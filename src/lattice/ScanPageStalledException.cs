@@ -28,6 +28,18 @@ namespace Orleans.Lattice;
 /// rather than racing them.
 /// </para>
 /// <para>
+/// <b>Since issue 2585 the ceiling only throws when it caught the walk holding
+/// nothing.</b> A page fill whose sortable rows had already accumulated banks
+/// them as an ordinary short page (<c>HasMore = true</c>, no
+/// <c>ResumeFromKey</c>) instead of faulting, so the work is not discarded and
+/// the caller's next request starts past it. This exception therefore names the
+/// strictly narrower case where the ceiling fired before any row was read, or
+/// on a path (counts, deletes, diagnostics) whose result carries no
+/// continuation to bank into. That is why a repeated stall used to be a
+/// livelock - every attempt re-walked and re-discarded the same leaves - and no
+/// longer is.
+/// </para>
+/// <para>
 /// Derives from <see cref="System.TimeoutException"/> so existing catch
 /// handlers that match on <see cref="System.TimeoutException"/> continue to
 /// work; the typed slots carry the per-occurrence attribution that makes the
@@ -119,6 +131,68 @@ public sealed class ScanPageStalledException : TimeoutException
     /// </para>
     /// </summary>
     [Id(6)] public string? LeafInFlight { get; set; }
+
+    /// <summary>
+    /// How many <em>consecutive</em> ceiling fires this shard root has now seen
+    /// that completed no leaf and named this same <see cref="LeafInFlight"/>,
+    /// counting this one. Zero when the fire made progress, named no leaf, or
+    /// named a different leaf from the previous fire (issue #3016).
+    /// <para>
+    /// <see cref="LeavesVisited"/> says a single attempt read nothing.
+    /// <b>This says the attempts are not making each other any more likely to
+    /// succeed</b>, which is the only quantity that separates a tree that is
+    /// busy from one that cannot converge. Both present identically per
+    /// attempt: the field exists because a caller reading one exception cannot
+    /// otherwise tell a leaf replaying a long WAL window from cold - which
+    /// recovers - from one that has failed the same read 307 times running,
+    /// which does not.
+    /// </para>
+    /// </summary>
+    [Id(7)] public int ConsecutiveZeroProgressStalls { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="LeafInFlight"/> has been classified <b>unreadable</b>
+    /// by this shard root: it has now missed the ceiling on enough consecutive
+    /// zero-progress attempts that retrying it unchanged cannot be expected to
+    /// behave differently, so the stranded-leaf recovery was applied before
+    /// this exception was raised (issue #3016).
+    /// <para>
+    /// <see langword="false"/> is the ordinary reading for a stall and means
+    /// only "not yet": a slow leaf is expected to recover, and the first fires
+    /// against one are indistinguishable from the first fires against a wedged
+    /// one. <see langword="true"/> is a statement about the <em>sequence</em>
+    /// and is always actionable - it says a plain retry has already been tried
+    /// and has already failed to differ.
+    /// </para>
+    /// </summary>
+    [Id(8)] public bool LeafStranded { get; set; }
+
+    /// <summary>
+    /// How many times this shard root has applied the stranded-leaf recovery to
+    /// <see cref="LeafInFlight"/>, counting this occurrence, across <b>every
+    /// activation of the shard root</b> and not merely the current one
+    /// (issue #3016). Zero when the fire did not reach the classification.
+    /// <para>
+    /// <see cref="ConsecutiveZeroProgressStalls"/> and
+    /// <see cref="LeafStranded"/> together say that retrying <em>the read this
+    /// activation is parked on</em> has been tried and does not differ, and the
+    /// remedy for that is to stop waiting on it. This field answers the
+    /// question that remedy raises and nothing else can: <b>did dropping it
+    /// help?</b>
+    /// </para>
+    /// <para>
+    /// One means the recovery has just been applied for the first time; the
+    /// next attempt will issue a genuinely fresh read and may well succeed.
+    /// <b>Greater than one means it already did that and the leaf still did not
+    /// answer</b>, so the fault is inside the leaf activation rather than in the
+    /// shard root's coalescing, and no number of further scan attempts will
+    /// converge. That distinction cannot be drawn from within one activation,
+    /// because a freshly activated shard root holds no coalesced reads and its
+    /// eviction is a no-op - so its stall looks identical to a first-ever
+    /// stall no matter how long the leaf has been unreadable.
+    /// </para>
+    /// </summary>
+    [Id(9)] public int StrandedRecoveryApplications { get; set; }
 }
 
 /// <summary>

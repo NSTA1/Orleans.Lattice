@@ -62,6 +62,16 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     internal const string PhaseNothingRegisteredTag = "nothing_registered";
 
     /// <summary>
+    /// Wire value for <see cref="RepoContextRetrievalReadinessPhase.Building"/>. No
+    /// readiness stamp carries it - <see cref="StampReady(string)"/> records the phase a
+    /// host became ready in, and Building is precisely the phase that is not ready - so
+    /// it has no meter arm. It exists because reporting surfaces must still be able to
+    /// name the phase they observed, and naming it "" or omitting it would make
+    /// "not ready" indistinguishable from "not evaluated".
+    /// </summary>
+    internal const string PhaseBuildingTag = "building";
+
+    /// <summary>
     /// The cause a readiness probe supplies to <see cref="MarkUnavailable(string?)"/>
     /// when it, rather than a real query, observed the plane unable to serve.
     /// </summary>
@@ -94,6 +104,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     private int _phase = BuildingRaw;
     private long _faultSinceTicks = NoFault;
     private long _readyElapsedTicks = NotReady;
+    private int _arming = (int)RepoContextRetrievalArming.Unknown;
 
     /// <summary>Creates the readiness state, starting the time-to-ready clock.</summary>
     /// <param name="timeProvider">The clock driving the fault hold-down and the time-to-ready measurement. Must not be <see langword="null"/>.</param>
@@ -161,6 +172,48 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     public bool IsReady => Phase != RepoContextRetrievalReadinessPhase.Building;
 
     /// <summary>
+    /// The canonical low-cardinality wire value naming a readiness phase, single-sourced
+    /// from the same constants the meter stamps so a reporting surface and the meter can
+    /// never disagree about what a phase is called.
+    /// <para>
+    /// <b>Deliberately a throwing switch.</b> A phase added to
+    /// <see cref="RepoContextRetrievalReadinessPhase"/> without a value here raises
+    /// rather than falling through to a default, because the alternative is reporting
+    /// the new phase under an existing phase's name - a wrong answer that reads exactly
+    /// like a right one.
+    /// </para>
+    /// </summary>
+    /// <param name="phase">The phase to name.</param>
+    /// <returns>The canonical wire value for <paramref name="phase"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="phase"/> is not a declared phase.</exception>
+    public static string PhaseTag(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving => PhaseServingTag,
+        RepoContextRetrievalReadinessPhase.KeywordOnly => PhaseKeywordOnlyTag,
+        RepoContextRetrievalReadinessPhase.NothingRegistered => PhaseNothingRegisteredTag,
+        RepoContextRetrievalReadinessPhase.Building => PhaseBuildingTag,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No canonical wire value is declared for this readiness phase."),
+    };
+
+    /// <summary>
+    /// Whether the approximate plane is <b>armed</b> - answering from a trained
+    /// partitioning - as last demonstrated by a query the plane answered for
+    /// itself. <see cref="RepoContextRetrievalArming.Unknown"/> until one has.
+    /// <para>
+    /// <b>Deliberately not part of <see cref="IsReady"/> or
+    /// <see cref="Phase"/>.</b> An unarmed plane serves complete recall by
+    /// exhaustive scan, so it is genuinely ready; a corpus below the training
+    /// threshold can never partition and would never become ready if arming
+    /// gated the verdict. This reports a second, independent fact beside the
+    /// verdict rather than changing it. Do not "simplify" the two into one:
+    /// they answer different questions and have different correct answers on the
+    /// same host.
+    /// </para>
+    /// </summary>
+    public RepoContextRetrievalArming Arming => (RepoContextRetrievalArming)Volatile.Read(ref _arming);
+
+    /// <summary>
     /// The elapsed time from this state's construction to the moment the host first
     /// reported ready, or <see langword="null"/> while it has never been ready. This is
     /// the same figure published on the <c>repocontext.retrieval.ready_seconds</c>
@@ -197,10 +250,42 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         }
 
         if (string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, StringComparison.Ordinal)
-            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal)
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
         {
             MarkUnavailable(retrievalPath);
         }
+    }
+
+    /// <summary>
+    /// Folds an observation of which path inside the approximate plane answered a
+    /// query into <see cref="Arming"/>. Call it only where the plane answered for
+    /// itself, so the value reports demonstrated behaviour rather than a
+    /// prediction from configuration.
+    /// <para>
+    /// <b>Last observation wins, and evidence is never erased.</b> Arming is a
+    /// statement about the plane's current partitioning, not a latch: a rebuild
+    /// can legitimately return an armed plane to
+    /// <see cref="RepoContextRetrievalArming.Unarmed"/>, and latching would make
+    /// this property assert a partitioning that no longer exists - the defect
+    /// this signal was added to remove. In the other direction
+    /// <see cref="RepoContextRetrievalArming.Unknown"/> is ignored, because it
+    /// carries no observation and must never overwrite one that does.
+    /// </para>
+    /// <para>
+    /// This changes neither <see cref="Phase"/> nor <see cref="IsReady"/> by
+    /// design; see <see cref="Arming"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="arming">The observed arming state. <see cref="RepoContextRetrievalArming.Unknown"/> is ignored.</param>
+    public void ObserveArming(RepoContextRetrievalArming arming)
+    {
+        if (arming == RepoContextRetrievalArming.Unknown)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _arming, (int)arming);
     }
 
     /// <summary>
@@ -418,6 +503,11 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         if (string.Equals(cause, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
         {
             return RepoContextRetrievalPath.KeywordIndexDegraded;
+        }
+
+        if (string.Equals(cause, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
+        {
+            return RepoContextRetrievalPath.KeywordExactFallbackSuppressed;
         }
 
         return string.Equals(cause, ProbeCause, StringComparison.Ordinal) ? ProbeCause : UnknownCause;

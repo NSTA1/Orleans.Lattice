@@ -481,14 +481,61 @@ internal sealed class LatticeRegistryGrain(
 
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         // Bump the map version on every persist so strongly-consistent scans
-        // can detect topology changes via a single long comparison. The
-        // registry grain is non-reentrant and singleton-keyed, so the
-        // get-modify-set sequence is atomic across concurrent split
-        // coordinators.
+        // can detect topology changes via a single long comparison.
+        //
+        // Note this method replaces the map wholesale. A caller that needs to
+        // apply a *diff* onto the live map must not build that diff from a
+        // separate GetShardMapAsync call and persist it here: non-reentrancy
+        // serialises each individual call, not a sequence of two, so a
+        // concurrent coordinator can persist between the caller's read and its
+        // write and have its reassignment erased. Use ReassignSlotsAsync,
+        // which performs the whole read-modify-write inside one call.
         var previousVersion = existing.ShardMap?.Version ?? 0L;
         map.Version = previousVersion + 1;
         var updated = existing with { ShardMap = map };
         await UpdateAsync(treeId, updated);
+    }
+
+    public async Task<ShardMap> ReassignSlotsAsync(
+        string treeId,
+        int[] slots,
+        int targetShardIndex,
+        ShardMap fallbackMap)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(fallbackMap);
+
+        // Atomic read-modify-write: this grain is non-reentrant and is a
+        // singleton (keyed by RegistryTreeId), so the entire method body runs
+        // without interleaving across concurrent callers. Both the read of the
+        // live map and the persist of the reassigned copy are inside that
+        // body, which is what lets a concurrent split and fold compose: each
+        // applies its own slot diff onto whatever the other has already
+        // committed, rather than onto a view that has since gone stale.
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var currentMap = existing.ShardMap ?? fallbackMap;
+        var newSlots = (int[])currentMap.Slots.Clone();
+        foreach (var slot in slots)
+        {
+            if (slot < 0 || slot >= newSlots.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(slots),
+                    slot,
+                    $"Virtual slot is outside the shard map's {newSlots.Length} slots.");
+            }
+
+            newSlots[slot] = targetShardIndex;
+        }
+
+        var reassigned = new ShardMap
+        {
+            Slots = newSlots,
+            Version = (existing.ShardMap?.Version ?? 0L) + 1,
+        };
+        await UpdateAsync(treeId, existing with { ShardMap = reassigned });
+        return reassigned;
     }
 
     public async Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap)

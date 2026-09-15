@@ -498,18 +498,7 @@ public sealed class LeafEntryCacheTests
         Assert.That(cache.StateBytes, Is.EqualTo((long)expected));
     }
 
-    [Test]
-    public void OverwriteStateBytesForBackfill_resets_running_total()
-    {
-        var cache = new LeafEntryCache(NewBackingStore());
-        cache.StoreRow("a", Row(new byte[] { 1, 2 }));
-
-        cache.OverwriteStateBytesForBackfill(99L);
-
-        Assert.That(cache.StateBytes, Is.EqualTo(99L));
-    }
-
-    // ── deferred CRDT row materialisation ──────────────────────
+    // deferred CRDT row materialisation
 
     private static LwwValue<byte[]> Metadata(long ticks = 5)
         => new()

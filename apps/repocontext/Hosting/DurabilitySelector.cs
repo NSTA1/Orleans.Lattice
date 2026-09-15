@@ -125,6 +125,23 @@ public static class DurabilitySelector
                     break;
             }
         });
+
+        // Per-grain-type non-reentrancy queue depth, recorded at dispatch on
+        // every outgoing grain call rather than only when something times out.
+        //
+        // This container's saturation investigation ran for two gate rounds
+        // reading the only queue signal Orleans ships - the
+        // "NonReentrancyQueueSize=" clause of the near-timeout diagnostic - and
+        // that signal is censored twice over: it fires only for a request
+        // already approaching the 30s deadline, and it describes that request's
+        // own wait, so a grain type whose calls queue deeply but which does not
+        // itself trip the timeout contributes no rows at all. On gate run 2 the
+        // grain type carrying the deepest queues in the system contributed 0 of
+        // 154 samples, and two independent extractions from those samples
+        // agreed exactly that nothing was queueing. Enabling the observation
+        // filter is what makes that population visible during a healthy run,
+        // which is the run in which the question has to be answerable.
+        silo.AddLatticeGrainCallObservation();
     }
 
     private static void ConfigureReminders(ISiloBuilder silo, RepoContextHostConfiguration config)

@@ -35,6 +35,18 @@ internal sealed class TreeDeletionGrain(
 
     private IGrainTimer? _purgeTimer;
 
+    /// <summary>
+    /// The bounded inter-attempt backoff used when an essential reminder
+    /// registration in this grain races Orleans' asynchronous reminder-service
+    /// startup. Defaults to
+    /// <see cref="ReminderServiceReadiness.DefaultRegistrationBackoff"/>; settable
+    /// only so a unit test can drive the retry budget without real delays,
+    /// exactly as <see cref="ReminderServiceReadiness"/> exposes its
+    /// backoff-injectable core for the same reason.
+    /// </summary>
+    internal IReadOnlyList<TimeSpan> ReminderRegistrationBackoff { get; set; }
+        = ReminderServiceReadiness.DefaultRegistrationBackoff;
+
     public async Task DeleteTreeAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -84,13 +96,65 @@ internal sealed class TreeDeletionGrain(
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         await compaction.UnregisterReminderAsync();
 
-        // Register the purge reminder.
+        // Register the purge reminder. This reminder is the tree's ONLY purge
+        // anchor and it has no natural re-attempt seam: the idempotency guard at
+        // the top of this method makes every later retry a silent no-op once the
+        // deletion is durable. Orleans' reminder service initialises
+        // asynchronously after the silo reaches Active, so a delete issued inside
+        // that window can see the transient "Reminder Service is still
+        // initializing" fault. Wait it out with the same bounded retry the
+        // atomic-write saga's essential keepalive uses (issue #2579, the same
+        // defect class as #2086); any other fault, and a transient that never
+        // clears within the retry budget, still surfaces with its original shape.
         var period = ClampPeriod(Options.SoftDeleteDuration);
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: ReminderName,
-            dueTime: period,
-            period: period);
+        try
+        {
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+                () => reminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: context.GrainId,
+                    reminderName: ReminderName,
+                    dueTime: period,
+                    period: period),
+                ReminderRegistrationBackoff);
+        }
+        catch (Exception registrationFault)
+        {
+            // The deletion is already durable but no purge reminder exists, so
+            // nothing would ever purge this tree AND the idempotency guard above
+            // would swallow every retry - a permanently soft-deleted, unpurgeable
+            // tree whose only symptom is silence. Roll the deletion back (the
+            // same snapshot/restore the WriteStateAsync failure path above uses,
+            // leaving the idempotent shard marks in place) so the caller's retry
+            // is a real retry, and say so loudly rather than failing quietly.
+            logger.LogError(
+                registrationFault,
+                "Tree {TreeId}: purge reminder registration failed after the readiness "
+                + "retry budget was exhausted. Rolling the soft delete back so the "
+                + "delete can be retried; the tree is NOT deleted.",
+                TreeId);
+
+            state.State.IsDeleted = isDeletedSnapshot;
+            state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch (Exception rollbackFault)
+            {
+                // The in-memory revert above already restores retryability for
+                // this activation, so the original registration fault stays the
+                // reported cause; the rollback write failure is recorded rather
+                // than masking it.
+                logger.LogError(
+                    rollbackFault,
+                    "Tree {TreeId}: failed to persist the soft-delete rollback after a "
+                    + "purge reminder registration failure. Storage still records the "
+                    + "tree as deleted with no purge reminder.",
+                    TreeId);
+            }
+
+            throw;
+        }
 
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
@@ -307,11 +371,20 @@ internal sealed class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
+        // The keepalive reminder is the purge's crash-recovery anchor, so it is
+        // essential rather than best-effort and must not be dropped on the
+        // transient reminder-service startup fault (issue #2579). Unlike the
+        // purge reminder in DeleteTreeAsync this call site does have a natural
+        // re-attempt seam - the purge reminder itself re-enters StartPurgeAsync
+        // on its next tick while _purgeTimer is still null - so the bounded
+        // readiness retry is the whole fix here and no state rollback is needed.
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            () => reminderRegistry.RegisterOrUpdateReminder(
+                callingGrainId: context.GrainId,
+                reminderName: KeepaliveReminderName,
+                dueTime: TimeSpan.FromMinutes(1),
+                period: TimeSpan.FromMinutes(1)),
+            ReminderRegistrationBackoff);
     }
 
     private async Task OnPurgeTimerTick(CancellationToken ct)

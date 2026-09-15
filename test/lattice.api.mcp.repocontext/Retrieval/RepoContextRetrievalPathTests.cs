@@ -19,6 +19,9 @@ public sealed class RepoContextRetrievalPathTests
                 RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
                 Is.EqualTo("keyword.vector_plane_unavailable"));
             Assert.That(RepoContextRetrievalPath.KeywordIndexDegraded, Is.EqualTo("keyword.index_degraded"));
+            Assert.That(
+                RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
+                Is.EqualTo("keyword.exact_fallback_suppressed"));
         });
 
     [Test]
@@ -31,6 +34,7 @@ public sealed class RepoContextRetrievalPathTests
             RepoContextRetrievalPath.KeywordNoEmbedder,
             RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
             RepoContextRetrievalPath.KeywordIndexDegraded,
+            RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
         ];
 
         Assert.That(all, Is.Unique);
@@ -73,6 +77,7 @@ public sealed class RepoContextRetrievalPathTests
     [TestCase("keyword.no_embedder")]
     [TestCase("keyword.vector_plane_unavailable")]
     [TestCase("keyword.index_degraded")]
+    [TestCase("keyword.exact_fallback_suppressed")]
     [TestCase("semantic")]
     public void IsSemantic_is_false_for_every_other_value(string? path)
         => Assert.That(RepoContextRetrievalPath.IsSemantic(path), Is.False);

@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The adapter behind the repository-context tool module. It exposes the
-/// read-only <c>repocontext_health</c> probe - which proves the module is
-/// registered and that the caller cleared the fail-closed authorization gate -
+/// read-only <c>repocontext_health</c> probe - which reports that the module is
+/// registered, that the caller cleared the fail-closed authorization gate, and
+/// whether retrieval can actually serve -
 /// the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
 /// codebase into the context store, and the day-to-day capture, maintenance, and
 /// retrieval tools: the read-only <c>repocontext_recall</c>, <c>_scan</c>, and
@@ -18,34 +19,75 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <c>_update</c>, and <c>_forget</c>.
 /// </summary>
 /// <remarks>
-/// The health result is invariant, so it is built once and reused on every call:
-/// the probe adds no per-invocation allocation to the hot path. The bootstrap
-/// handler resolves its coordinator from the request service provider and adds no
-/// authorization path of its own - the fail-closed gate that advertises the
-/// mutating tool only to a write-opted-in caller is inherited from the discovery
+/// The bootstrap handler resolves its coordinator from the request service provider
+/// and adds no authorization path of its own - the fail-closed gate that advertises
+/// the mutating tool only to a write-opted-in caller is inherited from the discovery
 /// core.
 /// </remarks>
 internal static class RepoContextToolHandlers
 {
     /// <summary>
-    /// The single, shared health result. It carries no caller- or
-    /// request-specific state, so one immutable instance serves every session and
-    /// no allocation occurs per <c>tools/call</c>.
+    /// Reports that the repository-context surface is reachable and the caller is
+    /// authorized, together with whether retrieval can actually serve.
+    /// <para>
+    /// <b>It is not a constant.</b> This handler previously returned a shared
+    /// immutable instance, which made it structurally incapable of reporting a
+    /// degraded host: reachability was the only fact it carried, so a plane that
+    /// could not serve semantic retrieval still read green at the probe an agent is
+    /// instructed to call first. It now folds in the same
+    /// <see cref="RepoContextRetrievalReadinessState"/> that the <c>/health/ready</c>
+    /// endpoint reads, so the MCP probe and the HTTP probe answer from one signal.
+    /// </para>
     /// </summary>
-    private static readonly RepoContextHealthResult Healthy = new()
+    /// <param name="context">The MCP request context, used to resolve the shared retrieval readiness state.</param>
+    /// <returns>The health result for this host's current readiness.</returns>
+    public static RepoContextHealthResult Health(RequestContext<CallToolRequestParams> context)
     {
-        Available = true,
-        Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
-        Status = "The Orleans.Lattice repository-context MCP surface is registered and reachable.",
-    };
+        var readiness = ResolveReadinessState(context);
+
+        // Read the phase exactly once. It is time-dependent (the fault hold-down is
+        // evaluated on each read), so sampling it again for readiness could straddle
+        // the hold-down boundary and report the self-contradictory pair
+        // "ready = true, phase = building".
+        var phase = readiness.Phase;
+        var ready = phase != RepoContextRetrievalReadinessPhase.Building;
+
+        return new RepoContextHealthResult
+        {
+            Available = true,
+            Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
+            Status = HealthStatusLine(phase),
+            RetrievalReady = ready,
+            RetrievalPhase = RepoContextRetrievalReadinessState.PhaseTag(phase),
+        };
+    }
 
     /// <summary>
-    /// Reports that the repository-context surface is available to the caller.
-    /// Reaching this handler means the caller was advertised the tool and cleared
-    /// the authorization gate, so it always returns the ready result.
+    /// The human-readable status line for a readiness phase. Every arm names the
+    /// phase's consequence for the caller rather than only its label, because the
+    /// prose is what a reader acts on.
     /// </summary>
-    /// <returns>The shared, immutable health result.</returns>
-    public static RepoContextHealthResult Health() => Healthy;
+    /// <param name="phase">The observed readiness phase.</param>
+    /// <returns>A status line describing what this host can currently serve.</returns>
+    private static string HealthStatusLine(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
+            + "and semantic retrieval is serving.",
+        RepoContextRetrievalReadinessPhase.KeywordOnly =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable. "
+            + "No embedding provider is bound, so keyword retrieval is the intended steady state "
+            + "and this host is ready.",
+        RepoContextRetrievalReadinessPhase.NothingRegistered =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable. "
+            + "No repository is onboarded yet, so there is nothing to retrieve from.",
+        RepoContextRetrievalReadinessPhase.Building =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
+            + "but semantic retrieval is NOT serving: searches are answered by degraded keyword "
+            + "recall. Treat retrieval results as incomplete until this clears.",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No status line is declared for this readiness phase."),
+    };
 
     /// <summary>
     /// Reports an aggregate roll-up of the repository-context surface's usage over a bounded
@@ -238,7 +280,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when writing under a claim.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
-    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, or a link target is malformed.</exception>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, the body carries leaked tool-call framing, the body, title, author, or provenance carries a URL with a password-bearing userinfo component, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextRememberResult> RememberAsync(
         RequestContext<CallToolRequestParams> context,
@@ -290,6 +332,11 @@ internal static class RepoContextToolHandlers
                 $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");
         }
 
+        GuardBody(RepoContextBodyFraming.RememberBodyLocation, body);
+        GuardText("The 'title' argument", title);
+        GuardText("The 'author' argument", author);
+        GuardText("The 'provenance' argument", provenance);
+
         return ResolveStore(context).RememberAsync(
             repoId, topic, id, memoryKind, title, body, author, provenance, tags,
             addLinks, removeLinks, ttlSeconds, fencingToken, cancellationToken);
@@ -309,7 +356,7 @@ internal static class RepoContextToolHandlers
     /// <param name="fencingToken">The fencing token from repocontext_claim, when patching under a claim.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, or a link target is malformed.</exception>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, the patched body carries leaked tool-call framing, any patched field carries a URL with a password-bearing userinfo component, or a link target is malformed.</exception>
     /// <exception cref="RepoContextClaimConflictException">The record is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextUpdateResult> UpdateAsync(
         RequestContext<CallToolRequestParams> context,
@@ -334,8 +381,128 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
+        if (fields is not null)
+        {
+            foreach (var field in fields)
+            {
+                if (string.Equals(field.Key, "body", StringComparison.OrdinalIgnoreCase))
+                {
+                    GuardBody(RepoContextBodyFraming.UpdateBodyLocation, field.Value);
+                }
+                else
+                {
+                    // Every other field is guarded for the credential shape but not
+                    // for framing: the shape corrupts whichever field carries it,
+                    // whereas leaked tool-call framing is a body-shaped problem.
+                    GuardText(DescribeFieldLocation(field.Key), field.Value);
+                }
+            }
+        }
+
         return ResolveStore(context).UpdateAsync(
             key, fields, addTags, removeTags, addLinks, removeLinks, fencingToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Refuses a body that ends in leaked MCP tool-call framing, or that carries a
+    /// URL with a password-bearing userinfo component.
+    /// </summary>
+    /// <remarks>
+    /// This is the <c>body</c>-specific guard, which is the only field framing
+    /// contamination can meaningfully reach. The credential check it delegates to
+    /// <see cref="GuardText"/> runs over every stored free-text field, because that
+    /// defect is not field-specific.
+    /// </remarks>
+    /// <param name="location">Names how the offending body was supplied.</param>
+    /// <param name="body">The candidate body.</param>
+    /// <exception cref="McpException">
+    /// The body ends in tool-call framing, or carries a URL of the shape an upstream
+    /// redaction rewrites into a value this store can no longer decode.
+    /// </exception>
+    private static void GuardBody(string location, string? body)
+    {
+        var framing = RepoContextBodyFraming.Inspect(body);
+        if (framing.IsContaminated)
+        {
+            throw new McpException(
+                RepoContextBodyFraming.DescribeRejection(location, framing.DisplacedArguments));
+        }
+
+        // Framing is checked first because it means the *call* was malformed and
+        // arguments were silently dropped, which the caller must know about before
+        // anything else. A credential-bearing URL is a problem with the body's
+        // content, and the body arrived intact.
+        GuardText(location, body);
+    }
+
+    /// <summary>
+    /// Refuses any stored free-text value carrying a URL with a password-bearing
+    /// userinfo component.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>This is deliberately wider than the framing guard, and the asymmetry
+    /// is the point.</strong> Framing contamination is genuinely specific to a
+    /// <c>body</c>: it is leaked tool-call text at the end of a long free-form
+    /// field, and it cannot meaningfully appear in an author identity. The
+    /// credential-shaped URL is not specific to any field. The rewrite that mangles
+    /// it happens in transit, before this store sees the call, and the structural
+    /// character it swallows belongs to the serialised record rather than to the
+    /// field. A <c>title</c> carrying the shape therefore freezes an entry exactly
+    /// as a <c>body</c> does.
+    /// </para>
+    /// <para>
+    /// Guarding only <c>body</c> would leave that path open while reading as
+    /// closed, which is the worse of the two failure modes: a partial guard invites
+    /// the conclusion that the seam is covered.
+    /// </para>
+    /// </remarks>
+    /// <param name="location">How the offending value was supplied.</param>
+    /// <param name="text">The candidate value. May be <see langword="null"/>.</param>
+    private static void GuardText(string location, string? text)
+    {
+        var credentials = RepoContextBodyCredentials.Inspect(text);
+        if (credentials.CarriesCredentialUrl)
+        {
+            throw new McpException(
+                RepoContextBodyCredentials.DescribeRejection(location, credentials));
+        }
+    }
+
+    /// <summary>
+    /// The <c>fields</c> entry names this surface will name back to a caller in a
+    /// rejection message.
+    /// </summary>
+    /// <remarks>
+    /// A rejection message must never echo caller-supplied text, which is why
+    /// <see cref="RepoContextBodyCredentialInspection"/> carries no strings at all.
+    /// A field <em>name</em> is caller-supplied too, so
+    /// <see cref="DescribeFieldLocation"/> emits the matched constant from this set
+    /// rather than the caller's own string, and falls back to an unnamed
+    /// description otherwise. The guarantee is then structural in both directions.
+    /// </remarks>
+    private static readonly string[] NameableFields =
+    [
+        "body", "title", "author", "provenance", "digest", "language", "kind",
+    ];
+
+    /// <summary>
+    /// Names where in an <c>update</c> call a rejected value was supplied, without
+    /// echoing the caller's own field name.
+    /// </summary>
+    /// <param name="fieldName">The caller-supplied field name.</param>
+    /// <returns>A location description built only from this surface's constants.</returns>
+    private static string DescribeFieldLocation(string fieldName)
+    {
+        foreach (var known in NameableFields)
+        {
+            if (string.Equals(known, fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                return "The '" + known + "' entry of the 'fields' argument";
+            }
+        }
+
+        return "An entry of the 'fields' argument";
     }
 
     /// <summary>
@@ -422,7 +589,7 @@ internal static class RepoContextToolHandlers
         string key,
         [Description("The claiming agent's identity, recorded on the record so a later reader can see who holds the claim. Prefer a stable session or agent id.")]
         string owner,
-        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum, and the granted length is reported back in 'leaseSeconds'.")]
+        [Description("The lease length to request in seconds. Always pass this explicitly for work that outlives a few seconds: omitting it defers to the cluster's configured default lease, which is deliberately short (30 seconds unless the host overrides it), on the reasoning that a caller which named no length is not one that should be granted a long one. The lock clamps any request to the configured maximum, so the granted length may be shorter than the one requested; act on the returned 'leaseSeconds' and 'leaseExpiresAtUtc', never on the value you asked for.")]
         long? leaseSeconds = null,
         [Description("How long to wait in the lock's first-in-first-out queue for the claim, in seconds. Omit to fail immediately when the record is already claimed, which is what a work-stealing agent wants.")]
         long? maxWaitSeconds = null,
@@ -458,7 +625,7 @@ internal static class RepoContextToolHandlers
         string key,
         [Description("The fencing token returned by the repocontext_claim call that took this claim.")]
         long fencingToken,
-        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum.")]
+        [Description("The lease length to request in seconds. Always pass this explicitly. Omitting it defers to the same deliberately short cluster default as a claim (30 seconds unless the host overrides it), so a renew that omits it SHORTENS a claim currently held for longer - and still reports 'granted: true', with the loss surfacing only on the next renew as 'superseded'. A renew that shortens its lease is flagged in 'leaseShortened'. The lock clamps any request to the configured maximum; act on the returned 'leaseSeconds' and 'leaseExpiresAtUtc', never on the value you asked for.")]
         long? leaseSeconds = null,
         CancellationToken cancellationToken = default)
     {
@@ -881,6 +1048,15 @@ internal static class RepoContextToolHandlers
     /// unknown repository is a no-op that reports zero deletions. Reaching this
     /// handler means the caller cleared the fail-closed authorization gate and
     /// the host opted writes in.
+    /// <para>
+    /// The reset reports its own lifecycle through <c>repocontext_index_status</c>,
+    /// the same surface onboarding uses: while the sweep runs the status is
+    /// <c>Running</c> in phase <c>Resetting</c> with advancing tree/entry counters,
+    /// and it flips to <c>Completed</c> only once the sweep finishes. So a caller
+    /// that loses this call's response can still poll to learn whether the reset
+    /// finished, rather than being forced to re-run a destructive verb because
+    /// still-working and wedged looked identical.
+    /// </para>
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the store.</param>
     /// <param name="repoId">The repository identity whose code index to reset.</param>
@@ -922,8 +1098,11 @@ internal static class RepoContextToolHandlers
 
     /// <summary>
     /// Returns the current progress snapshot for a repository's indexing job so a
-    /// caller can follow an asynchronous onboarding pass to completion. Read-only.
-    /// A repository that was never onboarded reports status <c>None</c>.
+    /// caller can follow an asynchronous onboarding pass to completion, or an
+    /// in-flight reset (phase <c>Resetting</c>) as it tears the index down, so one
+    /// status verb answers whether a repository is being built up or torn down
+    /// right now. Read-only. A repository that was never onboarded reports status
+    /// <c>None</c>.
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the job grain.</param>
     /// <param name="repoId">The repository identity whose indexing job to inspect.</param>
@@ -1123,5 +1302,25 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context stats tool cannot resolve its service.");
         return services.GetRequiredService<IRepoContextUsageRecorder>();
+    }
+
+    /// <summary>
+    /// Resolves the shared retrieval readiness state the health probe reports.
+    /// <para>
+    /// Deliberately <see cref="ServiceProviderServiceExtensions.GetRequiredService{T}"/>
+    /// rather than an optional lookup with a healthy default: the registration that
+    /// advertises these tools registers this singleton in the same call, so its absence
+    /// is a wiring fault. Defaulting to "ready" there would reinstate the exact defect
+    /// this probe was changed to remove - a host reporting green because nothing
+    /// measured it.
+    /// </para>
+    /// </summary>
+    private static RepoContextRetrievalReadinessState ResolveReadinessState(
+        RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context health tool cannot resolve its readiness state.");
+        return services.GetRequiredService<RepoContextRetrievalReadinessState>();
     }
 }

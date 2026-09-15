@@ -23,10 +23,28 @@ internal sealed class RepoContextAnnOptions
 
     /// <summary>
     /// How many source vectors one background build slice consumes before it
-    /// checkpoints and yields. Bounds the work a single turn does, so the build
-    /// never blocks a query for longer than one slice.
+    /// checkpoints and yields.
+    /// <para>
+    /// This is the work half of the slice bound only. It does NOT on its own
+    /// bound how long a slice runs, and reading it as though it did is what
+    /// issue #2483 measured: this repository's source streams over grain calls,
+    /// so on an 8,158-file corpus a 4,096-vector slice held the coordinator's
+    /// turn for over twenty minutes and every caller queued behind it.
+    /// <see cref="IngestSliceBudget"/> is the bound that actually keeps a slice
+    /// short.
+    /// </para>
     /// </summary>
     public int IngestBatchSize { get; init; } = 4_096;
+
+    /// <summary>
+    /// The wall-clock ceiling on one background build slice, checked after each
+    /// vector so a slice always makes progress. This is what keeps the build
+    /// coordinator's turn available: a slice ends on whichever of this and
+    /// <see cref="IngestBatchSize"/> is reached first, so the keep-alive reminder
+    /// is delivered and an arming call is answered while a build is running.
+    /// </summary>
+    public TimeSpan IngestSliceBudget { get; init; } =
+        DurableVectorIndexOptions.DefaultIngestSliceBudget;
 
     /// <summary>
     /// The largest number of centroids or vectors one persisted record carries,
@@ -108,6 +126,7 @@ internal sealed class RepoContextAnnOptions
         {
             KeyPrefix = keyPrefix,
             IngestBatchSize = IngestBatchSize,
+            IngestSliceBudget = IngestSliceBudget,
             MaxItemsPerChunk = MaxItemsPerChunk,
             Index = new VectorIndexOptions
             {

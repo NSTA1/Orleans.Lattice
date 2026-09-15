@@ -6,7 +6,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <summary>
 /// The default <see cref="IRepoContextSemanticIndex"/>: it answers from the
 /// persisted approximate nearest-neighbour plane, and falls back to the exact
-/// scan while that plane is still building.
+/// scan while that plane is still building - except where that fallback has
+/// already proved it cannot finish, in which case keyword recall serves and the
+/// response says so.
 /// <para>
 /// <b>It declares the weaker guarantee, always.</b>
 /// <see cref="IRepoContextSemanticIndex.RetrievalPath"/> is a property of the
@@ -19,10 +21,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// answering, and never over-promises it once the plane is.
 /// </para>
 /// <para>
-/// <b>Nothing about the fallback is a degradation.</b> While the plane builds,
-/// the exact scan answers with complete recall - slower, never worse - so this
-/// path must never be confused with
-/// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>. The build state
+/// <b>Nothing about the fallback is a degradation, while it runs.</b> While the
+/// plane builds, the exact scan answers with complete recall - slower, never
+/// worse - so this path must never be confused with
+/// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>. That holds only
+/// while the gather can complete: once the breaker below has suppressed it, the
+/// fallback is not answering at all and recall is neither complete nor bounded but
+/// keyword, reported as
+/// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/> (issue
+/// #2720). The build state
 /// itself is reported out of band: as a log line on every transition, and to a
 /// host through <see cref="TryGetProgress"/>, which is per repository and
 /// embedding space and so carries detail the single per-response value could not.
@@ -49,10 +56,32 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// #2231). <see cref="RepoContextExactScanBreaker"/> closes that window without
 /// reading any count: one gather faults with
 /// <see cref="ScanPageStalledException"/>, that fault is caught and reported as
-/// the same no-matches answer the budget's skip produces, and no further gather
-/// is started for the repository until the plane serves. A miscounted or
-/// not-yet-counted corpus cannot defeat it, because it observes the failure
-/// rather than predicting it.
+/// the same no-matches answer the budget's skip produces, and further gathers are
+/// suppressed. A miscounted or not-yet-counted corpus cannot defeat it, because
+/// it observes the failure rather than predicting it.
+/// </para>
+/// <para>
+/// <b>The suppression expires, because the plane is not guaranteed to rescue
+/// it.</b> Until issue #2362 the suppression lifted only when the plane answered
+/// for itself, which made the exit conditional on the subsystem whose absence
+/// caused the entry. Where no build is scheduled, or where a build cannot count a
+/// corpus the same stall prevents it from reading, that is not a slow recovery
+/// but no recovery: the fallback stays suppressed for the life of the process
+/// while every surface above reports the transient state "still building". So the
+/// breaker now grants a backing-off half-open probe. One query per window runs the
+/// gather it would otherwise have skipped, and a gather that completes closes the
+/// breaker on its own evidence. Nothing here waits on the plane, and a repository
+/// that is genuinely wedged still pays only one stall ceiling per
+/// <see cref="RepoContextExactScanBreaker.MaxProbeDelay"/>.
+/// </para>
+/// <para>
+/// <b>A wedged repository says so in one line.</b> The condition this type can
+/// end up in was, before issue #2362, only visible by correlating three messages
+/// from three components - two of which asserted a build was in progress that was
+/// not. Consecutive stalls with the plane never once serving is now diagnosed
+/// directly, once per repository, at warning level, and no message on this path
+/// asserts that a build is running: what is known is that the plane is not
+/// serving, and that is all any of them now claim.
 /// </para>
 /// <para>
 /// <b>Both guards report what they did, at information level.</b> A guard whose
@@ -64,16 +93,54 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// repeat-skip or a repeated budget skip is counted rather than logged per query.
 /// The two zeros this ladder can produce stay distinguishable: no budget
 /// evaluations at all means the budget was never reached, whereas evaluations
-/// with no skips means it was reached and declined.
+/// with no skips means it was reached and let the gather run.
 /// </para>
 /// </summary>
 internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
 {
+    /// <summary>
+    /// Consecutive stalls, with the plane never having served, past which a
+    /// repository is called wedged rather than contended. Three is chosen so the
+    /// diagnosis costs at least two elapsed probe windows of evidence: transient
+    /// build contention clears inside one, so a state that survives two is not
+    /// waiting on anything this process is doing.
+    /// </summary>
+    private const int WedgedStallThreshold = 3;
+
+    /// <summary>
+    /// Consecutive gather faults, with no intervening success, past which a
+    /// capacity-shaped fault stops being read as capacity and is reported as a
+    /// degraded index.
+    /// <para>
+    /// <b>Why a count of faults is the discriminator.</b>
+    /// <see cref="RepoContextExactGatherFault.Classify(Exception)"/> decides one
+    /// exception at a time and is right to: a timeout genuinely is a capacity
+    /// fault, and the same gather over the same bytes succeeds once the load goes
+    /// away. That reasoning is sound per event and says nothing at all about a
+    /// sequence of them. Load is intermittent - it produces successes between the
+    /// faults - so a fault rate that stays at one hundred percent is the one shape
+    /// load cannot make. Issue #2948 recorded twenty-five consecutive faults over
+    /// six hours, every one absorbed as capacity, nothing escalated, and the
+    /// container reporting healthy throughout.
+    /// </para>
+    /// <para>
+    /// <b>Deliberately defined as <see cref="WedgedStallThreshold"/> rather than
+    /// repeating its value.</b> That threshold already decides when this ladder
+    /// tells an operator in words that the repository is wedged. The machine-
+    /// readable classification and the human-readable warning are statements about
+    /// the same condition, so they must not be able to drift apart into a run where
+    /// the log says wedged and the instrument says load. Deriving one from the
+    /// other makes that drift unexpressible instead of merely unlikely.
+    /// </para>
+    /// </summary>
+    private const int DeterministicFaultThreshold = WedgedStallThreshold;
+
     private readonly IRepoContextAnnIndex _plane;
     private readonly IRepoContextSemanticIndex _exact;
     private readonly RepoContextExactScanBudget _exactScanBudget;
     private readonly RepoContextExactScanBreaker _exactScanBreaker;
     private readonly RepoContextRetrievalGuardReporter _guards;
+    private readonly RepoContextRetrievalReadinessState? _readiness;
     private readonly ILogger<AnnRepoContextSemanticIndex> _logger;
 
     /// <summary>Creates the approximate-first semantic index.</summary>
@@ -83,6 +150,13 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// <param name="exactScanBreaker">The record of gathers that have already proved they cannot finish. Must not be <see langword="null"/>.</param>
     /// <param name="guards">The counters that make both guards' operating state readable from an information-level container. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the fallback report is written to. Must not be <see langword="null"/>.</param>
+    /// <param name="readiness">
+    /// The shared readiness state told which path inside the plane answered, so
+    /// <see cref="RepoContextRetrievalReadinessState.Arming"/> reports a
+    /// demonstrated fact rather than a prediction. Optional: a host that binds no
+    /// readiness state simply loses the arming report, and nothing on the query
+    /// path depends on it.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public AnnRepoContextSemanticIndex(
         IRepoContextAnnIndex plane,
@@ -90,7 +164,8 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         RepoContextExactScanBudget exactScanBudget,
         RepoContextExactScanBreaker exactScanBreaker,
         RepoContextRetrievalGuardReporter guards,
-        ILogger<AnnRepoContextSemanticIndex> logger)
+        ILogger<AnnRepoContextSemanticIndex> logger,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(plane);
         ArgumentNullException.ThrowIfNull(exact);
@@ -104,6 +179,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         _exactScanBreaker = exactScanBreaker;
         _guards = guards;
         _logger = logger;
+        _readiness = readiness;
     }
 
     /// <inheritdoc />
@@ -112,6 +188,19 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
     /// type remarks for why a state-tracking declaration would be unsound.
     /// </remarks>
     public string RetrievalPath => RepoContextRetrievalPath.SemanticApproximate;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Reports the breaker's own open/closed state rather than the last
+    /// <see cref="RepoContextExactScanBreakerDecision"/>, so a query granted the
+    /// half-open probe still reports the fallback as suppressed while that probe is
+    /// in flight - which it is, for every other query in the window.
+    /// </remarks>
+    public bool IsExactFallbackSuppressed(string repoId)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        return _exactScanBreaker.IsTripped(repoId);
+    }
 
     /// <summary>
     /// The state the last query for a repository and embedding space would be
@@ -165,10 +254,21 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             .SearchAsync(repoId, query, querySpace, k, cancellationToken)
             .ConfigureAwait(false);
 
+        // Reported to readiness only for the two states in which the plane answered
+        // for itself. Bootstrapping means it did not answer at all, which is evidence
+        // about the fallback ladder and none whatever about whether a partitioning
+        // exists, so ArmingOf maps it to Unknown and ObserveArming ignores it rather
+        // than letting a query the plane could not serve erase a real observation.
+        _readiness?.ObserveArming(ArmingOf(outcome.State));
+
         // Recorded for every outcome, Bootstrapping included, so the instrument
         // partitions the whole query population rather than only its serving half.
         // A zero on one state is then denominated by a total that rises with
-        // traffic, which is what makes it a measured absence.
+        // traffic, which is what makes it a measured absence. On the exported
+        // counter that holds only while the collector is unsaturated, which is why
+        // RepoContextRetrievalGuardReporter pre-mints all three arms (issue #2515);
+        // the periodic log line reads these same counters in process, so its
+        // equivalent statement holds unconditionally.
         if (_guards.RecordPlaneOutcome(repoId, outcome.State)
             && outcome.State != RepoContextAnnServingState.Bootstrapping)
         {
@@ -213,13 +313,14 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             return outcome.Matches;
         }
 
-        if (_exactScanBreaker.IsTripped(repoId))
+        var breaker = _exactScanBreaker.Evaluate(repoId);
+        if (breaker == RepoContextExactScanBreakerDecision.Open)
         {
             // A gather over this repository has already spent a full page-fill
-            // ceiling and faulted. Nothing about the plane still building makes the
-            // next one cheaper, so it is not started. This is the branch that holds
-            // when the corpus is uncounted and the budget below therefore fails
-            // open - the state the whole bootstrap window is in.
+            // ceiling and faulted, and the delay before the next half-open probe
+            // has not elapsed. This is the branch that holds when the corpus is
+            // uncounted and the budget below therefore fails open - the state the
+            // whole bootstrap window is in.
             //
             // It runs on every subsequent query, so it is announced once at
             // information level (which is the proof the path executed at all) and
@@ -229,26 +330,63 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             {
                 _logger.LogInformation(
                     "Repository-context exact-scan breaker for {RepoId} is open and suppressed its first gather in "
-                    + "space {ModelId}/{Dimension}: a gather over this repository has already stalled while the "
-                    + "approximate index builds. Serving keyword recall until the plane answers for itself. Further "
-                    + "suppressed gathers are counted into the periodic retrieval-ladder guard summary rather than "
-                    + "logged per query.",
+                    + "space {ModelId}/{Dimension}: a gather over this repository has already stalled, and the "
+                    + "approximate plane is not serving. Serving keyword recall until a half-open probe or the plane "
+                    + "itself closes the breaker; the next probe is due in {ProbeDueIn}. Further suppressed gathers "
+                    + "are counted into the periodic retrieval-ladder guard summary rather than logged per query.",
                     repoId,
                     querySpace.ModelId,
-                    querySpace.Dimension);
+                    querySpace.Dimension,
+                    _exactScanBreaker.ProbeDueIn(repoId));
             }
             else
             {
                 _logger.LogDebug(
                     "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
-                    + "scan: a gather over this repository has already stalled while the approximate index builds. "
-                    + "Serving keyword recall until the plane answers for itself.",
+                    + "scan: a gather over this repository has already stalled, and the approximate plane is not "
+                    + "serving. Serving keyword recall; the next half-open probe is due in {ProbeDueIn}.",
                     repoId,
                     querySpace.ModelId,
-                    querySpace.Dimension);
+                    querySpace.Dimension,
+                    _exactScanBreaker.ProbeDueIn(repoId));
             }
 
             return Array.Empty<RepoContextVectorMatch>();
+        }
+
+        if (breaker == RepoContextExactScanBreakerDecision.Probe)
+        {
+            // The delay has elapsed and this query holds the window's single probe.
+            // It runs the gather the breaker would otherwise suppress, and if that
+            // gather completes the breaker closes below with no build involved.
+            // Announced on the first probe per repository at information level for
+            // the same reason the suppression above is: a recovery path that never
+            // logs cannot be told apart from one that never runs, and this one had
+            // no way to run at all before issue #2362.
+            if (_guards.RecordBreakerProbe(repoId))
+            {
+                _logger.LogInformation(
+                    "Repository-context exact-scan breaker for {RepoId} granted its first half-open probe in space "
+                    + "{ModelId}/{Dimension} after {OpenFor} open across {Faults} gather fault(s): running one gather "
+                    + "to test whether the contention that stalled it has cleared. Further probes are counted into "
+                    + "the periodic retrieval-ladder guard summary rather than logged per window.",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension,
+                    _exactScanBreaker.OpenFor(repoId),
+                    _exactScanBreaker.ConsecutiveStalls(repoId));
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Repository-context exact-scan breaker for {RepoId} granted a half-open probe in space "
+                    + "{ModelId}/{Dimension} after {OpenFor} open across {Faults} gather fault(s).",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension,
+                    _exactScanBreaker.OpenFor(repoId),
+                    _exactScanBreaker.ConsecutiveStalls(repoId));
+            }
         }
 
         var decision = EvaluateExactScanBudget(repoId, querySpace, out var corpus, out var affordable);
@@ -258,7 +396,9 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // settles, so each distinct decision is announced once and counted
             // thereafter. This line is what resolves the ambiguity issue #2253 was
             // filed over: a budget that never appears here was never reached, and a
-            // budget that appears with CorpusUnknown was reached and declined.
+            // budget that appears with CorpusUnknown was reached and failed open,
+            // letting the gather run - which is why the breaker, not the budget, is
+            // what actually holds this window shut.
             _logger.LogInformation(
                 "Repository-context exact-scan budget for {RepoId} in space {ModelId}/{Dimension} reached decision "
                 + "{Decision} for the first time: {Reason} Corpus {Corpus} vector(s) against an affordable "
@@ -285,7 +425,7 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // documented "the plane is still building" answer.
             _logger.LogDebug(
                 "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} skipped the exact "
-                + "scan: the approximate index is still building and the corpus of {Corpus} vectors exceeds the "
+                + "scan: the approximate plane is not serving and the corpus of {Corpus} vectors exceeds the "
                 + "{Affordable} a page fill can cover within the configured scan-page budget. Serving keyword "
                 + "recall instead of a scan that cannot complete.",
                 repoId,
@@ -303,16 +443,37 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         // that has never indexed it.
         _logger.LogDebug(
             "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} served by the exact "
-            + "scan: the approximate index is still building.",
+            + "scan: the approximate plane is not serving.",
             repoId,
             querySpace.ModelId,
             querySpace.Dimension);
 
         try
         {
-            return await _exact
+            var matches = await _exact
                 .SearchAsync(repoId, query, querySpace, k, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (breaker == RepoContextExactScanBreakerDecision.Probe && _exactScanBreaker.Reset(repoId))
+            {
+                // The exit issue #2362 was filed for. The gather that the breaker
+                // had been suppressing has now completed, which is direct evidence
+                // that the contention is gone - evidence owed nothing to the plane,
+                // which is the whole point, because on the deployment that produced
+                // that issue the plane never served at all. Logged every time and
+                // counted apart from the plane-served reset, so which subsystem
+                // recovered the repository is readable rather than inferred.
+                _guards.RecordBreakerProbeRecovery(repoId);
+                _logger.LogInformation(
+                    "Repository-context exact-scan breaker for {RepoId} closed: a half-open probe in space "
+                    + "{ModelId}/{Dimension} completed its gather, so the contention that stalled it has cleared and "
+                    + "the exact fallback is armed again. The approximate plane did not have to serve for this.",
+                    repoId,
+                    querySpace.ModelId,
+                    querySpace.Dimension);
+            }
+
+            return matches;
         }
         catch (ScanPageStalledException ex)
         {
@@ -327,21 +488,250 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             // broken index rather than the still-building plane that is true. Every
             // other fault keeps propagating, so a genuinely broken index is still
             // reported as degraded rather than masked as "still building".
+            //
+            // A probe that stalls lands here too, which is what grows the delay
+            // before the next one: the failure re-arms the backoff rather than
+            // ending it, so a wedged repository quietens down instead of paying a
+            // ceiling per query.
             var first = _exactScanBreaker.Trip(repoId);
             _guards.RecordBreakerTrip(repoId);
+            if (IsDeterministic(repoId))
+            {
+                ReportDeterministicFault(repoId, querySpace, RepoContextExactGatherFault.StalledTag, ex);
+                throw;
+            }
+
+            _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.StalledTag);
             _logger.Log(
                 first ? LogLevel.Warning : LogLevel.Debug,
                 ex,
                 "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} abandoned the "
-                + "exact scan: the gather stalled against the vector-metadata tree while the approximate index "
-                + "builds. Serving keyword recall, and skipping the gather for this repository until the plane "
-                + "answers for itself.",
+                + "exact scan: the gather stalled against the vector-metadata tree while the approximate plane was "
+                + "not serving. Serving keyword recall, and suppressing the gather for this repository until a "
+                + "half-open probe in {ProbeDueIn} retries it, or the plane answers for itself.",
                 repoId,
                 querySpace.ModelId,
-                querySpace.Dimension);
+                querySpace.Dimension,
+                _exactScanBreaker.ProbeDueIn(repoId));
 
+            ReportBreakerWedgedIfDue(repoId);
             return Array.Empty<RepoContextVectorMatch>();
         }
+        catch (Exception ex) when (RepoContextExactGatherFault.IsTransient(ex, cancellationToken))
+        {
+            // Issue #2749. The absorbed set above is a SUBCLASS of the fault this
+            // path actually produces. ScanPageStalledException derives from
+            // TimeoutException: the tree raises the derived type when it abandons
+            // its own page fill, but a grain call whose target never replies raises
+            // the base type, and the catch above does not see it. A census over one
+            // deployment's whole uptime found TimeoutException ten times,
+            // OperationCanceledException three, OutOfMemoryException twice, and
+            // ScanPageStalledException not once - so before this arm the absorbed
+            // set matched nothing that was happening.
+            //
+            // What that cost is not that the query failed; it falls back to keyword
+            // recall either way. It is that Trip is the ONLY thing that grows the
+            // probe delay, so a fault arriving here left the breaker pinned at its
+            // initial delay forever instead of doubling towards MaxProbeDelay. The
+            // same deployment shows the signature exactly: open for 21 minutes
+            // across ONE stall, having granted THIRTEEN half-open probes, none of
+            // which closed it. Each of those probes re-ran a full-prefix gather over
+            // the very tree the build is streaming - which is the contention the
+            // breaker exists to remove, running at roughly three times the rate the
+            // backoff was designed to allow, and not decaying.
+            //
+            // Absorbing here preserves the constraint the handler above states,
+            // because the predicate recognises timing and memory faults ONLY. A
+            // fault about the index's CONTENTS - a deserialisation failure, a
+            // missing record, a contract violation - matches nothing in
+            // RepoContextExactGatherFault and still propagates to
+            // keyword.index_degraded, loud, exactly as before. A caller's own
+            // cancellation is likewise not absorbed: the breaker is shared by every
+            // caller of this repository, so one client walking away must not arm a
+            // backoff that withholds the fallback from the rest.
+            //
+            // The caller is told keyword.exact_fallback_suppressed rather than
+            // keyword.index_degraded, because the breaker is now open and that is
+            // what is true: a gather failed and the fallback is being withheld until
+            // a probe retries it. That is the honest classification issue #2749 asked
+            // for, and it is reached by the existing IsExactFallbackSuppressed seam
+            // in RepoContextSearchService rather than by a new path constant.
+            var fault = RepoContextExactGatherFault.Classify(ex);
+            var first = _exactScanBreaker.Trip(repoId);
+            _guards.RecordBreakerTrip(repoId);
+            if (IsDeterministic(repoId))
+            {
+                ReportDeterministicFault(repoId, querySpace, fault, ex);
+                throw;
+            }
+
+            _guards.RecordExactGatherFault(repoId, fault);
+            _logger.Log(
+                first ? LogLevel.Warning : LogLevel.Debug,
+                ex,
+                "Repository-context semantic search for {RepoId} in space {ModelId}/{Dimension} abandoned the "
+                + "exact scan: the gather failed with a transient {Fault} fault while the approximate plane was "
+                + "not serving. This is capacity, not a broken index, so it is absorbed and backed off rather "
+                + "than reported as a degraded index. Serving keyword recall, and suppressing the gather for "
+                + "this repository until a half-open probe in {ProbeDueIn} retries it, or the plane answers for "
+                + "itself.",
+                repoId,
+                querySpace.ModelId,
+                querySpace.Dimension,
+                fault,
+                _exactScanBreaker.ProbeDueIn(repoId));
+
+            ReportBreakerWedgedIfDue(repoId);
+            return Array.Empty<RepoContextVectorMatch>();
+        }
+        catch (Exception)
+        {
+            // Not absorbed, and deliberately so: this fault says something about the
+            // index rather than about capacity, and it keeps propagating to
+            // keyword.index_degraded. It is counted before it is rethrown so that
+            // "no integrity faults occurred" is a measured zero on the same
+            // instrument as the absorbed arms, rather than an absent series that
+            // looks identical to the instrument never having been wired.
+            _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.PropagatedTag);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Whether the gather faults over this repository have stopped being
+    /// intermittent: <see cref="DeterministicFaultThreshold"/> or more consecutive
+    /// faults with no success between them.
+    /// <para>
+    /// Read from the breaker rather than from a counter of this ladder's own,
+    /// because the breaker is already the thing that knows. Its episode is reset by
+    /// exactly the two events that would falsify the claim - a gather completing on
+    /// a half-open probe, and the plane answering for itself - so the count it
+    /// holds is consecutive by construction rather than by a rule maintained
+    /// alongside it. Call it after <see cref="RepoContextExactScanBreaker.Trip"/>,
+    /// so the fault being classified is included in the count it is classified by.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository the gather faulted for.</param>
+    /// <returns><see langword="true"/> when the fault must be reported rather than absorbed.</returns>
+    private bool IsDeterministic(string repoId)
+        => _exactScanBreaker.ConsecutiveStalls(repoId) >= DeterministicFaultThreshold;
+
+    /// <summary>
+    /// Counts a capacity-shaped fault that has proved deterministic onto the
+    /// reported half of the census, and says so at warning level.
+    /// <para>
+    /// <b>The fault is still rethrown by the caller, and that is the point.</b>
+    /// <see cref="RepoContextSearchService"/> catches it and answers
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>, so the caller
+    /// receives the same keyword recall it received while the fault was being
+    /// absorbed - the served answer does not change, only the claim made about why.
+    /// What changes is that the claim becomes true: "waiting will fix this" is what
+    /// backing off asserts, and after this many consecutive faults it is false.
+    /// </para>
+    /// <para>
+    /// <b>The cause arm is replaced, not supplemented.</b> The snapshot's absorbed
+    /// and propagated counts must sum to the fault count or the reading rule the
+    /// summary states has no denominator, so one fault records one arm. The cause
+    /// is not lost: the first
+    /// <see cref="DeterministicFaultThreshold"/>-1 faults of the episode are
+    /// already recorded under it, so a real episode reads as a short run of
+    /// <c>timed_out</c> followed by a long run of <c>deterministic</c> - which is a
+    /// better account of what happened than either arm alone - and this line
+    /// carries the cause in full.
+    /// </para>
+    /// <para>
+    /// <b>The threshold is safe to set low because the readiness verdict does not
+    /// move.</b> <see cref="RepoContextRetrievalReadinessState.Observe"/> folds
+    /// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/> and
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/> into the same
+    /// unavailable arm, so a repository in this state was already unready and stays
+    /// exactly as unready; only the cause string it carries changes, from one that
+    /// claims a suppression that will clear to one that does not. A false positive
+    /// here therefore costs a more alarming cause on a deployment that was already
+    /// reporting unavailable, and costs a caller nothing at all - which is why the
+    /// count can be small enough to catch the episode early rather than large
+    /// enough to be unarguable.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository the gather faulted for.</param>
+    /// <param name="space">The embedding space the query was produced in.</param>
+    /// <param name="cause">The event-local classification the fault would have been absorbed under.</param>
+    /// <param name="error">The fault, logged for its stack.</param>
+    private void ReportDeterministicFault(
+        string repoId, EmbeddingSpaceTag space, string cause, Exception error)
+    {
+        _guards.RecordExactGatherFault(repoId, RepoContextExactGatherFault.DeterministicTag);
+        _logger.LogWarning(
+            error,
+            "Repository-context exact gather for {RepoId} in space {ModelId}/{Dimension} has now faulted "
+            + "{Faults} time(s) consecutively over {OpenFor} without one intervening success, most recently with "
+            + "a {Cause} fault. A fault rate that does not come down is not capacity: load is intermittent, and "
+            + "this is not, so it is reported as a degraded index rather than absorbed into the breaker's "
+            + "backoff. Retrieval answers as {RetrievalPath}. The breaker keeps its backoff and keeps probing, so "
+            + "this still clears on its own if the dependency recovers; if it does not, the fault is downstream "
+            + "of this ladder and more waiting will not reach it.",
+            repoId,
+            space.ModelId,
+            space.Dimension,
+            _exactScanBreaker.ConsecutiveStalls(repoId),
+            _exactScanBreaker.OpenFor(repoId),
+            cause,
+            RepoContextRetrievalPath.KeywordIndexDegraded);
+
+        ReportBreakerWedgedIfDue(repoId);
+    }
+
+    /// <summary>
+    /// Emits the one-line diagnosis of a repository whose exact fallback has
+    /// stalled repeatedly while the approximate plane has never once served.
+    /// <para>
+    /// This exists because the condition it names was, before issue #2362,
+    /// derivable only by correlating three messages emitted by three components on
+    /// three different cadences - and two of those messages asserted a build was in
+    /// progress when none was scheduled. Whether a deployment is in this state is
+    /// not a subtle question, and it should not have required a subtle reading. The
+    /// conjunction is checked where the stall count grows, so the line is emitted
+    /// once, on the transition into the state, rather than re-derived per query.
+    /// </para>
+    /// <para>
+    /// It states only what is known. The plane not serving is measured here; why it
+    /// is not serving is not, so no cause is named and no build is claimed. The
+    /// machine-readable form of the same fact is the search service's
+    /// <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>, which
+    /// this line deliberately quotes so the two cannot drift into disagreeing. It is
+    /// that value rather than
+    /// <see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/> because
+    /// this method is only reached with the breaker open, which is precisely the
+    /// condition the search service now reports separately (issue #2720).
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository the gather stalled for.</param>
+    private void ReportBreakerWedgedIfDue(string repoId)
+    {
+        var stalls = _exactScanBreaker.ConsecutiveStalls(repoId);
+        if (stalls < WedgedStallThreshold || _guards.Snapshot(repoId).PlaneServed != 0)
+        {
+            return;
+        }
+
+        if (!_guards.RecordBreakerStuck(repoId))
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "Repository-context retrieval for {RepoId} is wedged: the exact gather has stalled {Stalls} time(s) "
+            + "over {OpenFor}, and the approximate plane has not served this repository once since process start. "
+            + "Semantic retrieval is therefore not being served from the approximate plane at all, and every search "
+            + "for this repository is answering as {RetrievalPath}. This is a statement about what the plane is "
+            + "doing, not about why: no build is known to be in progress, and none is claimed here. The breaker "
+            + "keeps retrying with a half-open probe every {ProbeDueIn} at most, so this can still clear on its "
+            + "own; if it does not, the vector plane needs attention rather than more time.",
+            repoId,
+            stalls,
+            _exactScanBreaker.OpenFor(repoId),
+            RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
+            _exactScanBreaker.MaxProbeDelay);
     }
 
     /// <summary>
@@ -363,13 +753,25 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             + "{Bootstrapping} reached the fallback. Of the plane's answers, {PlaneApproximate} came from a trained "
             + "partitioning and {PlaneExhaustive} from an exhaustive scan of the vectors it holds, so a zero in the "
             + "first against a non-zero search count is a measured absence of approximate retrieval rather than an "
-            + "absent measurement. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
-            + "{BudgetUnbounded} with no bound configured, {BudgetCorpusUnknown} declined for an uncounted corpus, "
-            + "{BudgetWithinBudget} cleared as affordable, {BudgetExceeded} skipped as unaffordable; last read "
-            + "corpus {Corpus} against an affordable {Affordable}. Exact-scan breaker: currently {BreakerState}, "
-            + "{BreakerTrips} trip(s), {BreakerRepeatSkips} gather(s) suppressed while open, {BreakerResets} "
-            + "reset(s). Zero evaluations means the guard was never reached; evaluations with zero skips means it "
-            + "was reached and declined.",
+            + "absent measurement. These are this process's own counters, read directly rather than scraped, so "
+            + "unlike the exported 'repocontext.retrieval.ann.search' arms that reading cannot be voided by a "
+            + "saturated collector. Exact-scan budget: {BudgetEvaluations} evaluation(s) - "
+            + "{BudgetUnbounded} with no bound configured, {BudgetCorpusUnknown} that read an uncounted corpus and "
+            + "so failed open and let the gather run, {BudgetWithinBudget} cleared as affordable, {BudgetExceeded} "
+            + "skipped as unaffordable; last read corpus {Corpus} against an affordable {Affordable}. Exact-scan "
+            + "breaker: currently {BreakerState}, {BreakerTrips} trip(s), {BreakerRepeatSkips} gather(s) suppressed "
+            + "while open, {BreakerProbes} half-open probe(s) of which {BreakerProbeRecoveries} closed the breaker "
+            + "with no help from the plane, {BreakerResets} closure(s) by a serving plane. Gather faults: "
+            + "{GatherFaultsAbsorbed} absorbed as capacity and backed off, {GatherFaultsPropagated} propagated as "
+            + "a degraded index. Read those two against each other rather than alone, and do NOT read a flat "
+            + "propagated count beside a climbing absorbed one as load: a deterministic defect and sustained load "
+            + "produce the same per-event classification, and reading it as load is what ran issue #2948's "
+            + "six-hour total retrieval outage as capacity pressure. What separates them is the fault RATE, which "
+            + "load cannot hold at one hundred percent - so a gather that faults repeatedly with no success "
+            + "between is counted as propagated on the 'deterministic' arm of "
+            + "'repocontext.retrieval.exact_gather.faults', which also names which capacity fault it was. Zero "
+            + "evaluations means the guard was never reached; evaluations with zero skips means it was reached "
+            + "and let the gather run.",
             repoId,
             guards.Searches,
             guards.PlaneServed,
@@ -381,13 +783,59 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             guards.BudgetCorpusUnknown,
             guards.BudgetWithinBudget,
             guards.BudgetExceeded,
-            guards.LastCorpus,
+            guards.LastCorpus is var lastCorpus && lastCorpus > 0
+                ? lastCorpus.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : DescribeUncountedCorpus(guards),
             DescribeAffordable(guards.LastAffordable),
-            _exactScanBreaker.IsTripped(repoId) ? "open" : "closed",
+            DescribeBreakerState(repoId),
             guards.BreakerTrips,
             guards.BreakerRepeatSkips,
-            guards.BreakerResets);
+            guards.BreakerProbes,
+            guards.BreakerProbeRecoveries,
+            guards.BreakerResets,
+            guards.GatherFaultsAbsorbed,
+            guards.GatherFaultsPropagated);
     }
+
+    /// <summary>
+    /// The breaker's state for a repository in the operator's terms. An open
+    /// breaker reports how long it has been open and when it next probes, because
+    /// the bare word "open" is what made the wedged state of issue #2362 read as a
+    /// transient one: an open breaker that is still probing recovers on its own,
+    /// and one that has been open for hours across many stalls does not.
+    /// </summary>
+    /// <param name="repoId">The repository to describe.</param>
+    /// <returns>A short phrase, with no trailing punctuation.</returns>
+    private string DescribeBreakerState(string repoId)
+    {
+        var stalls = _exactScanBreaker.ConsecutiveStalls(repoId);
+        if (stalls == 0)
+        {
+            return "closed";
+        }
+
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"open for {_exactScanBreaker.OpenFor(repoId)} across {stalls} gather fault(s), next half-open probe in "
+            + $"{_exactScanBreaker.ProbeDueIn(repoId)}");
+    }
+
+    /// <summary>
+    /// Maps a serving state onto the arming fact readiness reports. Only the two
+    /// states in which the plane answered for itself carry an observation:
+    /// <see cref="RepoContextAnnServingState.Bootstrapping"/> means the plane did
+    /// not answer, which says nothing about whether it holds a partitioning, so it
+    /// maps to <see cref="RepoContextRetrievalArming.Unknown"/> and is ignored by
+    /// <see cref="RepoContextRetrievalReadinessState.ObserveArming"/>.
+    /// </summary>
+    /// <param name="state">The state that answered.</param>
+    /// <returns>The arming observation, which may be <see cref="RepoContextRetrievalArming.Unknown"/>.</returns>
+    internal static RepoContextRetrievalArming ArmingOf(RepoContextAnnServingState state) => state switch
+    {
+        RepoContextAnnServingState.Approximate => RepoContextRetrievalArming.Armed,
+        RepoContextAnnServingState.Exhaustive => RepoContextRetrievalArming.Unarmed,
+        _ => RepoContextRetrievalArming.Unknown,
+    };
 
     /// <summary>
     /// What a serving state means in the operator's terms. Kept beside the state
@@ -444,6 +892,38 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
         => affordable == RepoContextExactScanBudget.Unbounded
             ? "unbounded"
             : affordable.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Renders a non-positive last-read corpus for the summary, so an unknown is
+    /// never printed as a measured zero.
+    /// <para>
+    /// <b>Why this is not cosmetic.</b> The number the summary carried was
+    /// literally <c>0</c>, and a reader of "last read corpus 0" concludes the
+    /// repository holds no vectors - which in issue #2948 was false, on a rig
+    /// demonstrably holding them, for all 174 samples of a six-hour run. The only
+    /// thing that disambiguated it was the aggregate clause several lines earlier
+    /// saying "read an uncounted corpus", which is a different sentence about a
+    /// different quantity. An absence presented as a measurement is the failure
+    /// this epic exists to remove; the value is uncounted, so it must say so.
+    /// </para>
+    /// <para>
+    /// <b>Two distinct uncounted states, kept apart.</b> A corpus of zero cannot
+    /// mean "counted and empty":
+    /// <see cref="EvaluateExactScanBudget(string, EmbeddingSpaceTag, out int, out int)"/>
+    /// returns <see cref="RepoContextExactScanBudgetDecision.CorpusUnknown"/> at
+    /// <c>corpus &lt;= 0</c> before any comparison, so every counted corpus that
+    /// reaches the affordability test is positive. What a zero cannot distinguish
+    /// on its own is a budget that was asked and could not count, from one that was
+    /// never asked at all - so the evaluation count decides which of the two is
+    /// reported.
+    /// </para>
+    /// </summary>
+    /// <param name="guards">The snapshot being rendered.</param>
+    /// <returns>The rendered value, never a bare number.</returns>
+    private static string DescribeUncountedCorpus(in RepoContextRetrievalGuardSnapshot guards)
+        => guards.BudgetEvaluations == 0
+            ? "not read (the budget was never reached)"
+            : "uncounted";
 
     /// <summary>
     /// What the exact-scan budget concludes about a gather over this repository and

@@ -126,12 +126,6 @@ internal static class MetricEmissionScanner
         var sites = new List<EmissionSite>();
         foreach (var (relative, text) in files)
         {
-            // An identifier-keyed match is only trusted in a file that actually
-            // talks to the metrics surface, so an unrelated collection that
-            // happens to share a name is never mistaken for an instrument.
-            var metricFile = text.Contains("Metrics", StringComparison.Ordinal)
-                || text.Contains("Meter", StringComparison.Ordinal);
-
             var localNames = groupNames.TryGetValue(TypeGroupKey(relative), out var g)
                 ? g
                 : EmptyNames;
@@ -142,7 +136,30 @@ internal static class MetricEmissionScanner
                 // an instrument declared in this file's own declaring type (its
                 // partial-class group). An instrument name that belongs to a
                 // different type is a name collision, not an emission here.
-                if (m.Groups[2].Success && (!metricFile || !localNames.Contains(m.Groups[2].Value)))
+                //
+                // The partial-group membership test is the whole guard, and it is
+                // strictly stronger than asking whether the file text mentions
+                // "Metrics" or "Meter": membership requires an actual instrument
+                // DECLARATION in this file's declaring type, which a substring
+                // never establishes. Conjoining the substring test with it - as
+                // this did until the declaration-coverage gate exposed it - drops
+                // every bare-identifier emission in a concern file that emits
+                // through an alias field and never names the metrics surface.
+                // src/lattice/Views/ViewMaintainerGrain.AtomicStaging.cs is such a
+                // file: it contains neither word, so its real emission of
+                // ViewAtomicStagingBackstop at line 430 was silently discarded.
+                //
+                // That miss was invisible under this scanner's original quantifier.
+                // An emission-side gate ("for all emissions, the tags are present")
+                // only becomes weaker when a site is dropped - it checks one fewer
+                // call and still reports green - so a false negative here degrades
+                // coverage without ever producing a failure. Under the converse
+                // quantifier ("for all declarations, an emission exists") the same
+                // miss inverts into a false positive that names a live instrument
+                // as dead. Reusing a recogniser across a quantifier flip inverts
+                // its error mode, so a heuristic that was safe in one direction is
+                // not safe in the other.
+                if (m.Groups[2].Success && !localNames.Contains(m.Groups[2].Value))
                 {
                     continue;
                 }
@@ -228,7 +245,6 @@ internal static class MetricEmissionScanner
     private static int SplitFirstArgument(string inner)
     {
         var depth = 0;
-        var angle = 0;
         for (var i = 0; i < inner.Length; i++)
         {
             var c = inner[i];
@@ -244,11 +260,119 @@ internal static class MetricEmissionScanner
             }
             else if (c is '(' or '[' or '{') depth++;
             else if (c is ')' or ']' or '}') depth--;
-            else if (c == '<') angle++;
-            else if (c == '>' && angle > 0) angle--;
-            else if (c == ',' && depth == 0 && angle == 0) return i;
+            else if (c == '<' && TryMatchGenericArgumentList(inner, i, out var close))
+            {
+                // Skip the whole list so a comma inside it (Dictionary<string,
+                // int>) is not read as the argument separator. A '<' that does
+                // not open a type-argument list is a relational operator and
+                // falls through to be treated as an ordinary character.
+                i = close;
+            }
+            else if (c == ',' && depth == 0) return i;
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Decides whether the <c>'&lt;'</c> at <paramref name="open"/> opens a
+    /// generic argument list rather than being the less-than operator, and if so
+    /// reports the index of its closing <c>'&gt;'</c>.
+    /// </summary>
+    /// <remarks>
+    /// C# spells both with the same character, so this is genuinely ambiguous to
+    /// a scanner and cannot be settled by counting brackets. Counting alone
+    /// treats a clamp written <c>a &lt; b ? b : a</c> as an unterminated generic
+    /// open, swallows the rest of the argument list looking for a close that
+    /// does not exist, and reports the call as passing no tags at all - a false
+    /// positive against a site whose tags are correct.
+    /// <para>
+    /// Three conditions are required together, and none of them suffices alone:
+    /// the <c>'&lt;'</c> follows an identifier or type-name token; it is
+    /// balanced by a <c>'&gt;'</c> whose enclosed text contains only characters
+    /// a type argument can contain; and that <c>'&gt;'</c> is followed by one of
+    /// the disambiguating tokens the language itself uses for this decision.
+    /// The last is what separates <c>new Dictionary&lt;string, int&gt;(map)</c>
+    /// from <c>a &lt; b, c &gt; d</c>: both are balanced and both enclose only
+    /// type-shaped characters, and only the token after the <c>'&gt;'</c> tells
+    /// them apart.
+    /// </para>
+    /// <para>
+    /// This is a scanner, not a parser, so it is deliberately conservative:
+    /// anything it cannot positively identify as a type-argument list is treated
+    /// as a relational operator, which leaves the tag text to be parsed
+    /// normally rather than discarded.
+    /// </para>
+    /// </remarks>
+    private static bool TryMatchGenericArgumentList(string inner, int open, out int close)
+    {
+        close = -1;
+
+        var before = open - 1;
+        while (before >= 0 && char.IsWhiteSpace(inner[before]))
+        {
+            before--;
+        }
+
+        if (before < 0 || !(char.IsLetterOrDigit(inner[before]) || inner[before] == '_'))
+        {
+            return false;
+        }
+
+        var depth = 0;
+        for (var i = open; i < inner.Length; i++)
+        {
+            var c = inner[i];
+            if (c == '<')
+            {
+                depth++;
+            }
+            else if (c == '>')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    if (!IsGenericDisambiguatingToken(inner, i + 1))
+                    {
+                        return false;
+                    }
+
+                    close = i;
+                    return true;
+                }
+            }
+            else if (!IsTypeArgumentCharacter(c))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="c"/> can appear inside a generic argument list:
+    /// identifier characters, namespace qualification, the element separator,
+    /// nullable and array suffixes, and whitespace. An operator, literal, or
+    /// call means the text is an expression, not a type argument list.
+    /// </summary>
+    private static bool IsTypeArgumentCharacter(char c) =>
+        char.IsLetterOrDigit(c) || c is '_' or '.' or ',' or '?' or '[' or ']' || char.IsWhiteSpace(c);
+
+    /// <summary>
+    /// Whether the token at <paramref name="index"/> is one the language accepts
+    /// after the <c>'&gt;'</c> that closes a generic argument list in an
+    /// expression. An identifier there means the <c>'&gt;'</c> was the
+    /// greater-than operator, which is what distinguishes
+    /// <c>a &lt; b, c &gt; d</c> from a real type-argument list.
+    /// </summary>
+    private static bool IsGenericDisambiguatingToken(string inner, int index)
+    {
+        while (index < inner.Length && char.IsWhiteSpace(inner[index]))
+        {
+            index++;
+        }
+
+        return index >= inner.Length || inner[index] is '(' or ')' or '[' or ']' or '}' or '.' or ',' or ':' or ';' or '?' or '>';
     }
 }

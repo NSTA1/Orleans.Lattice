@@ -143,6 +143,14 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "median shard rate in operations per second at or above which healing yields to foreground "
                 + "traffic).");
         }
+        if (options.MaxLeafBytes < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxLeafBytes)} must be non-negative "
+                + "(0 disables the byte bound so leaves split on key count alone; a positive value is the aggregate "
+                + "live state size at which a leaf splits, keeping its snapshot small enough to capture in one "
+                + "contiguous buffer).");
+        }
         if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(
@@ -309,6 +317,21 @@ if (options.WalSaturationSampleInterval <= TimeSpan.Zero
         $"{nameof(LatticeOptions.WalSaturationSampleInterval)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the saturation sampler cadence; infinite disables the sampler entirely and pins every tree's signal to Healthy).");
 }
+// Note the missing InfiniteTimeSpan escape hatch, which every sibling branch
+// above carries. It is absent deliberately (issue #3065): for those options the
+// infinite value restores an earlier behaviour that was merely unbounded, while
+// here it would restore the defect this budget exists to close - a starvation
+// drive holding a replay permit for the life of the process. There is no
+// supported way to switch the ceiling off, so infinite falls through to the
+// non-positive rejection below along with zero and every negative.
+if (options.StarvationDriveBudget <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.StarvationDriveBudget)} must be positive, and unlike the sibling WAL budgets it does not accept "
+        + $"{nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the ceiling on how long one WAL GC starvation drive may hold a replay permit; an infinite or non-positive value either "
+        + "restores the unbounded drive that wedges the per-silo replay gate or abandons every drive instantly).");
+}
 if (options.WalSaturationThrottledRatio < 0.0 || options.WalSaturationThrottledRatio > 1.0
     || double.IsNaN(options.WalSaturationThrottledRatio))
 {
@@ -390,7 +413,8 @@ if (options.WalMaterialiserMaxConcurrentReplays < 0)
 {
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} must be greater than or equal to 0 "
-        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to Environment.ProcessorCount; a positive "
+        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to the lesser of "
+        + "Environment.ProcessorCount and the enforced container CPU grant; a positive "
         + "value pins it explicitly).");
 }
 if (options.WalReplayMaxRecordsPerTurn < 0)
@@ -399,6 +423,14 @@ if (options.WalReplayMaxRecordsPerTurn < 0)
         $"{nameof(LatticeOptions.WalReplayMaxRecordsPerTurn)} must be greater than or equal to 0 "
         + "(zero disables the cooperative activation-replay yield; a positive value bounds the number of WAL "
         + "records applied per scheduler turn before the replay yields).");
+}
+if (options.WalReplaySliceBudget < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalReplaySliceBudget)} must be greater than or equal to 1 "
+        + "(the number of WAL entries one activation-time replay requests per commit-log slice read, and the "
+        + "width it widens back towards after a memory-pressure narrowing; a single entry is the narrowest "
+        + "legal read, so zero would request nothing and the replay could never advance).");
 }
 if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
     && options.WalAdmissionSaturationWaitBudget != Timeout.InfiniteTimeSpan)

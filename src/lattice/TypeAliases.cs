@@ -82,6 +82,7 @@ internal static class TypeAliases
     internal const string LeafNodeState = "ol.lns";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
+    internal const string LeafSnapshotSegment = "ol.lss";
     internal const string SnapshotShardBaseline = "ol.ssb";
     internal const string LeafBaselineFreeze = "ol.bsf";
     internal const string LeafBaselinePendingEntry = "ol.bpe";
@@ -115,6 +116,8 @@ internal static class TypeAliases
     internal const string CrdtApplyResult = "ol.cap";
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
+    internal const string GatedMultiReadResult = "ol.gmr";
+    internal const string LatticeRangeReadGateCoverage = "ol.rrc";
     internal const string ShardHotness = "ol.sh";
     internal const string ShardMap = "ol.sm";
     internal const string RoutingInfo = "ol.ri";
@@ -454,6 +457,7 @@ internal static class TypeAliases
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
+    internal const string ILeafSnapshotSegmentGrain = "ol.gsg";
     internal const string ISnapshotBaselineStorageGrain = "ol.sbs";
     internal const string ILatticeQueueGrain = "ol.glq";
     internal const string IClusterSplitConcurrencyGrain = "ol.gcs";
@@ -502,6 +506,30 @@ internal static class TypeAliases
     // Write-ahead-log durability seam (consumed by the replication
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";
+
+    // Read-path memory-pressure surface. Raised by a WAL storage provider
+    // when even a single-entry page cannot be materialised, so a replay
+    // can tell "this machine cannot afford the read right now" from a
+    // corrupt log and bank its progress instead of unwinding (issue 2742).
+    // Crosses the ILeafReplayCoordinatorGrain boundary, so it is
+    // serializable rather than a bare OutOfMemoryException.
+    internal const string WalReadUnderPressure = "ol.wrp";
+
+    // Activation-time counterpart of the above. Raised when a leaf cannot
+    // materialise its persisted snapshot within the available heap, so the
+    // activation is declined rather than escalated into the whole-window
+    // replay that allocates more than the load which just failed
+    // (issue 2765). Crosses the activation boundary, so it is serializable
+    // rather than a bare OutOfMemoryException.
+    internal const string LeafSnapshotUnaffordable = "ol.lsu";
+
+    // What a starvation drive achieved on one leaf, returned to the WAL GC
+    // blocked-leaf sweep (issue 2692 Half B). Crosses the IBPlusLeafGrain
+    // boundary. An enum rather than a bool because "drove and lifted the pin",
+    // "drove and lifted nothing", and "refused for memory pressure" call for
+    // three different responses, and the sweep it replaced could not tell any
+    // of them apart.
+    internal const string LeafStarvationDriveOutcome = "ol.sdo";
 
     // WAL saturation back-pressure surface (push + poll + await
     // shapes exposed to callers driving offered load into ILattice;

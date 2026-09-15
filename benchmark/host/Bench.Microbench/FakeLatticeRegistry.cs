@@ -107,6 +107,12 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap) => throw NotUsed();
 
+    public Task<ShardMap> ReassignSlotsAsync(
+        string treeId,
+        int[] slots,
+        int targetShardIndex,
+        ShardMap fallbackMap) => throw NotUsed();
+
     public Task<WalPlacementPin> GetWalPlacementAsync(string treeId) => throw NotUsed();
 
     public Task<WalPlacementPin> UpdateWalPlacementAsync(

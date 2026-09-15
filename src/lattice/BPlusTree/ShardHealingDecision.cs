@@ -1,5 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
+using Orleans.Lattice.BPlusTree.Grains;
+
 /// <summary>
 /// The outcome of one over-split healing sweep for a tree: either a
 /// consolidation was admitted, or the single clause that refused it.
@@ -14,6 +16,10 @@ namespace Orleans.Lattice.BPlusTree;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.ShardHealingDecision)]
+[InstrumentedEnum(
+    typeof(ShardHealingOrchestratorGrain),
+    "orleans.lattice.shard.healing.decisions",
+    LatticeMetrics.TagDecision)]
 internal enum ShardHealingDecision
 {
     /// <summary>

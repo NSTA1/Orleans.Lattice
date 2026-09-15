@@ -97,6 +97,35 @@
   "version": 1,
   "panels": [
     {
+      "id": 142,
+      "title": "Scan-page leaf-read coalescing (ops/s) - issued / joined - issue #2585",
+      "description": "Whether a retried page fill re-pays for work a previous attempt already did. This panel and the shard-root wedge-guard panel above bound DIFFERENT quantities and neither is a proxy for the other: that one asks whether a stalled shard was released and whether the rows it held were banked, this one asks what the NEXT attempt then had to do. A walk can score perfectly there and still livelock here, which is exactly the repo-context-vector-index case - the ceiling fired before the first leaf read returned, so there were no rows to bank, the banking path was never reached, and every retry restarted at the same continuation token. issued = no argument-identical read was held, so a fresh call went to the leaf. This is the ordinary steady state of a healthy scan as well as the signature of the defect, so read it AGAINST shard_root.scan_page.stalls and never on its own: issued climbing in step with the stall rate while joined stays flat at zero is the livelock. joined = an argument-identical read was still in flight and this attempt attached to it rather than enqueuing a second. That is the divergence guard. Task.WaitAsync ends the wait and never the call, and IBPlusLeafGrain is deliberately non-reentrant, so an abandoned read keeps its place in the leaf queue and each retry used to enqueue another identical read behind the one it had just abandoned; after N attempts the leaf held N queued reads for the same rows. The retry loop diverged rather than merely failing to converge, and the identical-looking failures were each strictly worse than the last, alike only because the ceiling truncated them all at the same number. There is deliberately NO third arm for a reused result. Only a read still in flight is ever joined, and that is what makes the walk converge: the read stays in flight, so successive retries keep attaching to the same one and elapsed read time accumulates across attempts instead of resetting - whichever retry is attached when it completes carries the rows and the continuation token advances. An earlier revision of this fix also retained settled results for one ceiling and emitted a served arm, reasoning the window was short; that is wrong in kind rather than in degree, because once the leaf turn ends later writes are ordered after the read, so replaying its rows returns a scan page that misses committed writes - incorrect at any window length. It turned four unrelated backup restore-then-scan fixtures red and was removed outright rather than narrowed. The residual cost is a retry landing after a read completed and before the next is issued: it pays for a fresh read, which is slower and correct. Joining is not a staleness compromise: because the leaf is non-reentrant the joined read holds that leaf turn for its whole duration and every write is ordered strictly before or after it, so a joiner observes exactly what the original caller would have - a linearisable read at the point the leaf executed it. Reading a zero: both arms are primed at zero on first guarded use through the same recorder the live path uses, so a zero is a measured absence rather than an absent measurement. Only stall-guarded walks report at all, by design, because an unguarded walk cannot strand a read and so has nothing to attach to - a flat zero across BOTH arms therefore says the walks on this tree are unguarded, not that coalescing is failing. The map is per-activation and carries no cross-activation obligation: losing it on deactivation degrades to a fresh read, never to a wrong one.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 243
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, shard, outcome) (rate(orleans_lattice_shard_root_scan_page_leaf_read_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}}/{{shard}} leaf read {{outcome}}/s"
+        }
+      ]
+    },
+    {
       "id": 1,
       "title": "Commit-step latency p95 (ms) - wal / apply / observer / digest",
       "type": "timeseries",
@@ -243,62 +272,6 @@
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
           "legendFormat": "p95"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "title": "Activation replay duration p95 by outcome (ms)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 22
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(orleans_lattice_leaf_replay_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)",
-          "legendFormat": "p95 {{outcome}}"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "Replay entries (applied vs skipped, ops/s)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 22
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (outcome) (rate(orleans_lattice_leaf_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)",
-          "legendFormat": "{{outcome}}"
         }
       ]
     },
@@ -517,21 +490,26 @@
     },
     {
       "id": 113,
-      "title": "Shard-root wedge guards (ops/s) - forward timeouts and scan-page stalls",
-      "description": "Two guards that release a deliberately non-reentrant shard root rather than let a caller hold it indefinitely. shard_root.forward.timeouts is the rate of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout. Zero in steady state. A sustained non-zero rate during a resize means a forward parked against a sibling shard whose ownership was changing during the reshard swap; the forward was faulted as a TimeoutException so the foreground write pipeline could make progress and the write retried against refreshed routing. A persistent non-zero rate outside a resize window indicates the swap phase is outlasting the configured forward deadline. shard_root.scan_page.stalls is the rate of range-scan page fills abandoned after exceeding MaxScanPageStallDuration, broken out by phase. MaxScanPageDuration is cooperative (sampled between leaf reads), so it cannot bound a prologue that parks or a single leaf read that never returns; a non-zero rate here means the hard end-to-end ceiling fired so the shard's queue could drain, and the phase label attributes it: prologue = shard preparation, descent = traversal to the start leaf, leaf-walk = one in-flight leaf read.",
+      "title": "Shard-root wedge guards (ops/s) - forward timeouts, scan-page stalls, scan resumptions, and flush suspensions",
+      "description": "Two guards that release a deliberately non-reentrant shard root rather than let a caller hold it indefinitely, plus the client-side recovery from one of them. shard_root.forward.timeouts is the rate of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout. Zero in steady state. A sustained non-zero rate during a resize means a forward parked against a sibling shard whose ownership was changing during the reshard swap; the forward was faulted as a TimeoutException so the foreground write pipeline could make progress and the write retried against refreshed routing. A persistent non-zero rate outside a resize window indicates the swap phase is outlasting the configured forward deadline. shard_root.scan_page.stalls is the rate of range-scan page fills abandoned after exceeding MaxScanPageStallDuration, broken out by phase. MaxScanPageDuration is cooperative (sampled between leaf reads), so it cannot bound a prologue that parks or a single leaf read that never returns; a non-zero rate here means the hard end-to-end ceiling fired so the shard's queue could drain, and the phase label attributes it: prologue = shard preparation, descent = traversal to the start leaf, leaf-walk = one in-flight leaf read. Since the ceiling now banks a page that had already accumulated rows, this series counts only the ceiling fires that discarded work, so read it against shard_root.scan_page.ceiling_outcomes rather than as the whole. That counter is the same event split by outcome, and both arms are emitted from the one site so they sum exactly to the number of ceiling fires: banked = the ceiling caught the walk holding rows and returned them as a short page with HasMore set, so the caller's next request starts past them and a page that cannot fill in one attempt still fills across several; discarded = it caught the walk holding nothing and faulted, which is the stalls series above. Both arms are here so a zero is readable as a measured zero rather than as a code path that never ran: banked reading zero while discarded is non-zero says the ceiling is firing and never catching work in hand, whereas both reading zero says the ceiling never fired at all, and before the split those two were the same observation. scan.stall_resumptions is what the client scan wrappers then did about it, broken out by outcome: resumed = the scan carried on from its last continuation token and still completed in full (read this against the stall rate - a stall rate matched by an equal resumed rate is recovery working, and without this series such a scan is indistinguishable from one that never stalled); budget-exhausted = it had already resumed its permitted number of consecutive non-progressing times without banking a record, and rethrew; ceiling-exhausted = the opposite diagnosis with the same symptom - the scan WAS banking records between stalls and exceeded the lifetime resumption ceiling, so it reports that the ceiling is too small for this workload rather than that the source is dead. Those two are the terminal outcomes and the strongest single contention signal here, and every one of them is a scan that failed and whose caller saw the stall; read them apart, because budget-exhausted calls for relieving contention on the source while ceiling-exhausted calls for raising the ceiling or for the caller to bank partial progress so a terminated walk resumes rather than restarts. scan.stall_futility_outcomes is the sibling series that says which of those a budget-exhausted actually was, because under load a shard that is merely busy and a source that is genuinely not yielding are the same observation at the consecutive bound. Each budget-exhausted termination opens a short-lived watch on the source and position it gave up on, and that watch resolves to exactly one of recovered (a later walk against the same source yielded a record at or beyond the abandoned position, so the bound cut off a recoverable source and DefaultScanStallResumeAttempts is too tight for this workload), still-stalled (a later walk was itself killed for futility there before reaching that position, so the source really was not yielding and the bound is doing its job), unobserved (nothing revisited the source before the window closed, so the run says nothing either way), or dropped (the watch was evicted under the registry capacity bound before it could resolve). The watch never re-drives the abandoned work, so this series observes the termination policy without altering it. Read still-stalled and unobserved before concluding anything from recovered: a zero recovered rate is evidence the bound is correct only when still-stalled is non-zero, because a run whose watches all end unobserved reads zero for an entirely different reason. An earlier no-progress outcome, recorded when a progress gate refused a stall that still had resume budget, has been removed: the gate refused every stall that occurred in practice, so the label can no longer be recorded and appears only in historical data. shard_root.flush.retries_suspended is the fourth guard and the only one that fires on a write rather than a read: each of the two coalescing background-flush loops counts consecutive failures and suspends itself for the remainder of the activation once it reaches the ceiling, broken out by kind (leaf-access, dirty-leaves). Zero in steady state. Any non-zero value names a shard root whose background flushes have given up, and in practice means its in-memory ETag no longer matches its stored row, so every write from that activation fails identically and no number of retries repairs it. Suspension bounds the wasted writes and makes the condition visible; it is not a repair, because the activation stays poisoned until it is collected and a later one re-reads state. Read it against the accompanying warning log, which names the shard. shard_root.scan_page.zero_progress_stalls is the fifth series and the one that says whether the stalls above are a shard retrying or a shard wedged. Every other series here counts fires; none of them counts whether successive fires are the SAME fire over again, so 307 stalls on one leaf and 307 stalls spread across 307 leaves that each then recovered read identically on all of them - which is precisely how the repo-context symbol tree stayed wedged for three days while every counter on this panel looked like ordinary contention. This one is tagged by outcome over consecutiveness on a single leaf identity: slow = a ceiling fire that completed no leaf, counted but not yet a verdict, because a leaf replaying a long WAL window from cold and a leaf that will never answer produce byte-identical first attempts and recovering the first out from under itself would be a regression; stranded = the same leaf has now produced a run of consecutive zero-progress fires, so the shard root has stopped waiting on the read it was parked on and every attempt after this point issues a genuinely fresh read instead of attaching to a read that will never return. Both arms are primed at zero from shard-root activation, so an absent series means the build does not carry the instrument rather than that no fire happened. A stranded arm that climbs once and stops is a recovery: the leaf was replaced and the next attempt reached it. A stranded arm that keeps climbing on one tree/shard localises the fault to inside the leaf activation itself, which the shard root cannot repair and which no number of retries will clear, and is the cue to escalate rather than to keep waiting.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_shard_root_forward_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} forward timeouts/s" },
-        { "refId": "B", "expr": "sum by (tree, phase) (rate(orleans_lattice_shard_root_scan_page_stalls_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} scan-page stalls/s ({{phase}})" }
+        { "refId": "B", "expr": "sum by (tree, phase) (rate(orleans_lattice_shard_root_scan_page_stalls_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} scan-page stalls/s ({{phase}})" },
+        { "refId": "C", "expr": "sum by (tree, outcome) (rate(orleans_lattice_scan_stall_resumptions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} scan stall {{outcome}}/s" },
+        { "refId": "D", "expr": "sum by (tree, shard, kind) (rate(orleans_lattice_shard_root_flush_retries_suspended_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}/{{shard}} flush suspended ({{kind}})/s" },
+        { "refId": "E", "expr": "sum by (tree, outcome) (rate(orleans_lattice_scan_stall_futility_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} futility {{outcome}}/s" },
+        { "refId": "F", "expr": "sum by (tree, shard, outcome) (rate(orleans_lattice_shard_root_scan_page_ceiling_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}/{{shard}} ceiling {{outcome}}/s" },
+        { "refId": "G", "expr": "sum by (tree, shard, outcome) (rate(orleans_lattice_shard_root_scan_page_zero_progress_stalls_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}/{{shard}} zero-progress {{outcome}}/s" }
       ]
     },
     {
       "id": 126,
-      "title": "Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size",
-      "description": "Post-restart LeafCacheGrain pre-warm, driven by each shard root's persisted leaf-access frequency histogram (LatticeOptions.LeafCachePreWarmCount, default 0 = disabled). warmup.leaf_cache.prewarmed is leaves successfully primed; a rate materially below shards x LeafCachePreWarmCount per warm-up means individual priming calls are failing (they are swallowed by design, so this counter is the only signal). warmup.leaf_cache.duration is the per-shard fan-out cost, read against warmup.duration to attribute how much of warm-up is leaf priming. leaf_access.model.leaves is the resident model size at persist time; a distribution pinned at the model's tracked-leaf cap means the shard's read set is wider than the model represents and the ranking is drawn from a pruned view. All three stay flat at zero while the feature is disabled.",
+      "title": "Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size",
+      "description": "Post-restart LeafCacheGrain pre-warm, driven by each shard root's persisted leaf-access frequency histogram (LatticeOptions.LeafCachePreWarmCount, default 8, so the feature is on unless it is explicitly set to 0). warmup.leaf_cache.prewarmed is leaves successfully primed; a rate materially below shards x LeafCachePreWarmCount per warm-up means individual priming calls are failing (they are swallowed by design, so this counter is the only signal). warmup.leaf_cache.duration is the per-shard fan-out cost, read against warmup.duration to attribute how much of warm-up is leaf priming. leaf_access.model.leaves is the resident model size at persist time; a distribution pinned at the model's tracked-leaf cap means the shard's read set is wider than the model represents and the ranking is drawn from a pruned view. All three read zero only where the feature has been turned off by setting the count to 0.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
@@ -698,16 +676,41 @@
       ]
     },
     {
-      "id": 125,
-      "title": "Leaf-materialiser drain lag p50/p95 (ms) - issue #1030 back-pressure",
-      "description": "Distribution of leaf-materialiser drain lag (orleans.lattice.materialiser.drain_lag), sampled by each per-tree WAL GC pass as now minus the slowest durable materialiser checkpoint. This is the drain-lag back-pressure signal: when it exceeds WalSaturationMaterialiserLagThreshold for WalSaturationMaterialiserLagSampleWindows consecutive passes the tree escalates to Saturated and the writer admission gate plus replication flow control throttle. A sustained climb here is the early warning the wedge is forming.",
+      "id": 134,
+      "title": "Leaf-materialiser pin advancement by outcome (rate) - issue #2694",
+      "description": "What each merged leaf-materialiser pin report actually ADVANCED (orleans.lattice.materialiser.pin.advances), by outcome: offset = the durable checkpoint offset moved forward, which is the only outcome that can lower the WAL GC offset floor and let retention fall; frontier_only = the HLC frontier moved but the offset did not, so retention is unchanged; none = a report at or behind the existing pin on both axes. It exists because the durable_writes panel beside it counts WRITES, and writes are not proportional to advancement: pins are bucketed, so one advancing consumer rewrites its whole bucket, and a frontier-only merge rewrites the pin at the same offset. A store writing steadily while offset stays flat is a stalled retention floor presenting as healthy write throughput, which durable_writes alone cannot show. Emitted unconditionally on every merge, so all three series exist for any tree with a live pin grain rather than appearing only once the condition occurs.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 143 },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 143 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_materialiser_pin_advances_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}}/s" }
+      ]
+    },
+    {
+      "id": 125,
+      "title": "Leaf-materialiser drain lag p50/p95 (ms) - issue #1030 back-pressure",
+      "description": "Distribution of leaf-materialiser drain lag (orleans.lattice.materialiser.drain_lag), recomputed on every tick of the silo-wide WalSaturationSampler hosted service as now minus the MINIMUM materialiser cursor in the in-memory WAL cursor registry. It observes in-memory drain progress, NOT the durable WAL retention floor: a stalled pin store leaves this panel flat, which is what the pin durable-write latency panel below exists to catch. This is the drain-lag back-pressure signal: when it exceeds WalSaturationMaterialiserLagThreshold for WalSaturationMaterialiserLagSampleWindows consecutive sampler ticks the classifier holds the tree at Throttled, a pure back-off that paces each local append by WalThrottledAdmissionPace. Drain lag deliberately does NOT escalate a tree to Saturated and never engages the writer admission gate's LatticeSaturatedException fast-fail (asserted by Drain_lag_never_escalates_to_Saturated), so do not wait on a Saturated transition here: it cannot occur. Because the aggregate is a minimum across consumers, one legitimately dormant consumer and a broad materialiser stall produce an identical reading; the lagging-consumer panel below separates them (issue #2444). A sustained climb here is the early warning the wedge is forming.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 143 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
+    },
+    {
+      "id": 133,
+      "title": "Materialiser lagging consumers on over-threshold trees - issue #2444 (absent = healthy)",
+      "description": "Number of individual WAL cursor consumers whose own reported cursor trails the WAL head by more than WalSaturationMaterialiserLagThreshold (orleans.lattice.materialiser.lagging_consumers), recorded only for a tree whose aggregate drain lag is already over that same threshold on the same tick. Read it against the drain-lag panel above: that aggregate is a min() across consumers, so one legitimately dormant consumer holding the frontier down and a broad materialiser stall produce an identical lag reading while calling for opposite responses, and this count is what separates them (issue #2444). ABSENT IS NOT ZERO. No series means no tree was over threshold in this window, which is the healthy reading. These targets deliberately omit the 'or vector(0)' fallback the neighbouring panels use, because substituting a literal zero for an absent series would draw a healthy estate identically to an instrument that never fired, which is the very confusion this panel exists to remove. A drawn 0 is different again and is anomalous: whenever the aggregate is over threshold the consumer holding the minimum is over it too, so the count should be at least 1. Consumers that have never reported a cursor (HLC zero) are excluded, exactly as they are from the min() meet that produces the aggregate. Consumer identity is unbounded cardinality and is deliberately not a tag, so this panel tells you which of the two shapes you are in, not which consumer to open next (issue #2505). The second series is the rate of emitted samples, that is how often the tree was over threshold at all, which separates a brief trip from a continuous one.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 150 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "lagging consumers {{tree}}" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_lagging_consumers_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "over-threshold samples/s {{tree}}" }
       ]
     },
     {
@@ -716,7 +719,7 @@
       "description": "Per-observer breakdown of the inline IMutationObserver callback cost (orleans.lattice.observer.duration), split by the observer CLR type. Observers run inline on the write path, so this is latency the caller pays: it is the by-observer decomposition of the aggregate observer step on the Commit-step latency panel above. A single series climbing away from its peers names the misbehaving observer (synchronous I/O, a blocking call, a chatty downstream). The measurement is taken on the faulting path too, so an observer that throws slowly still shows up here.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 150 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 157 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, observer) (rate(orleans_lattice_observer_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{observer}}" },
@@ -729,11 +732,11 @@
       "description": "Caller-observed duration of a durable leaf-materialiser pin write (orleans.lattice.materialiser.pin.durable_write_latency), recorded by LeafCursorReporter around each pin grain call that reached WalSaturationMaterialiserPinLatencyThreshold or faulted. This is the only materialiser instrument that observes the durable retention floor rather than in-memory drain progress, so it is what makes a stalled pin store visible: the drain-lag panel above reads the in-memory cursor registry and stays flat through a pin-store stall. Measured at the call site, so it includes time queued ahead of the shard's non-reentrant activation. Emitted only when the threshold option is set. A sustained climb means the pin store is the bottleneck; the corrective knob is WalMaterialiserPinBuckets.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 157 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 164 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_pin_durable_write_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
       ]
     },
     {
@@ -742,7 +745,7 @@
       "description": "Steady-state per-checkpoint pin reports LeafCursorReporter declined to enqueue (orleans.lattice.materialiser.pin.reports_shed) because the target shard's last durable write showed the store is not keeping up. Shedding is always safe - a shed report leaves the durable pin staler, which retains more WAL - and only the steady-state path opts in: the birth block-pin seed and the deactivation flush are last-chance writes and are always issued. Zero is the healthy steady state. A sustained non-zero rate means the pin store is the bottleneck; pair it with the pin write-latency panel and consider raising WalMaterialiserPinBuckets.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 157 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 164 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_materialiser_pin_reports_shed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "shed {{tree}}" }
@@ -754,13 +757,340 @@
       "description": "What a leaf activation banked on its way out, split cold vs warm, plus the activations that never got out at all. checkpoint_delta is the sum across WAL partitions of (checkpoint leaving OnDeactivateAsync - checkpoint entering it), recorded once per graceful deactivation and tagged by tree, deactivation reason and activation temperature (never by leaf: the leaf population is unbounded, so per-leaf detail is on the debug log line instead). activation_failures counts leaf activations that THREW out of OnActivateAsync, by reason (canceled / canceled_awaiting_permit / faulted). READ BOTH SERIES TOGETHER. THIS PAIR IS A LOWER BOUND ON DEACTIVATIONS AND MUST NOT BE QUOTED AS A CENSUS: crash, kill and silo failure bypass the deactivation hook by design, and Orleans does not run that hook at all when OnActivateAsync throws (measured with a positive control on Orleans 10.2.2), which is why the failure counter exists as a separate series rather than as another arm of the histogram. A ZERO delta on the cold arm is EXPECTED and is not by itself a fault: a cold replay restarts from the -1 sentinel and the projection checkpoint is strictly monotonic, so a cold activation cannot bank anything until its scanned-through offset passes the mark it started above. Progress below that mark is not discarded, it is unrepresentable, so a flat zero on the cold arm is arithmetically forced rather than symptomatic. The offsets are scanned-through, not applied-through (issue #2270): replay advances the checkpoint over entries it skips as another leaf's work, because the WAL retention floor is the minimum of these offsets. A non-zero delta is durable forward progress through the log, not a count of mutations this leaf applied. The fault shape to look for is a sustained cold activation-failure rate on a tree whose cold checkpoint_delta never leaves zero across many activations.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 164 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 171 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, activation_temperature) (rate(orleans_lattice_leaf_deactivation_checkpoint_delta_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 banked offsets {{activation_temperature}}" },
         { "refId": "B", "expr": "sum by (activation_temperature) (rate(orleans_lattice_leaf_deactivation_checkpoint_delta_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "banked offsets {{activation_temperature}}/s" },
         { "refId": "C", "expr": "sum by (activation_temperature) (rate(orleans_lattice_leaf_deactivation_checkpoint_delta_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "graceful deactivations {{activation_temperature}}/s" },
         { "refId": "D", "expr": "sum by (activation_temperature, reason) (rate(orleans_lattice_leaf_activation_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "activation failures {{activation_temperature}} {{reason}}/s" }
+      ]
+    },
+    {
+      "id": 131,
+      "title": "Leaf snapshot load failures (rate) by reason - issue #2364",
+      "description": "Leaf activations that could not load their snapshot (orleans.lattice.leaf.snapshot.load_failures), split by reason. READ THIS PANEL WITH THE ACTIVATION-FAILURE PANEL ABOVE, NOT INSTEAD OF IT: this counter does not count activations that failed, it counts activations that SUCCEEDED while silently giving up their warm start. A failed snapshot load is not fatal for the faulted arm - the leaf declines the snapshot, activates cold, and replays its whole readable WAL window - so that fault is invisible in availability terms and shows up only as slower activations and higher WAL read volume. SINCE ISSUE #2765 THE resource_exhausted ARM IS DIFFERENT AND DELIBERATELY SO: it declines the ACTIVATION rather than the snapshot, because the cold replay it used to fall through to allocates more than the load that had just failed, and under a container limit that is positive feedback rather than a fallback. Failing one leaf costs one leaf; escalating cost the silo. Before this instrument existed the decline was indistinguishable from a leaf that genuinely had no snapshot, so the failure population read as zero at every rate of occurrence, which is not a weak measurement but no measurement. reason=resource_exhausted means the load ran out of memory, which under a container memory limit is the self-reinforcing shape: the cgroup limit sizes the .NET GC heap hard limit, so the process is never OOM-killed and there is no restart, no exit code and no resource event - the allocation simply fails inside the storage provider deserialising the snapshot blob, and surfaces to an operator as the provider's own \"Error reading grain state\". A memory shortage wearing a storage fault's clothes. The cold replay that follows raises memory pressure further, so a non-zero resource_exhausted rate tends to climb rather than settle. reason=faulted is every other cause, and is what a snapshot-grain activation failure arrives as, because that failure is raised in-process inside the snapshot grain and never crosses a grain-call boundary carrying the original exception. Zero is the healthy steady state. Any sustained non-zero rate means leaves are paying for full-window replays they should not be paying for; correlate with container memory headroom first.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 179 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_load_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" }
+      ]
+    },
+    {
+      "id": 132,
+      "title": "Self-reinforcing cold replay loop (rate) - issue #2280",
+      "description": "Cold leaf activations cancelled at or past the consecutive-cancellation escalation threshold (orleans.lattice.leaf.activation.cold_replay_loop). READ THIS AS A DEFECT SIGNAL, NOT A COST SIGNAL, AND THAT IS THE WHOLE POINT OF IT EXISTING SEPARATELY FROM THE ACTIVATION-FAILURE PANEL ABOVE. That counter is an aggregate: it cannot distinguish one leaf cancelled five times from five leaves cancelled once, and those are a defect and a cost respectively. This one counts only cancellations on a leaf that has been cancelled repeatedly IN A ROW WITH NO SUCCESSFUL ACTIVATION IN BETWEEN, which is the pathology: a cold activation replays the whole readable WAL window, and when it is cancelled it latches neither of the two signals the snapshot capture gate requires, so no snapshot is banked, the next activation finds no anchor and replays the whole window again - the condition that causes the cancellation is REPRODUCED BY the cancellation. The count is CONSECUTIVE and resets on any successful activation, so the threshold measures leaf health and not how long the process has been up; a cumulative count would reach any fixed threshold eventually on a healthy leaf and fire falsely. The threshold is set one above the highest value seen in the field measurement behind issue #2280 (79 runtime cancellations over ~40 minutes across 67 distinct leaves: 55 cancelled once, 12 twice, none more than twice), so ZERO IS THE EXPECTED READING and any sustained non-zero rate is a real finding rather than background. Not tagged by leaf - that population is unbounded - so take the leaf identity, the consecutive count and the mid-replay / queued-for-permit split from the paired warning, which names the pathology in full. A high queued-for-permit share points at replay concurrency (issues #2279, #2256); a high mid-replay share points at bounding a cold replay (issue #2411). This instrument is a DIAGNOSTIC ONLY: it changes no leaf behaviour, and the underlying activations still fail exactly as they did before it existed.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 186 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_cold_replay_loop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "loop-escalated cancellations {{tree}}/s" }
+      ]
+    },
+    {
+      "id": 135,
+      "title": "Leaf snapshot zero-coverage repair evaluations (rate) by outcome - issues #2692, #2940 (absent = NOT deployed)",
+      "description": "Evaluations of the zero-coverage leaf snapshot repair path (orleans.lattice.leaf.snapshot.coverage_repairs), split by outcome, charted against the reclaimed WAL GC passes the repair exists to unblock. A leaf that holds a checkpointed partition with no durable snapshot coverage publishes the Zero block pin, and ONE such leaf disables cursor-based WAL trimming for its ENTIRE tree, so every other leaf's WAL is retained on its behalf and retained bytes grow without bound (issue #2692). FIVE ARMS PARTITION EVERY INVOCATION OF THE REPAIR PATH (issue #2940). outcome=repaired is a capture after which every checkpointed partition holds coverage, so that leaf has stopped blocking its tree. outcome=unsatisfied is a capture that RAN and left a checkpointed partition still uncovered. outcome=exhausted is an activation that spent its whole per-activation repair budget with a partition still uncovered: it is recorded ONCE PER ACTIVATION at the moment the budget is spent, not once per attempt, so the series counts stuck leaves rather than retries. outcome=capture_in_flight is an evaluation declined because a capture was already running on that leaf; the uncovered-partition predicate is NOT evaluated on that arm, so it makes no claim about whether the leaf is repairable. outcome=no_checkpointed_uncovered_partition is an evaluation declined because nothing needs repairing, which is the healthy majority and WILL DOMINATE THIS PANEL BY RATE on a healthy estate - it is the denominator, not a fault, and deselecting it in the legend is the usual first move. THE TWO REJECTION ARMS ARE THE DIAGNOSTIC AND ARE WHY THIS PANEL CHANGED. Until issue #2940 both the guard exit and the attempted-but-unsatisfied exit recorded NOTHING, so a repair that never ran and a repair that ran and failed produced byte-identical silence while calling for opposite responses: no_checkpointed_uncovered_partition says the repair is structurally unable to address the fault and the remedy belongs at the pin/guard seam, whereas unsatisfied says the repair is reaching the fault and failing and the remedy belongs at the capture seam. ABSENT IS NOT ZERO, AND ABSENT NOW MEANS NOT DEPLOYED. All five arms are zero-primed per tree the first time that tree evaluates the repair path in a process, so a tree with leaves activating and no series here is running a binary without this instrument, not an estate in good health. These targets omit the 'or vector(0)' fallback most neighbouring panels use, because substituting a literal zero would draw an estate that needs no repairs identically to an instrument that never fired, which is the exact confusion this fix exists to remove. ONE BOUNDARY ON THE SUM: a repeat exhaustion within a single activation is deduplicated on purpose, so summing the arms gives a lower bound on invocations, never an over-count. An exhausted or unsatisfied series present at any sustained rate is the headline fault: those trees are retaining WAL right now, and the paired warning log names the individual leaf, which is deliberately not a tag here because the leaf population is unbounded cardinality. Read series A against series B for the drain: on a backlog of starved leaves repaired rises, then falls toward zero as the population clears, WHILE reclaimed GC passes rise from zero - that crossover is the reclamation actually resuming, and repaired falling while reclaimed stays flat means coverage is being written but something else still pins the offset floor. Leaves whose TreeId is not yet known emit nothing at all, by construction.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 193 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_coverage_repairs_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "coverage repairs {{tree}} {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",outcome=\"reclaimed\"}[5m]))", "legendFormat": "reclaimed WAL GC passes {{tree}}/s" }
+      ]
+    },
+    {
+      "id": 136,
+      "title": "Leaf snapshot capture attempts (rate) by outcome - issue #2696",
+      "description": "Leaf-snapshot capture attempts (orleans.lattice.leaf.snapshot.captures), split by outcome - issue #2696. READ THE SUM ACROSS OUTCOMES FIRST: it is the attempt count, and before this instrument existed there was no exported series anywhere from which it could be derived, so \"every capture is failing\" and \"capture never ran\" were the same reading - zero - at every rate of occurrence. That is not a weak measurement, it is no measurement, and it is the defect this panel exists to close. outcome=failed is the reading that was previously invisible: the activation advisory handler catches and swallows the exception, logging it and incrementing nothing. outcome=abandoned is a capture dropped because the caller's deactivation token was cancelled; it is kept apart from failed deliberately, because a fleet-wide rolling restart and a broken storage provider would otherwise produce an identical graph while calling for opposite responses. ONE LIMITATION, STATED BECAUSE INFERRING A GUARANTEE FROM IT WOULD BE WRONG: outcome=succeeded records that the capture completed and the blob was persisted, NOT that the blob is subsequently loadable. A capture whose SnapshotOffset normalises to null is saved and is then discarded on load by HasCapturedPrefix, and this counter will record that as a success. Correlate with the snapshot load panels above rather than reading succeeded as end-to-end coverage.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 200 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_captures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_captures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} attempts (all outcomes)/s" }
+      ]
+    },
+    {
+      "id": 137,
+      "title": "Leaf snapshot capture duration p50/p95 (ms) - issue #2696",
+      "description": "Wall-clock duration of leaf-snapshot capture attempts (orleans.lattice.leaf.snapshot.capture.duration) - issue #2696. Timing starts at the SINGLE-FLIGHT BOUNDARY, after the eligibility gates, so a leaf that declines to capture contributes no sample; the gates return in microseconds and are taken far more often than a capture runs, so timing the whole method would let near-zero no-ops dominate and drag the distribution toward zero exactly when capture is most expensive. This shares its population exactly with the attempt counter above - every counted attempt is timed and every timed attempt is counted - so the two may be read as a ratio without drift. WHY THIS PANEL MATTERS OPERATIONALLY: capture is awaited INLINE inside OnActivateAsync, and Orleans delivers no request to a grain until that method completes, so every millisecond here is activation latency paid by every caller of that leaf. A rising p95 with a flat attempt rate is the shape of a saturating snapshot provider (issue #2696): all per-leaf snapshot grains write through one shared provider with no admission control, no cap and no jitter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 207 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "{{tree}} p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "{{tree}} p95" },
+        { "refId": "C", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1) or vector(0)", "legendFormat": "{{tree}} interval mean" }
+      ]
+    },
+    {
+      "id": 138,
+      "title": "Leaf snapshot capture declines (rate) by reason - issue #2696",
+      "description": "Leaf-snapshot capture invocations that DECLINED before reaching the attempt boundary (orleans.lattice.leaf.snapshot.capture.declines), split by reason - issue #2696. THIS PANEL EXISTS BECAUSE THE ATTEMPT COUNTER ABOVE CANNOT BE READ ALONE. A declined capture is a third state, distinct from both a failed capture and an idle deployment: it increments nothing on that counter, so \"every capture is being declined\" and \"the capture path is never reached\" leave it at zero alike. That is the same ambiguity the attempt counter was added to remove, one gate higher, and it is the most likely way a self-heal silently never runs. It is a separate instrument rather than a fourth outcome value deliberately, so that attempts and durations stay exactly co-populated - declines are never timed. reason=not_eligible IS THE STARVED-LEAF SIGNAL and is the one to read after a self-heal deploy: it means no partition held a checkpoint or live data, so that leaf will never cover itself. reason=already_in_flight is contention rather than error - a sustained rate means captures are being requested faster than the shared provider retires them, which is the saturation shape, and it calls for the opposite response to not_eligible. reason=no_tree_id is a bug above zero rather than a workload characteristic, and carries NO tree tag because the leaf has no tree identity to report, so a per-tree filter will never show it.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 214 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_capture_declines_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{reason}}/s" },
+        { "refId": "B", "expr": "sum by (reason) (rate(orleans_lattice_leaf_snapshot_capture_declines_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "untagged-tree {{reason}}/s" }
+      ]
+    },
+    {
+      "id": 139,
+      "title": "Deferred terminals dropped at the replay-work cap (rate) by tree/partition - issue #2756 (absent = build did not land)",
+      "description": "Deferred terminals (TxCommit, TxAbort, DeleteRange) that replay pass 1 could NOT record into the leaf durable UnresolvedReplayWork ledger because it was already at MaxDurableUnresolvedReplayWork, and which therefore fell back to the pre-#2165 in-memory clamp (orleans.lattice.leaf.deferred_terminals_dropped_at_cap). BEFORE THIS INSTRUMENT THAT DROP WAS ENTIRELY SILENT: no metric, no log, no counter, while being able to hold the partition replay checkpoint down and so, through the whole-tree Zero block pin, stop WAL reclamation for EVERY leaf in the tree. A frozen tree was therefore indistinguishable between this clamp pinning the checkpoint and this clamp never having fired at all, which are opposite findings with opposite fixes. DO NOT READ orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap AS A PROXY FOR THIS SERIES. It is deliberately not charted here, and not merely because it is unpaneled by design (issue #2183): the two meter DIFFERENT LEDGER ARMS with opposite policies. That one is the prepare arm, which is uncapped by design and records unconditionally; this one is the capped deferred arm, sampled at the point a terminal is DISCARDED. The substitution fails hardest exactly where an operator would reach for it. On a tree that runs no sagas the prepare arm is structurally empty and reads zero forever, yet this series can still climb, because the deferred branch admits DeleteRange and not only transaction terminals - so on such a tree this is the ONLY clamp that can fire and the only series that can see it. It also fails on a tree that does run sagas: that counter fires on count strictly greater than the cap while the capped recorder refuses at count greater than or equal to the cap BEFORE adding, so a ledger held at exactly the cap drops every subsequent terminal forever while leaving that counter at zero. That boundary is now inclusive for this reason, which widens the observability window by one and changes no behaviour. ABSENT IS NOT ZERO, AND THAT IS DELIBERATE. These targets omit the or vector(0) fallback most neighbouring panels use, because a literal zero would draw a healthy estate identically to a build in which the instrument was never wired. The series is instead PRE-MINTED at zero per tree and partition when a partition enters replay, carrying the exact tag set a later drop carries, so a flat zero line is a MEASURED zero and a missing line means the build did not land. Observability only: the drop behaviour, the cap, and the in-memory fall-back are all unchanged by this instrument.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 221 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, partition) (rate(orleans_lattice_leaf_deferred_terminals_dropped_at_cap_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "deferred terminals dropped {{tree}}/p{{partition}}/s" }
+      ]
+    },
+    {
+      "id": 148,
+      "title": "WAL replay permit queue wait (mean ms) by outcome - issue #2873 (absent = build did not land)",
+      "description": "Mean time an activation spent QUEUED on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_queue_wait), split by whether the wait ended in a permit (ACQUIRED) or in cancellation while still queued (CANCELED). THIS PANEL EXISTS TO DISCRIMINATE A READING THE COUNTER BESIDE IT CANNOT MAKE. leaf.activation.failures{reason=\"canceled_awaiting_permit\"} is honest about WHERE an activation was cancelled and silent about WHY: the Orleans request deadline spans the whole grain call, so an activation that burned its budget upstream arrives here already doomed and is cancelled within seconds, and the COUNT IS IDENTICAL whether the gate was saturated or completely idle. Only the duration separates them, and it separates them by ORDERS OF MAGNITUDE. GENUINE PERMIT STARVATION: the canceled arm climbs toward the request budget, because activations really are waiting behind a saturated gate. UPSTREAM BUDGET EXHAUSTION: the canceled arm sits at or near zero, because the activation was already out of time when it arrived and the gate never made it wait. Read the two arms TOGETHER - a large acquired wait alongside a large canceled wait is a saturated gate serving a real queue, whereas a near-zero canceled wait says the gate is not the constraint no matter how high that counter climbs. READ THE MEAN, NOT A QUANTILE, AND THAT IS A STRUCTURAL PROPERTY OF THIS CONTAINER RATHER THAN A SHORTCUT. The exposition renders a .NET Histogram as a Prometheus summary carrying _sum and _count and NO _bucket, so histogram_quantile over this series returns nothing, and the usual 'or vector(0)' repair would substitute a literal zero that reads exactly like the genuine near-zero canceled wait - one of the two conclusions this panel exists to distinguish. The mean is sufficient precisely because the two regimes differ by orders of magnitude rather than by percentile shape. SINCE ISSUE #3044 THIS INSTRUMENT DECLARES EXPLICIT BUCKET BOUNDARIES IN-PROCESS, AND THAT DOES NOT CHANGE THE GUIDANCE ABOVE FOR THIS CONTAINER. InstrumentAdvice is a .NET-level hint that only an exporter which reads it can honour, and the deployed exposition renders every one of its 98 histogram families as a bucketless summary - no _bucket series anywhere in the scrape, and no quantile= labels either - so the boundaries are real inside the process and absent on the wire. The advice is NECESSARY AND NOT SUFFICIENT: it makes buckets available to an exporter that honours them, such as the OpenTelemetry AddPrometheusExporter used by samples/McpTelemetry, and changes nothing under the adapter this container actually runs. KEEP READING THE MEAN until a scrape genuinely shows _bucket series for this family; do not switch to histogram_quantile on the strength of the boundaries existing in source, because that is exactly the reading that would return nothing and invite the 'or vector(0)' repair this panel already warns against. TAGGED BY TREE, unlike the permit_adaptations panels above, and that is deliberate rather than inconsistent: those measure a process-wide CEILING, which has no per-tree value, whereas a WAIT is one caller's own experience and is attributable to the tree that waited. ABSENT IS NOT ZERO, AND HERE IT IS NOT INNOCENT EITHER. Unlike permit_adaptations this instrument is DELIBERATELY NOT PRIMED, because priming a histogram means fabricating a 0 ms sample, which is not a neutral 'measured, never engaged' marker but a datum reading as 'the gate was instant' - it would bias the instrument toward one of the two answers it exists to choose between. A missing line is therefore UNINTERPRETABLE and must be diagnosed: corroborate against the primed permit_adaptations arms and the activation counters to tell 'the build did not land' from 'nothing ever waited'.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 286
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(orleans_lattice_wal_replay_permit_queue_wait_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (outcome) (rate(orleans_lattice_wal_replay_permit_queue_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "mean permit queue wait {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 149,
+      "title": "WAL replay slice narrowings (rate) by tree/partition - issue #2867 (absent = build did not land)",
+      "description": "Activation-time WAL replay slice-width narrowings forced by memory pressure on a commit-log read (orleans.lattice.wal.replay.slice_narrowings) - issue #2867. THIS PANEL EXPOSES THE SECOND OF THE TWO FACTORS THAT SET PEAK REPLAY MEMORY, AND IT IS THE ONE NO OPERATOR CAN CONFIGURE. Peak memory is the PRODUCT of how many replays run at once and how much each one buffers. The first factor is WalMaterialiserMaxConcurrentReplays: it is an option, it is surfaced on the container tuning overlay, and the panels above already measure it from both sides. The second factor is the per-replay slice width, and it is a private const of 256 with no option, no environment variable and no overlay entry behind it - so before this instrument the deploy surface exposed exactly one of the two terms and the other was invisible. READ IT AGAINST leaf.activation.failures ON THE SAME TREE, because together they separate two stories that a failure count alone cannot and whose remedies point in opposite directions. NARROWINGS CLIMBING WITH FAILURES: the width is too coarse for this host, the narrowing is engaging and is not keeping up, and the second factor is the lever. FAILURES CLIMBING AGAINST A FLAT ZERO HERE: the allocation that failed was not the slice read this clause guards, so lowering the width would change nothing and the lever is elsewhere. THE NARROWING IS REACTIVE AND PER-ACTIVATION, NOT A SETTING. A replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742); the width resets to 256 on the next activation, and N concurrent replays each start at full width, so narrowing one does not lower the others. TAGGED BY TREE AND PARTITION, unlike the permit_adaptations panels above and for the same reason permit_queue_wait is: a ceiling is process-wide and has no per-tree value, but a buffer width is one replay own and is attributable to the tree and partition that paid it. That attribution is the point - it is what lets one tree be shown buffering harder than its siblings under identical cycling, which is the shape issue #2691 measured at 139x. ABSENT IS NOT ZERO, AND HERE ABSENT IS NOT INNOCENT. The series is PRE-MINTED at zero per tree and partition when a partition enters replay, carrying the exact tag set a later narrowing carries, because the HEALTHY steady state is never to narrow at all - without the prime the common case would be byte-identical on the scrape to a build in which the instrument was never wired, which is precisely the ambiguity it exists to remove. A flat zero line is therefore a MEASURED zero and a missing line means the build did not land. Priming is sound here in a way it is not for the permit_queue_wait histogram beside it: adding zero to a counter mints the series without perturbing its value, whereas a primed histogram would record a fabricated 0 ms sample that reads as a real observation. Observability only - the narrowing behaviour, its quarter-width step and its single-entry floor are all unchanged by this instrument.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 293 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, partition) (rate(orleans_lattice_wal_replay_slice_narrowings_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "slice narrowings {{tree}}/p{{partition}}/s" }
+      ]
+    },
+    {
+      "id": 150,
+      "title": "Leaf deferred WAL replay outcomes (rate) by tree/outcome - issue #2871 (absent = build did not land)",
+      "description": "Terminal states of a leaf's DEFERRED WAL replay (orleans.lattice.leaf.replay_barrier_outcomes), split by completed, faulted and canceled - issue #2871. THESE ARE THE LITERAL EMITTED TAG VALUES and must be written exactly as the LatticeMetrics constants emit them, because a query or alert matches on the value, so a plausible near-miss matches no series while looking correct (issue #2854). THIS PANEL EXISTS BECAUSE THE SIGNAL IT CARRIES NO LONGER APPEARS WHERE AN OPERATOR WOULD LOOK FOR IT. Before issue #2871 the WAL replay ran inside OnActivateAsync, so a replay that faulted failed the activation and was counted by leaf.activation.failures. It no longer does: the activation completes immediately and arms a once-only barrier that DATA OPERATIONS await, so a replay that faults now fails the REQUEST while the activation stays up and healthy. READ THIS PANEL AND leaf.activation.failures TOGETHER AND DO NOT SUBSTITUTE ONE FOR THE OTHER - after this change a silo can be losing every read on a tree while its activation-failure series sits flat at zero, which before the change was impossible. THE WHOLE POINT OF THE CHANGE IS VISIBLE IN THE completed ARM. The defect it repairs is that the remedy for a blocked WAL GC pin, the blocked-leaf reactivation sweep, has to make a grain call INTO the very activation that cannot complete: its probe is a trivial getter and it times out at 30s, so the sweep reported attempted at its full structural rate while not one call ever arrived (run 12 measured undelivered/attempted at 100.0 percent). Moving replay off the activation path is what lets that probe land. Chart this beside wal.gc.blocked_leaf_reactivations on the Replication dashboard: reactivations delivering AND this series showing completed is the loop closing; reactivations delivering while this stays flat means the leaf is reached and still not replaying, which is a different defect. THE canceled ARM IS NOT A FAULT ARM. A cancelled permit wait fails the REQUEST that was waiting and deliberately leaves the activation usable, so the barrier is left un-latched and the next data operation retries the replay from the beginning. A steady low canceled rate under load is the request budget doing its job; a canceled rate that rises with no completed arm is a tree whose replay cannot finish inside any single request budget, and it points at the per-silo replay permit gate above rather than at this barrier. THE faulted ARM IS THE ALARM ARM and means the replay itself threw: the projection for that tree is not converging and every data operation on it is failing, silently as far as activation health is concerned. ABSENT IS NOT ZERO. All three arms share one instrument and each is PRE-MINTED at zero per tree when a barrier is armed, carrying the exact tag set a later increment carries, so a flat zero on faulted is a MEASURED zero and a missing line means the build did not land. Priming is sound here in the way it is for every counter on this dashboard and is not for the permit_queue_wait histogram beside them: adding zero mints the series without perturbing its value. ONE CONSEQUENCE FOR ABSENCE-BASED READINGS ELSEWHERE. Because replay is now driven by the first data operation rather than by activation, a leaf that activates and is never read runs no replay and therefore mints none of the per-replay series, including the slice-narrowing panel above. Before reading an absent narrowing series as evidence, exclude the benign case of a leaf that activated and was never read; the cheapest exclusion is a non-zero read count on that leaf.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 300 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_replay_barrier_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "replay barrier {{tree}} {{outcome}}/s" }
+      ]
+    },
+    {
+      "id": 158,
+      "title": "WAL replay permit waits currently parked (level) by tree - issue #3044",
+      "description": "Activations currently QUEUED on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_waits_in_flight). THIS PANEL EXISTS BECAUSE THE HISTOGRAM ABOVE IT IS STRUCTURALLY BLIND TO THE STATE THAT MATTERS MOST. permit_queue_wait records on exactly two arms and BOTH ARE TERMINAL: acquired is written after the semaphore is entered, canceled is written from the catch around the wait. A wait that never returns writes NEITHER, so an activation parked on a saturated gate forever contributes nothing to either arm and the instrument built to measure gate contention goes quiet exactly when the gate is at its worst. That is not an edge case - it is what saturation looks like from the inside. NO AMOUNT OF ZERO-PRIMING REACHES THAT GAP, and this is worth stating because priming is the reflex the rest of this dashboard teaches. A primed canceled arm reading zero asserts that NO CANCELLATION COMPLETED, which is true and irrelevant while a wait is still in flight. The missing observable is a LEVEL, not a terminal event, so it needs a gauge and could never have been a prime. READ IT WITH THE OLDEST-AGE PANEL BESIDE IT AND DO NOT READ EITHER ALONE. A count of three cannot distinguish three healthy 200ms waits from one activation parked for twelve minutes, and those two have different causes and opposite remedies. The count answers IS ANYONE QUEUED; the age answers FOR HOW LONG, and only the pair is diagnostic. ABSENT IS NOT ZERO, BUT ZERO IS A MEASURED ZERO. This gauge IS primed, unlike the histogram above, and the asymmetry between them is deliberate rather than inconsistent: priming is free for an instrument whose empty state is genuinely a level and wrong for one whose empty state is a distribution, because adding a zero to a level does not perturb it while a fabricated 0 ms sample is a real datum that biases a shape. A tree reports zero here once it has queued at least once in this process, so a flat zero line is a measured zero and a MISSING line means either the build did not land or that tree has never activated a leaf in this silo. THE PRIMING HAS A BOUNDARY AND THE BOUNDARY IS PART OF THE READING: it covers trees this process has OBSERVED queueing, not every tree in the estate, so a zero here means 'has queued before, is not queued now' and never means 'this tree cannot queue'. TAGGED BY TREE for the same reason permit_queue_wait is and permit_adaptations is not - a ceiling is process-wide and has no per-tree value, but a wait is one caller's own experience and is attributable to the tree that is paying it.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 349 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_waits_in_flight{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "parked permit waits {{tree}}" }
+      ]
+    },
+    {
+      "id": 159,
+      "title": "WAL replay permit oldest parked wait (age) by tree - issue #3044",
+      "description": "Age in seconds of the OLDEST activation currently queued on the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_wait.oldest_age). THIS IS THE HALF OF THE PAIR THAT SEPARATES BUSY FROM STUCK. The count panel beside it reports how many activations are parked; it cannot say whether they are moving. A steady count of three with this age oscillating near zero is a gate serving a real queue promptly, which is the mechanism working. The SAME count of three with this age climbing without bound is one or more activations that will never be admitted, and it is the shape that closes the loop issue #2691 measured from the filesystem: a leaf that cannot get a permit cannot replay, cannot bank a snapshot, cannot advance the durable materialiser pin, so WAL garbage collection finds its pin unusable and reclaims nothing, and the next replay window is larger still. A MONOTONIC CLIMB HERE IS THE ALARM and no threshold is encoded in the instrument, deliberately: stuck is read off the slope against real data rather than guessed in code, because the honest threshold differs per host and per WAL size. NOT PRIMED, AND THE ASYMMETRY WITH THE COUNT BESIDE IT IS THE WHOLE DESIGN. The age of the oldest waiter when there is no waiter is UNDEFINED, not zero. Priming it would publish the healthiest possible value for the emptiest possible state, so a genuinely idle gate would be indistinguishable on the scrape from a gate whose waits are all instant - and 'the gate is innocent' is precisely one of the two conclusions this pair exists to choose between. So an absent series here is CORRECT and means nothing is queued; confirm that reading against the count panel, which IS primed and does distinguish a measured zero from a build that did not land. Use the count for presence and this for severity; neither substitutes for the other. TAGGED BY TREE, matching the count and permit_queue_wait, because a wait is attributable to the tree paying it even though the gate itself is a process-wide static with no per-tree ceiling.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 356 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
+      ]
+    },
+    {
+      "id": 143,
+      "title": "WAL replay gate memory backpressure (rate) by outcome - issue #2781 (absent = build did not land)",
+      "description": "Rate of adaptations to the per-silo WAL replay concurrency gate (orleans.lattice.wal.replay.permit_adaptations), split by whether a permit was WITHHELD from circulation or RESTORED to it. THE OUTCOME SPLIT IS THE WHOLE READING. TWO TRIGGERS WITHHOLD (issue #2862). PROACTIVE: a replay that finishes while managed heap occupancy is at or above 75 percent of the GC hard limit withholds its permit whether or not it faulted. REACTIVE: a replay that fails for memory pressure withholds its permit whatever the occupancy. A permit is RESTORED only when a replay completes cleanly AND occupancy has receded below 60 percent, so the two figures form a hysteresis band the gate settles inside rather than a single edge it chatters across. The reactive arm alone was never enough: the slice-budget narrowing loop (issue #2742) catches the very OutOfMemoryException the gate watched for and retries at a quarter width, so a replay that thrashed the heap and then succeeded looked CLEAN and RESTORED a permit into an already-full heap. The gate admits WalMaterialiserMaxConcurrentReplays - defaulting to the lesser of Environment.ProcessorCount and the enforced container CPU grant (issue #2816) - cold WAL replays at once, with no memory dimension at all before issue #2781. On a tree whose WAL entries are large, every such replay holds large buffers, so the admitted set can exhaust the heap; the replays then fail SLOWLY WHILE HOLDING PERMITS, other leaves time out queued for a permit and never replay at all, a cancelled activation banks no snapshot, the durable materialiser pin never advances, WAL garbage collection reclaims nothing, and the next replay window is larger still. That loop is closed and nothing inside it reduces concurrency. This is the instrument for the mechanism that opens it. A withheld rate with no restored rate is a silo still descending; the two rising together is the gate oscillating around the concurrency the heap can currently afford, which is the mechanism working rather than a fault. Read the LEVEL on the companion panel, not the rate, to judge how far concurrency has actually been reduced. NO TREE TAG BY DESIGN: the gate is process-wide, so a per-tree split would imply a per-tree ceiling that does not exist. THE DENOMINATOR IS THE GC HARD LIMIT, NOT THE CONTAINER GRANT. Under a container memory limit .NET applies its default GCHeapHardLimitPercent to the grant, so a 12 GiB grant yields a 9 GiB managed ceiling reported by GC.TotalAvailableMemoryBytes; a threshold written against the grant would sit 33 percent above the limit that actually throws and could never be crossed. ABSENT IS NOT ZERO - all three series (each trigger on the withheld arm, plus restored) are primed at zero when the gate is sized, so a flat zero line is a MEASURED zero and a missing line means the build did not land. THE WITHHELD ARM IS SPLIT BY TRIGGER (issue #2883), AND THAT SPLIT IS WHY THE SECOND QUERY EXISTS. Both mechanisms above used to write the same untagged series, so a withheld figure was a SUM THAT COULD NOT BE ATTRIBUTED to either - and run 12's withheld=6 was published as evidence that the reactive trigger works when it is equally consistent with that trigger firing zero times. Query A is the unchanged aggregate, kept so every pre-tag reading still applies; query B is the attribution. Summing B over trigger reproduces A's withheld arm exactly, which is the property that makes a dimension the non-destructive fix a second counter would not have been. DO NOT SUBTRACT RESTORED FROM A SINGLE TRIGGER. The restored arm carries no trigger, deliberately: withheld permits are FUNGIBLE, since the accounting is one process-wide count rather than a per-trigger ledger, so a restore cannot know which mechanism withheld the permit it hands back. Read the trigger split as WHICH MECHANISM IS DOING THE WORK, never as HOW MUCH EACH IS CURRENTLY HOLDING - the only valid level is the total on the companion panel.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 251 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_wal_replay_permit_adaptations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "replay permits {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (trigger) (rate(orleans_lattice_wal_replay_permit_adaptations_total{outcome=\"withheld\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "withheld by {{trigger}}/s" }
+      ]
+    },
+    {
+      "id": 144,
+      "title": "WAL replay gate permits currently withheld (level) - issue #2781",
+      "description": "Permits currently WITHHELD from the per-silo WAL replay concurrency gate, as the difference between the withheld and restored arms of orleans.lattice.wal.replay.permit_adaptations (issue #2781). This is the level, and it is the number to read when asking how far leaf-activation concurrency has actually been reduced: the effective ceiling is the configured maximum minus this value. A sustained non-zero level is a silo whose heap cannot afford the concurrency the operator granted, and the correct response is to look at WAL entry size on the trees being replayed rather than to raise the ceiling. TWO BOUNDS MAKE THIS SAFE TO LEAVE UNATTENDED. It can never reach the configured ceiling, because backpressure always leaves one permit in circulation - a gate that admits nothing could never observe the clean replay that recovers it, and would latch permanently. It can never go negative or drive the gate above the ceiling, because the mechanism works by DECLINING TO RETURN a permit already taken rather than by resizing, so it is structurally incapable of adding one; a dynamic floor beneath the operator setting is not an override of it (issues #2278/#2279). A level pinned at configured-minus-one is the floor, and means every replay that has run recently either failed for memory pressure or finished with heap occupancy still inside the withholding band (issue #2862). THIS LEVEL HAS NO PER-TRIGGER EQUIVALENT, AND THE QUERY BELOW DELIBERATELY SUMS ACROSS THE TRIGGER TAG. Since issue #2883 the withheld arm is split by trigger, but the restored arm is not, because withheld permits are FUNGIBLE: the accounting is one process-wide count rather than a per-trigger ledger, so a permit withheld by one mechanism may be handed back by any later clean replay. Narrowing this expression to withheld{trigger=X} minus restored would therefore produce a number that LOOKS like a per-mechanism level and is not one - it would drift without bound as the two mechanisms fire at different rates.       Use the trigger split on the rate panel above to see which mechanism is doing the work, and this panel, summed, for how much concurrency has actually been withdrawn. TWO QUERIES PLOT THE SAME LEVEL BY DIFFERENT ROUTES, AND THAT PAIRING IS THE POINT (issue #2784). Query A INFERS the level as a difference over two monotonic totals. Query B READS it directly from orleans.lattice.wal.replay.permits_withheld, which is the gate's own live count. Within one process the two must COINCIDE at every sample, so a visible divergence is a defect in one of them and is read here rather than inferred somewhere else - this panel is the falsifier for both. B IS NOT A REPLACEMENT FOR A, AND THE REASON IS SAMPLING. An observable gauge is read at scrape time, so a withhold and its matching restore that both fall between two scrapes leave B completely unchanged while A's inputs record both events; A retains the history, B carries the instantaneous truth. NEITHER SURVIVES A RESTART, AND THAT IS THE THING THIS LEVEL CANNOT SHOW. The adaptation lives entirely in process memory, so a silo that dies holding five withheld permits starts again at zero: A's counters reset and B's gauge resets with them, and nothing in either series marks the discontinuity as anything other than a return to health. Read a step to zero here against the process start time before reading it as recovery.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 258 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+              { "refId": "A", "expr": "sum(orleans_lattice_wal_replay_permit_adaptations_total{outcome=\"withheld\",cluster=~\"$cluster\",instance=~\"$silo\"}) - sum(orleans_lattice_wal_replay_permit_adaptations_total{outcome=\"restored\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits withheld (inferred from counters)" },
+              { "refId": "B", "expr": "sum(orleans_lattice_wal_replay_permits_withheld{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits withheld (gauge)" }
+            ]
+    },    {
+      "id": 140,
+      "title": "Cold-activation snapshot hydration admissions (rate) by outcome - issue #2765 (absent = build did not land)",
+      "description": "Leaf activations that passed the per-silo snapshot-hydration admission gate (orleans.lattice.leaf.snapshot.hydration_admissions), split by outcome: immediate, queued, or sole_occupancy. THESE ARE THE LITERAL EMITTED TAG VALUES and must be written exactly as the LatticeMetrics constants emit them, because a query or alert matches on the value, so a plausible near-miss matches no series while looking correct (issue #2854). THE OUTCOME SPLIT IS THE WHOLE READING AND A BARE TOTAL WOULD BE USELESS. The gate exists because nothing bounded how many leaves materialised their persisted state at once on a cold start: leaf state is written by the ADO.NET provider as JSON TEXT, so reading one blob back costs a UTF-16 System.String of the whole document plus the char[] it is copied from plus Newtonsoft's object graph - four or more multiples of the stored size, live simultaneously - and the aggregate crossed the .NET heap HARD LIMIT, which the runtime sizes from the container's cgroup. A managed OutOfMemoryException follows, so the process exits 0 and is never reported as OOM-killed, which is why the restart loop read for a long time as an unexplained clean exit. outcome=queued climbing during a cold start is the gate DOING ITS JOB and is expected on a corpus carrying oversized leaves; it means hydrations are being serialised rather than allowed to exhaust the heap together, and it should fall away as the leaf-division path brings those leaves back under their size bound. A queued rate that never decays across many restarts means division is not making progress and the corpus is not shrinking - correlate with the leaf byte-overflow and snapshot-capture panels, not with container memory headroom. outcome=immediate alone, with queued and sole_occupancy flat at zero, is the healthy steady state: the budget is never contended and the gate is invisible. outcome=sole_occupancy is a DIFFERENT PREDICATE from queued and is read differently (issue #2844): the hydration was serialised because its largest CONTIGUOUS allocation was too large to attempt alongside anything else, which does not improve with a bigger memory grant - every byte-denominated bound here is derived from that grant and admits more concurrent work as it rises. Read a sustained sole_occupancy rate as a signal to divide leaves or lower MaxLeafBytes, and specifically NOT to provision more memory. ABSENT IS NOT ZERO. These targets omit the or vector(0) fallback, because a literal zero would draw a healthy estate identically to a build that does not carry the gate at all, and those call for opposite responses. All three arms are instead PRE-MINTED at zero the first time a tree is seen in the process, carrying the exact tag set a later admission carries, so a flat zero line is a MEASURED zero and a missing line means the build did not land. The budget is derived from the heap hard limit and is deliberately NOT configurable: a bound an operator has to set cannot rescue a process that is already restart-looping.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 228 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_hydration_admissions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "hydration {{outcome}} {{tree}}/s" }
+      ]
+    },
+    {
+      "id": 141,
+      "title": "Resident leaf working-set sheds (rate) by class - issue #2767 (absent = build did not land)",
+      "description": "Leaf activations deactivated by the per-silo RESIDENT leaf working set so the hydrated population stays under its derived byte budget (orleans.lattice.leaf.residency.sheds), split by whether the shed leaf was snapshot-banked or unbanked. READ THIS PANEL DIRECTLY ABOVE THE HYDRATION ADMISSIONS PANEL, BECAUSE THE TWO BOUND DIFFERENT QUANTITIES AND NEITHER SUBSTITUTES FOR THE OTHER. The admission gate (issue #2765) bounds how many hydrations run CONCURRENTLY, which caps the PEAK cost of each one. It says nothing about what survives them. LeafSnapshotHydrationSource retains the whole encoded snapshot frame for the lifetime of the activation, so a completed hydration leaves roughly one frame resident and a forced blocking compacting gen2 collection reclaims NONE of it while the activation lives. The steady state therefore grows with the number of LIVE ACTIVATIONS, not with concurrency, and was entirely unbounded - which is why the heap hard limit was still reached with the admission gate provably binding (queued 238 against 9 immediate). kind=banked is the bound working at its cheap end: the shed leaf had a snapshot, so it reloads cheaply when next touched. kind=unbanked IS THE ARM TO ACT ON. It means the working set has run out of snapshot-backed candidates and is buying headroom by evicting leaves that must pay a whole-window WAL replay to come back, so a sustained rate points at SNAPSHOT COVERAGE and not at this bound - raising the budget would not help and lowering it would make it worse. Shedding is a GRACEFUL deactivation, so a shed leaf captures a snapshot on the way out and an unbanked shed converts itself into a banked candidate for next time; that is what makes the banked-first preference drain rather than recirculate, and it is why a healthy estate trends towards banked. ABSENT IS NOT ZERO. These targets omit the or vector(0) fallback, because a literal zero would draw an estate that never needed to shed identically to a build that does not carry the bound at all. Both arms are instead PRE-MINTED at zero when a tree first registers, carrying the exact tag set a later shed carries, so a flat zero line is a MEASURED zero and a missing line means the build did not land. The budget is derived at runtime from the heap hard limit and is deliberately NOT configurable, for the same reason the admission budget is not.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 235 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, kind) (rate(orleans_lattice_leaf_residency_sheds_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "shed {{kind}} {{tree}}/s" }
+      ]
+    },
+    {
+      "id": 145,
+      "title": "Resident leaf working-set budget (bytes) - issue #2788 (absent = build did not land)",
+      "description": "The byte budget the per-silo resident leaf working set is actually enforcing (orleans.lattice.leaf.residency.budget_bytes). THIS PANEL EXISTS TO MAKE A ZERO SHED COUNT READABLE. The shed counter directly below reads zero both when the bound is correctly quiescent and when it cannot engage at all, and those have opposite remedies. READ THIS AGAINST THE CONTAINER MEMORY GRANT. A budget of the same order as the whole grant means the process dies before the threshold can ever be reached, so the bound is present, plausible-looking and doing nothing - which is exactly what issue #2788 fixes. Originally the budget was derived from GCMemoryInfo.TotalAvailableMemoryBytes alone, on the assumption that it reports zero when no heap hard limit is configured. It does not: it reports HOST PHYSICAL MEMORY, so on a large host running a small container the derivation produced a budget larger than the grant. The budget is now the smaller of the heap hard limit and the cgroup memory limit, divided by four, floored at 64 MiB, and falls back to 1 GiB only when NEITHER ceiling can be observed. A flat line at exactly 1073741824 therefore means both detections failed and should be investigated as a detection defect, not read as a tuned value. This is a GAUGE and not a counter on purpose: a counter observes an action and could only ever report that a shed happened, while the question an operator has here is about STATE - what bound is in force - which a counter structurally cannot answer at any level of priming.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 265 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_budget_bytes{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "budget {{instance}}" }
+      ]
+    },
+    {
+      "id": 146,
+      "title": "Resident leaf working-set resident bytes - issue #2788 (absent = build did not land)",
+      "description": "Bytes currently accounted to live, un-shed leaf registrations in the per-silo resident leaf working set (orleans.lattice.leaf.residency.resident_bytes). STACK THIS AGAINST THE BUDGET PANEL ABOVE: the ratio between the two is the headroom, and it is the only reading that distinguishes an estate comfortably under bound from one about to start shedding. A resident figure pinned near the budget with a steady shed rate below is the bound working. A resident figure that stays a small fraction of the budget while the process is dying of memory exhaustion means the budget is too large to be a bound at all - compare the budget line against the container grant rather than concluding that leaf residency is not the cost. A resident figure that is FLAT AT ZERO while leaves are demonstrably activating means registration is not happening, which is a wiring defect and not quiescence; the registrations panel below separates those two.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 272 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_resident_bytes{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "resident {{instance}}" }
+      ]
+    },
+    {
+      "id": 147,
+      "title": "Resident leaf working-set registrations - issue #2788 (absent = build did not land)",
+      "description": "Leaf registrations currently held by the per-silo resident leaf working set (orleans.lattice.leaf.residency.registrations). THIS IS THE PANEL THAT SETTLES WHETHER A ZERO SHED COUNT IS QUIESCENCE OR A DEAD LEDGER. An empty ledger and a populated ledger that is correctly under budget are indistinguishable on the shed counter, because a counter reports events and both of these are the absence of an event. A non-zero registration count with zero sheds is the bound populated and under budget, which is healthy. A registration count that is FLAT AT ZERO while the silo is activating leaves means the registration path is not running at all and the bound is inert, which is a defect. Priming the shed counter at zero per tree fixed present-and-zero versus absent and could not fix this, because the instrument observes the action while the question is about the state.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 279 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_residency_registrations{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "registrations {{instance}}" }
+      ]
+    },
+    {
+      "id": 151,
+      "title": "Leaf snapshot capture concurrency peak (silo high-water) - issue #2696 (absent = build did not land)",
+      "description": "Greatest number of leaf-snapshot captures observed running CONCURRENTLY on one silo since process start (orleans.lattice.leaf.snapshot.capture.concurrency_peak) - issue #2696. THIS IS THE ONE CAPTURE QUANTITY NO OTHER PANEL ON THIS DASHBOARD CAN SHOW. Every other capture series is written around the per-leaf single-flight guard, which is an instance field on ONE activation: it stops a leaf capturing twice at once and is blind by construction to how many DIFFERENT leaves are capturing against the one shared snapshot storage provider. A thousand leaves each passing their own guard is exactly the fan-out issue #2696 describes and it registers nowhere else. READ IT AS A LEVEL, NOT A RATE, AND DO NOT EXPECT IT TO FALL. The series is monotone non-decreasing by design, so a spike is reported by the scrape that observes it AND by every scrape afterwards; that is what makes it immune to scrape timing rather than merely unlikely to be missed by it. PR #2723 deferred this metric because an INSTANTANEOUS gauge of the current depth is sampled only when the endpoint is scraped, so the transient spike that makes the reading worth having is precisely what falls between two scrapes - that objection was correct and is why this is a high-water mark. A histogram was equally unavailable: this container renders every histogram as _sum and _count with no buckets and no quantiles, so only the mean survives, and a mean dilutes a spike to nothing - one capture at depth 64 among ten thousand at depth 0 reads as 0.0064. A restart is what clears the peak. THE TARGET DELIBERATELY OMITS or vector(0). The gauge is registered at host build from AddLattice rather than on first capture, so a silo that has never captured still publishes the series: a flat zero line is a MEASURED zero and a MISSING line means the build did not land. Substituting a literal zero would draw those two identically. There is no tree tag and that is deliberate - the maximum spans every leaf on the silo and the contended provider is itself silo-wide, so a per-tree split would report several smaller numbers, none of which is the depth the provider actually saw. Read it beside the concurrent-entries panel below: this one says how deep it got, that one says how often it happens, and a peak alone cannot separate a single transient spike during startup from sustained contention.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 307 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_leaf_snapshot_capture_concurrency_peak{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "peak concurrent captures {{instance}}" }
+      ]
+    },
+    {
+      "id": 152,
+      "title": "Leaf snapshot captures admitted under contention (rate) by tree - issue #2696",
+      "description": "Leaf-snapshot captures admitted across the attempt boundary while at least one OTHER capture was already in flight on the same silo (orleans.lattice.leaf.snapshot.capture.concurrent_entries) - issue #2696. It is the FREQUENCY half of the cross-leaf concurrency reading whose magnitude half is the peak gauge above, and the pairing is load-bearing rather than decorative: a high-water mark alone cannot distinguish one transient depth of 3 during startup from a silo sitting 3 deep continuously for an hour, and those are opposite operational states that call for opposite responses. DO NOT READ THE already_in_flight DECLINE REASON AS A PROXY FOR THIS SERIES. That reason counts a capture the per-leaf guard TURNED AWAY because the same leaf was already capturing; this counts a capture that was ADMITTED while a DIFFERENT leaf was capturing. The two populations are disjoint - one never reaches the attempt boundary and the other is past it - and only this one describes real concurrent load on the shared provider. A deployment can show a high decline rate with zero entries here (one hot leaf, no cross-leaf contention) or the reverse (wide fan-out, every leaf capturing once), and the two demand different fixes. Zero-primed per tree: the instrument adds 0 on an uncontended attempt, so a flat zero is measured absence of contention rather than a tree whose captures never ran.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 314 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_capture_concurrent_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} contended entries/s" }
+      ]
+    },
+    {
+      "id": 153,
+      "title": "Leaf snapshot segment reads (rate) by tree/outcome - issue #2914",
+      "description": "Individual leaf-snapshot SEGMENT frames read during a segmented hydration, split by outcome (orleans.lattice.leaf.snapshot.segment_reads) - issue #2914. A snapshot whose encoded frame exceeds LeafSnapshotSegmentBytes is no longer stored in one BLOB column: the payload is split into row-aligned segments, each a standalone frame in its own grain-state row, and hydration folds them one at a time. That split is the whole bound. The contiguous allocation that failed in issue #2844 is materialised by the storage provider COLUMN READ, before any lattice code runs and before deserialization, so bounding it requires bounding the column, and the only way to bound a column is to stop putting the whole payload in one. CHART missing AND failed SEPARATELY AND ALERT ON EITHER, because they are different questions with different answers: missing means the manifest references a segment that is not there, which is a DURABILITY signal, while failed means the read threw, which is an I/O signal. Both fail the hydration CLOSED - the cache is emptied and the rehydrate declines, so the leaf replays its whole readable WAL rather than activating with a snapshot silently holding fewer rows than its coverage claims, which is the one shape that would let coverage-gated WAL GC trim the last durable copy of a prefix. THE TARGET DELIBERATELY OMITS or vector(0). All three arms are pre-minted at zero, but priming runs INSIDE the segmented fold, so the series exists only once a segmented hydration has actually run on this silo. That makes presence itself the signal, and substituting a literal zero would draw the segmentation-has-never-run-here case and the segmentation-ran-and-read-nothing case identically. Read an ABSENT series as either the build not landing or no snapshot yet exceeding the window; read a FLAT ZERO as the fold having been entered for that tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 321 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_snapshot_segment_reads_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}/s" }
+      ]
+    },
+    {
+      "id": 154,
+      "title": "Leaf snapshot segmented hydrations completed (rate) by tree - issue #2914",
+      "description": "Activation-time leaf-snapshot hydrations that folded a SEGMENTED snapshot to completion (orleans.lattice.leaf.snapshot.segmented_hydrations) - issue #2914. This is the population for which the contiguity bound was actually exercised: an ordinary leaf whose snapshot fits inside LeafSnapshotSegmentBytes is stored and hydrated inline and is never counted here, so this series names exactly the leaves that would previously have demanded a single contiguous array of the whole payload. READ IT AGAINST THE sole_occupancy ARM OF orleans_lattice_leaf_snapshot_hydration_admissions, WHICH SHOULD FALL AS THIS RISES: the admission gate added for issue #2844 refuses an oversized contiguous claim, and this change stops the claim being oversized in the first place, so the two are complementary rather than redundant and the gate is deliberately retained. It is counted only on a COMPLETE fold, so it is NOT an attempt count and must not be read as one: a hydration that declined partway appears on the missing or failed arms of orleans_lattice_leaf_snapshot_segment_reads and never here, which keeps the how-many-segmented-snapshots-hydrated-successfully question and the how-many-segment-reads-went-wrong question from sharing a population they do not share. THE TARGET DELIBERATELY OMITS or vector(0), for the reason given on the segment-reads panel above: priming runs inside the fold, so an absent series and a measured zero are different readings and a literal zero would draw them the same.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 328 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_segmented_hydrations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} segmented hydrations/s" }
+      ]
+    },
+    {
+      "id": 155,
+      "title": "Leaf snapshot segment peak bytes (high-water) by tree - issue #2914",
+      "description": "HIGH-WATER mark of the largest single contiguous segment frame this process has materialised while hydrating a segmented snapshot, per tree (orleans.lattice.leaf.snapshot.segment_peak_bytes) - issue #2914. THIS IS THE PANEL THAT ANSWERS WHETHER THE BOUND HELD. It must stay at or below the configured LeafSnapshotSegmentBytes window however large the underlying snapshot grows, so a value above that window is the direct signal that segmentation is not bounding what it claims to bound, and is the correct thing to alert on. READ IT AS A LEVEL, NOT A RATE, AND DO NOT EXPECT IT TO FALL: the series is monotone non-decreasing within a process lifetime, which is what makes it immune to scrape timing rather than merely unlikely to be missed by it, and a restart is what clears it. It is a high-water gauge and DELIBERATELY NOT A HISTOGRAM: this container renders every histogram as _sum and _count with no buckets and no quantiles, so the only reading available would be a mean, and a mean dilutes the single large allocation the instrument exists to catch into an average of many small ones. THE TARGET DELIBERATELY OMITS or vector(0). Unlike the silo-wide capture-concurrency peak, this gauge is NOT registered at host build - it is keyed by tree and primed on the first segmented hydration for that tree, so an ABSENT series means either the build did not land OR no snapshot has yet exceeded the segment window on this silo. Those two are not distinguished here, and substituting a literal zero would additionally collapse them into the measured-zero case.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 335 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_leaf_snapshot_segment_peak_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{tree}} peak segment bytes" }
+      ]
+    }, {
+      "id": 156,
+      "title": "WAL replay gate occupancy: ceiling, available, queued - issue #3047",
+      "description": "Occupancy of the per-silo WAL replay concurrency gate, as three series that are only interpretable together. CEILING is the denominator the permit family previously lacked: a SemaphoreSlim does not expose its own maximum and the gate is sized once and never re-created or topped up, so one permit withheld from sixteen (noise) and one withheld from two (half this silo's replay throughput) were indistinguishable on a scrape. A ceiling of 0 is an unambiguous not-yet-sized sentinel, never a sized gate, because the sizing resolver returns the configured value when positive and the derived default otherwise and both are at least 1. AVAILABLE is the headroom a new activation would find; a zero is ambiguous between an unsized gate and a saturated one and is resolved only against the ceiling, which is why the two are charted together. QUEUED is the un-terminated set, and it is the only series here that can show a gate admitting nothing: every other permit instrument records at a terminal outcome downstream of the wait - the queue-wait histogram on acquisition or cancellation, the replay counters once a permit is held - so an activation that never acquires and is never cancelled records nothing anywhere, and a permanently saturated gate renders byte-identically to a tree that never activated a leaf. Available cannot substitute for it: that count saturates at zero and reports the same figure for one waiter and for a thousand. Read the panel as the width of the door, whether it is open, and the queue outside it. An absent series means the build does not carry the instruments; a queued series pinned above zero while available sits at zero is a saturated gate with a standing backlog, and on an otherwise idle gate it is the signature of a leaked decrement rather than of real demand (issue #3047).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 342 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(orleans_lattice_wal_replay_permit_ceiling{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "gate ceiling" },
+        { "refId": "B", "expr": "sum(orleans_lattice_wal_replay_permits_available{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits available" },
+        { "refId": "C", "expr": "sum(orleans_lattice_wal_replay_permits_queued{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "activations queued for a permit" }
       ]
     }
   ]

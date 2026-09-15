@@ -76,7 +76,7 @@ These gauges read from the in-memory inventory registry on scrape without touchi
 | `InventoryCatalogBytes` | `orleans.lattice.backup.catalog.bytes` | Observable gauge (By) | - | Cumulative artifact bytes across tracked backups. |
 | `InventoryOldestAge` | `orleans.lattice.backup.inventory.oldest_age` | Observable gauge (s) | - | Age in seconds of the oldest tracked backup (0 when none). |
 | `InventoryNewestAge` | `orleans.lattice.backup.inventory.newest_age` | Observable gauge (s) | - | Age in seconds of the newest tracked backup (0 when none). |
-| `ScopeLastRunStatus` | `orleans.lattice.backup.scope.last_run_status` | Observable gauge | `scope` | Per-scope last-run outcome (0=none, 1=success, 2=failure). |
+| `ScopeLastRunStatus` | `orleans.lattice.backup.scope.last_run_status` | Observable gauge | `scope` | Per-scope last-run outcome (0=scheduled with no completed cycle, 1=success, 2=failure, 3=denied). The series appears at schedule registration, so 0 is a measured 'not yet'; an absent series means no schedule is registered for the scope. |
 | `ScopeLastSuccessAge` | `orleans.lattice.backup.scope.last_success_age` | Observable gauge (s) | `scope` | Per-scope seconds since the last successful capture (-1 when never). |
 
 ### Cross-tree fence (`BackupMetrics`)

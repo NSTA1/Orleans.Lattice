@@ -480,7 +480,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task FoldTail_pumps_multiple_slices_until_the_captured_head_is_reached()
     {
-        // ReplaySliceBudget is large, so force multiple pumps with a
+        // WalReplaySliceBudget is large, so force multiple pumps with a
         // coordinator that serves one entry per call.
         var served = 0;
         var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();

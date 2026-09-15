@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// deterministically rather than raced.
 /// </summary>
 [TestFixture]
-public sealed class RepoContextRetrievalReadinessStateTests
+public sealed partial class RepoContextRetrievalReadinessStateTests
 {
     private static readonly TimeSpan HoldDown = TimeSpan.FromSeconds(30);
 

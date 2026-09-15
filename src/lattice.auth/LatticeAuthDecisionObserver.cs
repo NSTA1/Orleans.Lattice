@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
@@ -24,10 +25,23 @@ namespace Orleans.Lattice.Auth;
 /// </remarks>
 internal sealed partial class LatticeAuthDecisionObserver
 {
+    /// <summary>
+    /// Upper bound on the number of operation/tree pairs this observer will
+    /// zero-prime. The primed pair set mirrors a cardinality the decision counter
+    /// already carries, so it introduces no new unbounded dimension; the cap exists
+    /// only so that a deployment with an unbounded tree population cannot grow the
+    /// bookkeeping without limit. Beyond it, priming stops and further pairs fall
+    /// back to the previous behaviour - the deny arm appears only if a denial
+    /// occurs. That is a degradation of the guarantee, not of correctness, and it is
+    /// stated here because the guarantee is only true inside this bound.
+    /// </summary>
+    private const int MaxPrimedDecisionPairs = 4096;
+
     private readonly ILatticeAuthAuditSink[] _sinks;
     private readonly IOptionsMonitor<LatticeAuthOptions> _options;
     private readonly ILogger<LatticeAuthDecisionObserver> _logger;
     private readonly TimeProvider _time;
+    private readonly ConcurrentDictionary<(string Operation, string Tree), byte> _primedDecisionPairs = new();
 
     /// <summary>Initializes a new <see cref="LatticeAuthDecisionObserver"/>.</summary>
     /// <param name="sinks">The registered audit sinks (may be empty).</param>
@@ -105,6 +119,7 @@ internal sealed partial class LatticeAuthDecisionObserver
 
             if (decisionsEnabled)
             {
+                PrimeDecisionPairOnce(request.Operation, request.TreeId);
                 LatticeAuthMetrics.Decisions.Add(1, tags);
             }
 
@@ -119,6 +134,43 @@ internal sealed partial class LatticeAuthDecisionObserver
         {
             Dispatch(BuildEvent(in request, in decision, in match, epoch));
         }
+    }
+
+    /// <summary>
+    /// Zero-primes both effect arms for an operation/tree pair the first time this
+    /// observer sees it, so that the deny arm exists at zero from the pair's first
+    /// decision onward instead of springing into existence at its first denial.
+    /// </summary>
+    /// <remarks>
+    /// Deduplicated because this runs on the decision path: the prime is a
+    /// correctness fix for the readability of an absence, not a per-request
+    /// measurement, and re-emitting it on every decision would add two counter adds
+    /// and a tag array to a path documented as allocation-light. The set is an
+    /// instance field rather than a static one so that the priming state shares the
+    /// observer's lifetime - a process-wide set would let one test's priming satisfy
+    /// another test's assertion, which would make a broken prime look green.
+    /// </remarks>
+    private void PrimeDecisionPairOnce(LatticeOperation operation, string treeId)
+    {
+        var operationTag = LatticeOperationTag.For(operation);
+
+        if (_primedDecisionPairs.ContainsKey((operationTag, treeId)))
+        {
+            return;
+        }
+
+        if (_primedDecisionPairs.Count >= MaxPrimedDecisionPairs)
+        {
+            return;
+        }
+
+        if (!_primedDecisionPairs.TryAdd((operationTag, treeId), 0))
+        {
+            // Another thread primed this pair between the read and the write.
+            return;
+        }
+
+        LatticeAuthMetrics.PrimeDecisions(operationTag, treeId);
     }
 
     private static bool Admits(LatticeAuthAuditVerbosity verbosity, bool allowed) =>

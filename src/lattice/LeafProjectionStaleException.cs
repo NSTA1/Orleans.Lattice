@@ -26,10 +26,17 @@ namespace Orleans.Lattice;
 /// caller as this typed, actionable exception rather than degrading into an
 /// opaque <c>CodecNotFoundException</c> messaging failure.
 /// </para>
+/// <para>
+/// Implements <see cref="ILatticeLeafUnavailable"/>: a stale projection means the
+/// leaf cannot be activated, so an operation that enumerates it cannot make
+/// progress and a caller is entitled to fall back to a primitive that does not
+/// enumerate. The base type is unchanged - the marker is additive, so existing
+/// <c>catch (InvalidOperationException)</c> handlers are unaffected.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafProjectionStale)]
-public sealed class LeafProjectionStaleException : InvalidOperationException
+public sealed class LeafProjectionStaleException : InvalidOperationException, ILatticeLeafUnavailable
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic context. Provided to

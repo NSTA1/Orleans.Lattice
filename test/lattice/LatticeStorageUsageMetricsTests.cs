@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests;
 
@@ -6,7 +7,9 @@ namespace Orleans.Lattice.Tests;
 /// Unit tests for <see cref="LatticeStorageUsageMetrics"/>: the observable
 /// storage-usage gauge sink. Verifies that published reports surface on the
 /// byte gauges, that partial reports report no data rather than a wrong zero,
-/// and that the over-threshold flag drives the 0/1 policy gauge.
+/// that a surface which was never measured stays distinguishable from one
+/// measured at zero, and that the over-threshold flag drives the 0/1 policy
+/// gauge.
 /// </summary>
 [TestFixture]
 public sealed class LatticeStorageUsageMetricsTests
@@ -22,31 +25,15 @@ public sealed class LatticeStorageUsageMetricsTests
         SampledAt = DateTimeOffset.UtcNow,
     };
 
+    /// <summary>
+    /// Scrapes one observable gauge for one tree. Returns <c>null</c> when the
+    /// gauge reported no measurement for that tree at all - the distinction
+    /// that separates "never measured" from "measured and zero" - and throws
+    /// when it reported more than one, rather than silently keeping the last
+    /// (issue #3004).
+    /// </summary>
     private static long? Read(string instrument, string tree)
-    {
-        long? found = null;
-        using var listener = new MeterListener
-        {
-            InstrumentPublished = (inst, l) =>
-            {
-                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter) && inst.Name == instrument)
-                    l.EnableMeasurementEvents(inst);
-            },
-        };
-        listener.SetMeasurementEventCallback<long>((inst, value, tags, _) =>
-        {
-            foreach (var t in tags)
-            {
-                if (t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree)
-                {
-                    found = value;
-                }
-            }
-        });
-        listener.Start();
-        listener.RecordObservableInstruments();
-        return found;
-    }
+        => GaugeScrape.ReadSingle(LatticeMetrics.Meter, instrument, LatticeMetrics.TagTree, tree);
 
     [Test]
     public void Publish_surfaces_byte_gauges_for_the_tree()
@@ -197,7 +184,7 @@ public sealed class LatticeStorageUsageMetricsTests
     }
 
     [Test]
-    public void PublishWal_without_prior_deep_publish_seeds_wal_bytes_only()
+    public void PublishWal_without_prior_deep_publish_reports_no_data_on_undeep_surfaces()
     {
         var sut = new LatticeStorageUsageMetrics();
         var tree = $"sg-{Guid.NewGuid():N}";
@@ -210,13 +197,119 @@ public sealed class LatticeStorageUsageMetricsTests
             SampledAt = DateTimeOffset.UtcNow,
         });
 
+        // This is the regression guard for issue #2693, and the assertion that
+        // would have caught it: before the fix these three read 0, which a
+        // reader took as a measurement and concluded no leaf state or snapshots
+        // existed. They did - 137 MB of them. Only the WAL surface was ever
+        // sampled on this path, so the other three must report no data at all.
         Assert.Multiple(() =>
         {
-            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500));
-            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(0));
-            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(0));
-            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(500));
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500),
+                "the WAL surface is the one this path actually measures");
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.Null,
+                "a snapshot byte count that was never taken must not be exported as zero");
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.Null,
+                "a leaf-state byte count that was never taken must not be exported as zero");
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.Null,
+                "a total omitting two of its three terms must not be exported at all");
         });
+    }
+
+    [Test]
+    public void Unmeasured_surface_is_distinguishable_from_a_measured_zero()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var walOnly = $"sg-{Guid.NewGuid():N}";
+        var deepZero = $"sg-{Guid.NewGuid():N}";
+
+        // Two trees that a pre-fix scrape rendered identically: one whose
+        // snapshot bytes were never measured, and one measured and genuinely
+        // empty. Telling them apart from /metrics alone is the whole
+        // requirement of issue #2693.
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = walOnly,
+            WalRetainedBytes = 500,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+        sut.Publish(Report(deepZero, wal: 500, snap: 0, leaf: 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, walOnly), Is.Null,
+                "never measured must be absent");
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, deepZero), Is.EqualTo(0),
+                "measured and empty must be an exported zero");
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, walOnly), Is.EqualTo(0),
+                "the depth gauge must state the absence positively, not leave it to inference");
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, deepZero), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Deep_published_gauge_reports_no_data_for_unobserved_tree()
+    {
+        _ = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.Null,
+            "a tree never published at all must stay distinct from one published WAL-only");
+    }
+
+    [Test]
+    public void Deep_publish_after_wal_only_publish_restores_the_deep_surfaces()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 500,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+        sut.Publish(Report(tree, wal: 500, snap: 40, leaf: 25));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(40));
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(25));
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(565));
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Wal_only_publish_after_deep_publish_keeps_the_tree_deep()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 150,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+            "the cheap path must not demote a tree whose deep values it is carrying forward");
+    }
+
+    [Test]
+    public void Deep_published_gauge_reports_no_data_for_a_partial_report()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25, partial: true));
+
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.Null,
+            "a partial report publishes no byte surfaces, so it has no depth to report");
     }
 
     [Test]
@@ -284,6 +377,61 @@ public sealed class LatticeStorageUsageMetricsTests
             Assert.That(Read(LatticeMetrics.StorageWalBytesName, treeB), Is.EqualTo(20),
                 "a tree published through the second instance must be observed too");
         });
+    }
+
+    /// <summary>
+    /// The cross-instance determinism regression for issue #3004, asserted in
+    /// <b>both</b> sink-construction orders.
+    /// <para>
+    /// Models the real race: a tree's deep report lands on one silo's sink
+    /// while the cluster-wide background poller seeds a WAL-only entry for the
+    /// same tree on another silo's sink. Both sinks then hold that tree and
+    /// disagree about its depth, so the process-wide gauge used to emit a 1
+    /// <i>and</i> a 0 for one series and let the reader pick by iteration
+    /// order.
+    /// </para>
+    /// <para>
+    /// Running both construction orders is what makes this a determinism
+    /// assertion rather than a single lucky draw: <c>Instances</c> is iterated
+    /// in construction order, so the two cases exercise the two orders in which
+    /// the contradicting measurements could arrive. Either one alone would pass
+    /// against a reader that simply preferred the first, or the last.
+    /// </para>
+    /// </summary>
+    [TestCase(true, TestName = "Deep_published_gauge_is_deterministic_when_two_instances_disagree(deep sink first)")]
+    [TestCase(false, TestName = "Deep_published_gauge_is_deterministic_when_two_instances_disagree(wal-only sink first)")]
+    public void Deep_published_gauge_is_deterministic_when_two_instances_disagree(bool deepSinkConstructedFirst)
+    {
+        LatticeStorageUsageMetrics deepSink;
+        LatticeStorageUsageMetrics walOnlySink;
+        if (deepSinkConstructedFirst)
+        {
+            deepSink = new LatticeStorageUsageMetrics();
+            walOnlySink = new LatticeStorageUsageMetrics();
+        }
+        else
+        {
+            walOnlySink = new LatticeStorageUsageMetrics();
+            deepSink = new LatticeStorageUsageMetrics();
+        }
+
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        deepSink.Publish(Report(tree, wal: 10, snap: 20, leaf: 30));
+        walOnlySink.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 10,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        // Read throws rather than collapsing, so a pre-fix producer fails here
+        // by naming both measurements instead of reporting whichever arrived
+        // last as though it were the reading.
+        Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+            "a tree measured deeply by any sink is deeply measured; one sink holding only the "
+            + "cheap WAL-only entry is no evidence that another has not measured it");
     }
 
     [Test]

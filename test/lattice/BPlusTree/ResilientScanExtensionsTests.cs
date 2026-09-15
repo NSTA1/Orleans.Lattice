@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <see cref="LatticeExtensions.ScanEntriesAsync"/>, and the typed
 /// <see cref="TypedLatticeExtensions.ScanEntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, System.Threading.CancellationToken)"/>).
 /// </summary>
-public class ResilientScanExtensionsTests
+public partial class ResilientScanExtensionsTests
 {
     private record TestItem(string Name, int Score);
 

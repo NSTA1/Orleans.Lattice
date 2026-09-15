@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -25,28 +26,37 @@ internal sealed class RepoContextGraphService
     private readonly Orleans.Serialization.Serializer _serializer;
     private readonly IRepoContextTokenCounter _tokenCounter;
     private readonly RepoContextWorkspaceGuard _workspaceGuard;
+    private readonly RepoContextRetrievalLatencyReporter _latency;
 
     /// <summary>Creates the graph service.</summary>
     /// <param name="grainFactory">The grain factory used to reach the context trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode stored records. Must not be <see langword="null"/>.</param>
     /// <param name="tokenCounter">The shared token counter used for an outline's full-read cost fallback. Must not be <see langword="null"/>.</param>
     /// <param name="workspaceGuard">The workspace boundary the <c>changed</c> walk resolves paths through. Must not be <see langword="null"/>.</param>
+    /// <param name="latency">
+    /// The reporter that publishes end-to-end latency for the <c>outline</c> and
+    /// <c>related</c> graph reads. Required rather than optional so an unmeasured host
+    /// is not constructible.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextGraphService(
         IGrainFactory grainFactory,
         Orleans.Serialization.Serializer serializer,
         IRepoContextTokenCounter tokenCounter,
-        RepoContextWorkspaceGuard workspaceGuard)
+        RepoContextWorkspaceGuard workspaceGuard,
+        RepoContextRetrievalLatencyReporter latency)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(tokenCounter);
         ArgumentNullException.ThrowIfNull(workspaceGuard);
+        ArgumentNullException.ThrowIfNull(latency);
 
         _grainFactory = grainFactory;
         _serializer = serializer;
         _tokenCounter = tokenCounter;
         _workspaceGuard = workspaceGuard;
+        _latency = latency;
     }
 
     /// <summary>
@@ -59,6 +69,28 @@ internal sealed class RepoContextGraphService
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The outline result.</returns>
     public async Task<RepoContextOutlineResult> OutlineAsync(
+        string repoId, string path, CancellationToken cancellationToken)
+    {
+        // A graph read never consults the vector plane, so no retrieval-path value
+        // applies and it is tagged 'not_applicable'. Timed from a finally like every
+        // other tool, so a cancelled read is recorded rather than dropped. Keeping the
+        // graph reads on the same instrument is what makes "outline is two orders of
+        // magnitude cheaper than search" a comparison an operator can actually run.
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            return await OutlineCoreAsync(repoId, path, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _latency.RecordCall(
+                RepoContextRetrievalTool.Outline,
+                RepoContextRetrievalLatencyReporter.PathNotApplicable,
+                Stopwatch.GetElapsedTime(startedAt));
+        }
+    }
+
+    private async Task<RepoContextOutlineResult> OutlineCoreAsync(
         string repoId, string path, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -310,6 +342,25 @@ internal sealed class RepoContextGraphService
     /// <param name="cancellationToken">Cancels the reads.</param>
     /// <returns>The related-neighbourhood result.</returns>
     public async Task<RepoContextRelatedResult> RelatedAsync(
+        string repoId, string path, CancellationToken cancellationToken)
+    {
+        // See OutlineAsync: a graph read consults no vector plane, so the path
+        // dimension is 'not_applicable' rather than absent.
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            return await RelatedCoreAsync(repoId, path, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _latency.RecordCall(
+                RepoContextRetrievalTool.Related,
+                RepoContextRetrievalLatencyReporter.PathNotApplicable,
+                Stopwatch.GetElapsedTime(startedAt));
+        }
+    }
+
+    private async Task<RepoContextRelatedResult> RelatedCoreAsync(
         string repoId, string path, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);

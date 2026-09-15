@@ -25,6 +25,25 @@ internal sealed partial class BPlusLeafGrain
     /// topology + checkpoint + the digest fold. Returns the live backing
     /// dictionary; tests may both inspect and seed it. Callers that mutate
     /// the cache mid-enumeration must materialise first.
+    /// <para>
+    /// WARNING: this detaches the snapshot frame, irreversibly, and is recorded
+    /// as <see cref="LeafSnapshotDetachSeam.UnderlyingRowsAccessor"/>. A test
+    /// that seeds or inspects through this property has already forfeited the
+    /// leaf-division fast path before its assertion runs, so a test meaning to
+    /// prove the frame-only pivot is taken would instead exercise the detached
+    /// fallback - and would pass identically with and without that path
+    /// present. Assert on the recorded refusal reason and detach seam rather
+    /// than on a downstream outcome, and seed through
+    /// <c>TryAttachSnapshot</c> when frame attachment is what is under test.
+    /// </para>
+    /// <para>
+    /// Unlike the leaf's other whole-cache readers, this one cannot be
+    /// converted to a bounded window (issue #2368). The contract is a LIVE
+    /// view that tests seed through, so a bounded copy would silently swallow
+    /// those seeds. The detach is therefore inherent to the seam rather than
+    /// an oversight, which is why the mitigation is to steer residency
+    /// assertions to <see cref="CacheForTest"/> instead of to remove it.
+    /// </para>
     /// </summary>
     internal SortedDictionary<string, LwwValue<byte[]>> EntriesForTest => Cache.UnderlyingRows;
 

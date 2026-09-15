@@ -41,8 +41,10 @@ public sealed class LatticeAuthDecisionObserverTests
 
         observer.Observe(in request, in decision, default, epoch: 7, LatticeAuthDecisionObserver.CaptureStart());
 
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var tags = collector.Measurements.Single().Tags.ToDictionary(t => t.Key, t => t.Value);
+        var decisions = collector.Measurements.Where(m => m.Value == 1).ToList();
+        Assert.That(decisions, Has.Count.EqualTo(1),
+            "exactly one decision is recorded; the zero-primed effect arms are not decisions");
+        var tags = decisions.Single().Tags.ToDictionary(t => t.Key, t => t.Value);
         Assert.That(tags[LatticeAuthMetrics.TagOperation], Is.EqualTo("Write"));
         Assert.That(tags[LatticeAuthMetrics.TagTree], Is.EqualTo("orders"));
         Assert.That(tags[LatticeAuthMetrics.TagEffect], Is.EqualTo(LatticeAuthMetrics.EffectDeny));
@@ -59,7 +61,7 @@ public sealed class LatticeAuthDecisionObserverTests
 
         observer.Observe(in request, in decision, default, epoch: 1, startTimestamp: 0);
 
-        var tags = collector.Measurements.Single().Tags.ToDictionary(t => t.Key, t => t.Value);
+        var tags = collector.Measurements.Single(m => m.Value == 1).Tags.ToDictionary(t => t.Key, t => t.Value);
         Assert.That(tags[LatticeAuthMetrics.TagEffect], Is.EqualTo(LatticeAuthMetrics.EffectAllow));
     }
 
@@ -74,7 +76,7 @@ public sealed class LatticeAuthDecisionObserverTests
 
         observer.Observe(in request, in decision, default, epoch: 3, LatticeAuthDecisionObserver.CaptureStart());
 
-        var tags = collector.Measurements.Single().Tags.ToDictionary(t => t.Key, t => t.Value);
+        var tags = collector.Measurements.Single(m => m.Value == 1).Tags.ToDictionary(t => t.Key, t => t.Value);
         Assert.That(tags[LatticeAuthMetrics.TagOperation], Is.EqualTo("SchemaAdmin"),
             "a schema-admin decision is audited with a clear, distinct operation tag");
     }

@@ -37,6 +37,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="_compactionEnsured"/>, <see cref="_monitorEnsured"/>) are
 /// activation-scoped and remain safe under multiple parallel activations.
 /// </para>
+/// <para>
+/// <b>The timeout diagnostic quoted above is a censored channel; do not size a
+/// queue from it.</b> Orleans emits that clause only for a request already
+/// approaching the 30 s response deadline, and the clause describes the
+/// <em>emitting</em> request's own wait, so a grain type whose calls queue
+/// deeply but which does not itself trip the timeout contributes no rows to it
+/// at all. A depth read from it is therefore conditioned on failure and biased
+/// towards requests that were not queued; on one real gate run the grain type
+/// with the deepest queues in the system contributed zero of the diagnostic's
+/// 154 samples, and two independent extractions agreed - consistently and
+/// wrongly - that nothing was queueing. It is evidence that <em>this</em>
+/// request waited, never evidence about the distribution. For an uncensored
+/// per-grain-type depth, enable
+/// <see cref="LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation"/>
+/// and read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/>, which
+/// records at dispatch on every call and requires no timeout to exist.
+/// </para>
 /// </remarks>
 [StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(
@@ -1141,6 +1158,22 @@ internal sealed partial class LatticeGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
     {
+        var gated = await GetManyGatedAsync(keys, cancellationToken);
+        return gated.Values;
+    }
+
+    /// <summary>
+    /// The gate-accounting entry point (issue #2277). Identical read, and it
+    /// additionally reports how many requested keys the read-path filter removed,
+    /// which is the one fact a caller cannot recover from the returned rows: a
+    /// pruned key and a never-written key are the same observation there.
+    /// </summary>
+    public Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(
+        List<string> keys, CancellationToken cancellationToken = default) =>
+        GetManyGatedAsync(keys, cancellationToken);
+
+    private async Task<GatedMultiReadResult> GetManyGatedAsync(List<string> keys, CancellationToken cancellationToken)
+    {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(keys);
@@ -1153,6 +1186,15 @@ internal sealed partial class LatticeGrain(
         // silo, let alone returned to the caller. On the default (null gate /
         // system-origin) path the filter is null and the caller's list is used
         // unchanged with no per-key work or allocation.
+        //
+        // The prune COUNT is carried out to the caller (issue #2277). It is the
+        // only seam that knows it: downstream, a pruned key is byte-identical to
+        // a key that was never written, so a caller reading coverage from the
+        // returned rows classifies an entry it is merely not authorized to see as
+        // an entry that does not exist. Never the identities - a prune list names
+        // the keys the caller was refused and turns any multi-get into an
+        // authorization oracle.
+        var prunedByAccessGate = 0;
         var keyFilter = await ResolveMultiReadKeyFilterAsync(cancellationToken);
         if (keyFilter is not null)
         {
@@ -1162,6 +1204,8 @@ internal sealed partial class LatticeGrain(
                 if (k is not null && keyFilter(k))
                     filtered.Add(k);
             }
+
+            prunedByAccessGate = keys.Count - filtered.Count;
             keys = filtered;
         }
 
@@ -1204,7 +1248,11 @@ internal sealed partial class LatticeGrain(
                     {
                         await DecodeManyInPlaceAsync(many, cancellationToken);
                     }
-                    return many;
+                    return new GatedMultiReadResult
+                    {
+                        Values = many,
+                        PrunedByAccessGate = prunedByAccessGate,
+                    };
                 }
                 catch (StaleShardRoutingException)
                 {
@@ -3755,6 +3803,8 @@ internal sealed partial class LatticeGrain(
     /// </remarks>
     public async Task OnActivateAsync(CancellationToken cancellationToken)
     {
+        PrimeConfigChangeArms();
+
         try
         {
             await EnsureMonitorAsync();
@@ -3767,6 +3817,64 @@ internal sealed partial class LatticeGrain(
                 TreeId);
         }
     }
+
+    /// <summary>
+    /// Publishes both members of the <see cref="LatticeMetrics.TagConfig"/>
+    /// taxonomy on <see cref="LatticeMetrics.ConfigChanged"/> at zero for this
+    /// tree (issue #2918).
+    /// <para>
+    /// The counter carries a bounded two-member domain and, before this, only the
+    /// member that had already fired existed. A tree that has never had its
+    /// publish-events override touched produced no
+    /// <c>config="publish_events"</c> series at all, which scrapes identically to
+    /// a build in which the call site was deleted - so a flat absence could not
+    /// be read as "no such change was made", which is the only reading an
+    /// operator ever wants from it.
+    /// </para>
+    /// <para>
+    /// Activation is the seam rather than the two setters, because the two arms
+    /// are armed from <em>different</em> methods: priming inside each setter
+    /// would leave each arm's zero reachable only on the path that also arms it,
+    /// which is the defect one layer in. The lifecycle hook is reachable for
+    /// every tree that has activated, so absence means the build does not carry
+    /// the instrument and nothing else.
+    /// </para>
+    /// <para>
+    /// System trees are excluded because both setters reject them outright via
+    /// <see cref="ThrowIfSystemTree"/>: a primed arm on a tree that can never arm
+    /// it would assert a measured zero for a measurement that cannot be taken.
+    /// </para>
+    /// <para>
+    /// The issue filed this as unprimable on the grounds that
+    /// <c>LatticeMetrics</c> is a static class with no silo-startup hook. That
+    /// premise is too pessimistic - the instrument is emitted from a grain, and
+    /// the emitting grain has a lifecycle.
+    /// </para>
+    /// </summary>
+    private void PrimeConfigChangeArms()
+    {
+        if (_configChangeArmsPrimed
+            || TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _configChangeArmsPrimed = true;
+
+        // Written out rather than looped so the priming-enrolment gate, which
+        // reads literal `new KeyValuePair<string, object?>(...)` arguments on a
+        // zero-valued Add, can see both arms.
+        LatticeMetrics.ConfigChanged.Add(0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
+            LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.ConfigChanged.Add(0,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
+            LatticeTenantLabel.ForTree(TreeId));
+    }
+
+    private bool _configChangeArmsPrimed;
 
     private async Task EnsureHotShardMonitorAsync()
     {

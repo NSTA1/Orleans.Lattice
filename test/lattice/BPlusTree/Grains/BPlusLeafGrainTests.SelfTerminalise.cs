@@ -127,7 +127,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeaf(txId, TxStatus.Committed, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Progress counter that must MOVE: the checkpoint advances past the
         // resolved prepare to the applied frontier rather than pinning at 1.
@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeaf(txId, TxStatus.Aborted, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
             "A registry-aborted resident prepare must self-terminalise so the ceiling advances to the applied frontier.");
@@ -184,7 +184,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeaf(txId, TxStatus.InFlight, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
             "An undecided prepare must keep the checkpoint clamped one below its offset.");
@@ -214,7 +214,7 @@ public partial class BPlusLeafGrainTests
 
         // Activation must COMPLETE rather than throw: this await failing is the
         // exact regression the containment prevents.
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         // Identical end state to the undecided-prepare guard: the resolution
         // could not be obtained, so the prepare is treated as unresolved.
@@ -259,7 +259,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.Committed, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
             "A retention-masked but recorded-committed prepare must still self-terminalise.");
@@ -278,7 +278,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.Aborted, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(4L),
             "A retention-masked but recorded-aborted prepare must still self-terminalise.");
@@ -299,7 +299,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var (grain, state) = BuildSelfTerminaliseLeafWithMaskedOutcome(txId, TxStatus.InFlight, out _);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
             "Indeterminate with no recorded row must clamp exactly as an undecided prepare does.");
@@ -320,7 +320,7 @@ public partial class BPlusLeafGrainTests
             .ThrowsAsync(new TimeoutException("registry unavailable during recorded-status probe"));
         var (grain, state) = BuildSelfTerminaliseLeafCore(txId, registry, out _, persistedCheckpoint: 0);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
             "A failing recorded-status probe must clamp exactly as the pre-heal path did.");

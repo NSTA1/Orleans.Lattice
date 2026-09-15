@@ -16,6 +16,14 @@ internal sealed class ListVectorSource(int dimensions) : IVectorSource
     /// <summary>How many entries the last enumeration yielded, so a test can see how far a step read.</summary>
     internal int Yielded { get; private set; }
 
+    /// <summary>
+    /// The cursor the most recent enumeration was asked to resume after, so a
+    /// test can see what the index believed was already durable. A resume that
+    /// cannot name its committed prefix asks for <see langword="null"/> and
+    /// re-reads the corpus from the start.
+    /// </summary>
+    internal string? LastResumedFrom { get; private set; }
+
     /// <summary>Adds or replaces one vector.</summary>
     internal void Set(string id, float[] vector) => _entries[id] = vector;
 
@@ -32,6 +40,7 @@ internal sealed class ListVectorSource(int dimensions) : IVectorSource
         string? afterIdExclusive, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         Yielded = 0;
+        LastResumedFrom = afterIdExclusive;
         var page = _entries.ToArray();
         foreach (var entry in page)
         {

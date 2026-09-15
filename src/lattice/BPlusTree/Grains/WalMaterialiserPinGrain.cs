@@ -324,7 +324,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task ReportAsync(string consumerId, HybridLogicalClock frontier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
-        if (Merge(consumerId, frontier, checkpointOffset: -1))
+        if (Merge(consumerId, frontier, checkpointOffset: NoOffset))
         {
             await ScheduleOrFlushAsync();
         }
@@ -494,18 +494,32 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool Merge(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
         var changed = false;
+        var frontierAdvanced = false;
 
         if (!_state.State.Pins.TryGetValue(consumerId, out var existing) || frontier > existing)
         {
             _state.State.Pins[consumerId] = frontier;
             changed = true;
+            frontierAdvanced = true;
         }
 
-        if (!_state.State.Offsets.TryGetValue(consumerId, out var existingOffset) || checkpointOffset > existingOffset)
+        var hadOffset = _state.State.Offsets.TryGetValue(consumerId, out var existingOffset);
+
+        // An absent offset is the same floor as the no-offset sentinel, so a
+        // brand-new consumer reporting NoOffset has not moved anything the WAL
+        // GC can use even though it does mark the pin dirty below.
+        var offsetAdvanced = checkpointOffset > (hadOffset ? existingOffset : NoOffset);
+
+        if (!hadOffset || checkpointOffset > existingOffset)
         {
             _state.State.Offsets[consumerId] = checkpointOffset;
             changed = true;
         }
+
+        // Classify what this merge actually moved, not merely that it dirtied
+        // the shard. Offset advancement is the quantity that lets the GC offset
+        // floor move, and no exported series carried it before issue #2694.
+        RecordPinAdvance(offsetAdvanced, frontierAdvanced);
 
         if (changed)
         {
@@ -514,6 +528,27 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Records one merged pin report on
+    /// <see cref="LatticeMetrics.MaterialiserPinAdvances"/>, tagged by what the
+    /// merge moved: the checkpoint offset, the HLC frontier only, or nothing.
+    /// Tag pairs are materialised once per activation, so the hot path adds no
+    /// allocation.
+    /// </summary>
+    private void RecordPinAdvance(bool offsetAdvanced, bool frontierAdvanced)
+    {
+        _ = TreeTag;
+        LatticeMetrics.MaterialiserPinAdvances.Add(
+            1,
+            _treeTagPair,
+            offsetAdvanced
+                ? LatticeMetrics.OutcomePinOffsetAdvanced
+                : frontierAdvanced
+                    ? LatticeMetrics.OutcomePinFrontierOnly
+                    : LatticeMetrics.OutcomePinNoAdvance,
+            _tenantTagPair);
     }
 
     /// <summary>
@@ -817,12 +852,36 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private const string MaterialiserPinCoalescedOutcome = "coalesced";
 
     private string? _treeTag;
+    private KeyValuePair<string, object?> _treeTagPair;
+    private KeyValuePair<string, object?> _tenantTagPair;
+
+    /// <summary>
+    /// The no-offset sentinel a consumer reports when it has no durable
+    /// checkpoint offset to pin (the value <see cref="ReportAsync"/> supplies).
+    /// Also the floor an absent offset is compared against, so "no offset yet"
+    /// and "explicitly no offset" classify identically.
+    /// </summary>
+    private const long NoOffset = -1;
 
     /// <summary>
     /// The logical tree id this pin shard belongs to, used as the metric tree
     /// tag. The grain key is either the bare <c>{treeName}</c> (single-shard
     /// layout) or a shard-suffixed key; the suffix is stripped so every shard of
-    /// a tree reports under the same tree tag.
+    /// a tree reports under the same tree tag. Materialising it also caches the
+    /// tree and tenant tag pairs used by the per-report advance counter.
     /// </summary>
-    private string TreeTag => _treeTag ??= WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+    private string TreeTag
+    {
+        get
+        {
+            if (_treeTag is null)
+            {
+                _treeTag = WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+                _treeTagPair = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeTag);
+                _tenantTagPair = LatticeTenantLabel.ForTree(_treeTag);
+            }
+
+            return _treeTag;
+        }
+    }
 }

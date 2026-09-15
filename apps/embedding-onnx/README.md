@@ -114,7 +114,7 @@ client never sends, so "no prefix" is the reference behaviour for this caller.
 | `EMBED_MODEL_PATH` | `/app/assets/model.onnx` | ONNX weights. |
 | `EMBED_VOCAB_PATH` | `/app/assets/vocab.txt` | WordPiece vocabulary (committed gzipped, decompressed at build time). |
 | `EMBED_MAX_CONTEXT_LENGTH` | `512` | Hard token ceiling; a larger request is clamped. |
-| `EMBED_INTRA_THREADS` | ONNX Runtime default | CPU intra-op threads. |
+| `EMBED_INTRA_THREADS` | the enforced cgroup CPU quota | CPU intra-op threads. `0` hands the decision back to ONNX Runtime. See below. |
 | `EMBED_DEVICE_ID` | `0` | Device ordinal for an accelerated provider. |
 
 An unknown `EMBED_PROVIDER`, or an unparseable number, falls back to the default
@@ -122,6 +122,29 @@ rather than aborting startup: a container that boots on the CPU is strictly more
 useful than one that refuses to boot. A missing or unreadable model or
 vocabulary **is** fatal, because serving wrong vectors is worse than serving
 none.
+
+### Why the intra-op thread count is not left to ONNX Runtime
+
+ONNX Runtime's own default sizes the intra-op pool from the **host core count**
+and does not consult the container's cgroup CPU quota. Under any CPU limit that
+oversubscribes by the ratio between the two, and the cost is far worse than
+proportional. Measured on a 4.0-CPU grant on a 16-core host (issue #2606): a pool
+of 16, the kernel throttling **296 of 298** consecutive scheduling periods, and
+**346.3 CPU-seconds stalled against 118.8 run**. Sixteen threads drain a 400ms
+quota in 25ms and are then frozen for the remaining 75ms, predicting a 3.0 ratio
+against 2.91 measured. Because ONNX Runtime synchronises intra-op threads at
+every operator boundary and a transformer crosses hundreds per inference, a
+freeze landing mid-barrier stalls the whole operator rather than one thread.
+
+So this server derives the count from `/sys/fs/cgroup/cpu.max` itself. It reads
+the quota rather than `Environment.ProcessorCount` because `DOTNET_PROCESSOR_COUNT`
+overrides the latter and wins over the quota, and that variable is set on the
+sibling repository-context service for an unrelated purpose. When the two figures
+disagree the server logs a `CPU GRANT MISMATCH` warning naming both.
+
+The resolved count is logged once at startup, marked `DECLARED` when an operator
+supplied it and `DERIVED` when it did not, so the effective figure never has to
+be inferred from a file.
 
 ## Build
 

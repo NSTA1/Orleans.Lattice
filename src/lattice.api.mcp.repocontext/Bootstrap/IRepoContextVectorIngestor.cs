@@ -86,12 +86,18 @@ internal interface IRepoContextVectorIngestor
     /// <param name="prunedSymbolKeys">The canonical record keys of the symbols pruned
     /// this pass, whose embeddings should be retired.</param>
     /// <param name="cancellationToken">Cancels the ingest.</param>
+    /// <param name="onProgress">An optional callback invoked after each batch of
+    /// symbol passages lands, with the running count embedded so far. It exists so
+    /// a long symbol pass reports liveness: without it the arm ran to completion
+    /// in silence, which froze the job's <c>updatedAt</c> and made a converging
+    /// repository indistinguishable from a stalled one.</param>
     /// <returns>The number of symbols whose vectors were embedded and stored.</returns>
     Task<int> IngestSymbolsAsync(
         string repoId,
         IReadOnlyCollection<string> changedSymbolKeys,
         IReadOnlyCollection<string> prunedSymbolKeys,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<int, CancellationToken, ValueTask>? onProgress = null);
 
     /// <summary>
     /// Embeds the repository's durable agent-memory entries (decisions, gotchas,

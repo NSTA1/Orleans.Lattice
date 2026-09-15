@@ -30,11 +30,228 @@ internal enum RepoContextAnnSweepOutcome
     Armed = 1,
 
     /// <summary>
-    /// The sweep completed but armed nothing, because no repository is registered
-    /// (or every one of them declined arming). A successful sweep with nothing to
-    /// do, not a failure - and not progress either.
+    /// The sweep completed but armed nothing, because it observed no repository in
+    /// the store listing (or every one it observed declined arming). A successful
+    /// sweep with nothing to do, not a failure - and not progress either.
+    /// <para>
+    /// Note what this tag does and does not assert. It records what the sweep
+    /// <i>observed</i>, never what the store <i>contains</i>: the listing is an
+    /// observation like any other and can be wrong, which is the failure mode issue
+    /// #2406 records. Anything that reports this outcome must report the observed
+    /// count rather than assert an empty store.
+    /// </para>
     /// </summary>
     Empty = 2,
+}
+
+/// <summary>
+/// Why a sweep faulted, as a closed vocabulary resolved at the fault site rather
+/// than inferred from the exception afterwards.
+/// <para>
+/// <b>Why this exists.</b> The <see cref="RepoContextAnnSweepOutcome.Faulted"/> arm
+/// is literally correct about what it counts and says nothing about what to do
+/// about it. The final scrape of the gate run 2 container read
+/// <c>armed 5, faulted 4</c>: four faults, no cause, and four causes below that
+/// need four different responses - one is a registration defect, one is a startup
+/// race that clears itself, one is deterministic and will never clear, and one is a
+/// bug. A reader who cannot tell them apart supplies a cause, and the one a reader
+/// supplies is always the benign one.
+/// </para>
+/// <para>
+/// <b>Why the default value is the loud one.</b> <see cref="Unexpected"/> is zero
+/// deliberately. Every recording path names its cause explicitly and the recording
+/// call has no default argument, so an unset value cannot arise through the public
+/// surface at all - but were one ever to, it must read as the value that pages
+/// rather than as one of the four that have a known and often benign explanation.
+/// A vocabulary whose default is benign is the same defect in a new costume.
+/// </para>
+/// <para>
+/// <b>What this vocabulary deliberately cannot express, and why.</b> Issue #2578
+/// proposed <c>corpus-empty</c> and <c>insufficient-corpus</c> among its values.
+/// Neither is reachable from here and neither is included. Both are conditions of
+/// the <i>build</i> phase, evaluated inside the coordinator's build step long after
+/// the sweep's arming call has returned; the sweep calls
+/// <see cref="RepoContextAnnIndexScheduler.TryArmAsync"/>, which registers a
+/// reminder and returns, and never reads a vector count at any point. A cause value
+/// that no site can ever set does not read as absent - it reads as checked and
+/// fine, which is precisely the misreading this whole dimension exists to prevent.
+/// The corpus question is real and is answered by build-phase telemetry, not here:
+/// note that the <see cref="RepoContextAnnSweepOutcome.Empty"/> arm's own
+/// documentation already disclaims the corpus reading in the same terms.
+/// </para>
+/// <para>
+/// <b>And why there is no <c>startup-ordering</c> value.</b> Whether a given
+/// failure from the store means "the silo is not dispatch-ready yet" or "this is
+/// genuinely broken" is not decidable from the exception, so such a tag would be a
+/// guess rendered as a measurement. Transience is a property of the series over
+/// time and is already readable without a tag: <c>faulted</c> flat while
+/// <c>armed</c> advances is a startup transient, which is exactly the run 2
+/// signature, whereas <c>faulted</c> advancing while <c>armed</c> stays flat is
+/// not. What the vocabulary does say is <i>which</i> dependency was not ready -
+/// <see cref="ListingUnavailable"/> or <see cref="DependencyUnavailable"/> - which
+/// is the actionable half and is decidable.
+/// </para>
+/// </summary>
+internal enum RepoContextAnnSweepFaultCause
+{
+    /// <summary>
+    /// Something outside the four known causes. The only value that should page: it
+    /// means a path faulted in a way nobody has classified, so the vocabulary itself
+    /// is behind the code. Also covers a cancellation that escapes the per-repository
+    /// loop while the host is <i>not</i> shutting down, which is a bug rather than an
+    /// orderly stop.
+    /// </summary>
+    Unexpected = 0,
+
+    /// <summary>
+    /// Resolving the sweep's run credential threw, so <b>nothing was attempted</b> -
+    /// no listing, no arming. Look at the run-authority registration. This arm
+    /// matters out of proportion to how often it fires, because the neighbouring
+    /// failure is silent: an uncredentialed sweep does <i>not</i> throw on a
+    /// default-deny gate, it reads back an empty listing and reports
+    /// <see cref="RepoContextAnnSweepOutcome.Empty"/> forever, which is the defect
+    /// issue #2406 records.
+    /// </summary>
+    AuthorityUnavailable = 1,
+
+    /// <summary>
+    /// The repository listing threw, so <b>nothing was attempted</b> and the
+    /// accompanying observed count of zero corroborates rather than contradicts
+    /// that. A grain call from a hosted service's start can race ahead of the silo
+    /// becoming dispatch-ready, and that race lands here, so a small burst of this
+    /// cause at process start that stops once arming begins is the expected shape
+    /// and not a defect.
+    /// </summary>
+    ListingUnavailable = 2,
+
+    /// <summary>
+    /// A build coordinator was reached and <b>refused the request it was given</b> -
+    /// an argument-shaped failure, or an embedding-space mismatch. Deterministic: the
+    /// retry backoff will re-issue the same rejected call indefinitely and never
+    /// clear it, so this cause needs a change rather than patience.
+    /// </summary>
+    PlaneRejected = 3,
+
+    /// <summary>
+    /// A build coordinator <b>could not be reached</b>: silo churn, a rejected
+    /// message, or a transport, storage or IO failure underneath. Expected to clear
+    /// on its own once the cluster settles.
+    /// <para>
+    /// Deliberately excludes a grain call timeout. A non-reentrant coordinator inside
+    /// a long build turn answers the arming call late, and the sweep already treats
+    /// that as a deferral rather than a fault - it is the expected answer from a
+    /// healthy coordinator doing exactly the work it was armed to do, and counting it
+    /// here would re-create the false-failure signal issue #2252 records.
+    /// </para>
+    /// </summary>
+    DependencyUnavailable = 4,
+}
+
+/// <summary>
+/// The fault counts by cause, cumulative since process start.
+/// </summary>
+/// <param name="Unexpected">Faults with no recognised cause.</param>
+/// <param name="AuthorityUnavailable">Faults resolving the run credential.</param>
+/// <param name="ListingUnavailable">Faults listing the repositories.</param>
+/// <param name="PlaneRejected">Arming calls a coordinator refused.</param>
+/// <param name="DependencyUnavailable">Arming calls that could not reach a coordinator.</param>
+internal readonly record struct RepoContextAnnSweepFaultTally(
+    long Unexpected,
+    long AuthorityUnavailable,
+    long ListingUnavailable,
+    long PlaneRejected,
+    long DependencyUnavailable)
+{
+    /// <summary>
+    /// The sum over every cause. Equal to the faulted arm of the outcome partition
+    /// by construction, which is what makes an unclassified path detectable rather
+    /// than merely undocumented.
+    /// </summary>
+    internal long Total =>
+        Unexpected + AuthorityUnavailable + ListingUnavailable + PlaneRejected + DependencyUnavailable;
+
+    /// <summary>The count for one cause.</summary>
+    /// <param name="cause">The cause to read.</param>
+    /// <returns>The cumulative count.</returns>
+    internal long For(RepoContextAnnSweepFaultCause cause) => cause switch
+    {
+        RepoContextAnnSweepFaultCause.AuthorityUnavailable => AuthorityUnavailable,
+        RepoContextAnnSweepFaultCause.ListingUnavailable => ListingUnavailable,
+        RepoContextAnnSweepFaultCause.PlaneRejected => PlaneRejected,
+        RepoContextAnnSweepFaultCause.DependencyUnavailable => DependencyUnavailable,
+        _ => Unexpected,
+    };
+}
+
+/// <summary>
+/// How one repository's arming call ended, within a single sweep.
+/// <para>
+/// <b>Why this is a second partition and not more arms on the sweep outcome.</b>
+/// <see cref="RepoContextAnnSweepOutcome"/> partitions <i>sweeps</i>, and that
+/// partition is total - the documented denominator for its faulted arm is the sum
+/// across all three. One sweep visits many repositories and can arm some while
+/// deferring others, so an arming result is not a value that sweep outcome could
+/// take. Adding one there would either double-count a sweep or force a precedence
+/// rule, and a precedence rule loses exactly the information this exists to keep.
+/// The denominator here is repositories visited; there it is sweeps completed. The
+/// two are not commensurable and are deliberately kept on separate instruments.
+/// </para>
+/// <para>
+/// The values are mutually exclusive and total over the repositories a sweep
+/// reaches, so a missing arm is a missing branch rather than a rounding loss.
+/// </para>
+/// </summary>
+internal enum RepoContextAnnArmingResult
+{
+    /// <summary>The coordinator answered and accepted the arming call.</summary>
+    Armed = 0,
+
+    /// <summary>
+    /// The coordinator did not answer within the grain call timeout. This is the
+    /// expected answer from a healthy coordinator already inside a long build turn,
+    /// and it is deliberately not a fault - see
+    /// <see cref="RepoContextAnnSweepFaultCause.DependencyUnavailable"/> and issue
+    /// #2252. It is counted here because "not a fault" was previously implemented as
+    /// "not counted anywhere", which is what issue #2751 records.
+    /// </summary>
+    Deferred = 1,
+
+    /// <summary>
+    /// The arming call threw something other than a timeout. Counted per repository
+    /// here, whereas the sweep-level faulted arm counts the sweep once however many
+    /// of its repositories failed.
+    /// </summary>
+    Faulted = 2,
+}
+
+/// <summary>
+/// The per-repository arming counts, cumulative since process start.
+/// </summary>
+/// <param name="Armed">Arming calls a coordinator accepted.</param>
+/// <param name="Deferred">Arming calls a busy coordinator did not answer in time.</param>
+/// <param name="Faulted">Arming calls that threw something other than a timeout.</param>
+internal readonly record struct RepoContextAnnArmingTally(
+    long Armed,
+    long Deferred,
+    long Faulted)
+{
+    /// <summary>
+    /// The sum over every result, which is the number of repositories the sweeps
+    /// have visited. Because the partition is total, this is the denominator a
+    /// reader needs to turn any single arm into a proportion, and a total that
+    /// falls short of the observed repository count is a missing branch.
+    /// </summary>
+    internal long Total => Armed + Deferred + Faulted;
+
+    /// <summary>The count for one result.</summary>
+    /// <param name="result">The result to read.</param>
+    /// <returns>The cumulative count.</returns>
+    internal long For(RepoContextAnnArmingResult result) => result switch
+    {
+        RepoContextAnnArmingResult.Armed => Armed,
+        RepoContextAnnArmingResult.Deferred => Deferred,
+        _ => Faulted,
+    };
 }
 
 /// <summary>
@@ -56,9 +273,12 @@ internal enum RepoContextAnnSweepAnnouncement
     FirstArmed = 1,
 
     /// <summary>
-    /// The first sweep in this process that completed with nothing to arm.
+    /// The first sweep in this process that completed without arming anything.
+    /// Named for what was observed - nothing was armed - rather than for a cause,
+    /// because the two causes the <see cref="RepoContextAnnSweepOutcome.Empty"/> tag
+    /// covers are not distinguishable from here.
     /// </summary>
-    NoRepositories = 2,
+    ArmedNothing = 2,
 
     /// <summary>
     /// The first fault of a new run of consecutive faults. The exception belongs on
@@ -95,12 +315,23 @@ internal readonly record struct RepoContextAnnSweepReport(
 /// <param name="Armed">Sweeps that completed and armed at least one coordinator.</param>
 /// <param name="Empty">Sweeps that completed with nothing to arm.</param>
 /// <param name="Faulted">Sweeps that threw.</param>
+/// <param name="FaultedByCause">
+/// The faulted total decomposed by cause. Sums to <paramref name="Faulted"/>.
+/// </param>
 /// <param name="ConsecutiveFaults">The length of the fault run in progress, or zero.</param>
+/// <param name="Arming">
+/// The per-repository arming results. A different population from the three sweep
+/// arms above: its denominator is repositories visited rather than sweeps
+/// completed, so it does not sum to any of them and must not be compared against
+/// them as though it did.
+/// </param>
 internal readonly record struct RepoContextAnnSweepSnapshot(
     long Armed,
     long Empty,
     long Faulted,
-    long ConsecutiveFaults);
+    RepoContextAnnSweepFaultTally FaultedByCause,
+    long ConsecutiveFaults,
+    RepoContextAnnArmingTally Arming);
 
 /// <summary>
 /// Meters the approximate-index build sweep, and decides which of its outcomes are
@@ -175,20 +406,78 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
     /// <summary>The tag value for a sweep that threw.</summary>
     internal const string OutcomeFaultedTag = "faulted";
 
+    /// <summary>
+    /// The tag key carrying the fault cause. Emitted on the faulted arm only, so the
+    /// completing arms keep exactly the cardinality they had before this dimension
+    /// existed.
+    /// </summary>
+    internal const string CauseTagKey = "cause";
+
+    /// <summary>The tag value for a fault resolving the run credential.</summary>
+    internal const string CauseAuthorityUnavailableTag = "authority-unavailable";
+
+    /// <summary>The tag value for a fault listing the repositories.</summary>
+    internal const string CauseListingUnavailableTag = "listing-unavailable";
+
+    /// <summary>The tag value for an arming call a coordinator refused.</summary>
+    internal const string CausePlaneRejectedTag = "plane-rejected";
+
+    /// <summary>The tag value for an arming call that could not reach a coordinator.</summary>
+    internal const string CauseDependencyUnavailableTag = "dependency-unavailable";
+
+    /// <summary>The tag value for a fault with no recognised cause.</summary>
+    internal const string CauseUnexpectedTag = "unexpected";
+
+    /// <summary>
+    /// The counter of per-repository arming calls, partitioned by result. A separate
+    /// instrument from <see cref="SweepInstrumentName"/> because it counts a
+    /// different population: repositories visited rather than sweeps completed.
+    /// </summary>
+    internal const string ArmingInstrumentName = "repocontext.ann.sweep.arming";
+
+    /// <summary>
+    /// The tag key carrying the arming partition. Deliberately not the
+    /// <see cref="OutcomeTagKey"/> the sweep counter uses. The two instruments have
+    /// different denominators, so a panel that grouped both by a shared key - which
+    /// a name-prefix selector over <c>repocontext_ann_sweep</c> makes easy to build
+    /// by accident - would sum incommensurable populations and present the result as
+    /// one series. A distinct key makes that construction fail to group rather than
+    /// silently mislead, which is the failure mode issue #2751 is about.
+    /// </summary>
+    internal const string ArmingResultTagKey = "result";
+
+    /// <summary>The tag value for an arming call a coordinator accepted.</summary>
+    internal const string ResultArmedTag = "armed";
+
+    /// <summary>The tag value for an arming call a busy coordinator did not answer in time.</summary>
+    internal const string ResultDeferredTag = "deferred";
+
+    /// <summary>The tag value for an arming call that threw something other than a timeout.</summary>
+    internal const string ResultFaultedTag = "faulted";
+
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering the two throws at type-initialisation rather than
     // publishing an instrument against a null meter. See the metrics conventions in
     // .github/copilot-instructions.md.
     private readonly Meter _meter;
     private readonly Counter<long> _annSweeps;
+    private readonly Counter<long> _armingAttempts;
 
     private readonly Lock _gate = new();
     private long _armed;
     private long _empty;
     private long _faulted;
+    private long _faultedAuthorityUnavailable;
+    private long _faultedListingUnavailable;
+    private long _faultedPlaneRejected;
+    private long _faultedDependencyUnavailable;
+    private long _faultedUnexpected;
     private long _consecutiveFaults;
     private bool _announcedArmed;
     private bool _announcedEmpty;
+    private long _armingArmed;
+    private long _armingDeferred;
+    private long _armingFaulted;
 
     /// <summary>Creates the reporter and its instrument.</summary>
     public RepoContextAnnIndexSweepReporter()
@@ -199,26 +488,159 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
             unit: "{sweep}",
             description:
                 "Approximate-index build sweeps partitioned by outcome: 'armed' (the sweep completed and armed at "
-                + "least one build coordinator), 'empty' (it completed with no repository to arm), or 'faulted' "
+                + "least one build coordinator), 'empty' (it completed without arming anything, either because it "
+                + "observed no repository in the store listing or because every repository it observed declined "
+                + "arming - this arm reports what the sweep observed, never that the store is empty), or 'faulted' "
                 + "(it threw, so nothing is scheduled until it gets through). Every sweep that runs is counted, so "
                 + "the total advances once per sweep - at the sweep interval while sweeps complete, and at the "
                 + "faster retry cadence (250 ms doubling to a 30-second ceiling) while they fault, so do not "
                 + "denominate 'faulted' by the sweep interval - and a zero on 'armed' beside a rising 'faulted' is "
-                + "a measured absence of arming rather than an absent measurement. All three series reading zero "
-                + "means the sweep loop is not running at all, which the service's startup line distinguishes.");
+                + "a measured absence of arming rather than an absent measurement. All three arms are "
+                + "pre-minted at zero when this reporter is constructed, so each is present from process start rather "
+                + "than appearing on its first occurrence. All three reading zero therefore means no sweep has "
+                + "completed yet; it does not localise the fault, and in particular does not establish that the sweep "
+                + "loop is not running, which the service's startup line reports directly. If an arm is absent rather "
+                + "than zero, read 'lattice_metrics_series' against the collector ceiling and "
+                + "'lattice_metrics_dropped_measurements_by_family_total' before reading anything into this "
+                + "instrument: a series whose first occurrence falls after a ceiling is reached is refused at "
+                + "creation, so an absent arm carries no information at all. "
+                + "The 'faulted' arm alone carries a second tag, 'cause', drawn from a closed set that is resolved "
+                + "where the fault is raised: 'authority-unavailable' (resolving the run credential threw, so "
+                + "nothing was attempted), 'listing-unavailable' (the repository listing threw, so nothing was "
+                + "attempted and the observed count of zero corroborates rather than contradicts that), "
+                + "'plane-rejected' (a coordinator was reached and refused the request, which is deterministic and "
+                + "will not clear on retry), 'dependency-unavailable' (a coordinator could not be reached, which "
+                + "is expected to clear once the cluster settles, and which deliberately excludes a grain call "
+                + "timeout because that is a busy coordinator and is counted as a deferral rather than a fault), "
+                + "or 'unexpected' (unclassified - the only value that should page). The cause says what to do; it "
+                + "does not say whether the fault will persist, which is read from the shape of the series instead: "
+                + "'faulted' flat while 'armed' advances is a startup transient, whereas 'faulted' advancing while "
+                + "'armed' stays flat is not. No cause reports on the corpus, because the sweep only arms a "
+                + "coordinator and never reads a vector count.");
+
+        // Pre-mint every arm of the outcome partition with a zero-valued add, so
+        // each series exists from process start rather than from its first
+        // occurrence. That is what keeps the description's reading available on a
+        // long-lived host: the collector refuses a series whose first occurrence
+        // falls after a ceiling is reached, and the arm most likely to have its
+        // first occurrence late is exactly the never-yet-exercised arm the reader
+        // is invited to read as a measured zero (issue #2515). An absent series and
+        // a series reading zero look identical on a dashboard and are very
+        // different claims; only the second is falsifiable.
+        //
+        // The five 'cause' values are deliberately not pre-minted. They partition
+        // 'faulted' rather than the whole population, so a zero on a cause is only
+        // interpretable once 'faulted' is non-zero, at which point the causes have
+        // been minted by the faults themselves.
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeArmedTag), LatticeTenantLabel.Platform);
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeEmptyTag), LatticeTenantLabel.Platform);
+        _annSweeps.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag), LatticeTenantLabel.Platform);
+
+        _armingAttempts = _meter.CreateCounter<long>(
+            ArmingInstrumentName,
+            unit: "{repository}",
+            description:
+                "Arming calls the approximate-index build sweep made, partitioned by result, counted once per "
+                + "repository visited rather than once per sweep: 'armed' (a coordinator accepted the call), "
+                + "'deferred' (a coordinator did not answer within the grain call timeout, which is the expected "
+                + "answer from a healthy one already inside a long build turn and is deliberately NOT a fault), "
+                + "or 'faulted' (the call threw something "
+                + "other than a timeout). The partition is total over the repositories a sweep reaches, so the sum "
+                + "is the number of repository visits and each arm is readable as a proportion of it. All three "
+                + "arms are pre-minted at zero when this reporter is constructed, so each is present from process "
+                + "start rather than appearing on its first occurrence. "
+                + "Read this beside 'repocontext.ann.sweep' and never as a refinement of it: that instrument "
+                + "partitions SWEEPS and this one partitions REPOSITORY VISITS, so the two totals are "
+                + "incommensurable and neither decomposes the other. The distinction is the whole point. A sweep "
+                + "that armed one repository and deferred nine is counted on the sweep instrument identically to "
+                + "one that armed ten of ten, and a sweep on which every coordinator deferred is counted there as "
+                + "'empty' - indistinguishable from a store with no repositories in it, because 'armed' was zero. "
+                + "Those are the two readings this instrument exists to separate (issue #2751). In particular a "
+                + "zero on the sweep instrument's 'faulted' arm does not mean no arming attempt failed: a timeout "
+                + "never reaches it, and lands here on 'deferred' instead. "
+                + "Carries no repository id, by the standing rule that identity dimensions belong in logs and "
+                + "outcome dimensions in metrics, so which repository deferred is named by its own warning rather "
+                + "than by a tag.");
+
+        // Same reasoning as the outcome arms above: an arm whose first occurrence
+        // falls after the collector's series ceiling is refused at creation, and the
+        // arm most likely to occur late is the one a reader is invited to read as a
+        // measured zero. On a healthy deployment 'faulted' may never occur at all,
+        // which is exactly when its absence would be mistaken for its being zero.
+        _armingAttempts.Add(
+            0, new KeyValuePair<string, object?>(ArmingResultTagKey, ResultArmedTag), LatticeTenantLabel.Platform);
+        _armingAttempts.Add(
+            0, new KeyValuePair<string, object?>(ArmingResultTagKey, ResultDeferredTag), LatticeTenantLabel.Platform);
+        _armingAttempts.Add(
+            0, new KeyValuePair<string, object?>(ArmingResultTagKey, ResultFaultedTag), LatticeTenantLabel.Platform);
     }
 
     /// <summary>
-    /// Records one sweep iteration and reports which transition, if any, the caller
-    /// should log. The counter is incremented for every outcome, including the
-    /// faulting one, because it is the partition of a total that rises once per
-    /// sweep - not once per sweep interval, since a faulting sweep is re-run on the
-    /// retry backoff - that makes a zero on any single arm interpretable.
+    /// Records the result of one repository's arming call. Called once per
+    /// repository the sweep reaches, so the partition is total over repository
+    /// visits rather than over sweeps.
     /// </summary>
-    /// <param name="outcome">How the sweep ended.</param>
-    /// <returns>The transition to announce, and the length of the fault run it opened or closed.</returns>
-    public RepoContextAnnSweepReport Record(RepoContextAnnSweepOutcome outcome)
+    /// <param name="result">How that repository's arming call ended.</param>
+    public void RecordArming(RepoContextAnnArmingResult result)
     {
+        _armingAttempts.Add(
+            1,
+            new KeyValuePair<string, object?>(ArmingResultTagKey, DescribeArmingResult(result)),
+            LatticeTenantLabel.Platform);
+
+        lock (_gate)
+        {
+            switch (result)
+            {
+                case RepoContextAnnArmingResult.Armed:
+                    _armingArmed++;
+                    break;
+                case RepoContextAnnArmingResult.Deferred:
+                    _armingDeferred++;
+                    break;
+                default:
+                    // Fails onto the same arm DescribeArmingResult resolves for an
+                    // out-of-range cast, so the tally can never disagree with the
+                    // meter about where the increment landed.
+                    _armingFaulted++;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one sweep iteration that completed, and reports which transition, if
+    /// any, the caller should log. The counter is incremented for every outcome,
+    /// including the faulting one, because it is the partition of a total that rises
+    /// once per sweep - not once per sweep interval, since a faulting sweep is re-run
+    /// on the retry backoff - that makes a zero on any single arm interpretable.
+    /// </summary>
+    /// <param name="outcome">How the sweep ended. Must not be the faulting outcome.</param>
+    /// <returns>The transition to announce, and the length of the fault run it closed.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="outcome"/> is <see cref="RepoContextAnnSweepOutcome.Faulted"/>,
+    /// which must be recorded through <see cref="RecordFaulted"/> so that it carries a
+    /// cause.
+    /// </exception>
+    /// <remarks>
+    /// The split into two entry points is what makes acceptance criterion 2 of issue
+    /// #2578 - that no path may emit a default or empty cause - structural rather than
+    /// a matter of discipline. A single <c>Record(outcome, cause = default)</c> would
+    /// have let a new fault path compile while emitting the default value, and a
+    /// default is exactly how the next reader is handed a benign-looking number again.
+    /// Here a fault cannot be counted without a cause because there is no overload that
+    /// accepts one without.
+    /// </remarks>
+    public RepoContextAnnSweepReport RecordCompleted(RepoContextAnnSweepOutcome outcome)
+    {
+        if (outcome == RepoContextAnnSweepOutcome.Faulted)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "A faulted sweep must be recorded through RecordFaulted so that it carries a cause.");
+        }
+
         _annSweeps.Add(
             1,
             new KeyValuePair<string, object?>(OutcomeTagKey, DescribeOutcome(outcome)),
@@ -226,15 +648,6 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
 
         lock (_gate)
         {
-            if (outcome == RepoContextAnnSweepOutcome.Faulted)
-            {
-                _faulted++;
-                _consecutiveFaults++;
-                return _consecutiveFaults == 1
-                    ? new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.FaultBegan, 1)
-                    : new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.None, 0);
-            }
-
             if (outcome == RepoContextAnnSweepOutcome.Armed)
             {
                 _armed++;
@@ -271,7 +684,57 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
             }
 
             _announcedEmpty = true;
-            return new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.NoRepositories, 0);
+            return new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.ArmedNothing, 0);
+        }
+    }
+
+    /// <summary>
+    /// Records one sweep iteration that threw, under the cause the fault site
+    /// resolved, and reports whether it opened a new fault run.
+    /// </summary>
+    /// <param name="cause">
+    /// Why the sweep faulted. Required, and resolved where the fault was raised
+    /// rather than inferred here, because the site is the only place that knows which
+    /// stage was executing.
+    /// </param>
+    /// <returns>The transition to announce, and the length of the fault run it opened.</returns>
+    public RepoContextAnnSweepReport RecordFaulted(RepoContextAnnSweepFaultCause cause)
+    {
+        _annSweeps.Add(
+            1,
+            new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+            new KeyValuePair<string, object?>(CauseTagKey, DescribeCause(cause)),
+            LatticeTenantLabel.Platform);
+
+        lock (_gate)
+        {
+            _faulted++;
+            switch (cause)
+            {
+                case RepoContextAnnSweepFaultCause.AuthorityUnavailable:
+                    _faultedAuthorityUnavailable++;
+                    break;
+                case RepoContextAnnSweepFaultCause.ListingUnavailable:
+                    _faultedListingUnavailable++;
+                    break;
+                case RepoContextAnnSweepFaultCause.PlaneRejected:
+                    _faultedPlaneRejected++;
+                    break;
+                case RepoContextAnnSweepFaultCause.DependencyUnavailable:
+                    _faultedDependencyUnavailable++;
+                    break;
+                default:
+                    // Fails open onto the arm that pages, matching the tag DescribeCause
+                    // resolves for the same value, so the tally can never disagree with
+                    // the meter about which arm an out-of-range cast landed on.
+                    _faultedUnexpected++;
+                    break;
+            }
+
+            _consecutiveFaults++;
+            return _consecutiveFaults == 1
+                ? new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.FaultBegan, 1)
+                : new RepoContextAnnSweepReport(RepoContextAnnSweepAnnouncement.None, 0);
         }
     }
 
@@ -281,7 +744,21 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnSweepSnapshot(_armed, _empty, _faulted, _consecutiveFaults);
+            return new RepoContextAnnSweepSnapshot(
+                _armed,
+                _empty,
+                _faulted,
+                new RepoContextAnnSweepFaultTally(
+                    _faultedUnexpected,
+                    _faultedAuthorityUnavailable,
+                    _faultedListingUnavailable,
+                    _faultedPlaneRejected,
+                    _faultedDependencyUnavailable),
+                _consecutiveFaults,
+                new RepoContextAnnArmingTally(
+                    _armingArmed,
+                    _armingDeferred,
+                    _armingFaulted));
         }
     }
 
@@ -296,6 +773,40 @@ internal sealed class RepoContextAnnIndexSweepReporter : IDisposable
         RepoContextAnnSweepOutcome.Armed => OutcomeArmedTag,
         RepoContextAnnSweepOutcome.Empty => OutcomeEmptyTag,
         _ => OutcomeFaultedTag,
+    };
+
+    /// <summary>
+    /// The bounded tag value for a fault cause. Resolved against a closed set so an
+    /// unrecognised value can never reach the meter as unbounded-cardinality text,
+    /// and fails open onto <see cref="RepoContextAnnSweepFaultCause.Unexpected"/> -
+    /// the arm that pages - rather than onto one with a benign explanation.
+    /// </summary>
+    /// <param name="cause">The cause to describe.</param>
+    /// <returns>The tag value.</returns>
+    internal static string DescribeCause(RepoContextAnnSweepFaultCause cause) => cause switch
+    {
+        RepoContextAnnSweepFaultCause.AuthorityUnavailable => CauseAuthorityUnavailableTag,
+        RepoContextAnnSweepFaultCause.ListingUnavailable => CauseListingUnavailableTag,
+        RepoContextAnnSweepFaultCause.PlaneRejected => CausePlaneRejectedTag,
+        RepoContextAnnSweepFaultCause.DependencyUnavailable => CauseDependencyUnavailableTag,
+        _ => CauseUnexpectedTag,
+    };
+
+    /// <summary>
+    /// The bounded tag value for an arming result. Resolved against a closed set so
+    /// an unrecognised value can never reach the meter as unbounded-cardinality
+    /// text, and fails open onto <see cref="RepoContextAnnArmingResult.Faulted"/>
+    /// rather than onto an arm with a benign explanation: a branch nobody mapped is
+    /// closer to a failure than to a success, and a new branch reading as 'armed'
+    /// would overstate exactly the thing this instrument is trusted for.
+    /// </summary>
+    /// <param name="result">The result to describe.</param>
+    /// <returns>The tag value.</returns>
+    internal static string DescribeArmingResult(RepoContextAnnArmingResult result) => result switch
+    {
+        RepoContextAnnArmingResult.Armed => ResultArmedTag,
+        RepoContextAnnArmingResult.Deferred => ResultDeferredTag,
+        _ => ResultFaultedTag,
     };
 
     /// <summary>Disposes the underlying meter.</summary>

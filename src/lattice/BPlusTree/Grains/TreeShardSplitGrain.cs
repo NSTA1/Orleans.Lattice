@@ -54,6 +54,9 @@ internal sealed class TreeShardSplitGrain(
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId}";
 
+    /// <inheritdoc />
+    protected override string MetricsTreeId => TreeId;
+
     /// <summary>
     /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
     /// integer suffix is the source shard; everything before the final '/' is
@@ -530,19 +533,23 @@ internal sealed class TreeShardSplitGrain(
         await ForwardMovedSlotEntriesAtomicallyAsync("SplitSwapFinalDrain");
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        // Re-read the current map so concurrent splits compose correctly:
-        // each swap applies its own moved-slot diff onto whatever is now
-        // persisted, preventing one coordinator from clobbering another's
-        // earlier swap. The registry grain is non-reentrant so the
-        // get-modify-set sequence is atomic across callers.
-        var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? state.State.OriginalShardMap!;
-        var newSlots = (int[])currentMap.Slots.Clone();
-        foreach (var slot in state.State.MovedSlots)
-            newSlots[slot] = state.State.TargetShardIndex;
-        await registry.SetShardMapAsync(TreeId, new ShardMap { Slots = newSlots });
+        // Apply this swap's moved-slot diff inside a single registry call so
+        // concurrent topology changes compose: ReassignSlotsAsync re-reads the
+        // live map and persists the reassigned copy without interleaving, so a
+        // consolidation fold landing alongside this split cannot erase either
+        // coordinator's reassignment. Performing the same get-modify-set here
+        // across two calls would not be atomic - the registry grain's
+        // non-reentrancy serialises each individual call, not a sequence of
+        // them, so a fold persisting in the gap would be clobbered by the
+        // write below and its folded slots would keep routing to the donor it
+        // had already drained.
+        await registry.ReassignSlotsAsync(
+            TreeId,
+            state.State.MovedSlots.ToArray(),
+            state.State.TargetShardIndex,
+            state.State.OriginalShardMap!);
 
-        // The registry SetShardMapAsync side effect is cross-grain and
+        // The registry ReassignSlotsAsync side effect is cross-grain and
         // idempotent on re-apply; only the in-memory Phase mutation needs
         // to be reverted on a failing WriteStateAsync.
         var prevPhase = state.State.Phase;

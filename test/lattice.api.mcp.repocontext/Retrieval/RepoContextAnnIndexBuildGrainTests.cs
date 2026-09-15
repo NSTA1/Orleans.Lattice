@@ -68,7 +68,14 @@ public sealed class RepoContextAnnIndexBuildGrainTests
 
         public required IGrainContext Context { get; init; }
 
-        public void Dispose() => Registry.Dispose();
+        /// <summary>The build-corpus reporter this activation's grain emits onto.</summary>
+        public required RepoContextAnnBuildCorpusReporter CorpusReporter { get; init; }
+
+        public void Dispose()
+        {
+            Registry.Dispose();
+            CorpusReporter.Dispose();
+        }
     }
 
     /// <summary>
@@ -103,12 +110,18 @@ public sealed class RepoContextAnnIndexBuildGrainTests
             context.ActivationServices.Returns(services);
 
             var reminders = Substitute.For<IReminderRegistry>();
+            var corpusReporter = new RepoContextAnnBuildCorpusReporter();
+            var sliceReporter = new RepoContextAnnBuildSliceReporter();
             var grain = new RepoContextAnnIndexBuildGrain(
                 context,
                 reminders,
                 registry,
                 Backing,
                 Indexing,
+                new NullRepoIndexRunAuthority(),
+                UnrestrictedCorpusGateProbe.Instance,
+                corpusReporter,
+                sliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
 
@@ -118,6 +131,7 @@ public sealed class RepoContextAnnIndexBuildGrainTests
                 Grain = grain,
                 Reminders = reminders,
                 Context = context,
+                CorpusReporter = corpusReporter,
             };
         }
 

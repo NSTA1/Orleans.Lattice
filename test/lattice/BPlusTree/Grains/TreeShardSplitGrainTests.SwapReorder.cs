@@ -29,13 +29,14 @@ public partial class TreeShardSplitGrainTests
 
         await grain.SwapAsync();
 
-        // Ordering invariant: EnterRejectPhaseAsync MUST be observed BEFORE
-        // SetShardMapAsync. NSubstitute's Received.InOrder verifies the call
+        // Ordering invariant: EnterRejectPhaseAsync MUST be observed BEFORE the
+        // registry map flip. NSubstitute's Received.InOrder verifies the call
         // sequence across distinct substitutes.
         Received.InOrder(() =>
         {
             source.EnterRejectPhaseAsync();
-            registry.SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+            registry.ReassignSlotsAsync(
+                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
         });
     }
 
@@ -99,7 +100,8 @@ public partial class TreeShardSplitGrainTests
         {
             source.EnterRejectPhaseAsync();
             source.GetLeftmostLeafIdAsync();
-            registry.SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+            registry.ReassignSlotsAsync(
+                Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
         });
     }
 }

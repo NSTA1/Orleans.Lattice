@@ -134,11 +134,16 @@ function New-TestComposeDocument {
     "embedder": {
       "image": "rc-embedder:coldstart-rig",
       "restart": "no",
+      "init": true,
+      "stop_grace_period": "30s",
       "volumes": [ { "type": "volume", "source": "hf-cache", "target": "/app/.cache/huggingface", "volume": {} } ]
     },
     "repocontext": {
       "image": "repocontext-mcp:coldstart-rig",
       "restart": "no",
+      "init": true,
+      "stop_grace_period": "120s",
+      "environment": { "LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD": "120s" },
       "ports": [ { "mode": "ingress", "target": 8080, "published": "18080", "protocol": "tcp" } ],
       "volumes": [
         { "type": "volume", "source": "work", "target": "/data", "volume": {} },
@@ -478,6 +483,95 @@ _AssertRefuses -Name 'REFUSES a declared volume outside the rig set' -Fragment '
 
 _AssertRefuses -Name 'REFUSES an empty resolved compose document' -Fragment 'empty' `
 	-Action { Assert-RigComposeIsolation -Document $null -Config $baseline }
+
+# ---------------------------------------------------------------------------
+Write-Host 'Assert-RigComposeIsolation (shutdown readiness, issue #2576)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+#
+# These cases are the reason the check lives at the RESOLVED-document layer
+# rather than in a fixture that compares tracked files to each other. Every
+# mutation below produces a document that a tracked-file comparison would call
+# clean, because the tracked files are not what changed.
+
+_AssertRefuses -Name 'REFUSES a host service that does not run an init process' -Fragment 'init: true' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.repocontext.init = $false
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+# The embedder holds no durable state, so it is tempting to exempt it. It is
+# not exempt: orphan reaping and signal handling are properties of PID 1, not
+# of whether the process has anything to flush.
+_AssertRefuses -Name 'REFUSES an embedder that does not run an init process' -Fragment 'init: true' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.embedder.init = $false
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+_AssertRefuses -Name 'REFUSES a host service with no stop_grace_period' -Fragment 'crash teardown' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.repocontext.stop_grace_period = $null
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+_AssertRefuses -Name 'REFUSES a grace period shorter than the host shutdown budget' -Fragment 'shutdown budget' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.repocontext.stop_grace_period = '30s'
+	$document.services.repocontext.environment.LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD = '30s'
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+# The drift that actually went unnoticed across two gate runs: a perfectly good
+# grace period that the host was never told about, so it planned against an
+# assumed one instead.
+_AssertRefuses -Name 'REFUSES a granted stop_grace_period that is never declared to the host' -Fragment 'assumed grace period' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.repocontext.environment = [pscustomobject] @{}
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+_AssertRefuses -Name 'REFUSES a declared grant that disagrees with the granted stop_grace_period' -Fragment 'nothing holds it to' `
+	-Action {
+	$document = New-TestComposeDocument
+	$document.services.repocontext.environment.LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD = '600s'
+	Assert-RigComposeIsolation -Document $document -Config $baseline
+}
+
+# Equal values written in different but equally legal Compose spellings must
+# agree, or the guard would force a cosmetic convention rather than a real one.
+$spelled = New-TestComposeDocument
+$spelled.services.repocontext.stop_grace_period = '2m'
+$spelled.services.repocontext.environment.LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD = '120s'
+$accepted = $true
+try { Assert-RigComposeIsolation -Document $spelled -Config $baseline | Out-Null }
+catch { $accepted = $false; $spellError = $_.Exception.Message }
+_Assert -Name '2m and 120s are recognised as the same grant' -Condition $accepted `
+	-Detail $(if ($accepted) { '' } else { $spellError })
+
+_Assert -Name 'ConvertFrom-RigComposeDuration reads every Compose spelling' `
+	-Condition (
+		(ConvertFrom-RigComposeDuration -Value '120s') -eq 120 -and
+		(ConvertFrom-RigComposeDuration -Value '2m') -eq 120 -and
+		(ConvertFrom-RigComposeDuration -Value '1m30s') -eq 90 -and
+		(ConvertFrom-RigComposeDuration -Value '1h') -eq 3600 -and
+		(ConvertFrom-RigComposeDuration -Value '90') -eq 90
+	) -Detail 'one of the accepted spellings did not parse'
+
+# "Absent" and "zero" must stay distinguishable, and junk must not parse as the
+# number it happens to start with.
+_Assert -Name 'ConvertFrom-RigComposeDuration rejects absent and malformed values' `
+	-Condition (
+		$null -eq (ConvertFrom-RigComposeDuration -Value $null) -and
+		$null -eq (ConvertFrom-RigComposeDuration -Value '') -and
+		$null -eq (ConvertFrom-RigComposeDuration -Value 'soon') -and
+		$null -eq (ConvertFrom-RigComposeDuration -Value '120 seconds') -and
+		0 -eq (ConvertFrom-RigComposeDuration -Value '0s')
+	) -Detail 'a malformed duration parsed, or a zero was treated as absent'
 
 # ---------------------------------------------------------------------------
 Write-Host 'Test-RigStagingManifestCurrent (staging cache validity)' -ForegroundColor Cyan

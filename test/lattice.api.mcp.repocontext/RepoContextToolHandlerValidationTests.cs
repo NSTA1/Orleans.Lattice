@@ -256,15 +256,24 @@ public sealed class RepoContextToolHandlerValidationTests
     public void ContextAsync_rejects_a_blank_task(string task)
         => AssertRejects(() => RepoContextToolHandlers.ContextAsync(null!, "acme", task), "task");
 
-    // ---- health is unconditional -------------------------------------------
+    // ---- health is no longer unconditional ---------------------------------
 
+    /// <summary>
+    /// Health now consults the shared readiness state, so a request with no service
+    /// provider must name the missing provider rather than null-dereference - and,
+    /// critically, must NOT fall back to reporting ready. A healthy default here
+    /// would reinstate the exact defect the readiness plumbing exists to remove: a
+    /// probe that answers green without having looked.
+    /// </summary>
     [Test]
-    public void Health_reports_the_surface_available_without_touching_the_request()
+    public async Task Health_without_a_request_service_provider_fails_with_an_actionable_message()
     {
-        var health = RepoContextToolHandlers.Health();
+        var context = await RepoContextRequestContexts.CreateAsync(services: null);
 
-        Assert.That(health.Available, Is.True,
-            "Reaching the handler means the caller cleared the authorization gate, so it always reports ready.");
+        Assert.That(
+            () => RepoContextToolHandlers.Health(context),
+            Throws.InstanceOf<InvalidOperationException>().With.Message.Contains("no service provider"),
+            "Health must fail loudly rather than default to ready; a green it cannot justify is the defect.");
     }
 
     // ---- service-resolution failures ---------------------------------------

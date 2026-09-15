@@ -98,7 +98,19 @@ internal sealed class LeafReplayCoordinatorGrain(
             && _cachedToInclusive == toOffsetInclusive
             && DateTime.UtcNow - _cachedAtUtc < SliceCacheTtl)
         {
-            return _cachedEntries;
+            // Issue #2899. The key is the range, and narrowing spends WIDTH,
+            // not span - a narrowed retry re-presents the identical range with
+            // a smaller budget, so it matches this entry exactly. Handing back
+            // the wider cached slice would ignore the budget and give a replay
+            // that had just narrowed under memory pressure the very allocation
+            // it narrowed to avoid, with no narrower read ever reaching
+            // storage. Truncating keeps the ascending prefix, which is what the
+            // replay loops need since they advance by the last offset they see.
+            // The instance is returned verbatim when it already fits, so the
+            // shared-read amortisation this cache exists for is unaffected.
+            return _cachedEntries.Count <= budget
+                ? _cachedEntries
+                : _cachedEntries.Take(budget).ToList();
         }
 
         var collected = new List<CommitLogSliceEntry>();

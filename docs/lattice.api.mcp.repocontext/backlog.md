@@ -116,6 +116,33 @@ static string Describe(RepoContextClaimResult claim) =>
 the authoritative signal that this run has lost the item: it must abandon
 immediately without writing anything further.
 
+**Always pass `leaseSeconds` explicitly on a renew.** Omitting it does not
+preserve the lease being held - it requests the cluster's configured default,
+which is deliberately short, so renewing a long claim without a length cuts it
+down. Both outcomes are `granted: true`, so the reduction is reported separately
+as `leaseShortened: true` with the prior expiry in `previousLeaseExpiresAtUtc`.
+Without that signal the reduction is invisible until the *next* renew, which
+returns `superseded` - by which point the worker has been fenced out mid-task
+while believing it held the claim. Treat a shortening renew as a prompt to renew
+again with an explicit length, not as success.
+
+```csharp verify
+using Orleans.Lattice.Api.Mcp.RepoContext;
+
+static string AfterRenew(RepoContextClaimResult renewed) =>
+    renewed switch
+    {
+        // Not a failure: the renew succeeded, but it moved the expiry earlier.
+        // Renew again with an explicit leaseSeconds rather than carrying on.
+        { Granted: true, LeaseShortened: true } =>
+            $"lease SHORTENED from {renewed.PreviousLeaseExpiresAtUtc} "
+            + $"to {renewed.LeaseExpiresAtUtc}; renew again with an explicit length",
+
+        { Granted: true } => $"lease held to {renewed.LeaseExpiresAtUtc}",
+        _ => $"lost the item ({renewed.Reason}); stop writing",
+    };
+```
+
 `repocontext_claim_status` is **advisory only**. Its `authoritative` property is
 hard-wired to `false` so that no call site can project an authoritative status
 from a read. Use it to observe and report; never to gate a decision. Only a

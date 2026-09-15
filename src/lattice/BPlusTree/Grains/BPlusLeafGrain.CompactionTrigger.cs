@@ -23,6 +23,27 @@ internal sealed partial class BPlusLeafGrain
     /// to reap. Failures on the dispatch task are swallowed and logged
     /// at warning - the trigger is best-effort observability machinery,
     /// not a correctness contract.
+    /// <para>
+    /// Reads both counts in O(1) from <c>Cache.Count</c> and
+    /// <c>Cache.LiveCount</c> rather than streaming the whole-cache row view.
+    /// The substitution is exact, not an approximation: <c>LiveCount</c> derives
+    /// liveness from the stored row's tombstone flag, which is the identical
+    /// predicate the enumeration applied, and both counters carry residual terms
+    /// for rows a lazily hydrated snapshot still owns - so a partially hydrated
+    /// leaf reports the same figures a fully hydrated one does.
+    /// </para>
+    /// <para>
+    /// What changes is that nothing is materialised. The whole-cache view called
+    /// <c>HydrateAll</c>, which ends in <c>DetachSnapshot</c> and leaves every
+    /// row resident for the life of the activation. That mattered here more than
+    /// anywhere else, because this runs on <em>every</em> successful foreground
+    /// commit once either threshold is configured, so on a write-heavy tree it
+    /// was reliably the first operation to consume a leaf's snapshot frame - and
+    /// a leaf whose frame is gone can only divide by materialising itself whole,
+    /// which is the cost a division on an oversized leaf can least afford.
+    /// Deciding that a leaf needs compaction was itself the act that forfeited
+    /// its cheap split (issue #2787).
+    /// </para>
     /// </summary>
     private void EvaluateCompactionTrigger()
     {
@@ -32,17 +53,15 @@ internal sealed partial class BPlusLeafGrain
         var sizeThreshold = resolved.MaxLeafEntriesBeforeForcedCompaction;
         if (ratioThreshold <= 0.0 && sizeThreshold <= 0) return;
 
-        var liveCount = 0;
-        var tombstoneCount = 0;
-        foreach (var (_, lww) in Cache.EnumerateRows())
-        {
-            if (lww.IsTombstone) tombstoneCount++;
-            else liveCount++;
-        }
-
-        if (tombstoneCount == 0) return;
-        var total = liveCount + tombstoneCount;
+        var total = Cache.Count;
         if (total <= 0) return;
+
+        // Clamped rather than trusted: both counters are maintained
+        // incrementally, so a negative difference would mean the accounting has
+        // drifted. Clamping keeps a drifted counter from inverting the ratio and
+        // dispatching a pass on a leaf holding no tombstones at all.
+        var tombstoneCount = Math.Max(0L, total - Cache.LiveCount);
+        if (tombstoneCount == 0) return;
 
         string? triggerKind = null;
         if (ratioThreshold > 0.0)
@@ -87,19 +106,21 @@ internal sealed partial class BPlusLeafGrain
     /// Tagged by tree and per-leaf grain id; per-leaf cardinality is
     /// expected to be bounded by the operator's view layer if the tree
     /// has very many leaves.
+    /// <para>
+    /// Reads both counts in O(1), for the reason given on
+    /// <see cref="EvaluateCompactionTrigger"/>. This sampler has no threshold
+    /// guard at all, so unlike the trigger it ran unconditionally at every
+    /// compaction pass entry: an observability sample that permanently forfeited
+    /// the leaf's ability to divide cheaply. The ratio it records is unchanged,
+    /// because the substituted counters apply the same tombstone predicate the
+    /// enumeration did.
+    /// </para>
     /// </summary>
     private void SampleLeafTombstoneRatio()
     {
-        var liveCount = 0;
-        var tombstoneCount = 0;
-        foreach (var (_, lww) in Cache.EnumerateRows())
-        {
-            if (lww.IsTombstone) tombstoneCount++;
-            else liveCount++;
-        }
-
-        var total = liveCount + tombstoneCount;
+        var total = Cache.Count;
         if (total <= 0) return;
+        var tombstoneCount = Math.Max(0L, total - Cache.LiveCount);
         var ratio = (double)tombstoneCount / total;
         LatticeMetrics.LeafTombstoneRatio.Record(ratio,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),

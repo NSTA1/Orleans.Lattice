@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
@@ -84,6 +85,27 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int MaxFileGapScanBackoffPasses = 8;
 
     /// <summary>
+    /// The most changed symbol keys a partial walk will carry forward to the pass
+    /// that resumes it.
+    /// <para>
+    /// A resumed walk starts mid-range, so a changed symbol whose key sorts behind
+    /// the cursor is not visited until the walk wraps. Carrying it forward turns
+    /// that into a deferral rather than a loss: without it, a changed symbol whose
+    /// membership flag is already set is skipped by the gap scan forever and its
+    /// stale vector is never replaced.
+    /// </para>
+    /// <para>
+    /// The set is bounded because it is unbounded in principle - a repository that
+    /// faults on every pass while churning would accumulate one entry per changed
+    /// symbol per pass. Dropping the excess re-exposes exactly the pre-existing
+    /// staleness, which the next completed circuit heals through the gap scan, so
+    /// the ceiling trades a bounded delay for a bounded memory cost rather than
+    /// trading correctness for either.
+    /// </para>
+    /// </summary>
+    internal const int MaxPendingChangedSymbolKeys = 50_000;
+
+    /// <summary>
     /// The ingest arm names carried into every batched embed-and-store log line.
     /// <para>
     /// The three arms share one embed body, so before these existed its warnings
@@ -115,6 +137,33 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly Serializer _serializer;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
+    private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
+    private readonly RepoContextSymbolWalkReporter? _symbolWalkReporter;
+
+    /// <summary>
+    /// The symbol arm's in-progress range walk, per repository, carried across
+    /// reconcile passes because the ingestor is a singleton.
+    /// <para>
+    /// The arm selects work by paging the entire symbol range. Before issue #2953
+    /// a page read that faulted discarded every page the pass had already read, so
+    /// the next pass restarted at the head and re-issued the identical leaf reads.
+    /// That re-drive is not a bystander to the stall that caused it: scan-page
+    /// issued leaf reads were measured at roughly 98% of the cold WAL replay permit
+    /// demand on the deployed acceptance container, against 1.6% for tombstone
+    /// compaction and 0.16% for the WAL-GC blocked-leaf sweep. A walk that restarts
+    /// therefore regenerates exactly the load that made it fault, and the cycle has
+    /// no exit - the walk never completes a circuit, so the arm never banks a
+    /// snapshot, so the tree's WAL cursor floor never advances and nothing is
+    /// reclaimed.
+    /// </para>
+    /// <para>
+    /// Banking the continuation token turns the re-drive into a resume, so the walk
+    /// makes monotonic progress across faulting passes. The cursor is dropped the
+    /// moment a circuit closes: it bounds a re-drive, it is not a permanent
+    /// position, and leaving it would hide a symbol captured behind it.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SymbolWalkCursor> _symbolWalkCursors = new();
 
     /// <summary>
     /// The symbol arm's per-repository gap-back-fill backoff, carried across
@@ -216,13 +265,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="serializer">The Orleans serializer used to decode symbol records during symbol embedding. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then degrades to keyword recall).</param>
+    /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing ingestion coverage down, or <see langword="null"/> in a host that registered none.</param>
+    /// <param name="symbolWalkReporter">Meters whether the symbol arm's range walk completed, resumed banked progress, or banked and stood down, or <see langword="null"/> in a host that registered none.</param>
     /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
         IGrainFactory grainFactory,
         Serializer serializer,
         ILogger<EmbeddingRepoContextVectorIngestor> logger,
-        IEmbeddingProvider? embeddingProvider = null)
+        IEmbeddingProvider? embeddingProvider = null,
+        RepoContextCoverageProbeReporter? coverageProbeReporter = null,
+        RepoContextSymbolWalkReporter? symbolWalkReporter = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -233,6 +286,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         _serializer = serializer;
         _logger = logger;
         _embeddingProvider = embeddingProvider;
+        _coverageProbeReporter = coverageProbeReporter;
+        _symbolWalkReporter = symbolWalkReporter;
     }
 
     /// <inheritdoc />
@@ -294,6 +349,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // happened on the live deployment once the symbol arm was fixed.
         RepoContextEmbeddingCoverage coverage;
         var coverageProbeFailed = false;
+        var coverageGatePruned = false;
         var gapsSelected = 0;
         var gapSelectedFiles = new List<RepoFileEntry>();
 
@@ -303,10 +359,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // embed-and-store write load - not the probe - that keeps the membership tree
         // beyond its replay budget. Only the back-fill selection stands down.
         var skipGapScan = ClaimFileGapScanSkip(repoId);
+        var coverageFromDigest = false;
         try
         {
-            coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+            // Digest first (issue #2486). A built digest answers coverage for the
+            // whole candidate set in a fixed number of rows on a different tree, so
+            // this pass makes ZERO membership reads for detection - which is both the
+            // O(sources) cost this item removes and the read pressure it takes off the
+            // #2071 replay-debt hotspot. The projection returns exactly the coverage
+            // shape the probe returned, so every consumer below is unchanged.
+            //
+            // An unbuilt or unreadable digest falls through to the probe unchanged;
+            // LoadCoverageDigestAsync seeds the digest from that same authoritative
+            // scan on its first call, so the O(sources) read happens once rather than
+            // every pass.
+            var digest = await _writer.LoadCoverageDigestAsync(repoId, cancellationToken)
                 .ConfigureAwait(false);
+            if (digest.IsBuilt)
+            {
+                coverage = digest.ProjectOnto(candidateKeys.Select(VectorCodec.SourceId));
+                coverageFromDigest = true;
+            }
+            else
+            {
+                coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -321,7 +399,62 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 unchangedFiles.Count);
         }
 
-        var toEmbed = coverageProbeFailed || skipGapScan
+        // The probe was answered, but the store's read-path access gate removed keys
+        // from it before fan-out, so a file's absence from this coverage says nothing
+        // about whether it is embedded (issue #2277). Standing the gap sweep down for
+        // this pass is the only safe reading: classifying on it would mark already
+        // embedded files as gaps and re-embed them on every pass, forever, while
+        // every layer's log stayed clean.
+        //
+        // Kept as a SEPARATE flag from coverageProbeFailed rather than folded into
+        // it, even though the two produce the same selection this pass, because they
+        // call for opposite operator responses. A failed probe is transient and
+        // clears itself; a pruned probe is a standing misconfiguration that never
+        // clears, and reporting it as a probe failure would have an operator waiting
+        // out a condition that does not pass.
+        if (!coverageProbeFailed && !coverage.AbsenceIsConclusive)
+        {
+            coverageGatePruned = true;
+            _logger.LogWarning(
+                "Repo {RepoId}: the embedding-coverage probe had {Pruned} key(s) removed by the store's "
+                + "read-path access gate, so its absences are not evidence of missing embeddings; embedding "
+                + "the {Changed} changed file(s) and standing down the gap sweep over {Unchanged} unchanged "
+                + "file(s). This does NOT clear on the next pass - the ingestor must be able to read its own "
+                + "membership keys for the back-fill to heal this repository.",
+                repoId,
+                coverage.PrunedByAccessGate,
+                changedFiles.Count,
+                unchangedFiles.Count);
+        }
+
+        // The file arm's single coverage-resolution seam (issue #2964). Exactly one
+        // of the three outcomes is charged per pass, and this sits ABOVE both of this
+        // method's early returns, so a zero on any arm means the seam was reached and
+        // that outcome did not occur - never that the seam was skipped.
+        //
+        // probe_failed is recorded even though a failed probe is transient and
+        // self-clearing, because the gate check immediately above is CONJOINED to
+        // !coverageProbeFailed: while the probe is failing the gate-pruned arm cannot
+        // advance, so its zero would otherwise be indistinguishable from health.
+        _coverageProbeReporter?.Record(
+            RepoContextCoverageProbeArm.File,
+            coverageProbeFailed
+                ? RepoContextCoverageProbeOutcome.ProbeFailed
+                : coverageGatePruned
+                    ? RepoContextCoverageProbeOutcome.GatePruned
+                    : RepoContextCoverageProbeOutcome.Conclusive);
+
+        // How this pass paid for detection (issue #2486). Logged rather than metered
+        // so the change adds no instrument and therefore binds no dashboard or metrics
+        // doc surface; the digest arm is the one that costs a fixed number of rows on
+        // a tree that is not the #2071 replay-debt hotspot.
+        _logger.LogDebug(
+            "Repo {RepoId}: coverage for {Candidates} candidate file(s) resolved from {Source}.",
+            repoId,
+            candidateKeys.Count,
+            coverageFromDigest ? "the per-page coverage digest" : "a per-source membership probe");
+
+        var toEmbed = coverageProbeFailed || coverageGatePruned || skipGapScan
             ? new List<RepoFileEntry>(changedFiles)
             : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected, out gapSelectedFiles);
         if (toEmbed.Count == 0)
@@ -331,8 +464,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // it was granted, and never accrue one either.
             RecordFileGapScanOutcome(repoId, saturated: false, skippedGapScan: skipGapScan);
             NoteAndLogUnmeasuredGapShape(
-                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
-            return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed, Deferred: false, skipGapScan);
+                repoId, coverageProbeFailed, coverageGatePruned, skipGapScan, changedFiles.Count, unchangedFiles.Count);
+            return new RepoFileVectorIngestOutcome(
+                0, gapsSelected, !coverageProbeFailed && !coverageGatePruned, Deferred: false, skipGapScan);
         }
 
         var sources = new List<EmbeddingSource>(toEmbed.Count);
@@ -526,7 +660,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         else
         {
             NoteAndLogUnmeasuredGapShape(
-                repoId, coverageProbeFailed, skipGapScan, changedFiles.Count, unchangedFiles.Count);
+                repoId, coverageProbeFailed, coverageGatePruned, skipGapScan, changedFiles.Count, unchangedFiles.Count);
         }
 
         // Fold this pass into the backoff. A pass that deferred batches saw the plane
@@ -539,29 +673,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             repoId, embedOutcome.Saturated || stalledGapProgress, skippedGapScan: skipGapScan);
 
         return new RepoFileVectorIngestOutcome(
-            embedded, gapsSelected, !coverageProbeFailed, embedOutcome.Saturated, skipGapScan);
+            embedded, gapsSelected, !coverageProbeFailed && !coverageGatePruned, embedOutcome.Saturated, skipGapScan);
     }
 
     /// <summary>
-    /// Records that a pass measured no gap-set shape, and says which of the three
+    /// Records that a pass measured no gap-set shape, and says which of the four
     /// mutually exclusive reasons produced it.
     /// <para>
     /// The reason is the whole point. An empty gap selection is reached by causes
     /// that mean OPPOSITE things - the probe failed so nothing was attempted, the
-    /// probe succeeded and found nothing left to do, or the back-fill was skipped
-    /// under backoff and never asked - and a pass that does not name which is
-    /// indistinguishable from the others in a deployed container's log. This is the
-    /// line an operator reads to tell "quiet because converged" from "quiet because
-    /// backed off" (issues #2208, #2253).
+    /// probe was answered incompletely because the store's access gate pruned it,
+    /// the probe succeeded and found nothing left to do, or the back-fill was
+    /// skipped under backoff and never asked - and a pass that does not name which
+    /// is indistinguishable from the others in a deployed container's log. This is
+    /// the line an operator reads to tell "quiet because converged" from "quiet
+    /// because backed off" (issues #2208, #2253).
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository whose pass measured nothing.</param>
     /// <param name="coverageProbeFailed">Whether the coverage probe failed, so no gap sweep was attempted.</param>
+    /// <param name="coverageGatePruned">Whether the coverage probe was answered but pruned by the store's access gate, so its absences prove nothing.</param>
     /// <param name="skippedGapScan">Whether the back-fill was skipped under the gap-scan backoff.</param>
     /// <param name="changedFiles">Files the reconcile reported changed this pass.</param>
     /// <param name="unchangedFiles">Files the reconcile reported unchanged this pass.</param>
     private void NoteAndLogUnmeasuredGapShape(
-        string repoId, bool coverageProbeFailed, bool skippedGapScan, int changedFiles, int unchangedFiles)
+        string repoId,
+        bool coverageProbeFailed,
+        bool coverageGatePruned,
+        bool skippedGapScan,
+        int changedFiles,
+        int unchangedFiles)
     {
         // This pass measured no gap shape, so it advances no history. Record that it
         // happened, or the next measured pass compares itself against a pass that is
@@ -576,11 +717,16 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var reason = coverageProbeFailed
             ? "the embedding-coverage probe failed, so no gap sweep was attempted and this pass advanced "
               + "the back-fill by nothing. This is NOT convergence"
-            : skippedGapScan
-                ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
-                  + "and this pass advanced the back-fill by nothing. This is NOT convergence"
-                : "the coverage probe succeeded and selected no gap files, so every walked file is already "
-                  + "covered or contentless. This IS convergence for the file arm";
+            : coverageGatePruned
+                ? "the embedding-coverage probe was answered but the store's read-path access gate pruned "
+                  + "keys from it, so its absences are not evidence of missing embeddings and no gap sweep "
+                  + "was attempted. This is NOT convergence, and unlike a failed probe it will NOT clear on "
+                  + "the next pass: the ingestor must be able to read its own membership keys"
+                : skippedGapScan
+                    ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
+                      + "and this pass advanced the back-fill by nothing. This is NOT convergence"
+                    : "the coverage probe succeeded and selected no gap files, so every walked file is already "
+                      + "covered or contentless. This IS convergence for the file arm";
 
         _logger.LogInformation(
             "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
@@ -590,7 +736,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             changedFiles + unchangedFiles,
             changedFiles,
             unchangedFiles,
-            coverageProbeFailed ? "failed" : "succeeded",
+            coverageProbeFailed ? "failed" : coverageGatePruned ? "gate-pruned" : "succeeded",
             skippedGapScan);
     }
 
@@ -599,7 +745,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         string repoId,
         IReadOnlyCollection<string> changedSymbolKeys,
         IReadOnlyCollection<string> prunedSymbolKeys,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, CancellationToken, ValueTask>? onProgress = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(changedSymbolKeys);
@@ -634,7 +781,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // churn-bloated membership tree can never force an unbounded sorted-range
         // scan past the response deadline (issue #1556); an already-embedded,
         // unchanged symbol is skipped without a payload read.
+        //
+        // Resume the range walk in progress, if any, rather than restarting it
+        // (issue #2953). The pending set folds in every changed key an earlier
+        // partial pass banked without reaching, so resuming defers those keys to the
+        // pass that walks past them instead of dropping them.
+        var resumed = _symbolWalkCursors.TryGetValue(repoId, out var cursor) ? cursor : null;
         var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
+        if (resumed is not null)
+        {
+            changed.UnionWith(resumed.PendingChangedKeys);
+        }
+
+        var walkPasses = (resumed?.Passes ?? 0) + 1;
 
         // When the previous pass gave the plane up as saturated, this pass embeds
         // only the symbols the reconcile named as changed and leaves the gap
@@ -661,15 +820,47 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // a changed symbol is legitimately re-embedded every time it changes.
         var gapSelected = new HashSet<string>(StringComparer.Ordinal);
 
-        string? token = null;
+        string? token = resumed?.ContinuationToken;
+        var pendingChanged = new HashSet<string>(changed, StringComparer.Ordinal);
         var probeFailures = 0;
         Exception? firstProbeFailure = null;
+        Exception? walkFault = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var page = await RepoContextPortability
-                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
-                .ConfigureAwait(false);
+
+            RepoContextSnapshotPage page;
+            try
+            {
+                var pageToken = token;
+                page = await RepoContextPortability
+                    .EnumerateAsync(tree, prefix, pageToken, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Bank the token this page was READ FROM, never one derived from the
+                // page that never arrived, so the next pass re-attempts exactly the
+                // page that failed and skips nothing.
+                //
+                // Cancellation is deliberately NOT banked: a cancelled pass has not
+                // established that the page is unreadable, and recording it as banked
+                // progress would let a host shutting down look like a degraded walk.
+                walkFault = ex;
+                _symbolWalkCursors[repoId] =
+                    new SymbolWalkCursor(token, TrimPendingChanged(repoId, pendingChanged), walkPasses);
+                _symbolWalkReporter?.Record(RepoContextSymbolWalkOutcome.Banked);
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: a symbol-range page faulted on walk pass {Pass} after selecting {Selected} "
+                    + "symbol(s); banking the continuation token so the next pass resumes from this page rather "
+                    + "than restarting the walk. Restarting would re-issue every leaf read already paid for, and "
+                    + "that re-drive is itself the load that keeps those leaves cold (issue #2953).",
+                    repoId,
+                    walkPasses,
+                    sources.Count);
+                break;
+            }
 
             var pageKeys = new List<string>(page.Records.Count);
             foreach (var record in page.Records)
@@ -687,7 +878,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // whole arm: without coverage for this page we cannot tell embedded
             // from missing, so we skip the page rather than guess, and the next
             // pass picks up whatever it was hiding.
-            IReadOnlySet<string> embeddedMembers = EmptyKeySet;
+            var embeddedMembers = new RepoContextProbedSourceIds(EmptyKeySet, 0);
             if (!skipGapScan)
             {
                 try
@@ -700,6 +891,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 {
                     firstProbeFailure ??= ex;
                     probeFailures++;
+                    _coverageProbeReporter?.Record(
+                        RepoContextCoverageProbeArm.Symbol,
+                        RepoContextCoverageProbeOutcome.ProbeFailed);
                     _logger.LogWarning(
                         ex,
                         "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
@@ -709,6 +903,42 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     token = page.HasMore ? page.ContinuationToken : null;
                     continue;
                 }
+
+                // The probe answered, but the store's access gate removed some of the
+                // keys before fan-out, so its silence about those symbols is not
+                // evidence that they are unembedded (issue #2277). Skip the page for
+                // the same reason a failed probe skips it - we cannot tell embedded
+                // from missing - rather than re-embed symbols that are already
+                // covered. This is deliberately not folded into the probe-failure
+                // counter above: the probe did not fail, the deployment is
+                // misconfigured, and conflating the two would hide a permanent
+                // condition inside a transient one's diagnostics.
+                if (!embeddedMembers.AbsenceIsConclusive)
+                {
+                    _coverageProbeReporter?.Record(
+                        RepoContextCoverageProbeArm.Symbol,
+                        RepoContextCoverageProbeOutcome.GatePruned);
+                    _logger.LogWarning(
+                        "Repo {RepoId}: the embedding-coverage probe for a page of {Count} symbol(s) had "
+                        + "{Pruned} key(s) removed by the store's read-path access gate, so absence from it "
+                        + "is not evidence of a missing embedding; skipping the page rather than re-embedding "
+                        + "symbols that may already be covered. The ingestor must be able to read its own "
+                        + "membership keys for the back-fill to heal this repository.",
+                        repoId,
+                        pageKeys.Count,
+                        embeddedMembers.PrunedByAccessGate);
+                    token = page.HasMore ? page.ContinuationToken : null;
+                    continue;
+                }
+
+                // The symbol arm resolved coverage it can trust. Charged here rather
+                // than once per pass because this arm stands down PER PAGE, so a
+                // per-pass tally would hide a pass in which most pages were pruned
+                // (issue #2964). The three symbol arms therefore advance per page, and
+                // are not comparable with the file arm's per-pass tally.
+                _coverageProbeReporter?.Record(
+                    RepoContextCoverageProbeArm.Symbol,
+                    RepoContextCoverageProbeOutcome.Conclusive);
             }
 
             foreach (var record in page.Records)
@@ -719,6 +949,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
+
+                // This key has now been walked, so a later partial pass must not
+                // carry it forward as still-pending changed work.
+                pendingChanged.Remove(sourceKey);
+
                 var selectedByGapScan = !changed.Contains(sourceKey);
                 if (selectedByGapScan
                     && (skipGapScan || embeddedMembers.Contains(VectorCodec.SourceId(sourceKey))))
@@ -744,10 +979,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
+        if (walkFault is null)
+        {
+            // The circuit closed. Drop the cursor so the next pass walks the whole
+            // range again: the cursor bounds a re-drive, it is not a permanent
+            // position, and a symbol captured behind it would otherwise never be
+            // reached.
+            _symbolWalkCursors.TryRemove(repoId, out _);
+            _symbolWalkReporter?.Record(
+                walkPasses > 1
+                    ? RepoContextSymbolWalkOutcome.Resumed
+                    : RepoContextSymbolWalkOutcome.Complete);
+        }
+
         EmbedOutcome outcome;
         try
         {
-            outcome = await EmbedAndStoreReportingLandedAsync(repoId, SymbolArm, sources, onProgress: null, cancellationToken)
+            outcome = await EmbedAndStoreReportingLandedAsync(repoId, SymbolArm, sources, onProgress, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -785,6 +1033,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _lastGapLanded[repoId] = landedFromGap;
         }
 
+        // Surface the page fault the walk banked - the arm still reports incomplete,
+        // so the bootstrap run re-drives it exactly as before. It is rethrown HERE,
+        // after the gap-scan bookkeeping above, rather than at the point it was
+        // caught: rethrowing earlier would let a walk that faults on every pass keep
+        // re-driving its gap back-fill at full rate, bypassing the saturation
+        // backoff that exists to let the plane drain.
+        if (walkFault is not null)
+        {
+            ExceptionDispatchInfo.Capture(walkFault).Throw();
+        }
+
         // Same rule as the batch boundary: a pass that achieved nothing at all
         // still has to surface its fault, but one that made progress counts as
         // progress even though part of the symbol space went unexamined.
@@ -799,6 +1058,54 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         return symbolsEmbedded;
+    }
+
+    /// <summary>
+    /// A symbol-arm range walk that faulted partway, so the pass after it can
+    /// resume rather than re-read the range from its head (issue #2953).
+    /// </summary>
+    /// <param name="ContinuationToken">The token the faulted page was read FROM, so the resuming pass re-attempts exactly that page and skips nothing. Null when the very first page faulted.</param>
+    /// <param name="PendingChangedKeys">Changed symbol keys this walk had not reached, carried forward so resuming defers them rather than dropping them.</param>
+    /// <param name="Passes">How many passes this walk has taken, so a completed circuit can report whether it consumed banked progress.</param>
+    private sealed record SymbolWalkCursor(
+        string? ContinuationToken,
+        IReadOnlySet<string> PendingChangedKeys,
+        int Passes);
+
+    /// <summary>
+    /// Bounds the changed-key set a partial walk carries forward, logging when the
+    /// ceiling actually bites so a repository that is silently shedding deferred
+    /// work is visible rather than inferred.
+    /// </summary>
+    /// <param name="repoId">The repository whose walk is banking.</param>
+    /// <param name="pendingChanged">The changed keys the walk had not reached.</param>
+    /// <returns>The carried-forward set, at most <see cref="MaxPendingChangedSymbolKeys"/> entries.</returns>
+    private IReadOnlySet<string> TrimPendingChanged(string repoId, HashSet<string> pendingChanged)
+    {
+        if (pendingChanged.Count <= MaxPendingChangedSymbolKeys)
+        {
+            return pendingChanged;
+        }
+
+        var trimmed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in pendingChanged)
+        {
+            if (trimmed.Count == MaxPendingChangedSymbolKeys)
+            {
+                break;
+            }
+
+            trimmed.Add(key);
+        }
+
+        _logger.LogWarning(
+            "Repo {RepoId}: a partial symbol walk had {Pending} unreached changed key(s), above the {Ceiling} "
+            + "carried forward; the remainder fall back to gap-scan healing on the next completed circuit.",
+            repoId,
+            pendingChanged.Count,
+            MaxPendingChangedSymbolKeys);
+
+        return trimmed;
     }
 
     /// <summary>
@@ -1149,7 +1456,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // same evidence, so the walk can fall back to it alone and still make
             // the right decision for most entries. Only an entry that has neither
             // signal is re-embedded, which is idempotent.
-            IReadOnlySet<string> embeddedMembers;
+            RepoContextProbedSourceIds embeddedMembers;
             try
             {
                 embeddedMembers = await _writer
@@ -1158,13 +1465,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                embeddedMembers = EmptyKeySet;
+                embeddedMembers = new RepoContextProbedSourceIds(EmptyKeySet, 0);
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: the embedded-member probe failed for a page of {Count} memory entr(ies); "
                     + "falling back to the embedded-key markers alone for this page.",
                     repoId,
                     pageKeys.Count);
+            }
+
+            // The store's access gate removed keys from the probe, so its silence is
+            // not evidence that those entries are unembedded (issue #2277). This arm
+            // needs no page skip: the probe's POSITIVE answers remain sound - a key
+            // it did return was really there - and the marker set already backstops
+            // its absences, which is exactly the degradation the guard above uses.
+            // The warning is still worth emitting, because unlike a transient probe
+            // failure this condition does not clear on the next pass.
+            if (!embeddedMembers.AbsenceIsConclusive)
+            {
+                _logger.LogWarning(
+                    "Repo {RepoId}: the embedded-member probe for a page of {Count} memory entr(ies) had "
+                    + "{Pruned} key(s) removed by the store's read-path access gate; falling back to the "
+                    + "embedded-key markers for those entries. The ingestor must be able to read its own "
+                    + "membership keys for coverage to be measurable.",
+                    repoId,
+                    pageKeys.Count,
+                    embeddedMembers.PrunedByAccessGate);
             }
 
             foreach (var record in page.Records)
@@ -1187,7 +1513,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // projection does so the embedded passage reflects the same converged
                 // entry that recall and keyword search return. Deserializing the
                 // envelope directly as a MemoryRecord would read the wrong shape.
-                var folded = RepoContextMemoryCodec.Fold(record.Value, _serializer);
+                var folded = RepoContextMemoryCodec.Fold(record.Value, _serializer, sourceKey);
                 if (folded is null)
                 {
                     continue;
@@ -1445,6 +1771,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
 
+        // The denominator, and the reason it is counted here rather than inferred.
+        // Every count this method used to emit was a NUMERATOR: a failed batch named
+        // itself, a successful batch said nothing at all. So "63 batch-record
+        // failures" could not be turned into a rate, and establishing one meant
+        // reconstructing the attempt total from the sidecar embedder's HTTP access
+        // log - one POST per EmbedAsync call - which is an instrument that belongs to
+        // a different container, is not present in every deployment, and disappears
+        // when that container is recycled. A bare numerator cannot distinguish 63
+        // failures in 70 attempts from 63 in 70,000, and those warrant opposite
+        // responses (issue #2346). These four counters and the summary line at the
+        // end of the pass make the rate readable from this arm's own log.
+        var attemptedBatches = 0;
+        var embedFailedBatches = 0;
+        var storeFailedBatches = 0;
+        var recordFailedBatches = 0;
+        var strandedSources = 0;
+
         // Naming a failed batch's sources is what separates a deterministic write
         // fault - a key range served by a permanently stalled leaf, say - from
         // ordinary contention that will drain, and that ambiguity is what left the
@@ -1472,8 +1815,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // is already failing and lands nothing, so the arm stops here and lets the next
         // reconcile retry from a quieter store. Whatever already landed is kept, and
         // every deferred source is simply unmarked, so the next pass picks it up.
-        // The stage word keeps the two failure kinds distinguishable in the log while
-        // rendering the record case exactly as it did before.
+        // The stage word distinguishes the three failure kinds - embed, store, and
+        // record - so a saturation deferral names the seam that actually saturated
+        // rather than collapsing the store and record stages into one word.
         void ReportSaturationDeferral(int from, int length, string stage)
         {
             var deferred = unitTexts.Count - (from + length);
@@ -1493,6 +1837,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             cancellationToken.ThrowIfCancellationRequested();
             var count = Math.Min(EmbedBatchSize, unitTexts.Count - start);
             var batchTexts = unitTexts.GetRange(start, count);
+            attemptedBatches++;
 
             var result = await _embeddingProvider!
                 .EmbedAsync(batchTexts, EmbeddingTextType.Passage, cancellationToken)
@@ -1511,6 +1856,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // and leave a healthy-looking outcome behind (issue #2272).
                 var failedSources = NameBatchSources(start, count);
                 failedBatches++;
+                embedFailedBatches++;
+                strandedSources += failedSources.Count;
                 consecutiveBatchFailures++;
 
                 _logger.LogWarning(
@@ -1554,6 +1901,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // back-fill could never finish however many passes it was given.
             // Losing one batch costs one batch: its sources stay unmarked and are
             // retried next pass, which is already the contract.
+            //
+            // The stage is tracked because this one try spans TWO distinct
+            // operations and its catch used to report both as "could not record".
+            // That mis-attribution is not cosmetic: the only fault ever captured on
+            // the deployed container was a ScanPageStalledException raised by the
+            // paged metadata scan inside StoreAsync's RetireStaleAsync - a READ, in
+            // the store stage, that never reached AddMembersAsync at all. Logged as
+            // a record failure, it framed the defect as "the membership write fails
+            // while the embed batch succeeds" and sent the investigation looking for
+            // a write fault that does not exist (issue #2346). Naming the stage that
+            // actually threw is what makes the two futures distinguishable: a store
+            // fault leaves no vectors and no membership, a record fault leaves
+            // vectors with no membership, and only the second is a candidate for an
+            // in-pass retry.
+            var stage = "store";
             try
             {
                 foreach (var owner in completed)
@@ -1572,6 +1934,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     // their vectors have landed. The writer lands the whole batch in one
                     // batched CRDT write (one read to mint the deltas, one apply), not
                     // one round trip per source.
+                    stage = "record";
                     await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
 
                     // Only now is a source genuinely landed: its vectors are stored
@@ -1593,20 +1956,31 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // convenient.
                 firstBatchFailure ??= ex;
                 failedBatches++;
+                if (stage == "record")
+                {
+                    recordFailedBatches++;
+                }
+                else
+                {
+                    storeFailedBatches++;
+                }
+
                 consecutiveBatchFailures++;
                 pendingMembers.Clear();
 
                 // Name the batch's sources, so a residue that persists across passes can
                 // be told apart from contention that will drain (see NameBatchSources).
                 var batchSources = NameBatchSources(start, count);
+                strandedSources += batchSources.Count;
 
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: the {Arm} arm could not record a batch of {Count} passage(s) spanning "
+                    "Repo {RepoId}: the {Arm} arm could not {Stage} a batch of {Count} passage(s) spanning "
                     + "{Sources} source(s); they stay unmarked and are retried on the next reconcile. Continuing "
                     + "with the remaining batches. sample: {Sample}",
                     repoId,
                     arm,
+                    stage,
                     count,
                     batchSources.Count,
                     string.Join(", ", batchSources.Take(6)));
@@ -1614,7 +1988,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
                 {
                     saturated = true;
-                    ReportSaturationDeferral(start, count, "record");
+                    ReportSaturationDeferral(start, count, stage);
                     break;
                 }
 
@@ -1631,6 +2005,36 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             {
                 await onProgress(embedded, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        // The pass census. It is logged unconditionally, including on a clean pass,
+        // because a rate needs its denominator on every observation and not only on
+        // the ones that went wrong: a line emitted only when something failed is
+        // another numerator, and reading "no failures" from the ABSENCE of a line
+        // cannot be told apart from an arm that never ran, an arm that selected
+        // nothing, or a log fetch that returned short. That indistinguishability -
+        // a bare absence standing in for a measured zero - is the defect, so the
+        // measured zero is what gets written (issue #2346).
+        //
+        // Information rather than Warning: it fires once per arm per pass, a handful
+        // of lines per reconcile, and it is a measurement rather than a fault. The
+        // failure lines above keep their own severity.
+        if (attemptedBatches > 0)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: {Arm} arm pass census - {Attempted} batch(es) attempted, {Succeeded} succeeded, "
+                + "{EmbedFailed} failed to embed, {StoreFailed} failed to store, {RecordFailed} failed to record; "
+                + "{Landed} source(s) landed, {Stranded} left unmarked for the next reconcile. saturated={Saturated}",
+                repoId,
+                arm,
+                attemptedBatches,
+                attemptedBatches - failedBatches,
+                embedFailedBatches,
+                storeFailedBatches,
+                recordFailedBatches,
+                landed.Count,
+                strandedSources,
+                saturated);
         }
 
         // Surfacing the fault only when nothing landed is what makes a partial pass
@@ -1847,6 +2251,243 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 : GapReadBackArm.PriorReadBackSkipped;
 
     /// <summary>
+    /// The most per-shard groups the shard-distribution line enumerates. The group
+    /// count is already bounded by <c>min(K, P)</c>, and <c>P</c> is itself bounded by
+    /// <see cref="LatticeOptions.MaxPhysicalShardsPerTree"/>, so this is a second,
+    /// unconditional ceiling rather than the only one: a pathological gap set over a
+    /// pathological shard space cannot flood the log however both move. The line
+    /// always reports <see cref="GapShardDistribution.DistinctShards"/> alongside, so
+    /// a truncated enumeration is visibly truncated and the totals stay complete.
+    /// </summary>
+    internal const int MaxReportedGapShardGroups = 64;
+
+    /// <summary>
+    /// The most individual sources the shard-distribution line names with their
+    /// resolved shard. This is the hand-checking arm - it exists so the derivation can
+    /// be reproduced offline from the log for a few members - not the measurement,
+    /// which is the whole-set histogram and the two statistics beside it.
+    /// </summary>
+    internal const int MaxReportedGapShardSources = 16;
+
+    /// <summary>
+    /// How a gap set distributes over the membership tree's <b>physical</b> shards,
+    /// with the two statistics issue #2287 pre-registers as the discriminator between
+    /// its surviving candidates.
+    /// <para>
+    /// <b>Why physical and not virtual.</b> Routing is two-stage: a key hashes into one
+    /// of <see cref="VirtualShardCount"/> virtual slots (4096 by default), and the
+    /// map sends that slot to a physical shard. With ~4096 slots over ~64 shards about
+    /// 64 virtual slots land on each physical shard, so keys sharing one <i>physical</i>
+    /// shard still occupy distinct <i>virtual</i> slots. A virtual-slot histogram
+    /// therefore reads as "scattered" under <b>both</b> candidates and discriminates
+    /// nothing; reporting its null as evidence against the hash-partitioned-subset
+    /// candidate would be a false refutation. Only <see cref="ShardMap.Resolve"/>,
+    /// which applies both stages, answers the question that was asked.
+    /// </para>
+    /// <para>
+    /// <b>What the two statistics are for.</b> <see cref="DistinctShards"/> (D) and
+    /// <see cref="LargestShardGroup"/> (M) are compared against a null simulated by
+    /// drawing <see cref="Sources"/> keys from the same population the gap set was
+    /// drawn from, and the candidate is judged on a quantile of that null. They are
+    /// deliberately <i>not</i> compared against an intuition about the gap-set size:
+    /// independent hashing of K=43 keys over P=63 shards occupies about 31 distinct
+    /// shards, not 43, so "far fewer than 43" fires when nothing is wrong. The
+    /// occupancy expectation is <c>E[D] = P * (1 - (1 - 1/P)^K)</c>, and this record
+    /// reports every term of it - K as <see cref="Sources"/> and P as
+    /// <see cref="PhysicalShardCount"/> - so the threshold is recomputed from the log
+    /// rather than assumed.
+    /// </para>
+    /// </summary>
+    /// <param name="Sources">K: gap sources whose membership key resolved to a shard. The whole gap set, not a prefix.</param>
+    /// <param name="DistinctShards">D: distinct physical shards the gap set occupies.</param>
+    /// <param name="LargestShardGroup">M: how many gap sources share the most-occupied single physical shard.</param>
+    /// <param name="PhysicalShardCount">P: distinct physical shards the tree's map references, so the null is parameterised from the tree rather than assumed.</param>
+    /// <param name="VirtualShardCount">The map's virtual slot count, which makes the virtual-to-physical fan-out readable from the log.</param>
+    /// <param name="MapVersion">The map version the assignments were computed against; a change between passes invalidates a cross-pass comparison.</param>
+    /// <param name="ReportedGroups">How many of the <paramref name="DistinctShards"/> groups the detail string enumerates.</param>
+    /// <param name="GroupDetail">Bounded <c>shard:count</c> enumeration, densest first then by ascending shard index.</param>
+    /// <param name="ReportedSources">How many of the <paramref name="Sources"/> the per-source detail names.</param>
+    /// <param name="SourceDetail">Bounded <c>path=shard</c> enumeration for offline hand-checking, in ordinal path order.</param>
+    internal readonly record struct GapShardDistribution(
+        int Sources,
+        int DistinctShards,
+        int LargestShardGroup,
+        int PhysicalShardCount,
+        int VirtualShardCount,
+        long MapVersion,
+        int ReportedGroups,
+        string GroupDetail,
+        int ReportedSources,
+        string SourceDetail);
+
+    /// <summary>
+    /// Resolves every gap source's membership key to its physical shard through
+    /// <paramref name="map"/> and summarises the distribution. Pure, deterministic,
+    /// and allocation-bounded, so the statistics are unit-testable without a silo.
+    /// <para>
+    /// The scan is over the <b>whole</b> <paramref name="gapSelectedFiles"/> set:
+    /// the counting arm never truncates, because D and M are the measurement and a
+    /// prefix would silently bias both downward. Only the two human-readable detail
+    /// strings are capped, and each reports the total it was drawn from, so
+    /// truncation can never be mistaken for a complete enumeration.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose gap set is being summarised.</param>
+    /// <param name="gapSelectedFiles">This pass's whole gap selection.</param>
+    /// <param name="map">The membership tree's effective shard map, as one snapshot for every assignment.</param>
+    /// <param name="maxReportedGroups">Ceiling on the enumerated per-shard groups.</param>
+    /// <param name="maxReportedSources">Ceiling on the enumerated per-source assignments.</param>
+    internal static GapShardDistribution SummariseGapShardDistribution(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> gapSelectedFiles,
+        ShardMap map,
+        int maxReportedGroups = MaxReportedGapShardGroups,
+        int maxReportedSources = MaxReportedGapShardSources)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(gapSelectedFiles);
+        ArgumentNullException.ThrowIfNull(map);
+
+        // One snapshot for every assignment. The map is resolved once by the caller and
+        // never re-read inside this loop, so a remap landing mid-pass cannot split the
+        // set across two mappings: the assignments are atomic with respect to the map
+        // by construction, which is stronger than observing MapVersion either side and
+        // discarding the result when it moved. MapVersion is still reported, because a
+        // remap BETWEEN passes is what invalidates a cross-pass comparison.
+        var perShard = new Dictionary<int, int>();
+        var assignments = new List<(string Path, int Shard)>(
+            Math.Min(gapSelectedFiles.Count, Math.Max(0, maxReportedSources)));
+
+        var resolved = 0;
+        foreach (var file in gapSelectedFiles)
+        {
+            var membershipKey = RepoContextKeys.VectorMembership(
+                repoId, VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath)));
+            var shard = map.Resolve(membershipKey);
+
+            resolved++;
+            perShard[shard] = perShard.TryGetValue(shard, out var seen) ? seen + 1 : 1;
+
+            if (assignments.Count < maxReportedSources)
+            {
+                assignments.Add((file.RelativePath, shard));
+            }
+        }
+
+        var largest = 0;
+        foreach (var count in perShard.Values)
+        {
+            if (count > largest) largest = count;
+        }
+
+        var groups = perShard
+            .OrderByDescending(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key)
+            .Take(Math.Max(0, maxReportedGroups))
+            .Select(static pair => $"{pair.Key}:{pair.Value}")
+            .ToArray();
+
+        var sources = assignments
+            .OrderBy(static a => a.Path, StringComparer.Ordinal)
+            .Select(static a => $"{a.Path}={a.Shard}")
+            .ToArray();
+
+        return new GapShardDistribution(
+            Sources: resolved,
+            DistinctShards: perShard.Count,
+            LargestShardGroup: largest,
+            PhysicalShardCount: map.GetPhysicalShardIndices().Count,
+            VirtualShardCount: map.VirtualShardCount,
+            MapVersion: map.Version,
+            ReportedGroups: groups.Length,
+            GroupDetail: string.Join(", ", groups),
+            ReportedSources: sources.Length,
+            SourceDetail: string.Join(", ", sources));
+    }
+
+    /// <summary>
+    /// Emits the physical-shard distribution of this pass's gap set (issue #2287), so
+    /// the question "is the stranded set hash-partitioned onto particular shards, or
+    /// spread proportionally?" is answerable from a deployed container's log without
+    /// re-deriving anything offline.
+    /// <para>
+    /// <b>Why this cannot perturb the control arm it sits beside.</b> The only call it
+    /// makes is <see cref="ILattice.GetRoutingAsync(CancellationToken)"/>, which
+    /// resolves the tree alias and shard map from the registry tree and is served from
+    /// the activation's own cache after the first call. It reads no membership entry
+    /// and touches no membership leaf, so it cannot warm the coverage read path that
+    /// the alternating read-back probe measures. It therefore runs on <b>every</b>
+    /// pass, including the arm-B passes that deliberately skip the read-back, and the
+    /// A/B comparison stays valid.
+    /// </para>
+    /// <para>
+    /// Best-effort and self-contained: a routing failure is logged and swallowed here
+    /// rather than propagating, because the caller's remaining work includes the
+    /// read-back durability signal and losing that to an unrelated failure would cost
+    /// the control arm a data point on every affected pass.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose gap set is being measured.</param>
+    /// <param name="gapSelectedFiles">This pass's whole gap selection.</param>
+    /// <param name="cancellationToken">Cancels the routing resolve.</param>
+    private async Task LogGapShardDistributionAsync(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> gapSelectedFiles,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var routing = await _grainFactory
+                .GetGrain<ILattice>(RepoContextTrees.VectorMembership)
+                .GetRoutingAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var distribution = SummariseGapShardDistribution(repoId, gapSelectedFiles, routing.Map);
+
+            _logger.LogInformation(
+                "Repo {RepoId}: back-fill gap set physical-shard distribution over tree {Tree} "
+                + "(physicalTreeId={PhysicalTreeId}, mapVersion={MapVersion}). K={Sources} gap source(s) over "
+                + "P={PhysicalShardCount} physical shard(s) (virtualSlots={VirtualShardCount}, so ~{FanOut} "
+                + "virtual slot(s) per physical shard - a VIRTUAL-slot histogram would read as scattered under "
+                + "either candidate and must not be substituted for this one). D={DistinctShards} distinct "
+                + "shard(s) occupied, M={LargestShardGroup} in the largest single-shard group. Compare D and M "
+                + "against a null simulated by drawing K keys from THIS pass's unchanged population and reject on "
+                + "a quantile of that null, not against a bare percentage: independent hashing gives "
+                + "E[D] = P * (1 - (1 - 1/P)^K), which is well below K, so a proportional set is not evidence of "
+                + "clustering. groups({ReportedGroups} of {DistinctShards} shown, shard:count, densest first): "
+                + "{GroupDetail}. sources({ReportedSources} of {Sources} shown, path=shard, for offline "
+                + "hand-checking only): {SourceDetail}",
+                repoId,
+                RepoContextTrees.VectorMembership,
+                routing.PhysicalTreeId,
+                distribution.MapVersion,
+                distribution.Sources,
+                distribution.PhysicalShardCount,
+                distribution.VirtualShardCount,
+                distribution.PhysicalShardCount > 0
+                    ? distribution.VirtualShardCount / distribution.PhysicalShardCount
+                    : 0,
+                distribution.DistinctShards,
+                distribution.LargestShardGroup,
+                distribution.ReportedGroups,
+                distribution.DistinctShards,
+                distribution.GroupDetail,
+                distribution.ReportedSources,
+                distribution.Sources,
+                distribution.SourceDetail);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not resolve the membership tree's physical shard map, so this pass's "
+                + "gap-set shard distribution is unavailable (issue #2287). Diagnostic only: the pass, the gap "
+                + "set shape line, and the read-back control arm are all unaffected.",
+                repoId);
+        }
+    }
+
+    /// <summary>
     /// Records this pass's gap selection into the per-repository history and emits the
     /// shape of the never-converging back-fill (issue #2208) as two structured lines,
     /// so a live deployment answers what the per-pass count cannot. Diagnostic only -
@@ -2009,6 +2650,15 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 arm,
                 string.Join(", ", sample));
 
+            // The physical-shard distribution of the WHOLE gap set (issue #2287),
+            // emitted immediately after the shape line and BEFORE the read-back branch
+            // below returns on arm-B passes, so it is collected on every pass rather
+            // than only on the passes that probe. It reads routing metadata only, never
+            // a membership entry, so running it on both arms cannot perturb the A/B
+            // control the read-back parity implements.
+            await LogGapShardDistributionAsync(repoId, gapSelectedFiles, cancellationToken)
+                .ConfigureAwait(false);
+
             if (stats.RegressionIsUnexplained)
             {
                 // The one arm of this instrumentation that is worth waking somebody
@@ -2053,6 +2703,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 var covered = await _writer
                     .ProbeCoveredSourceIdsAsync(repoId, selectedKeys.ToList(), cancellationToken)
                     .ConfigureAwait(false);
+                if (!covered.AbsenceIsConclusive)
+                {
+                    // The read-back was pruned by the store's access gate, so the
+                    // count below would undercount for a reason unrelated to
+                    // durability - and this line's whole reading is that a LOW
+                    // read-back means a write that did not stay observable. Emitting
+                    // it anyway would manufacture exactly the false durability
+                    // diagnosis an operator would then chase (issue #2277).
+                    _logger.LogWarning(
+                        "Repo {RepoId}: back-fill coverage read-back probe had {Pruned} key(s) removed by the "
+                        + "store's read-path access gate; suppressing the durability signal for this pass "
+                        + "rather than reporting a read-back that would understate coverage for an unrelated "
+                        + "reason. The pass is unaffected.",
+                        repoId,
+                        covered.PrunedByAccessGate);
+                    return stalled;
+                }
+
                 visibleNow = 0;
                 foreach (var key in selectedKeys)
                 {

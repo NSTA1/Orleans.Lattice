@@ -954,8 +954,19 @@ public static class LatticeReplicationMetrics
     /// is evicted (overflow) instead of drained does not contribute to
     /// this histogram - only successful waits are observed.
     /// </summary>
+    /// <remarks>
+    /// The instrument name deliberately carries <b>no</b> unit token. The
+    /// Prometheus exporter appends the suffix its declared unit maps to
+    /// (<c>ms</c> maps to <c>milliseconds</c>) and suppresses that append only
+    /// when the name already ends in the <i>mapped</i> form - never when it ends
+    /// in the raw alias. A name ending <c>_ms</c> therefore exported as
+    /// <c>..._ms_milliseconds_bucket</c> (issue #2920). The C# member keeps its
+    /// <c>Ms</c> suffix because it describes the recorded quantity, which is
+    /// still milliseconds, and renaming a public member of a shipped package
+    /// would be a source break unrelated to the defect.
+    /// </remarks>
     public static readonly Histogram<double> ApplyDependencyWaitMs =
-        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms", unit: "ms",
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait", unit: "ms",
             description: "Wait time between park and drain for a buffered causal-apply entry, tagged by tree.");
 
     /// <summary>
@@ -986,7 +997,11 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Canonical name of the <see cref="ApplyDependencyWaitMs"/> histogram.
     /// </summary>
-    public const string ApplyDependencyWaitMsName = "orleans.lattice.replication.apply.dependency_wait_ms";
+    /// <remarks>
+    /// The value carries no <c>_ms</c> token even though the member name does;
+    /// see the remarks on <see cref="ApplyDependencyWaitMs"/> for why.
+    /// </remarks>
+    public const string ApplyDependencyWaitMsName = "orleans.lattice.replication.apply.dependency_wait";
 
     /// <summary>
     /// Canonical name of the <see cref="ApplyCausalViolationsBlocked"/>

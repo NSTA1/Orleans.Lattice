@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using Orleans.Serialization;
@@ -41,6 +43,8 @@ internal sealed partial class RepoContextStore
     private readonly RepoContextVectorWriter _vectorWriter;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
+    private readonly RepoContextAnnIndexScheduler? _annScheduler;
+    private readonly ILogger _logger;
     private readonly string _replicaId;
 
     /// <summary>Creates the capture/maintenance adapter.</summary>
@@ -56,6 +60,19 @@ internal sealed partial class RepoContextStore
     /// replication companion registers a cluster-id identity so cross-cluster
     /// concurrent memory writes mint distinct dots and both survive the merge.
     /// </param>
+    /// <param name="annScheduler">
+    /// The approximate-index build scheduler, used to disarm a repository's build
+    /// coordinator during teardown, or <see langword="null"/> when the approximate
+    /// retrieval plane is not composed into this host - in which case no coordinator
+    /// was ever armed and there is nothing to stop.
+    /// </param>
+    /// <param name="logger">
+    /// Diagnostics for the faults the index reset now tolerates instead of
+    /// propagating, or <see langword="null"/> to discard them. A tolerated fault is
+    /// still named in the failure this verb raises, but only the log carries its
+    /// stack trace, and a tree that could not be drained is exactly the case an
+    /// operator needs the stack for.
+    /// </param>
     public RepoContextStore(
         IGrainFactory grainFactory,
         IRepoIndexRunner indexRunner,
@@ -63,8 +80,9 @@ internal sealed partial class RepoContextStore
         RepoContextVectorWriter vectorWriter,
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
         TimeProvider timeProvider,
-        IRepoContextReplicaIdentity? replicaIdentity = null)
-    {
+        IRepoContextReplicaIdentity? replicaIdentity = null,
+        RepoContextAnnIndexScheduler? annScheduler = null,
+        ILogger<RepoContextStore>? logger = null)    {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(indexRunner);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -78,6 +96,8 @@ internal sealed partial class RepoContextStore
         _vectorWriter = vectorWriter;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
+        _logger = logger ?? (ILogger)NullLogger.Instance;
+        _annScheduler = annScheduler;
         _replicaId = replicaIdentity?.ReplicaId ?? LocalRepoContextReplicaIdentity.LocalReplicaId;
     }
 
@@ -97,11 +117,14 @@ internal sealed partial class RepoContextStore
     /// Fetches the live record at <paramref name="key"/> and projects it, optionally
     /// evaluating the link staleness of a memory entry. When
     /// <paramref name="evaluateStaleness"/> is <see langword="true"/> and the key
-    /// addresses a memory record, each captured structural link digest is compared
-    /// against the target's current digest and the result is surfaced through
+    /// addresses a memory record, every live structural link is checked against its
+    /// target's present state - a target that has drifted, that has no live record
+    /// at all, or for which no digest was ever captured is reported through
     /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/>; otherwise those fields stay
-    /// <see langword="null"/> ("not evaluated"), the bulk-read convention.
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, with the subset that points at
+    /// nothing also named in <see cref="RepoContextEntryView.DanglingLinks"/>;
+    /// otherwise those fields stay <see langword="null"/> ("not evaluated"), the
+    /// bulk-read convention.
     /// </summary>
     /// <param name="key">The full repository-context key. Must be a well-formed key.</param>
     /// <param name="evaluateStaleness">Whether to evaluate memory link staleness on this read.</param>
@@ -121,7 +144,7 @@ internal sealed partial class RepoContextStore
         if (evaluateStaleness
             && parsed.Kind == RepoContextRecordKind.Memory
             && versioned.Value is { } bytes
-            && RepoContextMemoryCodec.Fold(bytes, _serializer) is { } record)
+            && RepoContextMemoryCodec.Fold(bytes, _serializer, key) is { } record)
         {
             view = await EvaluateStalenessAsync(view, record, cancellationToken)
                 .ConfigureAwait(false);
@@ -131,58 +154,92 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
-    /// Compares each captured structural link digest of <paramref name="record"/>
-    /// against its target's current digest and returns <paramref name="view"/> with
-    /// <see cref="RepoContextEntryView.Stale"/> and
-    /// <see cref="RepoContextEntryView.StaleLinks"/> populated. Only targets that are
-    /// both currently linked and carry a captured digest are evaluated, so an
-    /// unlinked-but-still-recorded digest never produces a phantom flag.
+    /// Evaluates each live structural link of <paramref name="record"/> against its
+    /// target's present state and returns <paramref name="view"/> with
+    /// <see cref="RepoContextEntryView.Stale"/>,
+    /// <see cref="RepoContextEntryView.StaleLinks"/>, and
+    /// <see cref="RepoContextEntryView.DanglingLinks"/> populated.
+    /// <para>
+    /// The walk is driven by the <em>live link set</em>, not by the captured-digest
+    /// map, so an unlinked-but-still-recorded digest can never produce a phantom
+    /// flag and - the point of issue #2654 - a link whose target was absent when
+    /// the edge was written cannot escape evaluation merely because nothing was
+    /// captured for it. Only file and symbol targets are evaluated, the same set
+    /// <see cref="CaptureLinkDigestsAsync"/> captures for; a package or
+    /// memory-to-memory edge carries no digest by design and is outside the
+    /// measurand.
+    /// </para>
+    /// <para>
+    /// A live structural link is fresh only when a digest was captured for it,
+    /// the target still has a live record, and the two digests are ordinal-equal.
+    /// Every other outcome is reported, so the answer follows the target's present
+    /// state rather than unobservable link-time history: a target that never
+    /// reached the corpus and one deleted after the edge was written now give the
+    /// same answer, where previously only the second was flagged.
+    /// </para>
     /// </summary>
     private async Task<RepoContextEntryView> EvaluateStalenessAsync(
         RepoContextEntryView view, MemoryRecord record, CancellationToken cancellationToken)
     {
-        HashSet<string>? linked = null;
+        List<string>? stale = null;
+        List<string>? dangling = null;
+        HashSet<string>? seen = null;
+
         foreach (var (_, targets) in view.Links)
         {
             foreach (var target in targets)
             {
-                (linked ??= new HashSet<string>(StringComparer.Ordinal)).Add(target);
-            }
-        }
+                if (!(seen ??= new HashSet<string>(StringComparer.Ordinal)).Add(target))
+                {
+                    continue;
+                }
 
-        List<string>? stale = null;
-        foreach (var target in record.LinkDigests.Keys())
-        {
-            if (linked is null || !linked.Contains(target))
-            {
-                continue;
-            }
+                if (!RepoContextKeys.TryParse(target, out var parsedTarget)
+                    || parsedTarget.Kind is not (RepoContextRecordKind.File or RepoContextRecordKind.Symbol))
+                {
+                    continue;
+                }
 
-            var register = record.LinkDigests.Get(target);
-            var captured = register is null ? null : RepoContextValues.ReadString(register);
-            if (captured is null)
-            {
-                continue;
-            }
+                var register = record.LinkDigests.Get(target);
+                var captured = register is null ? null : RepoContextValues.ReadString(register);
 
-            var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
-            string? current = null;
-            if (targetView.Exists)
-            {
-                targetView.Fields.TryGetValue("digest", out current);
-            }
+                var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                if (!targetView.Exists)
+                {
+                    // The link points at nothing: either the target was deleted, or
+                    // it never reached the indexed corpus at all. Both are reported,
+                    // and the dangling list names them so a caller can tell "re-read
+                    // the file" from "wait for the target to be indexed".
+                    (dangling ??= new List<string>()).Add(target);
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
 
-            if (!string.Equals(captured, current, StringComparison.Ordinal))
-            {
-                (stale ??= new List<string>()).Add(target);
+                if (captured is null)
+                {
+                    // The target has a live record but no digest was ever captured
+                    // for this edge, so drift is not measurable here. Reporting that
+                    // as fresh would render an absence of evidence as a positive
+                    // finding; the edge becomes evaluable again when it is rewritten.
+                    (stale ??= new List<string>()).Add(target);
+                    continue;
+                }
+
+                targetView.Fields.TryGetValue("digest", out var current);
+                if (!string.Equals(captured, current, StringComparison.Ordinal))
+                {
+                    (stale ??= new List<string>()).Add(target);
+                }
             }
         }
 
         stale?.Sort(StringComparer.Ordinal);
+        dangling?.Sort(StringComparer.Ordinal);
         return view with
         {
             Stale = stale is { Count: > 0 },
             StaleLinks = stale,
+            DanglingLinks = dangling,
         };
     }
 
@@ -538,7 +595,7 @@ internal sealed partial class RepoContextStore
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         var existing = RepoContextMemoryCodec.Fold(
-            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
+            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer, key);
         await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
         var created = existing is null;
 
@@ -576,7 +633,11 @@ internal sealed partial class RepoContextStore
             await accessor.SetAsync(_replicaId, bytes, cancellationToken).ConfigureAwait(false);
         }
 
-        var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        // POST-COMMIT BOUNDARY. The durable write above has landed. Nothing below may
+        // propagate a fault, because a caller that sees this call throw cannot tell a
+        // rejected write from a committed one, and the default id is a fresh GUID, so
+        // the obvious retry writes a SECOND entry rather than converging on the first.
+        var expiryTicks = await TryReadCommittedExpiryAsync(tree, key, cancellationToken).ConfigureAwait(false);
         await InvalidateMemoryVectorAsync(repoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextRememberResult
         {
@@ -585,11 +646,46 @@ internal sealed partial class RepoContextStore
             Topic = topic,
             Id = entryId,
             Created = created,
-            Expires = versioned.ExpiresAtTicks != 0L,
-            ExpiresAtUtc = ToExpiryIso(versioned.ExpiresAtTicks),
+            Expires = expiryTicks is { } ticks ? ticks != 0L : null,
+            ExpiresAtUtc = expiryTicks is { } isoTicks ? ToExpiryIso(isoTicks) : null,
             LinksAdded = linksAdded,
             LinksRemoved = linksRemoved,
         };
+    }
+
+    /// <summary>
+    /// Reads back the expiry of a key that was <b>just committed</b>, reporting
+    /// <see langword="null"/> ("not evaluated") instead of propagating a fault.
+    /// <para>
+    /// This read is enrichment, not the operation. The caller's write is already
+    /// durable by the time it runs, and it exists only to populate the expiry fields
+    /// on the result. Letting it throw would discard the one fact the caller most
+    /// needs - that the write landed - in exchange for two decorative fields, and the
+    /// resulting error is indistinguishable from a write that never happened.
+    /// </para>
+    /// <para>
+    /// Cancellation is absorbed here for the same reason and only here: cancelling a
+    /// token cannot un-commit a durable write, so reporting the write is the honest
+    /// answer even when the caller has stopped waiting. Every pre-commit path in this
+    /// type still observes cancellation normally.
+    /// </para>
+    /// </summary>
+    /// <param name="tree">The tree holding the committed key.</param>
+    /// <param name="key">The key that was just written.</param>
+    /// <param name="cancellationToken">Cancels the read-back only; it never un-commits the write.</param>
+    /// <returns>The expiry in ticks (0 when the entry never expires), or <see langword="null"/> when the read-back could not be evaluated.</returns>
+    private static async Task<long?> TryReadCommittedExpiryAsync(
+        ILattice tree, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+            return versioned.ExpiresAtTicks;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -619,6 +715,15 @@ internal sealed partial class RepoContextStore
     /// capture is the durable act; the vector is a derived projection that the
     /// always-on sweep reconciles anyway.
     /// </para>
+    /// <para>
+    /// <b>Cancellation is absorbed too, and that is deliberate.</b> Every call site is
+    /// past its durable commit, so an <see cref="OperationCanceledException"/> escaping
+    /// here would fail a call whose write had already landed - reporting "nothing
+    /// happened" about something that did. Cancelling a token cannot un-commit a write,
+    /// so the honest answer post-commit is the result, not the fault. This is the only
+    /// place in this type that absorbs cancellation; every pre-commit path still
+    /// observes it normally.
+    /// </para>
     /// </summary>
     private async Task InvalidateMemoryVectorAsync(
         string repoId, string key, CancellationToken cancellationToken)
@@ -628,9 +733,9 @@ internal sealed partial class RepoContextStore
             await _vectorWriter.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
             await _vectorWriter.UnmarkMemoryEmbeddedAsync(repoId, key, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception)
         {
-            // Swallowed deliberately: see the best-effort note above.
+            // Swallowed deliberately, cancellation included: see the post-commit note above.
         }
     }
 
@@ -712,7 +817,7 @@ internal sealed partial class RepoContextStore
         byte[] patchInput;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            var folded = RepoContextMemoryCodec.Fold(existing, _serializer)!;
+            var folded = RepoContextMemoryCodec.Fold(existing, _serializer, key)!;
             await EnforceFenceAsync(key, folded, fencingToken, cancellationToken).ConfigureAwait(false);
             patchInput = _serializer.SerializeToArray(folded);
         }
@@ -807,11 +912,21 @@ internal sealed partial class RepoContextStore
 
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
-            await EnforceFenceAsync(
-                key,
-                await ReadMemoryAsync(tree, key, cancellationToken).ConfigureAwait(false),
-                fencingToken,
-                cancellationToken).ConfigureAwait(false);
+            // A forget is fenced exactly as a patch is, but it is also the only
+            // remedy for a record whose stored value cannot be decoded, so the fence
+            // here must not be the thing that forecloses it. When the value folds,
+            // the fence is resolved off the record as usual; when it does not, it is
+            // resolved against the lock instead - which preserves the exclusion
+            // invariant rather than relaxing it (see the fallback's remarks).
+            var stored = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            if (RepoContextMemoryCodec.TryFold(stored, _serializer, key, out var existing))
+            {
+                await EnforceFenceAsync(key, existing, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await EnforceFenceOverUndecodableAsync(key, fencingToken, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (!lapse)
@@ -845,6 +960,7 @@ internal sealed partial class RepoContextStore
             };
         }
 
+        var undecodable = false;
         if (parsed.Kind == RepoContextRecordKind.Memory)
         {
             // Lapse a memory record through the multi-value-register accessor so the
@@ -852,25 +968,59 @@ internal sealed partial class RepoContextStore
             // soft-delete converges across clusters instead of racing an LWW rewrite.
             // Fold first so the lapse re-authors the merged record, not one arm of a
             // conflict set.
-            var accessor = RepoContextMemoryCodec.Accessor(tree, key);
-            var folded = RepoContextMemoryCodec.Fold(value, _serializer);
+            //
+            // A malformed stored value must not foreclose the retirement. The
+            // fallback below already anticipated "nothing folded, so lapse the stored
+            // bytes as they are"; an undecodable value takes that same path rather
+            // than throwing, because a record that cannot be read is exactly the
+            // record that most needs retiring, and refusing here would leave a hard
+            // delete as the only remedy - losing the entry rather than its formatting.
+            // The tolerance is scoped to this path alone: every other read-modify-write
+            // still fails loudly, so this cannot quietly absorb an unrelated decode
+            // fault. It is reported on the result so the shedding is never silent.
+            undecodable = !RepoContextMemoryCodec.TryFold(value, _serializer, key, out var folded);
             var lapseBytes = folded is null ? value : _serializer.SerializeToArray(folded);
-            await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
-                .ConfigureAwait(false);
+
+            if (undecodable)
+            {
+                // The accessor's own read-modify-write would re-decode the same
+                // malformed bytes, so the register path cannot carry this lapse.
+                // A direct write of the stored bytes under the short time-to-live
+                // retires the entry without ever decoding it.
+                //
+                // This bypass is a correctness requirement, not an optimisation, and
+                // a perturbation arm establishes it rather than assuming it: routing
+                // this write back through the accessor reddens the lapse fixtures
+                // with a decode failure raised from the accessor itself. Do not
+                // "simplify" the two branches back into one.
+                await tree.SetAsync(key, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                var accessor = RepoContextMemoryCodec.Accessor(tree, key);
+                await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         else
         {
             await tree.SetAsync(key, value, TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
         }
 
-        var lapsed = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        // POST-COMMIT BOUNDARY: the lapse write above has landed. A fault in the
+        // read-back below must degrade the reported expiry, never discard the lapse.
+        // On a "lapse" result a null ExpiresAtUtc is unambiguous: a lapsed entry always
+        // carries an expiry, so null here can only mean the read-back was not evaluated.
+        var lapsedTicks = await TryReadCommittedExpiryAsync(tree, key, cancellationToken).ConfigureAwait(false);
         await InvalidateMemoryVectorAsync(parsed.RepoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextForgetResult
         {
             Key = key,
             Mode = "lapse",
             Existed = true,
-            ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
+            ExpiresAtUtc = lapsedTicks is { } ticks ? ToExpiryIso(ticks) : null,
+            Undecodable = undecodable,
         };
     }
 
@@ -1076,13 +1226,99 @@ internal sealed partial class RepoContextStore
     {
         RequireNonEmpty(repoId, "repoId");
 
-        await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
+        var resetStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        // Collected, not thrown. TearDownIndexingControlAsync runs BEFORE any
+        // sweeping, so until now a single unresponsive control-plane grain aborted
+        // the reset before it deleted one record - and the grain most likely to be
+        // unresponsive is the approximate-index build coordinator, whose slices
+        // read the very vector trees the reset exists to drop. A damaged tree
+        // therefore starved the stop call that was supposed to precede dropping
+        // that tree, which is a deadlock in the recovery path: the worse the damage,
+        // the less able the reset was to start. RemoveRepoAsync keeps the strict
+        // behaviour (see the overload's remarks); only the recovery verb tolerates
+        // a teardown fault, and it reports every one it tolerated.
+        var teardownFailures = new List<string>();
+        await TearDownIndexingControlAsync(repoId, teardownFailures).ConfigureAwait(false);
+
+        // Mark the reset observable BEFORE any deletion. TearDownIndexingControlAsync
+        // above cleared the job grain (it cancels and clears any in-flight index
+        // run), so index_status would otherwise report None - indistinguishable
+        // from a never-onboarded repository - for the whole of a sweep that can run
+        // for minutes. BeginResetAsync re-populates that same surface with a
+        // running teardown (status Running, phase Resetting), so a caller that
+        // loses this call's response can still poll index_status and see the reset
+        // in flight rather than nothing at all. The completion signal is written
+        // only by CompleteResetAsync after the sweep finishes, never here.
+        var jobGrain = _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId);
+        await jobGrain.BeginResetAsync().ConfigureAwait(false);
 
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");
 
+        var structural = Tree(RepoContextTrees.Structural);
+        var markerKey = RepoContextKeys.Repo(repoId);
+
+        // Clear the marker's index-derived registers BEFORE the sweep, not after.
+        //
+        // The sweep below can run for minutes on a large corpus, and for the whole
+        // of that window list_repos is the surface an operator consults to ask
+        // "did the reset work?". Clearing afterwards meant it answered that
+        // question with the complete PRE-reset census - a stale lastIngested, a
+        // stale fileCount, a stale indexedCommit - stated with full confidence and
+        // indistinguishable from a healthy index. That does not read as "no
+        // information yet"; it reads as "the reset did nothing", which is the one
+        // conclusion that prompts an operator to run a destructive operation
+        // AGAIN. The documented post-reset signature (three nulls) was implemented
+        // correctly and simply could not be observed during the only window in
+        // which anyone looks for it, so the documentation described an outcome
+        // that never appeared - worse than describing none, because it licenses
+        // trusting a field that is stale.
+        //
+        // Moving it is safe, and the ordering constraint that kept it here was
+        // never real for THIS write. The marker sits at repo/{repoId} with no
+        // trailing separator; the sweep is a range delete over repo/{repoId}/ and
+        // its start bound sorts strictly after the marker key. The marker is
+        // outside the swept range, so writing it first cannot be re-deleted. (The
+        // re-derive branch after the sweep is a different case and genuinely must
+        // stay there: it is conditioned on the deletion count, which is not known
+        // until the sweep finishes.)
+        //
+        // Under a mid-sweep failure this also fails in the safer direction. The
+        // marker then reports "registered, no index" while some index records
+        // survive - understating coverage for a partially deleted index, which is
+        // true and prompts a retry. The old order overstated it, claiming a full
+        // census for an index that was being deleted underneath the claim.
+        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
+        var censusCleared = false;
+        if (markerBytes is not null)
+        {
+            // The three index-derived fields are cleared rather than carried across.
+            // Keeping them would have list_repos report a file count and an ingest
+            // timestamp for an index that no longer exists - a confident, precise
+            // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
+            // already tolerates unset registers and renders them as nulls, which is
+            // exactly the "registered, no index" state a caller needs to distinguish
+            // a just-reset repository from a never-onboarded one. Authored metadata
+            // (display name, default branch, tags) is not index-derived, so it is
+            // carried across untouched.
+            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
+            {
+                LastIngested = new BoundedRegister(),
+                FileCount = new BoundedRegister(),
+                IndexedCommit = new BoundedRegister(),
+            };
+
+            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
+                .ConfigureAwait(false);
+            censusCleared = true;
+        }
+
         long deleted = 0;
+        var treesSwept = 0;
+        var sweptTrees = new List<string>();
+        var sweepFailures = new List<string>();
         foreach (var treeName in RepoContextTrees.CodeIndexTrees)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1097,9 +1333,69 @@ internal sealed partial class RepoContextStore
                     "A code-only reset refused to sweep an unclassified tree: '" + treeName + "'.");
             }
 
-            deleted += await Tree(treeName)
-                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
-                .ConfigureAwait(false);
+            // One undrainable tree must not cost the other nine. The loop
+            // previously let the first failure propagate, which sounds like the
+            // safe default and is the opposite here: CodeIndexTrees is an ordered
+            // constant, so a tree that cannot be drained permanently shadows every
+            // tree after it, and the reset can never reach them however many times
+            // it is retried. That was measured, not theorised - a ~170 MB leaf on
+            // the symbol tree (position 2) blocked the vector-index tree (position
+            // 9) which by itself held 99.2% of a 41 GB write-ahead log, so the one
+            // verb that exists to reclaim that log could not reach the records
+            // holding it open. Continuing past a failed tree is what lets the
+            // whole-tree fallback in SweepTreeForResetAsync do its job on the
+            // trees that CAN be recovered.
+            //
+            // The catch is deliberately narrow, and each omission is load-bearing:
+            //
+            //  - ILatticeLeafUnavailable and TimeoutException are the two shapes a
+            //    tree that cannot be enumerated actually takes, and both are
+            //    properties of the tree rather than of this request, so skipping
+            //    to the next tree is the only way to make progress.
+            //  - OperationCanceledException is NOT caught: a caller that cancelled
+            //    must see the reset stop, not watch it grind through nine more
+            //    trees pretending each one failed.
+            //  - McpException is NOT caught: the refusals above it (an unclassified
+            //    tree, the sole-repo gate inside the fallback) are deliberate
+            //    fail-closed decisions, and swallowing one would turn a refusal to
+            //    act into a silently skipped tree.
+            //  - Nothing else is caught, so a genuine defect still surfaces as a
+            //    failed reset rather than as a tree quietly recorded as damaged.
+            //  - The structural tree is excluded from the catch entirely. Its
+            //    fault is not "one tree of ten is damaged": it holds the
+            //    repo/{repoId} marker that keeps the repository enumerable and the
+            //    file nodes every other tree is keyed against, and
+            //    SweepTreeForResetAsync refuses the whole-tree fallback on it
+            //    unconditionally for that reason. A reset that cannot drain it has
+            //    not partially succeeded, so it aborts with the original fault
+            //    rather than recording a skipped tree.
+            try
+            {
+                deleted += await SweepTreeForResetAsync(
+                        treeName, repoId, scanPrefix, end, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                !string.Equals(treeName, RepoContextTrees.Structural, StringComparison.Ordinal)
+                && IsUndrainableTreeFault(ex))
+            {
+                _logger.LogError(
+                    ex,
+                    "Reset of repository '{RepoId}' could not drain tree '{Tree}'; continuing with the remaining trees.",
+                    repoId,
+                    treeName);
+                sweepFailures.Add(treeName + " (" + ex.GetType().Name + ": " + ex.Message + ")");
+                continue;
+            }
+
+            // Report progress after each tree drains, so index_status shows the
+            // teardown advancing (evidence of progress, not merely a "resetting"
+            // flag). A wedged sweep stops advancing these counters, which is the
+            // signal a caller needs; the completion marker is still withheld until
+            // the whole loop finishes.
+            treesSwept++;
+            sweptTrees.Add(treeName);
+            await jobGrain.ReportResetProgressAsync(treesSwept, checked((int)deleted)).ConfigureAwait(false);
         }
 
         // The root marker sits at repo/{repoId} with no trailing separator, so it
@@ -1111,20 +1407,6 @@ internal sealed partial class RepoContextStore
         // from list_repos while its deliberately-preserved memory survives
         // underneath, reachable only by an agent that already knows the id -
         // which defeats the reason this verb exists.
-        //
-        // Rewriting it must happen AFTER the sweep above, not before: the sweep
-        // is a range delete over repo/{repoId}/ and would otherwise simply
-        // re-delete anything written first.
-        //
-        // The three index-derived fields are cleared rather than carried across.
-        // Keeping them would have list_repos report a file count and an ingest
-        // timestamp for an index that no longer exists - a confident, precise
-        // lie, which is worse than the absence it replaces. BuildRepoSummaryAsync
-        // already tolerates unset registers and renders them as nulls, which is
-        // exactly the "registered, no index" state a caller needs to distinguish
-        // a just-reset repository from a never-onboarded one. Authored metadata
-        // (display name, default branch, tags) is not index-derived, so it is
-        // carried across untouched.
         //
         // A reset must not invent a registration for a repository that was never
         // onboarded. The condition that establishes "never onboarded" is that the
@@ -1143,22 +1425,7 @@ internal sealed partial class RepoContextStore
         // two: it is direct evidence this repository had a code index a moment
         // ago. A zero-deletion reset still writes nothing, which keeps the
         // never-onboarded guarantee exactly as strong as it was.
-        var structural = Tree(RepoContextTrees.Structural);
-        var markerKey = RepoContextKeys.Repo(repoId);
-        var markerBytes = await structural.GetAsync(markerKey, cancellationToken).ConfigureAwait(false);
-        if (markerBytes is not null)
-        {
-            var node = _serializer.Deserialize<RepoNode>(markerBytes) with
-            {
-                LastIngested = new BoundedRegister(),
-                FileCount = new BoundedRegister(),
-                IndexedCommit = new BoundedRegister(),
-            };
-
-            await structural.SetAsync(markerKey, _serializer.SerializeToArray(node), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else if (deleted > 0)
+        if (markerBytes is null && deleted > 0)
         {
             // Re-derived, not invented: every index-derived register is left unset,
             // which is the same "registered, no index" shape the preserve branch
@@ -1170,18 +1437,229 @@ internal sealed partial class RepoContextStore
                 .ConfigureAwait(false);
         }
 
-        return new RepoContextIndexResetResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
+        resetStopwatch.Stop();
+
+        // A reset that could not drain every tree is NOT complete, and must not
+        // say it is. CompleteResetAsync is the sole completion signal and its
+        // contract is that an interrupted reset never reaches it, so a partial
+        // sweep reports failure on the job surface and raises - it does not return
+        // a result with a quietly shorter TreesSwept list, which a caller reading
+        // a success response has no reason to inspect.
+        //
+        // Everything the sweep DID drain is already durable and is not rolled
+        // back, so the message states it: the operator needs to know both that the
+        // reset was partial and that it made real progress, because the correct
+        // response to "eight of ten trees drained, two are damaged" is to
+        // investigate those two, not to assume nothing happened and retry blindly.
+        if (sweepFailures.Count > 0 || teardownFailures.Count > 0)
+        {
+            var detail = new System.Text.StringBuilder()
+                .Append("The reset of repository '").Append(repoId)
+                .Append("' was partial. Drained ").Append(treesSwept).Append(" of ")
+                .Append(RepoContextTrees.CodeIndexTrees.Count).Append(" trees and deleted ")
+                .Append(deleted).Append(" entries; that work is durable and is not rolled back.");
+
+            if (sweepFailures.Count > 0)
+            {
+                detail.Append(" Trees that could not be drained: ")
+                    .Append(string.Join("; ", sweepFailures)).Append('.');
+            }
+
+            if (teardownFailures.Count > 0)
+            {
+                detail.Append(" Control-plane teardown steps that did not complete: ")
+                    .Append(string.Join("; ", teardownFailures))
+                    .Append(". A writer may still be live for this repository.");
+            }
+
+            var message = detail.ToString();
+            await jobGrain.FailAsync(message).ConfigureAwait(false);
+            throw new McpException(message);
+        }
+
+        // The sole completion signal, written only now the sweep has finished.
+        // Everything above this line ran with the job surface reporting a running
+        // teardown; this is what flips it to Completed, so a caller can distinguish
+        // "reset in progress" from "reset done" and, critically, an interrupted
+        // reset (which never reaches this line) never reports itself complete.
+        await jobGrain
+            .CompleteResetAsync(resetStopwatch.ElapsedMilliseconds, treesSwept, checked((int)deleted))
+            .ConfigureAwait(false);
+
+        return new RepoContextIndexResetResult
+        {
+            RepoId = repoId,
+            EntriesDeleted = checked((int)deleted),
+            ElapsedMilliseconds = resetStopwatch.ElapsedMilliseconds,
+            // The trees actually swept, not the constant list. TreesSwept is
+            // documented as "named rather than counted so the caller can see
+            // exactly what was dropped instead of trusting that the sweep covered
+            // what it should have" - assigning CodeIndexTrees unconditionally
+            // asserted precisely the thing the caller was told not to trust. The
+            // two agreed only because the loop had no way to skip a tree; now that
+            // it has, reporting the constant would be a straightforward lie.
+            TreesSwept = sweptTrees,
+            MemoryPreserved = true,
+            CensusCleared = censusCleared,
+        };
+    }
+
+    /// <summary>
+    /// Whether a fault means a tree cannot be drained right now, as opposed to
+    /// the reset being refused or a defect having surfaced. Shared by the sweep
+    /// loop and the control-plane teardown so the two cannot drift apart on what
+    /// counts as recoverable.
+    /// <para>
+    /// <see cref="ILatticeLeafUnavailable"/> covers both core exceptions that mean
+    /// a leaf cannot be activated; <see cref="TimeoutException"/> covers an
+    /// Orleans response timeout on the tree grain and, because both derive from
+    /// it, the core's own stalled-scan and shard-activation timeouts. Neither is a
+    /// property of this request, so retrying it unchanged repeats the same
+    /// failure while moving to the next tree makes progress.
+    /// </para>
+    /// </summary>
+    private static bool IsUndrainableTreeFault(Exception ex) =>
+        ex is ILatticeLeafUnavailable or TimeoutException;
+
+    /// <summary>
+    /// Sweeps one code-index tree's <c>repo/{repoId}/</c> subtree for
+    /// <see cref="ResetIndexAsync"/>, falling back to a whole-tree drop when the
+    /// subtree cannot be walked at all.
+    /// <para>
+    /// The normal path is the resilient range-delete every other sweep uses. It
+    /// enumerates, and enumeration activates leaves - so on a tree holding a leaf
+    /// that is terminally un-activatable (its durable projection checkpoint was
+    /// trimmed with no covering snapshot, or it cannot be materialised within the
+    /// memory available) the reset cannot make progress at all. That is the exact
+    /// state an operator invokes a reset to escape, so the one verb that exists to
+    /// recover a damaged index is disabled by the damage. Both shapes carry
+    /// <see cref="ILatticeLeafUnavailable"/>, which is what lets this package catch
+    /// the condition at all - one of the two concrete types is internal to the
+    /// core, so before that marker existed only one of the two was reachable here
+    /// and the memory-exhaustion shape fell straight through the fallback.
+    /// </para>
+    /// <para>
+    /// <see cref="ILattice.DeleteTreeAsync"/> is the one public primitive that
+    /// makes progress there: it marks every shard root deleted through shard-root
+    /// state alone and never activates the throwing leaf. It drops the
+    /// <b>whole</b> tree, though, and these trees are shared by every repository,
+    /// so it is only equivalent to the requested subtree delete when this
+    /// repository is the only registered one. When another repository shares the
+    /// tree the fault is rethrown rather than silently widened into someone else's
+    /// data - the same fail-closed discipline
+    /// <see cref="RepoContextTrees.IsRebuildableVectorTree"/> applies to the
+    /// self-healer.
+    /// </para>
+    /// <para>
+    /// <see cref="RepoContextTrees.Structural"/> is excluded from the fallback
+    /// unconditionally. It carries the separator-free <c>repo/{repoId}</c> marker
+    /// that <see cref="ResetIndexAsync"/> deliberately preserves to keep the
+    /// repository enumerable, and that marker is outside the swept range precisely
+    /// so the sweep cannot take it. A whole-tree drop is not bounded by the range
+    /// and would delete it, turning a reset back into the disappearance the
+    /// preserve branch exists to prevent.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">The code-index tree to sweep.</param>
+    /// <param name="repoId">The repository being reset.</param>
+    /// <param name="scanPrefix">The inclusive start of the repository's subtree.</param>
+    /// <param name="end">The exclusive upper bound of the repository's subtree.</param>
+    /// <param name="cancellationToken">Cancels the sweep between steps.</param>
+    /// <returns>The number of entries tombstoned, or zero when the tree was dropped whole.</returns>
+    private async Task<long> SweepTreeForResetAsync(
+        string treeName,
+        string repoId,
+        string scanPrefix,
+        string end,
+        CancellationToken cancellationToken)
+    {
+        var tree = Tree(treeName);
+        try
+        {
+            return await tree
+                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception unavailable) when (unavailable is ILatticeLeafUnavailable)
+        {
+            if (string.Equals(treeName, RepoContextTrees.Structural, StringComparison.Ordinal))
+            {
+                throw;
+            }
+
+            // Only equivalent to the requested subtree delete when nothing else
+            // lives in the tree. Read the registration census rather than assume:
+            // a shared tree must keep the fault.
+            var repoIds = await ListRepoIdsAsync(cancellationToken).ConfigureAwait(false);
+            var soleRegisteredRepo = repoIds.Count <= 1
+                && (repoIds.Count == 0 || string.Equals(repoIds[0], repoId, StringComparison.Ordinal));
+            if (!soleRegisteredRepo)
+            {
+                throw new McpException(
+                    $"The code-index tree '{treeName}' holds a leaf that cannot be activated, so the "
+                    + $"repository subtree for '{repoId}' cannot be enumerated to delete it. The whole-tree "
+                    + "drop that would recover it was refused because "
+                    + $"{repoIds.Count} repositories share this tree and dropping it would delete their "
+                    + "index records too. Remove or reset the other repositories first, or remove this one "
+                    + "with repocontext_remove_repo.",
+                    unavailable);
+            }
+
+            // Infrastructure-authored maintenance with no user identity behind it,
+            // exactly as RepoContextVectorPlaneReDeriver documents for the same
+            // primitive. The bypass is bounded the same way: it is entered only
+            // after the fail-closed code-index classification accepted the tree,
+            // the tree name is a local layout constant rather than any wire- or
+            // exception-derived value, the scope contains nothing but the
+            // delete/purge of that one tree, and it is lexical and disposed on
+            // every path.
+            using var systemOrigin = LatticeSystemOrigin.Enter();
+
+            await tree.DeleteTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await tree.PurgeTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception purgeUnavailable) when (purgeUnavailable is ILatticeLeafUnavailable)
+            {
+                // Best-effort, matching the self-healer: the soft-delete has already
+                // unblocked the terminal state and registered a reminder-driven
+                // purge that completes the reclaim out of band.
+                _ = purgeUnavailable;
+            }
+
+            // A whole-tree drop tombstones no individual entries, so it contributes
+            // nothing to the deletion count. That is deliberate rather than a lost
+            // figure: the count feeds the "was anything here?" test that decides
+            // whether to re-derive an absent marker, and a dropped tree is not
+            // evidence about THIS repository's records specifically.
+            return 0;
+        }
     }
 
     /// <summary>
     /// Cancels any in-flight indexing run for a repository, clears the job
-    /// grain's durable state and its resume reminder, and stops the always-on
-    /// self-index scan. Shared by <see cref="RemoveRepoAsync"/> and
+    /// grain's durable state and its resume reminder, stops the always-on
+    /// self-index scan, and disarms the approximate-index build coordinator.
+    /// Shared by <see cref="RemoveRepoAsync"/> and
     /// <see cref="ResetIndexAsync"/> so both take the same control-plane
     /// teardown - a second copy would drift from the load-bearing comment
     /// below.
     /// </summary>
-    private async Task TearDownIndexingControlAsync(string repoId)
+    /// <param name="repoId">The repository whose control plane is torn down.</param>
+    /// <param name="faults">
+    /// When <see langword="null"/> (the <see cref="RemoveRepoAsync"/> path) every
+    /// step must succeed and the first failure propagates, because a removal
+    /// deletes the repository's memory as well as its index and must not run with
+    /// a writer still live. When non-<see langword="null"/> (the
+    /// <see cref="ResetIndexAsync"/> path) a recoverable fault in one step is
+    /// appended here and the remaining steps still run, because a reset is the
+    /// verb invoked precisely when the deployment is already damaged - refusing to
+    /// start until the damaged deployment answers promptly is how the recovery
+    /// path deadlocks against the damage. The caller reports every collected fault
+    /// and never claims the reset completed.
+    /// </param>
+    private async Task TearDownIndexingControlAsync(string repoId, ICollection<string>? faults = null)
     {
         // Stop any in-flight indexing run and drain it to a full halt BEFORE
         // deleting a single record. CancelAndWaitAsync cancels the run and awaits
@@ -1192,16 +1670,80 @@ internal sealed partial class RepoContextStore
         // so a removed repository leaves no reminder firing forever and no job
         // state for a later start to resume. Doing this first (rather than last)
         // also means an error in the delete pass can no longer skip the cleanup.
-        await _indexRunner.CancelAndWaitAsync(repoId).ConfigureAwait(false);
-        await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
-            .CancelAndClearAsync()
-            .ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "cancel the in-flight indexing run",
+            () => _indexRunner.CancelAndWaitAsync(repoId),
+            repoId,
+            faults).ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "clear the index job grain",
+            () => _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId).CancelAndClearAsync(),
+            repoId,
+            faults).ConfigureAwait(false);
 
         // Tear down the repository's always-on self-index scan so a removed
         // repository leaves no keep-alive reminder firing and no checkpoint behind.
-        await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
-            .StopAsync()
-            .ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "stop the self-index scan",
+            () => _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId).StopAsync(),
+            repoId,
+            faults).ConfigureAwait(false);
+
+        // Disarm the approximate-index build coordinator. This is the FOURTH
+        // reminder-anchored writer for a repository, and until now teardown covered
+        // only three - so a removed or reset repository left a durable keep-alive
+        // registered for a build over records that were about to be deleted.
+        //
+        // Two consequences, both observed. The coordinator reactivates on that
+        // reminder after every restart and re-opens the index into the process,
+        // which is resident memory held for a repository that may no longer exist;
+        // and it is a live writer to the vector-index tree racing the range-delete
+        // below, which is precisely the state the CancelAndWaitAsync comment above
+        // exists to prevent for the other three.
+        //
+        // Null when the approximate retrieval plane is not composed into this host,
+        // in which case no coordinator was ever armed. The stop is not gated on the
+        // scheduling switch: see RepoContextAnnIndexScheduler.TryStopAsync for why
+        // the switch being off is the state that most needs stopping.
+        //
+        // This is the step measured to time out against a damaged index: the
+        // coordinator is non-reentrant and its build slice, though budgeted at five
+        // seconds of its own work, blocks indefinitely inside a single vector read
+        // against an unresponsive tree, so the stop queues behind a turn that never
+        // ends. On the reset path that fault is now collected rather than fatal.
+        if (_annScheduler is not null)
+        {
+            await RunTeardownStepAsync(
+                "disarm the approximate-index build coordinator",
+                () => _annScheduler.TryStopAsync(repoId, CancellationToken.None),
+                repoId,
+                faults).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs one control-plane teardown step, either strictly or fault-collecting
+    /// according to whether <paramref name="faults"/> was supplied. Only the same
+    /// undrainable-tree shapes the sweep loop tolerates are collected - a
+    /// cancellation, a deliberate refusal, or any other exception still propagates,
+    /// so tolerating a wedged grain never becomes tolerating a defect.
+    /// </summary>
+    private async Task RunTeardownStepAsync(
+        string description, Func<Task> step, string repoId, ICollection<string>? faults)
+    {
+        try
+        {
+            await step().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (faults is not null && IsUndrainableTreeFault(ex))
+        {
+            _logger.LogError(
+                ex,
+                "Reset of repository '{RepoId}' could not {Step}; continuing so the sweep can still run.",
+                repoId,
+                description);
+            faults.Add(description + " (" + ex.GetType().Name + ": " + ex.Message + ")");
+        }
     }
 
     private async Task<RepoContextRepoSummary> BuildRepoSummaryAsync(
@@ -1225,15 +1767,40 @@ internal sealed partial class RepoContextStore
         var embeddedVectorCount = await ReadEmbeddedVectorCountAsync(repoId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The indexed root is read from the durable index request rather than the marker
+        // node, because the request is the authority for how the repository was actually
+        // walked - the structural records are addressed relative to it. The marker node
+        // never carried it, which is precisely why this listing could report a healthy
+        // repository under an id that described a different tree (issue #2617): the root
+        // was known to the drift report, which refuses a path "outside the indexed root
+        // of repository '<root>'", and to nothing a caller reads first.
+        var indexedRoot = await ReadIndexedRootAsync(repoId).ConfigureAwait(false);
+
         return new RepoContextRepoSummary
         {
             RepoId = repoId,
+            IndexedRoot = indexedRoot,
             LastIngested = lastIngested,
             FileCount = fileCount,
             EmbeddedVectorCount = embeddedVectorCount.Count,
             EmbeddedVectorCountPending = embeddedVectorCount.Pending,
             IndexedCommit = indexedCommit,
         };
+    }
+
+    /// <summary>
+    /// Reads the resolved root a repository was last indexed from, or
+    /// <see langword="null"/> when it has no persisted index request - a repository that
+    /// was never onboarded, or one whose index was reset (the reset path clears the
+    /// request, so a null root is the same "no information yet" answer the reset's other
+    /// three nulls carry, not a failure to read one).
+    /// </summary>
+    private async Task<string?> ReadIndexedRootAsync(string repoId)
+    {
+        var request = await _grainFactory
+            .GetGrain<IRepoIndexJobGrain>(repoId).GetRequestAsync().ConfigureAwait(false);
+
+        return string.IsNullOrWhiteSpace(request?.RepoRoot) ? null : request.RepoRoot;
     }
 
     /// <summary>

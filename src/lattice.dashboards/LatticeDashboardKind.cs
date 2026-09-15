@@ -28,10 +28,8 @@ public enum LatticeDashboardKind
     /// <c>leaf.commit.duration</c> broken out by step
     /// (<c>wal</c> / <c>apply</c> / <c>observer</c>),
     /// <c>leaf.write.duration</c> for storage-provider write latency,
-    /// <c>leaf.compaction.duration</c> for tombstone-compaction latency,
-    /// and activation-time <c>leaf.replay.duration</c> /
-    /// <c>leaf.replay.entries</c> tagged by recovery outcome. Sources
-    /// the <c>orleans.lattice</c> meter only.
+    /// <c>leaf.compaction.duration</c> for tombstone-compaction latency.
+    /// Sources the <c>orleans.lattice</c> meter only.
     /// </summary>
     CommitPath = 1,
 

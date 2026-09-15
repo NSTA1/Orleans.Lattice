@@ -1,16 +1,26 @@
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
 
 /// <summary>
-/// Tests for the cadence that gates the whole-repository embedding-gap probe.
+/// Tests for the cadence that gates the whole-repository embedding-gap scan.
 /// <para>
-/// Offering every unchanged file to the vector ingestor makes the ingestor probe
-/// membership for each one, which on a structurally converged repository is pure
-/// waste and dominates the pass. The probe is therefore skipped once coverage has
+/// Offering every unchanged file to the vector ingestor used to make the ingestor
+/// probe membership for each one, which on a structurally converged repository was
+/// pure waste and dominated the pass. That is what the back-off below exists to
+/// avoid, and it still applies whenever the coverage digest is unbuilt and the
+/// ingestor falls through to the old probe. The scan is skipped once coverage has
 /// been observed complete, and re-armed by three independent conditions: the
 /// periodic cadence coming due, prune consent being withheld (a deliberate full
 /// sweep), and the self-index grain's out-of-band paged sweep forcing it after
-/// finding a real gap. That last one is what keeps a converged repository healing
-/// promptly rather than waiting out the cadence.
+/// finding a real gap.
+/// </para>
+/// <para>
+/// With the digest built, detection reads a fixed number of rows on a tree of its
+/// own rather than 2N rows on the membership tree, so the shipped cadence is now a
+/// single reconcile spacing and the back-off does not engage at the defaults. The
+/// tests that exercise the back-off therefore pin a wide cadence explicitly via
+/// <c>BackOffOptions</c>, and
+/// <see cref="The_shipped_default_cadence_re_checks_a_converged_repository_every_pass"/>
+/// pins the default behaviour that replaced it.
 /// </para>
 /// </summary>
 public sealed partial class RepoContextBootstrapServicePassTests
@@ -40,6 +50,23 @@ public sealed partial class RepoContextBootstrapServicePassTests
         return harness;
     }
 
+    /// <summary>
+    /// Options whose gap-scan cadence is far wider than any test here runs, so the
+    /// periodic re-arm cannot fire and the back-off mechanism is observed in
+    /// isolation.
+    /// <para>
+    /// The shipped default is deliberately one reconcile spacing (see
+    /// <see cref="RepoContextIndexingOptions.EmbeddingGapScanInterval"/>), which
+    /// re-arms on every pass and would therefore mask the back-off entirely. That
+    /// default is not an accident to be worked around: detection now reads a
+    /// fixed-size coverage digest rather than probing membership per source, so
+    /// re-checking every pass is affordable. These tests pin a wide cadence because
+    /// they are about the back-off, not about the constant.
+    /// </para>
+    /// </summary>
+    private static RepoContextIndexingOptions BackOffOptions() =>
+        new() { EmbeddingGapScanInterval = TimeSpan.FromHours(4) };
+
     private static RepoContextBootstrapRequest GapScanRequest(
         BootstrapHarness harness, bool allowPrune = true, bool force = false) =>
         new()
@@ -53,7 +80,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
     [Test]
     public async Task A_converged_repository_stops_offering_unchanged_files_for_a_gap_scan()
     {
-        using var harness = await ConvergedHarnessAsync();
+        using var harness = await ConvergedHarnessAsync(BackOffOptions());
 
         // The cold pass reported coverage established with no gaps, so the next
         // consented pass has nothing to re-probe: it offers an empty unchanged set
@@ -104,7 +131,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
         // be allowed to overwrite the standing verdict in either direction. Without
         // this the skipped pass's empty result would immediately re-arm the scan and
         // the back-off would be worth nothing.
-        using var harness = await ConvergedHarnessAsync();
+        using var harness = await ConvergedHarnessAsync(BackOffOptions());
 
         harness.IngestOutcome = RepoFileVectorIngestOutcome.None;
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
@@ -119,7 +146,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
     [Test]
     public async Task A_forced_gap_scan_re_arms_a_converged_repository()
     {
-        using var harness = await ConvergedHarnessAsync();
+        using var harness = await ConvergedHarnessAsync(BackOffOptions());
 
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
         Assert.That(harness.UnchangedOfferedToIngestor, Is.Empty, "precondition: the repository has settled");
@@ -138,7 +165,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
     [Test]
     public async Task A_pass_without_prune_consent_re_arms_the_gap_scan()
     {
-        using var harness = await ConvergedHarnessAsync();
+        using var harness = await ConvergedHarnessAsync(BackOffOptions());
 
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
         Assert.That(harness.UnchangedOfferedToIngestor, Is.Empty, "precondition: the repository has settled");
@@ -168,6 +195,39 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 harness.UnchangedOfferedToIngestor,
                 Is.Not.Empty,
                 "a cadence of one pass scans every pass, as it did before the cadence existed");
+        });
+    }
+
+    [Test]
+    public async Task The_shipped_default_cadence_re_checks_a_converged_repository_every_pass()
+    {
+        // This is the behavioural point of the coverage digest, pinned so it cannot
+        // be quietly reverted by widening the constant. Detection no longer costs two
+        // membership reads per indexed source; it reads a fixed-size digest whose cost
+        // does not move with the corpus. Re-checking every pass is therefore affordable,
+        // and it is what collapses the worst-case detection window from the former four
+        // hours to a single reconcile.
+        //
+        // Note this is the same observable behaviour that
+        // A_converged_repository_stops_offering_unchanged_files_for_a_gap_scan denies -
+        // which is precisely why that test now pins a wide cadence explicitly. The
+        // back-off still exists and still matters (an unbuilt digest falls through to
+        // the old probe), it simply no longer engages at the shipped defaults.
+        var options = new RepoContextIndexingOptions();
+        using var harness = await ConvergedHarnessAsync(options);
+
+        await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.PassesPerEmbeddingGapScan,
+                Is.EqualTo(1),
+                "the shipped gap-scan interval must be the shortest window the scheduler can express");
+            Assert.That(
+                harness.UnchangedOfferedToIngestor,
+                Is.Not.Empty,
+                "at the shipped defaults a converged repository is re-checked on every pass");
         });
     }
 }

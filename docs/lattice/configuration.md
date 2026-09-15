@@ -178,6 +178,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
+| [`StarvationDriveBudget`](#starvationdrivebudget) | `TimeSpan` | 5 minutes | Yes (on the next drive) |
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
 | [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
 | [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval) | `TimeSpan` | `TimeSpan.Zero` (disabled) | No (global; read from the default options) |
@@ -195,7 +196,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalGcInterval`](#walgcinterval) | `TimeSpan` | 1 hour (band ceiling) | No (global; read from the default options) |
 | [`WalGcMinInterval`](#walgcmininterval) | `TimeSpan` | 30 seconds (band floor) | No (global; read from the default options) |
 | [`WalGcStartupDelay`](#walgcstartupdelay) | `TimeSpan` | 30 seconds | No (global; read at silo start) |
-| [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = `Environment.ProcessorCount`) | Yes |
+| [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = the lesser of `Environment.ProcessorCount` and the container CPU grant) | Yes |
 | [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
 | [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
@@ -204,6 +205,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
+| [`WalReplaySliceBudget`](#walreplayslicebudget) | `int` | 256 | Yes |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
 | [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -555,6 +557,8 @@ The default sits above the mean payload leaf measured on the reference deploymen
 **When off:** `0` means unbounded - hydrate on demand and never evict. That is not a kill switch for the mechanism, only for its eviction half. Negative values are rejected by options validation.
 
 **When an operator would change it:** raise it on a read-heavy tree with very large leaves whose working set is being evicted and re-read; set it to `0` when memory is plentiful and the re-read cost matters more than the footprint.
+
+**Interaction with `MaxLeafBytes`:** the leaf read, digest and freeze seams walk bounded key windows rather than the whole cache, and that bounds peak residency only because eviction can shed a window once the walk has moved past it. Eviction only runs while the resident footprint exceeds this budget, so a budget that is unbounded (`0`) or is not materially smaller than `MaxLeafBytes` sheds nothing: those walks stay windowed in shape and become whole-leaf in cost. The lazy hydration frame is retained across a completed ranged hydration rather than released, so in that regime the frame's bytes sit on top of a fully resident leaf. The degradation is silent - every seam still returns the same answer - so the silo logs a one-shot advisory per tree naming both configured values when this budget is unbounded or is at or above a tenth of `MaxLeafBytes`. It is a performance advisory, not a rejection: the configuration is legitimate on a host with ample memory, and nothing is clamped. To restore the bound, set this budget well below `MaxLeafBytes`.
 
 ### `LeafPartialHydrationEnabled`
 
@@ -1175,6 +1179,24 @@ Number of entries per batch during the shadow-write drain phase of an adaptive s
 
 This option can be changed freely at any time.
 
+### `StarvationDriveBudget`
+
+Hard ceiling on how long a single WAL GC starved-leaf checkpoint drive may run while holding a permit on the per-silo WAL replay concurrency gate, before it abandons its replay and releases that permit (default: 5 minutes = `4 * WalDrainBudget`).
+
+**What it defends against (issue #3065).** The retention sweep reactivates a dormant leaf whose unusable durable pin is blocking its tree's WAL cursor floor, and drives that leaf's outstanding replay under the same replay permit gate the activation path uses. Before this budget existed, every await inside the permit-guarded region was passed `CancellationToken.None`: no timeout, no cancellation, anywhere. A drive whose commit-log read never returned therefore held one of a small number of per-silo permits **indefinitely**, and could not even be cancelled. The gate drained, every subsequent leaf activation on that silo queued behind it, and the silo presented as an activation outage. Measured on a frozen production container: gate ceiling 2, available 0, 345 activations queued, the oldest for 66.8 minutes.
+
+A caller-side timeout does not help and is not what this option is. The sweep's grain call already times out at the Orleans response-timeout default and records `undelivered`; abandoning the caller's wait does nothing to the grain-side method, which keeps running and keeps holding its permit. The budget has to be enforced **inside** the permit-guarded region, which is what this option does.
+
+**How the budget is enforced.** The drive creates a `CancellationTokenSource` for the budget and passes its token to every await in the region, and additionally bounds its own wait on the work with that token. Both halves are needed and they fail differently: the token genuinely terminates work that honours cancellation, while the wait bound covers a host-supplied storage call that ignores it. In the second case the storage call keeps running detached - but **without a permit**, which is the property that matters. The permit is acquired and released in the outer frame, the only frame guaranteed to run its `finally`, so abandonment cannot skip the release.
+
+**Sizing.** The default is `4 * WalDrainBudget`. A full starved-leaf replay reads at most `MaxLeafReplayEntries` entries in slices of `WalReplaySliceBudget`, which at the shipped defaults is 40 slice reads; 5 minutes leaves 7.5 seconds per read against a healthy sub-millisecond read and a 15-second `WalFlushTimeout`, so a legitimately slow replay finishes comfortably inside it. Raise it if your storage tier is slow enough that real drives are being abandoned - the `orleans.lattice.wal.replay.starvation_drive_abandonments` counter tells you, and it is the only series that can. Lower it only if you are willing to trade drive completion for faster permit recovery.
+
+**`InfiniteTimeSpan` is rejected, unlike most other timeout options here.** An infinite budget restores exactly the outage this option exists to bound, so it is refused at validation rather than honoured at runtime. The validator also rejects zero and negative values.
+
+**Observability.** An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` (tagged `tree`), zero-primed per tree beside the sweep's `attempted` arm so an absent series proves the build is not deployed rather than that no drive has run, and emits a warning log carrying the tree, the budget and how long the drive actually ran. It also records the `drove_timed_out` verdict on `orleans.lattice.wal.gc.blocked_leaf_reactivations` - but that arm is near-silent in practice, because the caller has usually already timed out, so read the counter and not the verdict. See [Metrics](metrics.md).
+
+This option can be changed freely at any time. The new value takes effect on the next drive.
+
 ### `StorageUsageCacheTtl`
 
 Cache lifetime for `ILattice.GetStorageUsageAsync` reports (default: 10 seconds). The per-tree storage-usage aggregator fans out across the tree's shards and WAL partitions to assemble a byte-accurate `TreeStorageUsageReport`; this TTL coalesces repeat callers (dashboard scrapes, the background poller, and direct API calls) so a single fan-out serves a whole window. Set to `TimeSpan.Zero` to disable caching - every call fans out fresh. See [Tree Storage](tree-storage.md#measuring-retained-storage-at-runtime).
@@ -1206,7 +1228,7 @@ This option is read once when the poller starts on each silo.
 
 Optional cadence at which the same background poller *also* drives the **deep** storage gauges - `lattice.storage.snapshot_bytes`, `lattice.storage.leaf_state_bytes`, and `lattice.storage.total_bytes` - by calling the non-force `ILatticeAdmin.GetTotalStorageUsageAsync`. The faster [`StorageUsagePollInterval`](#storageusagepollinterval) poll refreshes only the WAL-bytes surface (it touches only WAL partition grains); this deep poll additionally reads each shard root's incrementally-maintained byte totals. That read is **O(1) per shard root** - it never walks the leaf chain or activates per-leaf snapshot grains - so it activates only the shard roots and never pins idle leaves resident. It never invokes the operator-only force-refresh (`ILatticeAdmin.RefreshStorageUsageAsync`) that re-walks every leaf.
 
-Defaults to `TimeSpan.Zero`, which **disables** the deep poll: the snapshot / leaf-state / total-bytes gauges then populate only on demand via `ILattice.GetStorageUsageAsync` or the operator-driven `ILatticeAdmin.RefreshStorageUsageAsync`. Set a positive value - typically a small multiple of `StorageUsagePollInterval` - to keep the deep gauges live on a dashboard. A value at or below `TimeSpan.Zero` disables it. Like `StorageUsagePollInterval`, this is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. The sink's staleness horizon is sized off the slower of the two cadences, so a deep series survives a few missed deep polls before expiring after a real migration.
+Defaults to `TimeSpan.Zero`, which **disables** the deep poll: the snapshot / leaf-state / total-bytes gauges then populate only on demand via `ILattice.GetStorageUsageAsync` or the operator-driven `ILatticeAdmin.RefreshStorageUsageAsync`. Set a positive value - typically a small multiple of `StorageUsagePollInterval` - to keep the deep gauges live on a dashboard. A value at or below `TimeSpan.Zero` disables it. Like `StorageUsagePollInterval`, this is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. The sink's staleness horizon is sized off the slower of the two cadences, so a deep series survives a few missed deep polls before expiring after a real migration. While the deep poll is disabled, the deep gauges report *no measurement at all* for a tree rather than a synthesised zero, and the companion `lattice.storage.usage_deep_published` gauge reads `0` for that tree so the absence is explained rather than merely silent (see [Metrics](metrics.md) and issue #2693).
 
 ```csharp verify
 // Refresh the deep storage gauges once a minute (WAL bytes still refresh
@@ -1476,7 +1498,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 **This default was re-examined during the bounded-cold-start work and deliberately left disabled.** It is a capacity quota rather than a retention mechanism: a correct value is a fraction of the volume the WAL lives on, which the library cannot know, and any value shipped as a default would be wrong for most deployments in one direction or the other. Enabling it also costs one retained-byte probe per WAL partition on every collection pass, which every consumer would pay for a signal most do not need.
 
-Leaving it off does not blind an operator. `orleans.lattice.wal.gc.passes` is emitted unconditionally with a `reclaimed | idle | failed` outcome tag, and reclaimed volume is visible through `orleans.lattice.wal.entries_trimmed`, so a tree reporting passes but no `orleans.lattice.wal.gc.backlog_bytes` samples is knowably "not measured" rather than "no backlog". Set `WalMaxRetainedBytes` when the WAL volume has a hard size budget **and** the WAL provider accounts bytes; that is also what makes the backlog histogram emit.
+Leaving it off does not blind an operator. `orleans.lattice.wal.gc.passes` is emitted unconditionally with a `reclaimed | blocked | no_consumer | idle | unclassified | failed` outcome tag, and reclaimed volume is visible through `orleans.lattice.wal.entries_trimmed`, so a tree reporting passes but no `orleans.lattice.wal.gc.backlog_bytes` samples is knowably "not measured" rather than "no backlog". Set `WalMaxRetainedBytes` when the WAL volume has a hard size budget **and** the WAL provider accounts bytes; that is also what makes the backlog histogram emit.
 
 ### `WalPartitions`
 
@@ -1511,15 +1533,61 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaterialiserMaxConcurrentReplays`
 
-Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves to `Environment.ProcessorCount` at runtime). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
+Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves at runtime to the **lesser** of `Environment.ProcessorCount` and the container's enforced CPU grant). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
 
-Set to a positive value to pin the ceiling explicitly. Must be `>= 0`; the validator rejects negative values.
+**Why the grant and not the processor count alone.** The ceiling is CPU-derived, so it is only meaningful against the CPU the process can actually obtain - a bound expressed in CPUs that is read off a figure the kernel does not enforce bounds nothing. `Environment.ProcessorCount` reflects the cgroup quota *only while* `DOTNET_PROCESSOR_COUNT` is unset - that variable overrides it, and overriding it is a legitimate thing to do for the thread pool's sake. A container granted 6 CPUs whose environment carries `DOTNET_PROCESSOR_COUNT=16` therefore used to size this gate at 16, a 2.67x oversubscription of the CPU-derived ceiling, with nothing in the process able to tell (issue #2816). The default now reads `/sys/fs/cgroup/cpu.max` (and the cgroup v1 pair) directly and takes the minimum of the two figures, so a quota the kernel actually enforces can lower the ceiling but never raise it. An operator who lowers `DOTNET_PROCESSOR_COUNT` is still obeyed exactly, and every other subsystem sized from the processor count is untouched. An unreadable or unlimited quota - a non-Linux host, a container with no CPU limit - is treated as **unknown**, not as zero, and leaves the processor count as the ceiling.
+
+The resolved ceiling, the configured option, the processor count, the grant, and the resolved managed heap ceiling are all written to the log once per process at silo start, so the effective figure can be read off the log rather than inferred from the host's vCPU count. The heap ceiling is reported there because the first four figures are all CPU quantities while the resource a concurrent replay exhausts first is the managed heap (issue #2784); a record carrying only the CPU side reads as a complete account of the sizing and is not one. It is reported as `unknown` when the runtime declines to supply it, which is a finding in its own right - heap occupancy then yields no verdict and the adaptive layer described below cannot engage on it.
+
+**The ceiling is sized once, but concurrency adapts beneath it (issue #2862).** The sizing above is CPU-derived and correct as far as it goes, but on a mass reactivation the binding constraint is usually the **heap**, not the CPU: a whole-window replay buffers the window, so N concurrent replays hold N such buffers against one fixed managed ceiling. The gate therefore carries a memory dimension on top of the CPU-derived figure. A replay that finishes while managed heap occupancy is at or above **75%** of the GC hard limit does not return its permit, and a replay that fails for memory pressure does not return its permit whatever the occupancy; a withheld permit is returned only when a replay completes cleanly **and** occupancy has receded below **60%**. Those two figures are a hysteresis band, not one edge, so the gate settles at the concurrency the heap can afford rather than oscillating across a single threshold. The occupancy denominator is the **GC hard limit** (`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, floored by the cgroup memory limit when one is readable) and not the container memory grant: under a container limit .NET applies its default `GCHeapHardLimitPercent` to the grant, so a 12 GiB grant yields a 9 GiB managed ceiling and a threshold written against the grant would sit 33% above the limit that actually throws. Backpressure never withholds the last permit, so the effective ceiling has a floor of one and the mechanism cannot latch, and it works by declining to return a permit already taken rather than by resizing, so it can never raise concurrency above the configured ceiling. Both arms of `orleans.lattice.wal.replay.permit_adaptations` are primed at zero when the gate is sized, so a flat zero is a measured zero rather than an absent series; the withheld arm additionally carries a `trigger` tag (`occupancy` or `fault`) naming which of the two mechanisms above withheld the permit, and each trigger value is primed separately (issue #2883). The counters are monotonic totals, so neither of them - nor their difference across two scrapes - can express what a process restart destroyed: the adaptation is held entirely in process memory, and a silo that dies at a withheld level of five starts again at zero with nothing in either series marking the discontinuity. `orleans.lattice.wal.replay.permits_withheld` is an observable gauge of that live level, published so the boundary is visible where a delta over the counters cannot show it (issue #2784). It is not a substitute for the counters: being sampled, a withhold and its restore that both fall between two scrapes leave it unchanged while the counters record both.
+Set to a positive value to pin the ceiling explicitly; an explicit value supersedes both figures. Must be `>= 0`; the validator rejects negative values.
+
+**This ceiling is one of two factors (issue #2867).** Peak replay memory is the **product** of how many replays run concurrently and how much each one buffers, and the paragraph above is careful about the first while being silent about the second - which is how the ceiling came to be treated as *the* control. It is not. The per-replay factor is the slice width the replay reads the commit log in, and it is settable in its own right as [`WalReplaySliceBudget`](#walreplayslicebudget) (issue #2898). Until that option existed the width was a private constant with no option, no environment variable and no overlay entry behind it, so lowering peak memory by lowering the width was not something configuration could express. Both terms of the product are now settable.
+
+That matters because both ends of the one dial you do have are failure modes, so there is not always a setting that works. Set the ceiling too high and the concurrent whole-window buffers sum past the managed heap hard limit, an `OutOfMemoryException` cancels the activation, and the replay banks nothing. Set it too low and cold leaves queue for a permit past the request timeout, the runtime cancels the activation, and the replay again banks nothing. Either way no snapshot is banked, the durable materialiser pin stays unusable, and WAL garbage collection reports `blocked` - so the next replay window is larger than the one that just failed.
+
+The configured width is a starting point, not a floor: a replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742), a reactive, per-replay, per-activation adaptation that widens back towards the configured width on success and starts afresh at it on the next activation. Setting the option lowers the ceiling that adaptation works down from; it does not disable it. Whether it is engaging at all is visible in `orleans.lattice.wal.replay.slice_narrowings`, tagged by tree and partition and primed at zero, which is the instrument to read before concluding that a memory-pressure failure was caused by the slice width - a flat zero alongside climbing activation failures means the failing allocation was somewhere else and the width is not the lever. See [Metrics](metrics.md).
+
+The narrowing reached only the **activation-time** replay when it was introduced. Two further replay sites - the snapshot-cursor rebuild and the frozen-baseline tail fold - kept a constant of the same name and the same value and passed it straight through, so for a period the recovery path was the one without the resilience, and every check that compared the two *values* passed while the *behaviour* had diverged. All three sites now read through one shared reader that owns the width, the retry, the widening and the counter's priming together (issue #2899), and all three honour this option.
 
 ### `WalReplayMaxRecordsPerTurn`
 
-Number of WAL records a single activation-time replay projects before yielding the Orleans turn cooperatively (`await Task.Yield()`), so a long replay does not monopolise the activation's turn and starve other grain calls on the same activation (default: 256). This is distinct from the cross-RPC `ReplaySliceBudget` slicing; it bounds the synchronous run length **within** a single replay turn.
+Number of WAL records a single activation-time replay projects before yielding the Orleans turn cooperatively (`await Task.Yield()`), so a long replay does not monopolise the activation's turn and starve other grain calls on the same activation (default: 256). This is distinct from the cross-RPC slice width, [`WalReplaySliceBudget`](#walreplayslicebudget), which bounds how many entries a single slice read returns; this option bounds the synchronous run length **within** a single replay turn. They default to the same number and mean different things.
 
 Set to `0` to disable the cooperative yield so replay runs to completion without voluntarily yielding (the historical shape). Must be `>= 0`; the validator rejects negative values.
+
+### `WalReplaySliceBudget`
+
+Number of WAL entries a single replay requests per commit-log slice read, and the
+width it widens back towards after a memory-pressure narrowing (default: 256).
+
+**This is the second of the two factors that set peak replay memory (issue
+#2898).** Peak draw is the *product* of how many replays run at once and how much
+each one buffers; the first factor is
+[`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) and
+this is the second. Lowering it trades round trips for a smaller resident slice on
+a host that cannot afford the default width.
+
+Do not confuse it with
+[`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn), which defaults to the
+same number. That option bounds how many records a replay applies **within** one
+scheduler turn before yielding cooperatively, and so governs silo responsiveness.
+This one bounds how many entries a single cross-RPC slice read **returns**, and so
+governs allocation. Changing one does not change the other.
+
+The value is the *starting* width, not a floor. A read refused for memory pressure
+is retried at a quarter of the current width, floored at a single entry, and widens
+back towards this value on success - so configuring it lowers the ceiling the
+replay works down from rather than disabling the adaptation. Whether the adaptation
+is engaging is visible in `orleans.lattice.wal.replay.slice_narrowings`; see
+[Metrics](metrics.md).
+
+All three replay sites honour it: the activation-time replay, the snapshot-cursor
+rebuild, and the frozen-baseline tail fold.
+
+Must be `>= 1`; the validator rejects zero and negative values, because a single
+entry is the narrowest legal read and a width of zero would request nothing and
+never advance.
 
 ### `WalGcInterval`
 
@@ -1543,7 +1611,16 @@ Floor of the WAL garbage collector's per-tree adaptive cadence band (default: 30
 
 The scheduler tracks a cadence per registered tree. A pass that reclaims at least one entry sets that tree's next interval to this floor; a pass that reclaims nothing, or throws, doubles it geometrically up to the ceiling. A tree with a growing log is therefore collected every 30 seconds while it has work to do, and a quiet tree relaxes back to the hourly ceiling. The `orleans.lattice.wal.gc.interval` histogram publishes the cadence chosen for each tree, so a series pinned at the floor means a log that is still growing.
 
-**Cost:** a pass on a tree with a backlog is exactly the pass that would have run later anyway; the adaptivity moves the work earlier rather than adding it. A tree with nothing to reclaim relaxes off the floor within a few passes.
+A **blocked** tree is the exception, and is also held at this floor. A pass that reclaimed nothing because an unusable durable leaf-materialiser pin disabled the consumer-cursor branch (`outcome="blocked"` on `orleans.lattice.wal.gc.passes`) is not a quiet tree: it cannot reclaim at all, and its WAL grows without bound. Backing it off would give it the fewest passes precisely when it needs the most, and because the same observation drove both the label and the cadence, the backoff was previously self-reinforcing - being unable to reclaim was itself the evidence used to decide to look less often (issue #2702). Holding it at the floor also bounds recovery: whatever repairs the pin, the stranded bytes do not return until a pass runs and trims them, so this floor is the time-to-reclaim after a repair. The floor introduces no new load level, because a reclaiming tree already runs at it indefinitely, and it is not a latch - a tree that stops being blocked relaxes exactly like any other quiet tree.
+
+**Cost:** a pass on a tree with a backlog is exactly the pass that would have run later anyway; the adaptivity moves the work earlier rather than adding it. A tree with nothing to reclaim relaxes off the floor within a few passes. A tree that is blocked and cannot recover polls at the floor indefinitely; that is the alarm state, and its cost is bounded by the floor while the unbounded WAL growth it signals is not.
+
+**Separately from the per-tree cadence, the scheduler runs two silo-wide ladders**, for the two conditions in which a pass has no per-tree cadence to set at all. Both start at this floor and double geometrically, and both are published as `orleans.lattice.wal.gc.scheduler_backoff`, tagged `cause`.
+
+- **`cause="empty"`** - the tree registry was read successfully and holds no collectable tree. That is a correct observation of an idle silo rather than a fault, so this ladder relaxes all the way to [`WalGcInterval`](#walgcinterval): an empty host costs nothing, while one whose first tree is about to register still picks it up promptly.
+- **`cause="faulted"`** - the registry could not be read at all. This ladder is capped far lower, at five minutes clamped into `[WalGcMinInterval, WalGcInterval]`, because the wait a faulted pass picks **is the operator's blindness window**: the scheduler has learned nothing, so it cannot notice the fault clearing until it next tries. Sharing the quiet ceiling made that window up to a full `WalGcInterval` - an hour at stock defaults - during which a silo that had already recovered was indistinguishable from one that was dead (issue #3064). The cap bounds recovery without retrying hard: the enumeration that failed is a full key-range scan across every registry shard, so retrying it at the floor forever is how a transient fault becomes a storm.
+
+Either ladder resets to the floor on the next pass that finds work, and the **faulted** ladder additionally resets on any pass whose enumeration merely succeeded - including one that found nothing. A registry that answered "nothing here" has proved it can be read, which is the only thing that ladder measures. Pair the backoff series with `orleans.lattice.wal.gc.scheduler_consecutive_faults`, which reports the current fault streak and returns to a measured zero on the first success.
 
 **When off:** a non-positive value, **or any value above `WalGcInterval`**, collapses the band to `WalGcInterval`, which reproduces the historical fixed-interval tick exactly. Both spellings are honoured; neither is a validation error.
 

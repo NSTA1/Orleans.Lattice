@@ -414,7 +414,7 @@ the first is fatal:
    `orleans.lattice.leaf.activation_replays_over_budget` counter are
    emitted at that exact count, not at the candidate. Also skipped for
    the -1 sentinel: a fresh leaf has nothing in cache to recover.
-   The per-slice `ReplaySliceBudget` still bounds individual
+   The per-slice `WalReplaySliceBudget` still bounds individual
    coordinator reads on this path.
 3. **Cold past retention.** The persisted projection age exceeds
    `LatticeOptions.LeafProjectionRetention` (default 7 days). Also a

@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Serialization;
 
@@ -135,6 +137,79 @@ public sealed class RepoContextStoreRemovalTests
         var repos = await store.ListReposAsync(Ct);
         Assert.That(repos.Repos.Select(r => r.RepoId), Does.Contain("acme-tools"));
         Assert.That(repos.Repos.Select(r => r.RepoId), Does.Not.Contain("acme"));
+    }
+
+    /// <summary>
+    /// Teardown must reach the approximate-index build coordinator - the fourth
+    /// reminder-anchored writer for a repository, and the one the shared
+    /// cancel/drain/clear preamble did not cover.
+    /// <para>
+    /// The other three (the index runner, the job grain, and the self-index grain)
+    /// were already stopped. The build coordinator was not, so a removed repository
+    /// left a durable keep-alive registered for a build over records that were
+    /// about to be deleted: it reactivates on that reminder after every restart and
+    /// re-opens the index into the process, and it is a live writer racing the
+    /// range-delete - which is precisely the state the runner drain exists to
+    /// prevent for the other three.
+    /// </para>
+    /// <para>
+    /// The scheduler is substituted over its own grain factory rather than the
+    /// harness's, so the coordinator call is observable without displacing the real
+    /// trees the removal actually sweeps.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task RemoveRepoAsync_stops_the_approximate_index_build_coordinator()
+    {
+        var coordinator = Substitute.For<IRepoContextAnnIndexBuildGrain>();
+        var probeFactory = Substitute.For<IGrainFactory>();
+        probeFactory
+            .GetGrain<IRepoContextAnnIndexBuildGrain>(Arg.Any<string>())
+            .Returns(coordinator);
+
+        var scheduler = new RepoContextAnnIndexScheduler(
+            probeFactory,
+            new RepoContextIndexingOptions(),
+            NullLogger<RepoContextAnnIndexScheduler>.Instance,
+            SpaceOnlyEmbedder.Instance);
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+
+                // The package registers its own scheduler with TryAddSingleton and
+                // this hook runs first, so this registration is the one the store
+                // resolves.
+                ConfigureServices = services => services.AddSingleton(scheduler),
+            },
+            Ct);
+
+        await SeedFullRepoAsync(harness, "acme", Ct);
+        await Store(harness).RemoveRepoAsync("acme", Ct);
+
+        await coordinator.Received(1).StopAsync();
+    }
+
+    /// <summary>
+    /// A minimal embedding provider that advertises a space and nothing else. The
+    /// scheduler only ever reads <see cref="IEmbeddingProvider.Space"/>, which it
+    /// needs because the coordinator key embeds the space fingerprint.
+    /// </summary>
+    private sealed class SpaceOnlyEmbedder : IEmbeddingProvider
+    {
+        public static SpaceOnlyEmbedder Instance { get; } = new();
+
+        public EmbeddingSpace Space { get; } = new("test-model", 8, normalized: true);
+
+        public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<EmbeddingResult> EmbedAsync(
+            IReadOnlyList<string> texts,
+            EmbeddingTextType textType,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("The scheduler never embeds.");
     }
 
     [Test]

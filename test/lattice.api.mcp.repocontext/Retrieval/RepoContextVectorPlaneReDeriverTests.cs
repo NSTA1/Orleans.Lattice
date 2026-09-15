@@ -25,12 +25,28 @@ public sealed class RepoContextVectorPlaneReDeriverTests
         => new($"leaf projection for tree '{treeId}' has fallen off the write-ahead log");
 
     private static (RepoContextVectorPlaneReDeriver ReDeriver, IGrainFactory Factory, CapturingLoggerProvider Log) Build()
+        => Build(new TestClock());
+
+    private static (RepoContextVectorPlaneReDeriver ReDeriver, IGrainFactory Factory, CapturingLoggerProvider Log) Build(
+        TestClock clock)
     {
         var factory = Substitute.For<IGrainFactory>();
         var log = new CapturingLoggerProvider();
         using var loggerFactory = LoggerFactory.Create(b => b.AddProvider(log));
         var logger = loggerFactory.CreateLogger<RepoContextVectorPlaneReDeriver>();
-        return (new RepoContextVectorPlaneReDeriver(factory, logger), factory, log);
+        return (new RepoContextVectorPlaneReDeriver(factory, logger, clock), factory, log);
+    }
+
+    /// <summary>
+    /// A controllable clock, so a test that needs a second reset attempt can cross
+    /// the re-deriver's post-failure backoff window deterministically instead of
+    /// waiting on it.
+    /// </summary>
+    private sealed class TestClock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = DateTimeOffset.UnixEpoch;
+
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private sealed record Measurement(long Value, string? Tree, string? Outcome);
@@ -420,7 +436,8 @@ public sealed class RepoContextVectorPlaneReDeriverTests
     [Test]
     public async Task ObserveAndReDeriveAsync_a_failed_delete_meters_failed_and_clears_the_in_flight_signal()
     {
-        var (reDeriver, factory, log) = Build();
+        var clock = new TestClock();
+        var (reDeriver, factory, log) = Build(clock);
         using (reDeriver)
         {
             var tree = Substitute.For<ILattice>();
@@ -450,7 +467,11 @@ public sealed class RepoContextVectorPlaneReDeriverTests
             });
 
             // The in-flight signal is cleared on completion, so a fresh fall-off starts
-            // a new reset rather than being permanently suppressed.
+            // a new reset rather than being permanently suppressed. The failed reset
+            // arms a bounded backoff (issue #2737), so cross it before re-observing:
+            // the claim under test is that the reset is retried at all, not that it is
+            // retried on the observation cadence.
+            clock.Now += RepoContextVectorPlaneReDeriver.TransientBackoffBase + TimeSpan.FromSeconds(1);
             await reDeriver.ObserveAndReDeriveAsync(
                 RepoContextTrees.VectorMetadata, Stale(RepoContextTrees.VectorMetadata), Ct);
 

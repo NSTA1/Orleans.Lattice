@@ -72,12 +72,70 @@ public static class RepoContextEffectiveConfiguration
     public const string RuntimeProcessorCountKey = "Environment.ProcessorCount";
 
     /// <summary>
+    /// States the boundary this report speaks inside, so that a setting it does not name
+    /// is read as out of scope rather than as unset.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists (issue #2470).</b> The report enumerates settings resolved from
+    /// the process environment. It never said so, and an enumeration that does not state
+    /// its scope is read as exhaustive - which is precisely the trust the surrounding
+    /// prose invites. An operator checking whether a value was applied, finding no line for
+    /// it, and concluding it was unset would be wrong in the one direction that matters:
+    /// the setting may be configured, applied, and steering the runtime, through a channel
+    /// this report cannot see.
+    /// </para>
+    /// <para>
+    /// The omission is worst for the settings nobody thought to look for, because those are
+    /// the ones an operator relies on the enumeration to have covered. Absence is only
+    /// evidence of absence once the boundary containing it is written down.
+    /// </para>
+    /// </remarks>
+    public const string ScopeStatement =
+        "SCOPE: this report covers settings resolved from the process environment (the "
+        + "LATTICE_ variables listed above, plus the DOTNET_ garbage-collector variables) "
+        + "and the runtime facts stated as such: Environment.ProcessorCount and the "
+        + "collector's resolved mode, heap count, memory ceiling and pause total. It does "
+        + "NOT cover LatticeOptions configured in code through ConfigureLattice - "
+        + "WalRetention among them - nor any value supplied through a channel other than "
+        + "the process environment. A setting absent from this report is a setting outside "
+        + "its scope, not a setting proven unset.";
+
+    /// <summary>Rendered in place of the value of a variable matched only by prefix.</summary>
+    public const string PrefixMatchedMarker = "<withheld: matched by prefix only>";
+
+    /// <summary>
+    /// Appended to a value that was supplied to this process.
+    /// </summary>
+    public const string DeclaredMarker = "(DECLARED)";
+
+    /// <summary>
+    /// Appended to a value nothing supplied, so that it cannot be read as a declared one.
+    /// </summary>
+    /// <remarks>
+    /// The whole of issue #2586 is that this marker was absent: a live container reported
+    /// <c>LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD = 120s</c> for a variable that was not set
+    /// anywhere, in the same shape it would have reported a declared one, seconds after
+    /// warning that the variable was unset.
+    /// </remarks>
+    public const string DefaultedMarker = "(DEFAULTED, not declared)";
+
+    /// <summary>
+    /// Appended to a reported fact about the runtime, which is not a setting and therefore
+    /// neither declared nor defaulted.
+    /// </summary>
+    public const string RuntimeMarker = "(RUNTIME FACT, not a declared setting)";
+
+    /// <summary>
     /// The keys whose resolved values may be written to the log. This is an
     /// <b>allowlist</b>: a key absent from it is redacted, including a key that does not
     /// exist yet. Add a key here only after deciding its value is not credential-bearing.
     /// </summary>
-    public static readonly IReadOnlySet<string> SafeToPrintKeys =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    public static readonly IReadOnlySet<string> SafeToPrintKeys = BuildSafeToPrintKeys();
+
+    private static IReadOnlySet<string> BuildSafeToPrintKeys()
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             RepoContextHostConfiguration.DurabilityKey,
             RepoContextHostConfiguration.WalProviderKey,
@@ -98,13 +156,53 @@ public static class RepoContextEffectiveConfiguration
             RepoContextPinBucketing.PinBucketsKey,
             RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
             RepoContextClaimLeases.MaxLockLeaseSecondsKey,
+            RepoContextShutdownBudget.StopGracePeriodKey,
 
             // Not a LATTICE_ key, and deliberately reported anyway: it is the value that
             // sized the oversubscribed WAL replay gate in issue #2279, and a report scoped
             // to this project's own prefix would have missed the most damaging setting in
             // the deployment.
             RuntimeProcessorCountKey,
+
+            // The collector's own settings and resolved facts (issue #2596), classified for
+            // the same reason and on the same evidence: a report scoped to this project's
+            // prefix missed the setting that suspended the whole process for 252 seconds at
+            // a time. None is credential-bearing - two are a boolean and a small integer,
+            // and the rest are figures the runtime reports about itself.
+            RepoContextGarbageCollection.ServerGcKey,
+            RepoContextGarbageCollection.HeapCountKey,
+            RepoContextGarbageCollection.RuntimeModeKey,
+            RepoContextGarbageCollection.RuntimeHeapCountKey,
+            RepoContextGarbageCollection.RuntimeMemoryLimitKey,
+            RepoContextGarbageCollection.RuntimePauseTotalKey,
         };
+
+        // The memory-backup wiring's own settings (issue #2602). Every one is a
+        // cadence, a count, or a container name. The blob connection string is
+        // deliberately NOT among them: it carries an account key, so it stays
+        // unclassified and is therefore withheld by the allowlist.
+        foreach (var key in RepoContextBackup.SafeToPrintKeys)
+        {
+            keys.Add(key);
+        }
+
+        // The repository-context package's own settings. Every one is a cadence, a count,
+        // an enum, or a path to a directory this host writes to - none is
+        // credential-bearing, so each is classified deliberately rather than by inheriting
+        // the classification of its neighbours. That includes the memory-archive keys
+        // (issue #2601): three are a cadence, a budget and an enum, and the fourth is the
+        // archive directory, which an operator must be able to see in full because a value
+        // pointing inside the data volume protects nothing. The per-repository git
+        // settings, which DO include tokens, are NOT added: they are a prefix family that
+        // is never described individually, so they stay unclassified and therefore
+        // withheld.
+        foreach (var key in RepoContextEnvironmentVariables.All)
+        {
+            keys.Add(key);
+        }
+
+        return keys;
+    }
 
     /// <summary>
     /// Determines whether a key's resolved value may be printed.
@@ -141,22 +239,85 @@ public static class RepoContextEffectiveConfiguration
     }
 
     /// <summary>
-    /// Renders one setting as <c>NAME = value</c>, appending an <c>[OVERRIDDEN]</c> marker
-    /// and the default it departed from when the resolved value differs from the one this
-    /// host reaches with nothing supplied.
+    /// Classifies a raw supplied value as declared or defaulted.
     /// </summary>
+    /// <remarks>
+    /// Whitespace counts as absent, matching
+    /// <see cref="RepoContextShutdownBudget.Resolve"/>, so that this report cannot call a
+    /// value declared that the code resolving it treated as missing. A provenance marker
+    /// derived from a different emptiness rule than the resolution it describes would be
+    /// the same defect it exists to remove, one level down.
+    /// </remarks>
+    /// <param name="raw">The raw value as supplied, or null when nothing was supplied.</param>
+    /// <returns>The provenance the raw value implies.</returns>
+    public static RepoContextSettingProvenance ProvenanceOf(string? raw)
+        => string.IsNullOrWhiteSpace(raw)
+            ? RepoContextSettingProvenance.Defaulted
+            : RepoContextSettingProvenance.Declared;
+
+    /// <summary>
+    /// Renders the marker that qualifies a value's origin.
+    /// </summary>
+    /// <param name="provenance">Where the value came from.</param>
+    /// <returns>The marker text.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The provenance is not one this renderer knows. Refused rather than rendered as an
+    /// empty string, because an unrecognised provenance silently producing no marker is
+    /// precisely the unqualified line issue #2586 was filed about.
+    /// </exception>
+    public static string RenderProvenance(RepoContextSettingProvenance provenance)
+        => provenance switch
+        {
+            RepoContextSettingProvenance.Declared => DeclaredMarker,
+            RepoContextSettingProvenance.Defaulted => DefaultedMarker,
+            RepoContextSettingProvenance.Runtime => RuntimeMarker,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(provenance),
+                provenance,
+                "Every reported value must carry a provenance marker; an unknown provenance "
+                + "cannot be rendered as silence, because silence is the shape that reads as "
+                + "declared."),
+        };
+
+    /// <summary>
+    /// Renders one setting as <c>NAME = value (PROVENANCE)</c>, appending an
+    /// <c>[OVERRIDDEN]</c> marker and the default it departed from when the resolved value
+    /// differs from the one this host reaches with nothing supplied.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The provenance marker is required, not optional (issue #2586).</b> An overload
+    /// that omitted it would leave the unqualified line reachable, and the unqualified
+    /// line is the defect: a value nothing declared printed in the shape of one somebody
+    /// did. It sits on the same line as the value because a reader who greps for the
+    /// variable name has to receive the qualification in the same result.
+    /// </para>
+    /// <para>
+    /// <b>Provenance and <c>[OVERRIDDEN]</c> are orthogonal and both are printed.</b>
+    /// <c>[OVERRIDDEN]</c> compares values and answers <i>did this move?</i>; provenance
+    /// answers <i>did anybody set it?</i>. A key nothing declared can still resolve away
+    /// from the pristine default because a neighbouring key moved it, and a key an
+    /// operator declared can resolve to exactly the default - which is the case that
+    /// produced this issue. Neither marker implies the other.
+    /// </para>
+    /// </remarks>
     /// <param name="name">The setting name.</param>
     /// <param name="resolved">The value this host actually resolved.</param>
     /// <param name="default">The value this host resolves when nothing is supplied.</param>
+    /// <param name="provenance">Where the resolved value came from.</param>
     /// <returns>The rendered line.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
-    public static string DescribeSetting(string name, string? resolved, string? @default)
+    public static string DescribeSetting(
+        string name,
+        string? resolved,
+        string? @default,
+        RepoContextSettingProvenance provenance)
     {
         ArgumentNullException.ThrowIfNull(name);
 
         var line = string.Create(
             CultureInfo.InvariantCulture,
-            $"{name} = {RenderValue(name, resolved)}");
+            $"{name} = {RenderValue(name, resolved)} {RenderProvenance(provenance)}");
 
         return string.Equals(resolved, @default, StringComparison.Ordinal)
             ? line
@@ -178,29 +339,126 @@ public static class RepoContextEffectiveConfiguration
     public static IReadOnlyList<string> DescribeUnreadVariables(
         IEnumerable<KeyValuePair<string, string?>> environment,
         IEnumerable<string> knownKeys)
+        => DescribeUnreadVariables(environment, knownKeys, []);
+
+    /// <summary>
+    /// Finds <c>LATTICE_</c> variables that were supplied to the process but that this host
+    /// does not read, ignoring any variable that belongs to one of
+    /// <paramref name="knownPrefixes"/>.
+    /// </summary>
+    /// <remarks>
+    /// The prefixes exist because some variables carry a repository id in the middle of
+    /// their name, so their full names are not knowable until run time and no exact-match
+    /// set can cover them. Without this, every correctly-supplied member of such a family
+    /// would be reported <c>[SUPPLIED BUT NOT READ BY THIS HOST]</c> - the same false
+    /// negative issue #2460 was filed about, one level down. Prefix-matched variables are
+    /// not silently dropped either; see <see cref="DescribePrefixMatchedVariables"/>.
+    /// </remarks>
+    /// <param name="environment">The process environment snapshot.</param>
+    /// <param name="knownKeys">Every exactly-named key this host resolves.</param>
+    /// <param name="knownPrefixes">Every prefix under which this host resolves a family.</param>
+    /// <returns>The rendered lines, empty when every supplied variable is read.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static IReadOnlyList<string> DescribeUnreadVariables(
+        IEnumerable<KeyValuePair<string, string?>> environment,
+        IEnumerable<string> knownKeys,
+        IEnumerable<string> knownPrefixes)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(knownKeys);
+        ArgumentNullException.ThrowIfNull(knownPrefixes);
 
         var known = new HashSet<string>(knownKeys, StringComparer.OrdinalIgnoreCase);
+        var prefixes = knownPrefixes.ToArray();
         var lines = new List<string>();
 
         foreach (var (name, _) in environment)
         {
             if (name is null
                 || !name.StartsWith(LatticePrefix, StringComparison.OrdinalIgnoreCase)
-                || known.Contains(name))
+                || known.Contains(name)
+                || MatchesPrefix(name, prefixes))
             {
                 continue;
             }
 
             lines.Add(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{name} = {UnclassifiedMarker} [SUPPLIED BUT NOT READ BY THIS HOST]"));
+                $"{name} = {UnclassifiedMarker} {DeclaredMarker} [SUPPLIED BUT NOT READ BY THIS HOST]"));
         }
 
         lines.Sort(StringComparer.Ordinal);
         return lines;
+    }
+
+    /// <summary>
+    /// Finds supplied variables that this host recognises only by prefix, and reports them
+    /// as such.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reported rather than dropped, because prefix membership is a weaker claim than
+    /// name-for-name recognition. This host knows the family is read; it does not know
+    /// that this particular member names a setting anything binds, so a typo inside a
+    /// recognised family is indistinguishable from a correct member. Counting such a
+    /// variable as read would trade one unsupported claim for another, which is the defect
+    /// issue #2460 records rather than a fix for it.
+    /// </para>
+    /// <para>
+    /// Values are always withheld here. A member of the git-source family may be a
+    /// personal access token, and the allowlist that would otherwise decide cannot classify
+    /// a name it has never seen - so this path never consults it and never prints a value.
+    /// </para>
+    /// </remarks>
+    /// <param name="environment">The process environment snapshot.</param>
+    /// <param name="knownKeys">Every exactly-named key this host resolves.</param>
+    /// <param name="knownPrefixes">Every prefix under which this host resolves a family.</param>
+    /// <returns>The rendered lines, empty when nothing matched a prefix only.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static IReadOnlyList<string> DescribePrefixMatchedVariables(
+        IEnumerable<KeyValuePair<string, string?>> environment,
+        IEnumerable<string> knownKeys,
+        IEnumerable<string> knownPrefixes)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(knownKeys);
+        ArgumentNullException.ThrowIfNull(knownPrefixes);
+
+        var known = new HashSet<string>(knownKeys, StringComparer.OrdinalIgnoreCase);
+        var prefixes = knownPrefixes.ToArray();
+        var lines = new List<string>();
+
+        foreach (var (name, _) in environment)
+        {
+            if (name is null || known.Contains(name) || !MatchesPrefix(name, prefixes))
+            {
+                continue;
+            }
+
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{name} = {PrefixMatchedMarker} {DeclaredMarker} [MATCHED BY A PREFIX THIS HOST READS, NOT VERIFIED INDIVIDUALLY]"));
+        }
+
+        lines.Sort(StringComparer.Ordinal);
+        return lines;
+    }
+
+    private static bool MatchesPrefix(string name, IReadOnlyList<string> prefixes)
+    {
+        foreach (var prefix in prefixes)
+        {
+            // The name must be longer than the prefix: a variable equal to the prefix is
+            // not a member of the family, and admitting it would let a bare prefix
+            // masquerade as a recognised setting.
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && name.Length > prefix.Length)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -79,7 +79,6 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.provider.retry.exhausted",
         "orleans.lattice.saga.fanout.size",
         "orleans.lattice.saga.perkey.duration",
-        "orleans.lattice.saga.wait.serial_gap",
         // c2-xv routing memo: per-phase attribution inside the saga.
         // Sums to approximately the end-to-end SetManyAtomicAsync p50
         // (residue is the saga-checkpoint persists and grain-RPC

@@ -244,8 +244,8 @@ no duplicates, no gaps, original ordering preserved.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
-| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility and reconnect guarantees as `ScanKeysAsync`. |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`) and, capped at `LatticeExtensions.DefaultScanStallResumeAttempts = 2`, its budget for resuming a `ScanPageStalledException`; `maxAttempts: 0` disables both. A stalled scan resumes from its last yielded key and refuses to resume when it has not advanced since the previous stall, so it either yields the full range or rethrows the stall - it never returns a short prefix as though the range were complete. A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility, reconnect, and stall-resume guarantees as `ScanKeysAsync`. |
 | `DeleteRangeAsync` | `Task<long> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize = 256, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
 
 Prefer the resilient `DeleteRangeAsync` drain helper over an
@@ -920,6 +920,49 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 
 `Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
+### Reading an empty range read under a gate
+
+A denied **point** read throws. A denied **range** read does not: it resolves to a
+reject-all key filter and returns a clean, successful, **empty** result. So
+`KeysAsync`, `EntriesAsync`, their predicate overloads, both `CountAsync`
+overloads, and the snapshot cursors all report "you may not look here" and "there
+is nothing here" identically - no exception, no log, every instrument healthy.
+
+That is deliberate. A denied scan stays cheap and non-fatal, and making it throw
+would break every existing caller. The cost is that **emptiness alone is
+uninterpretable under a gate**, so a caller that draws a conclusion from an empty
+range read must confirm the range was actually readable:
+
+```csharp verify
+static async Task<bool> RangeIsGenuinelyEmptyAsync(
+    ILattice tree, string startInclusive, string endExclusive, CancellationToken ct)
+{
+    await foreach (var key in tree.KeysAsync(startInclusive, endExclusive, cancellationToken: ct))
+    {
+        return false; // Not empty at all.
+    }
+
+    // Empty. Ask whether that is a fact about the store or about authorization.
+    var coverage = await tree.GetRangeReadGateCoverageAsync(startInclusive, endExclusive, ct);
+    return coverage == LatticeRangeReadGateCoverage.Unrestricted;
+}
+```
+
+`GetRangeReadGateCoverageAsync` reports `Unrestricted`, `Filtered`, or `Denied`.
+Only `Unrestricted` licenses reading emptiness as absence: under `Filtered` an
+unknown subset of keys is withheld, and under `Denied` every key is. It is a
+coverage classification and never names the withheld keys, for the same reason
+`GatedMultiReadResult.PrunedByAccessGate` is a count - identities would make any
+range read an authorization oracle.
+
+Call it **only when a range read came back empty** and you are about to act on
+that emptiness. The scan hot path pays nothing.
+
+A background component is the classic victim, because its turn carries no caller
+credential at all: under a fail-closed gate every one of its scans returns empty,
+so it concludes the store is empty and does nothing, forever, with a healthy log
+at every layer. If a component reads on a background turn, give it a credential
+(see the trusted system-origin scope below) rather than relying on this check.
 ### Trusted system-origin scope
 
 A co-hosted infrastructure extension that must run a trusted, gate-bypassing
@@ -1649,6 +1692,7 @@ constraints, and per-tree overrides via the
 | `WalFlushPreflightTimeout` | `TimeSpan` | 5 s | Hard ceiling on the per-shard WAL `FlushAsync` preflight region (the synchronous setup and initial scheduler yield that precede the bounded provider call). If the activation's grain scheduler never resumes the post-yield continuation within the deadline, the slot would sit in `_inFlight` with no provider-call deadline armed (`WalFlushTimeout` only covers the provider call, which has not been issued yet). The faulted preflight surfaces as a `TimeoutException` routed through the normal failure handler, the slot drains, and the `orleans.lattice.wal.flush.preflight.timeouts` counter attributes the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalAppendDispatchTimeout` | `TimeSpan` | 30 s | Hard ceiling on a single writer-side outbound WAL shard append-batch / append dispatch. A dispatch that exceeds it is abandoned and surfaced as a `TimeoutException` so the request pipeline releases its slot rather than back-filling behind a wedged shard until the Orleans response deadline (default 3 minutes). Does **not** fix any wedge mechanism - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge attributable to a specific `(tree, shard)` via the `orleans.lattice.wal.append_dispatch.timeouts` counter in O(timeout) instead of O(response timeout) time. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalDrainBudget` | `TimeSpan` | 75 s | Hard ceiling on how long a per-shard WAL grain's `OnDeactivateAsync` drain may run before the remaining in-flight slots are force-faulted and the chain is released so the activation can finish tearing down. Bounds the host-level SIGTERM drain so the silo's shutdown accounting always settles within bounded time of the SIGTERM, regardless of whether the storage provider is healthy. The drain signals every in-flight flush's linked cancellation token at drain entry (so a co-operative provider gives up promptly), waits for the chain to settle naturally for up to this budget, and then force-faults any slot that has not unlinked with a typed `TimeoutException` so callers parked on `AppendAsync` / `AppendBatchAsync` are released. The matching `orleans.lattice.wal.shard.drain.budget.expirations` counter and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram attribute the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded-drain behaviour. |
+| `StarvationDriveBudget` | `TimeSpan` | 5 min | Hard ceiling on how long a single WAL GC starved-leaf checkpoint drive may run while holding a permit on the per-silo WAL replay concurrency gate, before it abandons its replay and releases that permit (issue #3065). Before this budget existed every await inside the permit-guarded region was passed `CancellationToken.None`, so a drive whose commit-log read never returned held one of a small number of per-silo permits indefinitely and could not be cancelled; the gate drained and the silo presented as an activation outage. A caller-side timeout does not address this - the sweep's grain call already times out at the Orleans response-timeout default while the grain-side method keeps running and keeps holding its permit - so the budget is enforced inside the region, with a real `CancellationTokenSource` for work that honours cancellation and a bound on the drive's own wait for host-supplied storage that does not. The permit is acquired and released in the outer frame so abandonment cannot skip the release. Default is `4 * WalDrainBudget`, comfortably above a legitimately slow full replay. Unlike most timeout options here, **`InfiniteTimeSpan` is rejected** rather than honoured, because an infinite budget restores exactly the outage this option bounds; zero and negative values are rejected too. An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` and returns the `LeafStarvationDriveOutcome.TimedOut` verdict. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. Trimmed by a WAL GC driver: the built-in `WalGcInterval` scheduler (on by default), or the replication maintenance grain for replicated trees. |
 | `WalGcInterval` | `TimeSpan` | 1 hour (enabled) | Cadence at which the per-silo core WAL garbage-collection scheduler runs `ILatticeWalGc.RunOnceAsync` over every registered tree, so a durable-WAL host gets bounded WAL retention without the replication package and for non-replicated trees. Default-on (hourly) makes `WalRetention` effective out of the box; a pass is retention housekeeping, so the coarse default keeps the storage cost low (cost scales with `trees x WalPartitions` per silo). Composes with the replication maintenance grain - `RunOnceAsync` and the underlying WAL `TrimAsync` are idempotent, and the pass honours the minimum consumer cursor and leaf-materialiser checkpoint floor, so it never over-trims. Global knob read from the default (unnamed) options; per-tree overrides do not apply. `TimeSpan.Zero` or a negative value disables the scheduler. |
 | `WalMaxRetainedBytes` | `long?` | `null` | Optional advisory ceiling on retained WAL bytes per tree. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (`BytePressureTriggered`), and `BytePressureOverThreshold` reports whether the tree is still over after the trim. Advisory only - the GC never trims past the safe frontier to honour it. `null` disables the policy. |

@@ -70,12 +70,14 @@ public sealed partial class DurableVectorIndex
     private long _generation;
     private long _centroidEpoch;
     private bool _centroidsPersisted;
-    private int _persistedPartitions;
+    private bool _loaded;    private int _persistedPartitions;
     private VectorIndexBuildPhase _phase;
     private string? _cursor;
     private int _expected;
     private int _updatesSinceTraining;
     private bool _restored;
+    private int _slicesDeadlined;
+    private int _slicesDeadlinedWithoutProgress;
 
     private DurableVectorIndex(
         IVectorIndexStore store,
@@ -131,9 +133,91 @@ public sealed partial class DurableVectorIndex
         }
 
         var index = new DurableVectorIndex(store, source, options.Clone(), loadMode);
-        await index.LoadAsync(cancellationToken).ConfigureAwait(false);
+        await index.LoadOrResumeAsync(cancellationToken).ConfigureAwait(false);
         return index;
     }
+
+    /// <summary>
+    /// Creates the index object without reading anything, so a caller that drives
+    /// the load itself can <b>keep the instance across a load that faults</b> and
+    /// call <see cref="LoadOrResumeAsync"/> again to continue it.
+    /// <para>
+    /// <b>Why this is separate from <see cref="OpenAsync"/>.</b> The factory builds
+    /// into a local and returns only on success, so a faulted load discards the
+    /// partially-built identifier mapping along with the instance holding it. The
+    /// caller then opens again from nothing and reissues the whole O(corpus) walk.
+    /// On a tree whose leaves are slow to activate that regenerates the identical
+    /// demand on every attempt, which is the amplification half of #2953. Splitting
+    /// construction from loading is what lets the progress survive the fault.
+    /// </para>
+    /// <para>
+    /// The index is <b>not usable</b> until a <see cref="LoadOrResumeAsync"/> call
+    /// returns successfully; <see cref="IsLoaded"/> reports when that has happened.
+    /// Prefer <see cref="OpenAsync"/> unless you are implementing the retry.
+    /// </para>
+    /// </summary>
+    /// <param name="store">The durable store the index is persisted on.</param>
+    /// <param name="source">The store of record the index is derived from.</param>
+    /// <param name="options">The index and layout configuration.</param>
+    /// <param name="loadMode">How much of a persisted index to bring into memory.</param>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The options are unusable, or the source's dimensionality contradicts them.</exception>
+    public static DurableVectorIndex CreateUnloaded(
+        IVectorIndexStore store,
+        IVectorSource source,
+        DurableVectorIndexOptions options,
+        VectorIndexLoadMode loadMode = VectorIndexLoadMode.Full)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+
+        if (source.Dimensions != options.Index.Dimensions)
+        {
+            throw new ArgumentException(
+                $"The source supplies {source.Dimensions}-dimensional vectors but the index is configured for {options.Index.Dimensions}.",
+                nameof(source));
+        }
+
+        return new DurableVectorIndex(store, source, options.Clone(), loadMode);
+    }
+
+    /// <summary>
+    /// Runs the durable load, continuing a previous attempt that faulted partway
+    /// rather than starting it again. Returns without doing anything once the load
+    /// has completed, so a caller may call it on every retry tick unconditionally.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the load.</param>
+    public async Task LoadOrResumeAsync(CancellationToken cancellationToken = default)
+    {
+        if (_loaded)
+        {
+            return;
+        }
+
+        await LoadAsync(cancellationToken).ConfigureAwait(false);
+        _loaded = true;
+    }
+
+    /// <summary>
+    /// Whether a load has completed successfully on this instance. False on one
+    /// built by <see cref="CreateUnloaded"/> whose load has not yet finished,
+    /// including one whose load faulted and is waiting to be resumed.
+    /// </summary>
+    public bool IsLoaded => _loaded;
+
+    /// <summary>
+    /// Whether an interrupted load banked progress that a further
+    /// <see cref="LoadOrResumeAsync"/> will continue from rather than re-read.
+    /// <para>
+    /// A resumed load and a restarted one reach the same final state, so this is
+    /// the only witness that the resume happened at all. Reported here so the
+    /// caller that owns the retry can record it, since only the caller knows a
+    /// retry occurred.
+    /// </para>
+    /// </summary>
+    public bool HasBankedLoadProgress => _keys.HasBankedLoadProgress;
 
     /// <summary>The key prefix every durable record of this index sits under.</summary>
     public string KeyPrefix => _prefix;
@@ -186,7 +270,9 @@ public sealed partial class DurableVectorIndex
         _expected,
         _persistedPartitions,
         _index.PartitionCount,
-        _restored);
+        _restored,
+        _slicesDeadlined,
+        _slicesDeadlinedWithoutProgress);
 
     /// <summary>
     /// Searches the resident index, writing hits into the caller's span in
@@ -269,17 +355,16 @@ public sealed partial class DurableVectorIndex
     {
         ArgumentNullException.ThrowIfNull(id);
         RequireMutable();
-
-        // Any mutation the build did not itself apply breaks the assumption that
-        // the ingest cell is an append-only extension of what is committed, so
-        // the next checkpoint rewrites it wholesale instead of appending to a
-        // prefix that has shifted underneath it.
-        _ingestAppendOnly = false;
         _updatesSinceTraining++;
 
-        return _keys.TryGetKey(id, out var key)
-            ? new ValueTask<bool>(_index.Upsert(key, vector.Span))
-            : UpsertNewAsync(id, vector, cancellationToken);
+        if (!_keys.TryGetKey(id, out var key))
+        {
+            return UpsertNewAsync(id, vector, cancellationToken);
+        }
+
+        var replaced = _index.Upsert(key, vector.Span);
+        NoteOutOfBandUpsert(replaced);
+        return new ValueTask<bool>(replaced);
     }
 
     /// <summary>
@@ -300,7 +385,6 @@ public sealed partial class DurableVectorIndex
     {
         ArgumentNullException.ThrowIfNull(id);
         RequireMutable();
-        _ingestAppendOnly = false;
 
         if (!_keys.TryGetKey(id, out var key))
         {
@@ -310,6 +394,16 @@ public sealed partial class DurableVectorIndex
         _updatesSinceTraining++;
         await WriteRetirementAsync(key, cancellationToken).ConfigureAwait(false);
         var removed = _index.Remove(key);
+        if (removed)
+        {
+            // A removal vacates a position and backfills it from the tail, so a
+            // committed chunk that held either of them no longer matches the
+            // cell. Unlike an append, there is no position at which this is
+            // harmless, so the next checkpoint has to rewrite the cell whole.
+            // A removal that found nothing shifted nothing and must not pay it.
+            _ingestAppendOnly = false;
+        }
+
         await _keys.RemoveAsync(id, cancellationToken).ConfigureAwait(false);
         return removed;
     }
@@ -357,7 +451,38 @@ public sealed partial class DurableVectorIndex
         string id, ReadOnlyMemory<float> vector, CancellationToken cancellationToken)
     {
         var key = await _keys.GetOrAddAsync(id, cancellationToken).ConfigureAwait(false);
-        return _index.Upsert(key, vector.Span);
+        var replaced = _index.Upsert(key, vector.Span);
+        NoteOutOfBandUpsert(replaced);
+        return replaced;
+    }
+
+    /// <summary>
+    /// Records whether an upsert the build did not itself apply has cost the
+    /// ingest cell its append-only property.
+    /// <para>
+    /// Only a <b>replacement</b> can. It vacates a position and backfills it from
+    /// the tail, so a committed chunk holding either no longer matches the cell
+    /// and the next checkpoint has to rewrite the cell whole. This is the rule the
+    /// build's own ingest loop already applies to the vectors it streams - a
+    /// replacement is not an append - and it holds just the same for a write that
+    /// arrived from outside the build.
+    /// </para>
+    /// <para>
+    /// A <b>plain append</b> is indistinguishable from one the build would have
+    /// made itself: it lands at the tail and leaves every committed chunk exactly
+    /// as it was. Charging it a rewrite makes the next checkpoint rewrite the
+    /// whole cell, which over a build whose writer hands a batch over once per slice is
+    /// quadratic in corpus size rather than linear. That is the amplification
+    /// behind issue #2691, where one tree reached 25 GB of write-ahead log while
+    /// its largest sibling reached 185 MB.
+    /// </para>
+    /// </summary>
+    private void NoteOutOfBandUpsert(bool replaced)
+    {
+        if (replaced)
+        {
+            _ingestAppendOnly = false;
+        }
     }
 
     private Task WriteRetirementAsync(long key, CancellationToken cancellationToken)

@@ -6,13 +6,27 @@ namespace Orleans.Lattice.Embedding.Onnx;
 /// stack is (no config file, no command line).
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every knob has a working default except the two asset paths, which are baked
 /// into the image by the Dockerfile. Parsing is deliberately lenient: an
 /// unparseable numeric or an unknown provider name falls back to the default
 /// rather than aborting startup, because a model server that refuses to boot is
-/// strictly worse for the caller than one that boots on the CPU. The one
-/// exception is a missing model or vocabulary file, which is fatal - serving
-/// wrong vectors is worse than serving none.
+/// strictly worse for the caller than one that boots on the CPU. A missing model
+/// or vocabulary file is fatal - serving wrong vectors is worse than serving
+/// none.
+/// </para>
+/// <para>
+/// <b><see cref="IntraOpThreadsKey"/> is the second exception, and the boundary
+/// is the whole of it (issue #2887).</b> Leniency is right for a knob whose
+/// misreading costs throughput and announces itself in the startup line. It is
+/// wrong for the one knob that selects an <i>operating mode</i>: an unparseable
+/// value there derives silently, and the resulting deployment is
+/// indistinguishable - from the overlay, from <c>docker inspect</c>, and from
+/// the container's behaviour - from one deliberately left unpinned. A boot
+/// failure costs one deploy cycle; a silent mode change costs an acceptance run
+/// scored against a configuration nobody can vouch for. So that knob refuses,
+/// and every other knob on this type keeps the lenient default.
+/// </para>
 /// </remarks>
 internal sealed record EmbedServerOptions
 {
@@ -28,6 +42,46 @@ internal sealed record EmbedServerOptions
     /// the <c>OnyxEmbeddingOptions</c> default on the client.</summary>
     public const int DefaultMaxContextLength = 512;
 
+    /// <summary>
+    /// The environment variable that declares the intra-op thread count
+    /// explicitly, overriding the derivation from the container CPU grant.
+    /// </summary>
+    public const string IntraOpThreadsKey = "EMBED_INTRA_THREADS";
+
+    /// <summary>
+    /// The value of <see cref="IntraOpThreadsKey"/> that hands the decision back
+    /// to ONNX Runtime. Retained as an explicit escape hatch, but note that it
+    /// is the setting this server stopped defaulting to: ONNX Runtime sizes its
+    /// pool from the host core count and ignores the container CPU quota.
+    /// </summary>
+    public const int LetRuntimeChoose = 0;
+
+    /// <summary>
+    /// The value of <see cref="IntraOpThreadsKey"/> that selects the derivation
+    /// from the container CPU grant deliberately, rather than by omission.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists when omitting the variable already derives (issue
+    /// #2863).</b> The sample deployment's tuning overlay declares this variable
+    /// with a compose presence check, which errors when it is unset or empty but
+    /// <b>cannot inspect the value</b>. So <c>0</c> satisfies that check while
+    /// selecting <see cref="LetRuntimeChoose"/> - the one setting the overlay
+    /// exists to prevent, because ONNX Runtime then sizes its pool from the host
+    /// core count and ignores the CPU quota - and an operator who forgot to
+    /// export the variable looks exactly like one who chose that on purpose.
+    /// </para>
+    /// <para>
+    /// No guard can recover information the encoding destroyed, so the fix is at
+    /// the encoding: the deployment's preflight refuses <c>0</c>, and the
+    /// deliberate case gets its own spelling. The token is honoured <b>here</b>
+    /// because this is the code that reads the variable; a token may only be
+    /// introduced where we own the parser, which is why the overlay's Docker and
+    /// CLR knobs accept none.
+    /// </para>
+    /// </remarks>
+    public const string AutoToken = "auto";
+
     /// <summary>Absolute path to the ONNX model file.</summary>
     public required string ModelPath { get; init; }
 
@@ -41,10 +95,42 @@ internal sealed record EmbedServerOptions
     public int Port { get; init; } = DefaultPort;
 
     /// <summary>
-    /// Intra-op thread count for the CPU provider. Zero lets ONNX Runtime pick,
-    /// which is the right default under a container CPU quota.
+    /// The resolved intra-op thread count for the CPU provider, with its
+    /// provenance.
     /// </summary>
-    public int IntraOpThreads { get; init; }
+    /// <remarks>
+    /// <para>
+    /// This previously defaulted to zero, documented as "zero lets ONNX Runtime
+    /// pick, which is the right default under a container CPU quota". That claim
+    /// was false and was measured to be false (issue #2606). ONNX Runtime sizes
+    /// its intra-op pool from the host core count and does not consult the
+    /// cgroup quota, so under a CPU limit it oversubscribes by the ratio between
+    /// the two.
+    /// </para>
+    /// <para>
+    /// Measured on the gate deployment: a 4.0-CPU grant
+    /// (<c>cpu.max = "400000 100000"</c>) on a 16-core host produced an intra-op
+    /// pool of 16, a 4x oversubscription. The kernel throttled the cgroup in
+    /// <b>296 of 298</b> consecutive scheduling periods, and the pool spent
+    /// 346.3 CPU-seconds stalled against 118.8 CPU-seconds running, a ratio of
+    /// 2.91. That figure is not incidental: 16 threads exhaust a 400ms quota in
+    /// 25ms of wall time and are then frozen for the remaining 75ms, predicting
+    /// 75:25 = 3.0, which the measurement matched within 3%.
+    /// </para>
+    /// <para>
+    /// The cost is worse than proportional because ONNX Runtime synchronises its
+    /// intra-op threads at every operator boundary. A barrier requires every
+    /// thread to be scheduled, so a freeze landing mid-barrier stalls the whole
+    /// operator, and a transformer inference crosses hundreds of barriers.
+    /// </para>
+    /// </remarks>
+    public IntraOpThreadCount IntraOpThreadCount { get; init; }
+
+    /// <summary>
+    /// The intra-op thread count handed to ONNX Runtime. Zero means the runtime
+    /// chooses for itself, which is only safe when no CPU quota is enforced.
+    /// </summary>
+    public int IntraOpThreads => IntraOpThreadCount.Threads;
 
     /// <summary>
     /// The device ordinal for an accelerated provider. Ignored by the CPU
@@ -67,7 +153,9 @@ internal sealed record EmbedServerOptions
     /// <returns>The resolved options.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="read"/> is null.</exception>
     /// <exception cref="InvalidOperationException">A required asset path is
-    /// unset, or points at a file that does not exist.</exception>
+    /// unset, or points at a file that does not exist; or
+    /// <see cref="IntraOpThreadsKey"/> is present but unusable, which is refused
+    /// rather than derived from (issue #2887).</exception>
     public static EmbedServerOptions FromEnvironment(Func<string, string?> read)
     {
         ArgumentNullException.ThrowIfNull(read);
@@ -81,7 +169,8 @@ internal sealed record EmbedServerOptions
             VocabPath = vocabPath,
             Provider = ParseProvider(read("EMBED_PROVIDER")),
             Port = ParsePositiveInt(read("EMBED_PORT"), DefaultPort),
-            IntraOpThreads = ParseNonNegativeInt(read("EMBED_INTRA_THREADS"), 0),
+            IntraOpThreadCount = ResolveIntraOpThreads(
+                read(IntraOpThreadsKey), ContainerCpuGrant.Read(), Environment.ProcessorCount),
             DeviceId = ParseNonNegativeInt(read("EMBED_DEVICE_ID"), 0),
             MaxContextLength = ParsePositiveInt(
                 read("EMBED_MAX_CONTEXT_LENGTH"), DefaultMaxContextLength),
@@ -102,6 +191,147 @@ internal sealed record EmbedServerOptions
             "dml" or "directml" => EmbedExecutionProvider.DirectML,
             _ => EmbedExecutionProvider.Cpu,
         };
+
+    /// <summary>
+    /// Resolves the intra-op thread count, preferring an explicit declaration,
+    /// then the enforced container CPU grant, and only then the process's
+    /// reported processor count.
+    /// </summary>
+    /// <remarks>
+    /// The grant is preferred over <paramref name="processorCount"/> because the
+    /// two can disagree and the grant is the one the kernel enforces.
+    /// <c>DOTNET_PROCESSOR_COUNT</c> overrides
+    /// <see cref="Environment.ProcessorCount"/> and wins over the quota, and the
+    /// sample compose project sets that variable on the sibling
+    /// repository-context service, so a deployment can arrive at a processor
+    /// count that has nothing to do with what this container may actually use.
+    /// Deriving from the quota is immune to that.
+    /// </remarks>
+    /// <param name="declared">The raw <see cref="IntraOpThreadsKey"/> value.</param>
+    /// <param name="containerCpuGrant">The enforced CPU grant, or
+    /// <see langword="null"/> when unlimited or unreadable.</param>
+    /// <param name="processorCount">The process's reported processor count.</param>
+    /// <returns>The resolved count and its provenance.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="declared"/> is present but is neither
+    /// <see cref="AutoToken"/> nor a non-negative integer. It is refused rather
+    /// than derived from, because a derivation reached by accident is
+    /// indistinguishable from one chosen on purpose (issue #2887). The message
+    /// names the variable and the offending value, and the two refusals - a
+    /// value that is not a number at all, and a number that is negative - are
+    /// worded distinctly, because they are different operator mistakes with
+    /// different fixes.
+    /// </exception>
+    public static IntraOpThreadCount ResolveIntraOpThreads(
+        string? declared, int? containerCpuGrant, int processorCount)
+    {
+        var trimmed = (declared ?? string.Empty).Trim();
+
+        if (int.TryParse(
+                trimmed,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed)
+            && parsed >= 0)
+        {
+            return new IntraOpThreadCount(parsed, IntraOpThreadSource.Declared);
+        }
+
+        // Recognised EXPLICITLY rather than left to the fallthrough below, even
+        // though the fallthrough already produces the right number. Naming it
+        // keeps the startup line honest about who chose (issue #2863).
+        var declaredAuto = string.Equals(trimmed, AutoToken, StringComparison.OrdinalIgnoreCase);
+
+        // UNSET and SET-TO-NONSENSE are kept apart here, and that separation is
+        // the point of the change rather than a detail of it. They are different
+        // operator errors with different remedies - one supplied nothing, the
+        // other supplied something that was not understood - and collapsing them
+        // into one outcome is exactly what let a typo become an unannounced mode
+        // change. Only the genuinely-unset case derives; the derived path itself
+        // is unchanged and remains correct (issue #2887).
+        if (!declaredAuto && trimmed.Length > 0)
+        {
+            throw new InvalidOperationException(BuildRefusal(trimmed));
+        }
+
+        return containerCpuGrant is int grant
+            ? new IntraOpThreadCount(
+                Math.Max(1, grant), IntraOpThreadSource.ContainerCpuGrant, declaredAuto)
+            : new IntraOpThreadCount(
+                Math.Max(1, processorCount), IntraOpThreadSource.ProcessorCount, declaredAuto);
+    }
+
+    /// <summary>
+    /// Words the refusal for a present-but-unusable <see cref="IntraOpThreadsKey"/>.
+    /// </summary>
+    /// <remarks>
+    /// A negative integer and a non-numeric token are reported differently on
+    /// purpose. "Not a number" sent to someone who wrote <c>-1</c> is false, and
+    /// "must not be negative" sent to someone who wrote <c>banana</c> is
+    /// baffling; in both cases the operator has to guess which half of the rule
+    /// they broke. The remedy line is shared so the two cannot drift apart.
+    /// </remarks>
+    /// <param name="trimmed">The offending value, already trimmed.</param>
+    /// <returns>The refusal message.</returns>
+    private static string BuildRefusal(string trimmed)
+    {
+        var parsedAsLong = long.TryParse(
+            trimmed,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var wide);
+
+        var complaint = parsedAsLong switch
+        {
+            true when wide < 0 =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is negative. A thread count cannot "
+                    + "be below zero.",
+            true =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is larger than a thread count can "
+                    + $"be (the maximum is {int.MaxValue}).",
+            false =>
+                $"{IntraOpThreadsKey} is set to '{trimmed}', which is not a number.",
+        };
+
+        return complaint
+            + $" Write '{AutoToken}' to size the intra-op pool from the enforced container CPU grant"
+            + $" deliberately, or pin a non-negative integer ('{LetRuntimeChoose}' hands the decision"
+            + " back to ONNX Runtime). Leaving the variable UNSET also derives, and is a different"
+            + " thing from setting it to a value that was not understood - that is why this is"
+            + " refused instead of derived (issue #2887).";
+    }
+
+    /// <summary>
+    /// Describes a disagreement between the enforced CPU grant and the process's
+    /// reported processor count, which means something has overridden the
+    /// latter.
+    /// </summary>
+    /// <remarks>
+    /// This is reported rather than silently resolved because the disagreement
+    /// is itself the interesting fact. A process that believes it has sixteen
+    /// processors while the kernel grants it four will oversubscribe every pool
+    /// sized from the former, not only this one.
+    /// </remarks>
+    /// <param name="containerCpuGrant">The enforced CPU grant, or
+    /// <see langword="null"/> when unlimited or unreadable.</param>
+    /// <param name="processorCount">The process's reported processor count.</param>
+    /// <returns>A warning to log, or <see langword="null"/> when the two agree
+    /// or no grant is enforced.</returns>
+    public static string? DescribeProcessorCountDisagreement(
+        int? containerCpuGrant, int processorCount)
+    {
+        if (containerCpuGrant is not int grant || grant == processorCount)
+        {
+            return null;
+        }
+
+        return $"CPU GRANT MISMATCH: the enforced container CPU grant is {grant} " +
+            $"but Environment.ProcessorCount reports {processorCount}. Something is " +
+            "overriding the processor count (DOTNET_PROCESSOR_COUNT is the usual " +
+            $"cause). {IntraOpThreadsKey} has been derived from the enforced grant, " +
+            "but any other pool sized from the processor count is oversubscribed by " +
+            $"a factor of {(double)processorCount / grant:0.##}.";
+    }
 
     /// <summary>
     /// Resolves the listen port from a raw environment value, falling back to

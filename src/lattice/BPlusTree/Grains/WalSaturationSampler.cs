@@ -532,6 +532,40 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 if (lagTicks > lagThreshold.Ticks)
                 {
                     acc.MaterialiserDrainLagOverThreshold = true;
+
+                    // Decompose the aggregate for this tree only. The drain-lag
+                    // above is a min() across consumers, so it reads identically
+                    // for one dormant consumer and for many genuinely falling
+                    // behind - two conditions with opposite responses (issue
+                    // #2444). Counting the consumers individually past the same
+                    // threshold separates them without putting unbounded consumer
+                    // identity on a tag. It does NOT name the contributor; that is
+                    // issue #2505, out of band via SnapshotAsync.
+                    //
+                    // Deliberately inside the over-threshold branch: a healthy
+                    // estate never reaches here, so steady-state per-tick cost is
+                    // unchanged. Consumers that never reported a cursor (Zero) are
+                    // excluded, matching the min() meet that produced the
+                    // aggregate, so a never-checkpointed consumer cannot inflate
+                    // the count any more than it can pin the regime.
+                    var snapshot = await _cursors
+                        .SnapshotAsync(treeId, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var lagging = 0;
+                    foreach (var entry in snapshot)
+                    {
+                        if (entry.Cursor > HybridLogicalClock.Zero
+                            && headWallTicks - entry.Cursor.WallClockTicks > lagThreshold.Ticks)
+                        {
+                            lagging++;
+                        }
+                    }
+
+                    LatticeMetrics.MaterialiserLaggingConsumers.Record(
+                        lagging,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        LatticeTenantLabel.ForTree(treeId));
                 }
             }
         }

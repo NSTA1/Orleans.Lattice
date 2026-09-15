@@ -33,6 +33,19 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     private readonly IRepoContextAnnBackingFactory _backing;
     private readonly RepoContextAnnOptions _options;
     private readonly ILogger<RepoContextAnnIndexRegistry> _logger;
+
+    // Owned here rather than injected, following RepoContextAnnIndexSweepService:
+    // the instrument partitions a state only a handle can observe, and every handle
+    // is created here, so this is the one place that can guarantee no plane is
+    // built without it.
+    private readonly RepoContextAnnPartitioningReporter _partitioning = new();
+
+    // Owned here for the same reason. A load attempt is observable only inside a
+    // handle, and every handle is created here, so this is the one place that can
+    // guarantee the arms are minted in every deployment rather than only in one
+    // that happens to fault.
+    private readonly RepoContextAnnIndexLoadReporter _load = new();
+
     private bool _disposed;
 
     /// <summary>Creates the registry.</summary>
@@ -82,6 +95,18 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
 
         return handle.SearchAsync(query, k, cancellationToken);
     }
+
+    /// <summary>
+    /// The reporter metering whether each plane holds a partitioning. Exposed so a
+    /// test can read the arms without a meter listener.
+    /// </summary>
+    internal RepoContextAnnPartitioningReporter Partitioning => _partitioning;
+
+    /// <summary>
+    /// The reporter metering durable-load attempts, partitioned by fresh, resumed
+    /// and faulted. Exposed so a test can read the arms without a meter listener.
+    /// </summary>
+    internal RepoContextAnnIndexLoadReporter Load => _load;
 
     /// <inheritdoc />
     public bool TryGetProgress(string repoId, EmbeddingSpaceTag space, out VectorIndexBuildProgress progress)
@@ -174,9 +199,30 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     internal Task<VectorIndexBuildProgress> BuildStepAsync(
         string repoId, EmbeddingSpaceTag space, CancellationToken cancellationToken)
+        => BuildStepAsync(repoId, space, phase: null, cancellationToken);
+
+    /// <summary>
+    /// Advances one index by a single bounded build step, reporting the phase the
+    /// step ran in through <paramref name="phase"/> so a caller that meters the
+    /// step can place a fault inside it.
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="space">The embedding space.</param>
+    /// <param name="phase">
+    /// The caller's phase probe, or <see langword="null"/> when the caller does not
+    /// meter the step.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the step.</param>
+    /// <returns>Progress after the step.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    internal Task<VectorIndexBuildProgress> BuildStepAsync(
+        string repoId,
+        EmbeddingSpaceTag space,
+        RepoContextAnnBuildPhaseProbe? phase,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        return GetOrCreate(repoId, space).AdvanceAsync(cancellationToken);
+        return GetOrCreate(repoId, space).AdvanceAsync(phase, cancellationToken);
     }
 
     /// <summary>
@@ -224,6 +270,8 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         }
 
         _entries.Clear();
+        _partitioning.Dispose();
+        _load.Dispose();
     }
 
     private RepoContextAnnIndexHandle GetOrCreate(string repoId, EmbeddingSpaceTag space)
@@ -241,7 +289,9 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
             _backing.CreateStore(repoId, space),
             _options,
             LatticeRepoContextAnnBackingFactory.KeyPrefix(repoId, space),
-            _logger);
+            _logger,
+            _partitioning,
+            _load);
 
         var winner = _entries.GetOrAdd(key, created);
         if (!ReferenceEquals(winner, created))

@@ -74,7 +74,8 @@ public partial class BPlusLeafGrainTests
         CreateActivationSeedLeaf(
             long persistedCheckpoint,
             LeafSnapshotBlob? snapshot = null,
-            HybridLogicalClock? clock = null)
+            HybridLogicalClock? clock = null,
+            bool snapshotStoreFails = false)
     {
         var notes = new List<SeedPinNote>();
         IReadOnlyList<MaterialiserPinReport>? flushed = null;
@@ -95,7 +96,9 @@ public partial class BPlusLeafGrainTests
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(snapshot));
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(_ => snapshotStoreFails
+                ? Task.FromException(new InvalidOperationException("snapshot store unavailable"))
+                : Task.CompletedTask);
 
         // The WAL head sits at the persisted checkpoint and the slice read is
         // empty, so the activation replay applies nothing and `advanced` stays
@@ -168,7 +171,7 @@ public partial class BPlusLeafGrainTests
         var (grain, state, notes, _) = CreateActivationSeedLeaf(
             persistedCheckpoint: 5, snapshot: SeedPinSnapshotCovering(3));
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(state.State.Clock, Is.EqualTo(HybridLogicalClock.Zero),
             "the scenario is only the seed path while the clock is still Zero");
@@ -200,10 +203,18 @@ public partial class BPlusLeafGrainTests
         // offset 5 and ZERO snapshots anywhere. The whole prefix [0, 5] is
         // recoverable only from the WAL, so the seed must contribute no offset
         // floor at all (the -1 sentinel) rather than authorising a trim to 5.
+        //
+        // Issue #2692 added a capture driver that fires at activation for
+        // exactly this state, so "zero snapshots" is now reached the way the
+        // field reaches it - an unavailable snapshot store - rather than by the
+        // absence of any driver. That makes this a STRICTLY STRONGER statement
+        // of the same invariant: the seed must publish -1 even when a capture
+        // was attempted on this very activation and failed. The invariant is
+        // unchanged; only the way its precondition is established has moved.
         var (grain, _, notes, _) = CreateActivationSeedLeaf(
-            persistedCheckpoint: 5, snapshot: null);
+            persistedCheckpoint: 5, snapshot: null, snapshotStoreFails: true);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Has.Count.EqualTo(1));
         Assert.That(notes[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero),
@@ -231,7 +242,7 @@ public partial class BPlusLeafGrainTests
             snapshot: SeedPinSnapshotCovering(3),
             clock: new HybridLogicalClock { WallClockTicks = 500 });
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Is.Empty,
             "a leaf whose clock has advanced past Zero must not take the activation-seed path; the seed "
@@ -256,7 +267,7 @@ public partial class BPlusLeafGrainTests
         var (grain, _, notes, _) = CreateActivationSeedLeaf(
             persistedCheckpoint: -1, snapshot: null);
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(notes, Has.Count.EqualTo(1));
         Assert.That(notes[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero));

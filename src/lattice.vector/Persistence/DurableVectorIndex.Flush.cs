@@ -5,7 +5,7 @@ public sealed partial class DurableVectorIndex
     // A flush accumulates chunk records up to this many bytes before issuing a
     // write, so one round trip stays bounded no matter how large a partition or
     // an ingest batch is.
-    private const int WriteBatchBytes = 4 * 1024 * 1024;
+    private const int WriteBatchBytes = DurableVectorIndexOptions.WriteBatchBytes;
 
     private bool _ingestAppendOnly = true;
     private string? _chunkBoundaryCursor;
@@ -35,7 +35,7 @@ public sealed partial class DurableVectorIndex
     /// </summary>
     private async Task WritePartitionsAsync(long generation, bool full, CancellationToken cancellationToken)
     {
-        var snapshot = _index.CreateSnapshot(_options.MaxItemsPerChunk);
+        var snapshot = _index.CreateSnapshot(_options.EffectiveItemsPerChunk);
         var header = snapshot.Header;
         var slots = Math.Max(1, header.PartitionCount);
         var epoch = header.IndexVersion;
@@ -128,15 +128,16 @@ public sealed partial class DurableVectorIndex
             return;
         }
 
-        var snapshot = _index.CreateSnapshot(_options.MaxItemsPerChunk);
+        var snapshot = _index.CreateSnapshot(_options.EffectiveItemsPerChunk);
         var header = snapshot.Header;
         EnsureSlotArrays(1);
 
+        var itemsPerChunk = _options.EffectiveItemsPerChunk;
         var epoch = _persistedChunkCount[0] == 0 ? header.IndexVersion : _persistedEpoch[0];
         var chunks = complete
             ? header.ChunkCount
-            : _index.Count / _options.MaxItemsPerChunk;
-        var committedCount = complete ? _index.Count : chunks * _options.MaxItemsPerChunk;
+            : _index.Count / itemsPerChunk;
+        var committedCount = complete ? _index.Count : chunks * itemsPerChunk;
 
         if (chunks > _persistedChunkCount[0])
         {
@@ -274,15 +275,19 @@ public sealed partial class DurableVectorIndex
                 ? VectorIndexStorageKeys.CentroidChunk(_prefix, generation, epoch, sequence)
                 : VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, epoch, sequence);
 
-            batch.Add(new KeyValuePair<string, byte[]>(key, record));
-            batchBytes += record.Length;
-
-            if (batchBytes >= WriteBatchBytes)
+            // Flushed before the record is added rather than after, so the batch
+            // that is handed to the store is within the bound rather than one
+            // record past it. Adding first makes the bound a floor: the write
+            // that trips it always carries the record that tripped it.
+            if (batch.Count > 0 && batchBytes + record.Length > WriteBatchBytes)
             {
                 await _store.WriteAsync(batch, cancellationToken).ConfigureAwait(false);
                 batch.Clear();
                 batchBytes = 0;
             }
+
+            batch.Add(new KeyValuePair<string, byte[]>(key, record));
+            batchBytes += record.Length;
         }
 
         if (batch.Count > 0)

@@ -226,7 +226,16 @@ public sealed class LeafEntryCacheHydrationTests
         }
 
         Assert.That(seen, Is.EqualTo(rows.Select(r => r.Key).ToArray()).AsCollection);
-        Assert.That(cache.HasPendingHydration, Is.False, "an unbounded scan is a full walk");
+
+        // The unbounded scan still materialises every row, but completing the
+        // ranged hydration no longer releases the frame (issue #2843): the frame
+        // is what a subsequent leaf division bisects from, so it is retained
+        // even though every row is now resident. Only the detach was removed;
+        // the walk is still a full walk.
+        Assert.That(cache.HydratedRowCount, Is.EqualTo(rows.Length),
+            "an unbounded scan still materialises every row");
+        Assert.That(cache.HasPendingHydration, Is.True,
+            "a completed ranged hydration retains the frame so a division can still bisect");
     }
 
     [Test]
@@ -260,12 +269,6 @@ public sealed class LeafEntryCacheHydrationTests
         var viaUnderlying = Attached(rows);
         Assert.That(viaUnderlying.UnderlyingRows, Has.Count.EqualTo(rows.Length));
         Assert.That(viaUnderlying.HasPendingHydration, Is.False);
-
-        var viaBackfill = Attached(rows);
-        viaBackfill.OverwriteStateBytesForBackfill(123L);
-        Assert.That(viaBackfill.HasPendingHydration, Is.False);
-        Assert.That(viaBackfill.StateBytes, Is.EqualTo(123L),
-            "the backfill figure describes the whole projection, so no residual may be added to it");
     }
 
     [Test]
@@ -592,7 +595,7 @@ public sealed class LeafEntryCacheHydrationTests
                 cache.TryAttachSnapshot(LeafSnapshotCodec.Encode(Corpus(rowCount, payloadBytes: 64)), 0L);
                 return cache;
             },
-            static (cache, _) => cache.HydrateAll(),
+            static (cache, _) => cache.HydrateAll(LeafSnapshotDetachSeam.EnumerateRowsAccessor),
             smallSize: 128,
             largeSize: 256);
 

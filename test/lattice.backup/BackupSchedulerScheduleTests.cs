@@ -42,6 +42,56 @@ public sealed class BackupSchedulerScheduleTests
     }
 
     [Test]
+    public async Task EnsureScheduleAsync_registers_the_scope_so_the_status_gauge_reports_zero_before_any_run()
+    {
+        // Wiring for issue #2645. The registry change is inert unless the
+        // scheduler actually calls it, so this is the test that must go red if
+        // the EnsureScopeRegistered call in ApplyScheduleAsync is reverted: a
+        // scope with a live schedule and no completed cycle has to publish
+        // BackupScopeRunOutcome.None rather than no series at all.
+        BackupInventoryRegistry.Instance.Reset();
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync(o =>
+        {
+            o.FullBackupScheduleEnabled = true;
+            o.FullBackupInterval = TimeSpan.FromMinutes(1);
+        });
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        await _fixture.Scheduler(scope).EnsureScheduleAsync(scope);
+
+        var runtime = BackupInventoryRegistry.Instance.TryGetScope(BackupScopeKey.For(scope));
+        Assert.That(runtime, Is.Not.Null,
+            "a scheduled scope must be registered for observation; absent here means the status gauge "
+            + "cannot tell 'scheduled, not yet run' from 'not scheduled'");
+        Assert.Multiple(() =>
+        {
+            Assert.That(runtime!.Value.LastRunOutcome, Is.EqualTo(BackupScopeRunOutcome.None));
+            Assert.That(runtime.Value.LastRunUtc, Is.Null, "registration must not fabricate a run");
+            Assert.That(runtime.Value.LastSuccessUtc, Is.Null, "registration must not fabricate a success");
+        });
+    }
+
+    [Test]
+    public async Task EnsureScheduleAsync_does_not_register_the_scope_when_no_schedule_is_enabled()
+    {
+        // Discrimination: registration is tied to a reminder actually being
+        // registered, not to EnsureScheduleAsync merely being called. Without
+        // this, registering every scope that touched the grain would satisfy the
+        // test above while destroying the meaning of an absent series.
+        BackupInventoryRegistry.Instance.Reset();
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        await _fixture.Scheduler(scope).EnsureScheduleAsync(scope);
+
+        Assert.That(
+            BackupInventoryRegistry.Instance.TryGetScope(BackupScopeKey.For(scope)), Is.Null,
+            "an unscheduled scope must stay absent, which is what a 0 reading is distinguishable from");
+    }
+
+    [Test]
     public async Task EnsureScheduleAsync_registers_no_reminder_when_disabled()
     {
         _fixture = new SchedulerClusterFixture();

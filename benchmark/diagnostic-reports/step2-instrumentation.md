@@ -33,6 +33,22 @@ All on the existing `Meter("orleans.lattice")`.
 | `orleans.lattice.saga.perkey.duration` | Histogram\<double\> | `ms` | Wraps the per-key `await lattice.SetAsync(...)` inside the execute loop, on every successful or failing iteration (try/finally). |
 | `orleans.lattice.saga.wait.serial_gap` | Histogram\<double\> | `ms` | Same site, measured from the previous successful iteration's `WriteStateAsync` completion to the next iteration's per-key entry. First iteration skipped (no predecessor). |
 
+> **SUPERSEDED (issue #2932).** The two saga rows above describe a per-key execute
+> loop that no longer exists. The execute phase was later reshaped (the "post-D1c"
+> change) into a single batched `lattice.SetManyAsync(slice)` dispatch followed by
+> one saga checkpoint, so there is no per-iteration `WriteStateAsync` to measure
+> between. `saga.perkey.duration` survived the reshape but no longer fires as
+> described here: it now records the batch's elapsed time divided by its entry
+> count, once per entry. `saga.wait.serial_gap` was never wired at all, and the
+> site this row names was gone before anyone tried, so it published a permanent
+> absence that a dashboard rendered as a confident zero via `or vector(0)`. It has
+> been deleted along with its panel target, documentation rows and rig query.
+>
+> This row is left unedited on purpose. It is the evidence that the specification
+> drifted from the code, which is the more useful artefact than a corrected row -
+> a suppression or a spec is only as good as its currency, and nothing re-checks
+> a document.
+
 ## New tag constants
 
 - `TagPhase = "phase"` (phase 1 / phase 2)

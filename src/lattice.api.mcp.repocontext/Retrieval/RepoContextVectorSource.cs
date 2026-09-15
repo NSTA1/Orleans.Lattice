@@ -35,19 +35,58 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// </summary>
     private const int CountReconnectAttempts = 64;
 
+    /// <summary>
+    /// Wall-clock ceiling on the whole-prefix count walk, above which the walk stops
+    /// and reports the count as unknown rather than continuing.
+    /// <para>
+    /// The reconnect budget above bounds RETRIES; it does not bound WORK. A walk that
+    /// never aborts is never retried and so was never bounded at all: it ran until it
+    /// reached the end of the prefix, however many leaves that took (issue #2447).
+    /// This is the missing half.
+    /// </para>
+    /// <para>
+    /// The value is chosen against the call it runs inside, not against the corpus.
+    /// The walk happens on the build's turn-holding path, so every caller of that
+    /// grain waits behind it, and the Orleans call timeout that governs those waiting
+    /// callers is 30 seconds. Ten leaves room for the rest of the phase to complete
+    /// inside one call. Losing the walk is cheap and losing it is bounded: the count
+    /// sizes a capacity reservation and reports progress, and neither consumer needs
+    /// it to be correct - which is exactly why spending unbounded time on it was the
+    /// wrong trade.
+    /// </para>
+    /// </summary>
+    internal static readonly TimeSpan DefaultCountBudget = TimeSpan.FromSeconds(10);
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly string _repoId;
     private readonly EmbeddingSpaceTag _space;
+    private readonly TimeSpan _countBudget;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Creates the store-of-record view.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
     /// <param name="repoId">The repository whose vectors the view covers. Must not be <see langword="null"/>.</param>
     /// <param name="space">The embedding space the view is filtered to.</param>
+    /// <param name="countBudget">
+    /// The wall-clock ceiling on the <see cref="CountAsync"/> walk, or
+    /// <see langword="null"/> for <see cref="DefaultCountBudget"/>. A non-positive
+    /// value disables the bound and restores the unbounded pre-#2447 walk, which is
+    /// offered only so a test can assert the difference.
+    /// </param>
+    /// <param name="timeProvider">
+    /// The clock the count budget is measured against, or <see langword="null"/> for
+    /// <see cref="TimeProvider.System"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextVectorSource(
-        IGrainFactory grainFactory, Serializer serializer, string repoId, EmbeddingSpaceTag space)
+        IGrainFactory grainFactory,
+        Serializer serializer,
+        string repoId,
+        EmbeddingSpaceTag space,
+        TimeSpan? countBudget = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -56,6 +95,8 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
         _serializer = serializer;
         _repoId = repoId;
         _space = space;
+        _countBudget = countBudget ?? DefaultCountBudget;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -181,23 +222,135 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// re-walk ground already covered. The caller tolerates exhaustion anyway, so
     /// this only decides how often the cheap path is taken.
     /// </para>
+    /// <para>
+    /// The reconnect budget bounds RETRIES, not WORK, and those are different
+    /// guarantees. A walk that never aborts is never retried, so before #2447 it was
+    /// bounded by nothing at all and ran until it reached the end of the prefix -
+    /// on the turn-holding build path, with every other caller of the grain waiting
+    /// behind it. <see cref="DefaultCountBudget"/> supplies the missing half.
+    /// </para>
+    /// <para>
+    /// Exceeding that budget raises
+    /// <see cref="RepoContextCountBudgetExceededException"/> rather than returning
+    /// what was walked so far. Returning the partial figure would be an UNDER-count,
+    /// and the shortfall probe reads an under-count as "the index is not behind" and
+    /// skips a repair it needed - so the cheap fix would have bought a bounded walk
+    /// at the price of an index that lags the store of record silently. Both callers
+    /// treat the fault as "unknown" and resolve it in their own safe direction, which
+    /// is the same conclusion the reconnect-exhaustion path already reached.
+    /// </para>
+    /// <para>
+    /// WHAT A ZERO <see cref="RepoContextCountBudgetExceededException.Counted"/>
+    /// MEANS, AND WHAT IT DOES NOT. Two mechanisms bound this walk and they bound
+    /// different things: the deadline bounds the walk AS A WHOLE, including its
+    /// first page, and the sampled in-loop check bounds the gap BETWEEN keys. Only
+    /// the second is charged after a key is counted, so only the second carries the
+    /// one-key minimum-progress property. A first page slower than the whole budget
+    /// therefore reports <c>Counted = 0</c>, and that reading means precisely "the
+    /// source did not deliver a first page inside the budget" - it is a measured
+    /// absence, not a walk that never started, because the exception is raised only
+    /// on a path that did start one. Do not read a zero as an empty prefix: an empty
+    /// prefix RETURNS <c>0</c> and never throws, and the two are distinguishable for
+    /// exactly that reason. This paragraph exists because the in-loop comment below
+    /// once claimed the minimum-progress guarantee held for the walk rather than for
+    /// the sampled check, which is a guarantee the deadline can and does defeat.
+    /// </para>
     /// </remarks>
+    /// <exception cref="RepoContextCountBudgetExceededException">
+    /// The walk did not reach the end of the prefix within its wall-clock budget, so
+    /// no count can be reported.
+    /// </exception>
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var prefix = RepoContextKeys.VectorsPrefix(_repoId);
         var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
 
+        var bounded = _countBudget > TimeSpan.Zero;
+        var startedAt = bounded ? _timeProvider.GetTimestamp() : 0L;
+
+        // The budget has to be a DEADLINE and not just a sample taken between keys.
+        // Sampling in the loop body bounds the gap between keys and nothing else,
+        // so it does not bound a walk that yields NO key - and that is precisely
+        // the walk that needs bounding, because it is the one whose first page
+        // stalls. With CountReconnectAttempts set to 64, an unbounded such walk
+        // spends a 64-deep reconnect storm plus the stall-resume budget derived
+        // from it, all on the build's turn-holding path, before anything gives up.
+        // That was measured as a phase tick active for over four minutes against a
+        // 30-second call timeout, which starved the coordinator's own keep-alive
+        // reminder (issues #2536 and #2483).
+        //
+        // The token is linked rather than substituted so that a caller-cancelled
+        // count is still distinguishable from a merely over-budget one below.
+        using var deadline = bounded
+            ? new CancellationTokenSource(_countBudget, _timeProvider)
+            : null;
+        using var linked = deadline is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var walkToken = linked?.Token ?? cancellationToken;
+
         var count = 0;
-        await foreach (var _ in tree
-            .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        var overBudget = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            count++;
+            await foreach (var _ in tree
+                .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: walkToken)
+                .ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                count++;
+
+                // Checked AFTER the key is counted, so that THIS check - the sampled
+                // one, bounding the gap between keys - cannot consume a walk without
+                // advancing it. Read the scope precisely: the one-key minimum belongs
+                // to this check, NOT to the walk. The deadline above bounds the walk
+                // as a whole and is under no such constraint, so a first page slower
+                // than the entire budget still reports zero. An earlier revision of
+                // this comment said "a budget smaller than the cost of a single key
+                // still makes progress", stated of the walk; that is false whenever
+                // the deadline binds first, and the fixture that appeared to prove it
+                // only passed because its fake source answered synchronously, so the
+                // deadline never armed. A guarantee asserted at the wrong scope is
+                // worse than none, because it is believed. The walk is
+                // abandoned, not resumed: a count has no checkpoint to resume from, and
+                // the caller does not need one because it only needs to know that the
+                // figure is unavailable.
+                //
+                // That reasoning is sound, and it is also the reasoning that produced
+                // the hole this method's deadline now closes, so read it for what it
+                // covers rather than as a statement about the walk as a whole. It
+                // considers a walk that yields keys SLOWLY and concludes - correctly -
+                // that the check belongs after the first one. It does not consider a
+                // walk that yields NO key, which never reaches this line at all, and
+                // which is the walk that was actually observed: the budget was
+                // therefore never evaluated and the count ran on unbounded. Do not
+                // move this check back to the top of the body on the strength of the
+                // first case; the two cases need the two different mechanisms that are
+                // now both present.
+                if (bounded && _timeProvider.GetElapsedTime(startedAt) >= _countBudget)
+                {
+                    overBudget = true;
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (
+            deadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // The deadline stopped the walk mid-read. That is the budget being
+            // spent, which this method already has a documented answer for, so it
+            // takes the same exit as the sampled path rather than propagating a
+            // cancellation the caller never asked for.
+            overBudget = true;
         }
 
-        return count;
+        // Raised outside the enumeration so the scan's enumerator is disposed first,
+        // and so the throw cannot be mistaken by the resilient wrapper for a fault of
+        // the underlying stream that it should reconnect around.
+        return overBudget
+            ? throw new RepoContextCountBudgetExceededException(_repoId, count, _countBudget)
+            : count;
     }
 
     /// <inheritdoc />

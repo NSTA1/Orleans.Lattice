@@ -51,8 +51,11 @@ public partial class BPlusLeafGrainTests
     /// a separate mocked <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>. Internal so it
     /// stays inside the test assembly's own namespace surface.
     /// </summary>
-    internal static BPlusLeafGrain CreateLeafGrainForCrossFixtureUse(string replicaId)
-        => CreateGrain(replicaId: replicaId);
+    internal static BPlusLeafGrain CreateLeafGrainForCrossFixtureUse(
+        string replicaId,
+        Orleans.Lattice.BPlusTree.IBPlusLeafGrain? siblingStub = null,
+        int maxLeafKeys = 128)
+        => CreateGrain(replicaId: replicaId, siblingStub: siblingStub, maxLeafKeys: maxLeafKeys);
 
     /// <summary>
     /// Reflective accessor for the static
@@ -195,7 +198,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
             "precondition: nothing published before activation");
 
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var revision), Is.True,
             "activation must publish a cookie: the snapshot rehydrate and WAL replay rebuild the "
@@ -364,7 +367,7 @@ public partial class BPlusLeafGrainTests
             + "floor advance must happen together.");
 
         var second = CreateGrain(replicaId: unique);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out var republished), Is.True);
         Assert.That(

@@ -162,6 +162,7 @@ bytes, no latency percentiles, and no cache hit ratio. For those:
 | Question | Where to look |
 |---|---|
 | How many bytes is this tree holding? | `ILattice.GetStorageUsageAsync`; see [Tree storage](tree-storage.md). |
+| Is `storage_leaf_state_bytes` / `storage_snapshot_bytes` really zero, or just unmeasured? | `orleans.lattice.storage.usage_deep_published`: no series means the tree is unobserved, `0` means only the WAL-only poller has run so those gauges report no data, `1` means a deep publish ran and a zero is a real zero. See [Tree storage](tree-storage.md#self-populating-gauges-in-a-multi-silo-cluster). |
 | How slow are reads and writes? | The `orleans.lattice.get.duration` / `set.duration` histograms in [Metrics](metrics.md). |
 | Is the read cache helping? | `orleans.lattice.cache.hits` and `orleans.lattice.cache.misses`. |
 | Is the WAL backing up? | [WAL saturation signal](wal-saturation-signal.md) and [WAL tuning](wal-tuning.md). |
