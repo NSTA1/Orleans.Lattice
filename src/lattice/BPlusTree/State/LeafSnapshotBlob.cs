@@ -289,6 +289,33 @@ internal sealed class LeafSnapshotBlob : ILatticeBinaryPersistedState
     [Id(7)] public long SegmentFrameBytes { get; set; }
 
     /// <summary>
+    /// Which generation of segment grains this manifest's segments live in.
+    /// Incremented by every segmented capture, so a capture stages its segments
+    /// into addresses the live manifest does not reference and the previous
+    /// snapshot is never mutated before the new manifest commits.
+    /// <para>
+    /// <b>Without a generation the commit point is not actually a commit
+    /// point.</b> Segment addresses were previously derived from the leaf key
+    /// and the segment index alone, so a capture overwrote segments
+    /// <c>0..n-1</c> of the <i>live</i> snapshot in place before writing the
+    /// manifest that describes them. A capture torn part-way therefore left the
+    /// previous manifest referencing a mixture of new segments (those already
+    /// rewritten) and old ones (those not yet reached) - a snapshot reporting
+    /// coverage it cannot reproduce, which is exactly the shape that lets the
+    /// coverage-gated WAL GC trim the last durable copy of a prefix. The
+    /// write-order argument was sound; the addressing silently defeated it.
+    /// </para>
+    /// <para>
+    /// Zero on every blob persisted before generations existed, and generation
+    /// zero keeps the legacy <c>{leafKey}/{index}</c> address form, so an
+    /// existing segmented snapshot stays readable with no migration pass. The
+    /// first capture after upgrade writes generation 1 and retires generation
+    /// zero once its own manifest has committed.
+    /// </para>
+    /// </summary>
+    [Id(8)] public int SegmentGeneration { get; set; }
+
+    /// <summary>
     /// <see langword="true"/> when this blob is a segmented manifest whose rows
     /// live in separate segment grains rather than inline.
     /// <para>
