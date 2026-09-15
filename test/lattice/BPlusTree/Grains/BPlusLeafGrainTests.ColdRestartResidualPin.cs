@@ -401,7 +401,8 @@ public partial class BPlusLeafGrainTests
             int walPartitions,
             ILeafSnapshotStorageGrain snapshotStore,
             long coordinatorTail = 0,
-            int reclassifyEveryN = 0)
+            int reclassifyEveryN = 0,
+            long? leafSnapshotSegmentBytes = null)
     {
         var reporter = Substitute.For<ILeafCursorReporter>();
         reporter.FlushDurableMaterialiserFrontierAsync(
@@ -436,6 +437,15 @@ public partial class BPlusLeafGrainTests
                 WalPartitions = walPartitions,
                 MaterialiserCheckpointInterval = TimeSpan.Zero,
                 LeafSnapshotReClassifyEveryNCheckpoints = reclassifyEveryN,
+
+                // The capture path plans against the LEAF's window, not the
+                // storage grain's. A test that narrows only the store's window
+                // leaves capture comparing against the 4 MiB default, takes the
+                // inline branch, and then watches the store segment the frame
+                // afterwards - which is the pre-fix behaviour, so it would
+                // report a pass for having exercised the old path.
+                LeafSnapshotSegmentBytes = leafSnapshotSegmentBytes
+                    ?? LatticeOptions.DefaultLeafSnapshotSegmentBytes,
             },
             maxLeafKeys: 128,
             shardCount: 1,

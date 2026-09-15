@@ -32,7 +32,7 @@ internal sealed class LeafSnapshotStorageGrain(
     /// costs one extra segment, while under-reserving lets a run encode above
     /// the window, which is the failure the window exists to prevent.
     /// </summary>
-    private const long PerRowOverheadBytes = 64;
+    private const long PerRowOverheadBytes = LeafSnapshotSegmentPlan.PerRowOverheadBytes;
 
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -55,6 +55,20 @@ internal sealed class LeafSnapshotStorageGrain(
     private bool CanSegment => grainFactory is not null;
 
     /// <summary>
+    /// Generation a staged capture is writing frames into, or <c>-1</c> when no
+    /// capture is staging. Activation-scoped on purpose: a capture whose
+    /// activation is lost mid-flight leaves only frames no manifest references,
+    /// which are inert, and the next capture starts afresh. The alternative -
+    /// persisting the staging cursor - would buy nothing, since a torn capture
+    /// has to be redone either way.
+    /// </summary>
+    private int stagingGeneration = -1;
+
+    private int stagedSegmentCount;
+
+    private long stagedFrameBytes;
+
+    /// <summary>
     /// Segment window in bytes, clamped to
     /// <see cref="LatticeOptions.MinimumLeafSnapshotSegmentBytes"/>.
     /// <para>
@@ -69,13 +83,13 @@ internal sealed class LeafSnapshotStorageGrain(
     /// is a property of the host rather than of a tree.
     /// </para>
     /// </summary>
-    private long SegmentWindowBytes => Math.Max(
-        LatticeOptions.MinimumLeafSnapshotSegmentBytes,
+    private long SegmentWindowBytes => LeafSnapshotSegmentPlan.Window(
         options?.CurrentValue.LeafSnapshotSegmentBytes ?? LatticeOptions.DefaultLeafSnapshotSegmentBytes);
 
     /// <summary>
-    /// Grain key of segment <paramref name="index"/> for this leaf:
-    /// <c>{leafKey}/{index}</c>.
+    /// Grain key of segment <paramref name="index"/> in generation
+    /// <paramref name="generation"/> for this leaf: <c>{leafKey}/{index}</c> at
+    /// generation zero, and <c>{leafKey}/g{generation}/{index}</c> above it.
     /// <para>
     /// Derived from the raw grain key rather than from a parsed Guid so the
     /// mapping holds for any key representation the runtime hands back, and so
@@ -83,12 +97,21 @@ internal sealed class LeafSnapshotStorageGrain(
     /// segment address instead of silently collapsing every leaf onto
     /// <see cref="Guid.Empty"/>.
     /// </para>
+    /// <para>
+    /// Generation zero deliberately keeps the pre-generation address form, so a
+    /// snapshot segmented by an earlier build stays addressable and no
+    /// migration pass is needed. The <c>g</c> marker keeps the two forms
+    /// unambiguous: a leaf key ending in a digit cannot make
+    /// <c>{leafKey}/{index}</c> collide with a generation-qualified address.
+    /// </para>
     /// </summary>
-    private string SegmentKey(int index)
-        => string.Create(CultureInfo.InvariantCulture, $"{context.GrainId.Key}/{index}");
+    private string SegmentKey(int generation, int index)
+        => generation == 0
+            ? string.Create(CultureInfo.InvariantCulture, $"{context.GrainId.Key}/{index}")
+            : string.Create(CultureInfo.InvariantCulture, $"{context.GrainId.Key}/g{generation}/{index}");
 
-    private ILeafSnapshotSegmentGrain Segment(int index)
-        => grainFactory!.GetGrain<ILeafSnapshotSegmentGrain>(SegmentKey(index));
+    private ILeafSnapshotSegmentGrain Segment(int generation, int index)
+        => grainFactory!.GetGrain<ILeafSnapshotSegmentGrain>(SegmentKey(generation, index));
 
     /// <summary>
     /// True when <paramref name="blob"/> is a snapshot a leaf can actually
@@ -212,17 +235,24 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         var window = SegmentWindowBytes;
         var inlineFrame = merged.EncodedRows;
+        var previousGeneration = state.State.SegmentGeneration;
 
         if (!CanSegment || inlineFrame is not { Length: > 0 } || inlineFrame.LongLength <= window)
         {
             merged.SegmentCount = 0;
             merged.SegmentFrameBytes = 0;
+            merged.SegmentGeneration = previousGeneration;
             state.State = merged;
             await state.WriteStateAsync().ConfigureAwait(true);
-            await RetireSegmentsAsync(0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+            await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
             return;
         }
 
+        // Stage into the NEXT generation, so nothing the live manifest
+        // references is touched before the new manifest commits. Writing into
+        // the live generation would leave a torn capture's manifest pointing at
+        // a mixture of rewritten and untouched segments.
+        var generation = previousGeneration + 1;
         var runs = PlanSegments(merged, window);
         long totalFrameBytes = 0;
         for (var i = 0; i < runs.Count; i++)
@@ -230,7 +260,7 @@ internal sealed class LeafSnapshotStorageGrain(
             cancellationToken.ThrowIfCancellationRequested();
             var frame = LeafSnapshotCodec.Encode(runs[i]);
             totalFrameBytes += frame.LongLength;
-            await Segment(i).SaveAsync(frame, runs[i].Length, cancellationToken).ConfigureAwait(true);
+            await Segment(generation, i).SaveAsync(frame, runs[i].Length, cancellationToken).ConfigureAwait(true);
         }
 
         // The manifest keeps the coverage and carries no rows: the segments are
@@ -239,9 +269,14 @@ internal sealed class LeafSnapshotStorageGrain(
         merged.EncodedRows = null;
         merged.SegmentCount = runs.Count;
         merged.SegmentFrameBytes = totalFrameBytes;
+        merged.SegmentGeneration = generation;
         state.State = merged;
         await state.WriteStateAsync().ConfigureAwait(true);
-        await RetireSegmentsAsync(runs.Count, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+
+        // Retire the whole previous generation only now the new manifest has
+        // committed: until this write landed, the old manifest was still the
+        // authoritative one and still referenced every one of them.
+        await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -267,18 +302,16 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         // Leave headroom for the frame header and index table, which scale with
         // the run rather than with any one row.
-        var budget = Math.Max(window - (window / 8), LatticeOptions.MinimumLeafSnapshotSegmentBytes / 2);
+        var budget = LeafSnapshotSegmentPlan.Budget(window);
         var runs = new List<LeafSnapshotRow[]>();
         var current = new List<LeafSnapshotRow>();
         long currentCost = 0;
 
         foreach (var row in merged.EnumerateRows())
         {
-            long keyBytes = Encoding.UTF8.GetByteCount(row.Key);
-            long valueBytes = row.Value.IsTombstone ? 0 : row.Value.Value?.Length ?? 0;
-            var rowCost = keyBytes + valueBytes + PerRowOverheadBytes;
+            var rowCost = LeafSnapshotSegmentPlan.RowCost(row);
 
-            if (current.Count > 0 && currentCost + rowCost > budget)
+            if (LeafSnapshotSegmentPlan.MustCloseRun(current.Count, currentCost, rowCost, budget))
             {
                 runs.Add(current.ToArray());
                 current.Clear();
@@ -299,12 +332,18 @@ internal sealed class LeafSnapshotStorageGrain(
 
     /// <summary>
     /// Clears segments <paramref name="keepCount"/> through
-    /// <paramref name="previousCount"/> - 1, which the newly committed manifest
-    /// no longer references. Best-effort: an orphaned segment wastes a row but
+    /// <paramref name="previousCount"/> - 1 of generation
+    /// <paramref name="generation"/>, which the newly committed manifest no
+    /// longer references. Best-effort: an orphaned segment wastes a row but
     /// is unreachable, so a failure here must not fail the capture that has
     /// already durably committed.
+    /// <para>
+    /// A segmented capture retires the whole previous generation
+    /// (<paramref name="keepCount"/> zero), because the new manifest addresses
+    /// a different generation entirely and keeps none of the old segments.
+    /// </para>
     /// </summary>
-    private async Task RetireSegmentsAsync(int keepCount, int previousCount, CancellationToken cancellationToken)
+    private async Task RetireSegmentsAsync(int generation, int keepCount, int previousCount, CancellationToken cancellationToken)
     {
         for (var i = keepCount; i < previousCount; i++)
         {
@@ -315,7 +354,7 @@ internal sealed class LeafSnapshotStorageGrain(
 
             try
             {
-                await Segment(i).ClearAsync(cancellationToken).ConfigureAwait(true);
+                await Segment(generation, i).ClearAsync(cancellationToken).ConfigureAwait(true);
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
@@ -334,7 +373,124 @@ internal sealed class LeafSnapshotStorageGrain(
             return null;
         }
 
-        return await Segment(index).LoadFrameAsync(cancellationToken).ConfigureAwait(true);
+        return await Segment(state.State.SegmentGeneration, index)
+            .LoadFrameAsync(cancellationToken)
+            .ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> StageSnapshotSegmentAsync(byte[] frame, int rowCount, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (frame.Length == 0)
+        {
+            throw new ArgumentException("A staged segment frame must be non-empty.", nameof(frame));
+        }
+
+        if (rowCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rowCount), rowCount, "A staged segment frame must encode at least one row.");
+        }
+
+        if (!CanSegment)
+        {
+            throw new InvalidOperationException(
+                "Segment staging requires a grain factory. A host without one must capture through SaveAsync instead.");
+        }
+
+        if (stagingGeneration < 0)
+        {
+            // One generation above the live manifest's, so every address this
+            // capture writes is one the live manifest does not reference.
+            stagingGeneration = state.State.SegmentGeneration + 1;
+            stagedSegmentCount = 0;
+            stagedFrameBytes = 0;
+        }
+
+        var index = stagedSegmentCount;
+        await Segment(stagingGeneration, index).SaveAsync(frame, rowCount, cancellationToken).ConfigureAwait(true);
+        stagedSegmentCount = index + 1;
+        stagedFrameBytes += frame.LongLength;
+        return index;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> CommitStagedSnapshotAsync(LeafSnapshotBlob manifest, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (stagingGeneration < 0 || stagedSegmentCount == 0)
+        {
+            throw new InvalidOperationException(
+                "No staged segments to commit. Stage at least one frame with StageSnapshotSegmentAsync first.");
+        }
+
+        if (manifest.Rows.Count > 0 || manifest.EncodedRows is { Length: > 0 })
+        {
+            throw new ArgumentException(
+                "A staged manifest carries coverage only; its rows live in the staged segments.",
+                nameof(manifest));
+        }
+
+        var generation = stagingGeneration;
+        var segmentCount = stagedSegmentCount;
+        var frameBytes = stagedFrameBytes;
+        stagingGeneration = -1;
+        stagedSegmentCount = 0;
+        stagedFrameBytes = 0;
+
+        // The staged snapshot's rows live in segments, so the row-merging slow
+        // path is unavailable to it for exactly the reason MergeMonotone
+        // declines a segmented stored blob: there are no inline rows to merge,
+        // and loading every segment to merge them would reinstate the
+        // whole-snapshot residency segmentation exists to remove. Accept when
+        // coverage does not regress, decline otherwise.
+        var previousSegmentCount = state.State.SegmentCount;
+        var previousGeneration = state.State.SegmentGeneration;
+        if (HasUsableSnapshot(state.State) && RegressesCoverage(state.State, manifest))
+        {
+            await RetireSegmentsAsync(generation, 0, segmentCount, cancellationToken).ConfigureAwait(true);
+            return false;
+        }
+
+        manifest.Rows = Array.Empty<LeafSnapshotRow>();
+        manifest.EncodedRows = null;
+        manifest.SegmentCount = segmentCount;
+        manifest.SegmentFrameBytes = frameBytes;
+        manifest.SegmentGeneration = generation;
+
+        // Manifest last: until this write lands the previous snapshot is still
+        // the authoritative one, and the frames backing it are untouched.
+        state.State = manifest;
+        await state.WriteStateAsync().ConfigureAwait(true);
+
+        await RetireSegmentsAsync(previousGeneration, 0, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="incoming"/> covers any partition less far than
+    /// <paramref name="existing"/> does. Shared by the inline merge and the
+    /// staged commit so both admit exactly the same captures.
+    /// </summary>
+    private static bool RegressesCoverage(LeafSnapshotBlob existing, LeafSnapshotBlob incoming)
+    {
+        var slots = Math.Max(
+            Math.Max(EffectiveLength(existing), EffectiveLength(incoming)),
+            1);
+
+        for (var p = 0; p < slots; p++)
+        {
+            if (EffectiveOffset(existing, p) > EffectiveOffset(incoming, p))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -369,16 +525,7 @@ internal sealed class LeafSnapshotStorageGrain(
         // overwrite cannot regress coverage. This is the steady-state case
         // (captures normally advance), so it stays allocation-free beyond the
         // pre-existing overwrite.
-        var regresses = false;
-        for (var p = 0; p < slots; p++)
-        {
-            if (EffectiveOffset(existing, p) > EffectiveOffset(incoming, p))
-            {
-                regresses = true;
-                break;
-            }
-        }
-        if (!regresses)
+        if (!RegressesCoverage(existing, incoming))
         {
             return incoming;
         }
@@ -591,13 +738,14 @@ internal sealed class LeafSnapshotStorageGrain(
         }
 
         var segmentCount = state.State.SegmentCount;
+        var segmentGeneration = state.State.SegmentGeneration;
         await state.ClearStateAsync().ConfigureAwait(true);
 
         // Retire segments AFTER the manifest clear, never before. An orphaned
         // segment is harmless (unreachable, wastes a row); a live manifest
         // pointing at emptied segments is not - it reports coverage it cannot
         // reproduce.
-        await RetireSegmentsAsync(0, segmentCount, cancellationToken).ConfigureAwait(true);
+        await RetireSegmentsAsync(segmentGeneration, 0, segmentCount, cancellationToken).ConfigureAwait(true);
 
         // After ClearStateAsync the in-memory state is reset by the
         // provider; defensively re-seed the sentinel so LoadAsync's

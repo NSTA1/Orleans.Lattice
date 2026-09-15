@@ -1096,7 +1096,11 @@ internal sealed partial class BPlusLeafGrain
             var rowCount = Cache.Count;
             var buffer = ArrayPool<LeafSnapshotRow>.Shared.Rent(rowCount);
             IReadOnlyList<LeafSnapshotRow> legacyRows = Array.Empty<LeafSnapshotRow>();
-            byte[]? encodedRows;
+            byte[]? encodedRows = null;
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
+                context.GrainId.GetGuidKey());
+            var stagedSegmentCount = 0;
+            long largestStagedFrameBytes = 0;
             try
             {
                 var written = 0;
@@ -1110,22 +1114,88 @@ internal sealed partial class BPlusLeafGrain
                     buffer[written++] = new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key));
                 }
 
-                var rows = new ReadOnlySpan<LeafSnapshotRow>(buffer, 0, written);
                 if (resolved.LeafSnapshotBinaryEncodingEnabled)
                 {
-                    // Compact binary frame: one allocation, raw value bytes, no
-                    // per-row serializer envelope. A blob captured this way
-                    // leaves the legacy Rows slot empty, which is how the lazy
-                    // rewrite happens - the next natural capture of a leaf
-                    // whose durable blob is still legacy simply persists the
-                    // frame instead, with no migration pass anywhere.
-                    encodedRows = LeafSnapshotCodec.Encode(rows);
+                    // Plan BEFORE encoding. Capture used to encode every row
+                    // into one contiguous frame and hand that to the storage
+                    // grain, which only then split it - so the segmentation
+                    // that bounds the row write and the hydration read left the
+                    // capture peak exactly where it was, at the full size of
+                    // the leaf. A leaf large enough to need segmenting is
+                    // precisely the leaf whose whole-frame allocation fails, so
+                    // the bound has to be applied here, before any encoding.
+                    //
+                    // The trigger costs nothing. Cache.StateBytes is the
+                    // incrementally-maintained SUM(utf8(key) + value.Length)
+                    // the cache already keeps for the storage-usage aggregator,
+                    // and that is exactly the quantity LeafSnapshotSegmentPlan
+                    // charges per row, so adding the same per-row overhead
+                    // allowance reproduces the planner's own total in O(1) with
+                    // no second walk and no per-row re-measure. The common
+                    // small-leaf capture therefore pays one comparison.
+                    var window = LeafSnapshotSegmentPlan.Window(resolved.LeafSnapshotSegmentBytes);
+                    var plannedCost = Cache.StateBytes + ((long)written * LeafSnapshotSegmentPlan.PerRowOverheadBytes);
+
+                    if (written > 0 && plannedCost > window)
+                    {
+                        var budget = LeafSnapshotSegmentPlan.Budget(window);
+                        var start = 0;
+                        var runLength = 0;
+                        long runCost = 0;
+
+                        for (var i = 0; i < written; i++)
+                        {
+                            var rowCost = LeafSnapshotSegmentPlan.RowCost(in buffer[i]);
+                            if (LeafSnapshotSegmentPlan.MustCloseRun(runLength, runCost, rowCost, budget))
+                            {
+                                // Deliberately not a local function: capturing
+                                // buffer and the running counters would allocate
+                                // a display class per capture and an async state
+                                // machine box per segment, on a path whose whole
+                                // purpose is to hold allocation down. The span is
+                                // consumed by the synchronous encode before the
+                                // await, so it never lives across a suspension.
+                                var frame = LeafSnapshotCodec.Encode(
+                                    new ReadOnlySpan<LeafSnapshotRow>(buffer, start, runLength));
+                                stagedSegmentCount++;
+                                largestStagedFrameBytes = Math.Max(largestStagedFrameBytes, frame.LongLength);
+                                await snapshotGrain.StageSnapshotSegmentAsync(frame, runLength, cancellationToken);
+
+                                start = i;
+                                runLength = 0;
+                                runCost = 0;
+                            }
+
+                            runLength++;
+                            runCost += rowCost;
+                        }
+
+                        var tail = LeafSnapshotCodec.Encode(
+                            new ReadOnlySpan<LeafSnapshotRow>(buffer, start, runLength));
+                        stagedSegmentCount++;
+                        largestStagedFrameBytes = Math.Max(largestStagedFrameBytes, tail.LongLength);
+                        await snapshotGrain.StageSnapshotSegmentAsync(tail, runLength, cancellationToken);
+                    }
+                    else
+                    {
+                        // Compact binary frame: one allocation, raw value bytes, no
+                        // per-row serializer envelope. A blob captured this way
+                        // leaves the legacy Rows slot empty, which is how the lazy
+                        // rewrite happens - the next natural capture of a leaf
+                        // whose durable blob is still legacy simply persists the
+                        // frame instead, with no migration pass anywhere.
+                        //
+                        // Reached only when the whole leaf fits inside one
+                        // segment window, so "one allocation" is now a bounded
+                        // claim rather than an unbounded one.
+                        encodedRows = LeafSnapshotCodec.Encode(
+                            new ReadOnlySpan<LeafSnapshotRow>(buffer, 0, written));
+                    }
                 }
                 else
                 {
-                    encodedRows = null;
                     var copy = new LeafSnapshotRow[written];
-                    rows.CopyTo(copy);
+                    new ReadOnlySpan<LeafSnapshotRow>(buffer, 0, written).CopyTo(copy);
                     legacyRows = copy;
                 }
             }
@@ -1169,9 +1239,15 @@ internal sealed partial class BPlusLeafGrain
                 SnapshotOffsetsByPartition = perPartitionOffsets,
             };
 
-            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
-                context.GrainId.GetGuidKey());
-            await snapshotGrain.SaveAsync(blob, cancellationToken);
+            if (stagedSegmentCount > 0)
+            {
+                await snapshotGrain.CommitStagedSnapshotAsync(blob, cancellationToken);
+            }
+            else
+            {
+                await snapshotGrain.SaveAsync(blob, cancellationToken);
+            }
+
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
 
             // Bank the wire size this leaf will have to read back (issue #2765),
@@ -1180,7 +1256,13 @@ internal sealed partial class BPlusLeafGrain
             // cheapest possible place to learn it: the capture path is already
             // about to persist state, so the hint rides a write that was
             // happening anyway.
-            var capturedLoadBytes = MeasureSnapshotLoadBytes(blob);
+            // For a staged capture the largest contiguous read a hydration will
+            // demand is the largest segment frame, not the whole snapshot -
+            // banking the latter would size the admission claim from a
+            // allocation that segmentation guarantees never happens.
+            var capturedLoadBytes = stagedSegmentCount > 0
+                ? largestStagedFrameBytes
+                : MeasureSnapshotLoadBytes(blob);
             if (capturedLoadBytes > 0)
             {
                 state.State.SnapshotLoadHintBytes = capturedLoadBytes;

@@ -122,6 +122,73 @@ public sealed class DurableVectorIndexChunkSizingTests
         });
     }
 
+    /// <summary>
+    /// The runtime's large-object-heap threshold. Restated here rather than
+    /// referenced from the production constant, so this fixture fails if that
+    /// constant is redefined upward: an arm that reads its bound from the value
+    /// it is checking cannot catch the value changing.
+    /// </summary>
+    private const int LargeObjectHeapThreshold = 85_000;
+
+    [Test]
+    public void A_chunk_record_is_allocated_off_the_large_object_heap()
+    {
+        var resolved = DurableVectorIndexOptions.ResolveItemsPerChunk(WideDimensions, 1_024);
+        var largestRecord = DurableVectorIndexOptions.MaxChunkBytes;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                largestRecord,
+                Is.LessThan(LargeObjectHeapThreshold),
+                $"a chunk sized against {largestRecord} bytes is allocated on the large object heap, which "
+                + "is not compacted between collections. The read path then fails for want of a contiguous "
+                + "run rather than for want of memory, which is why an affordability check denominated in "
+                + "total bytes can record a claim as FITTED and the allocation still throw");
+
+            // The resolved payload plus the headers it is wrapped in is the
+            // allocation that actually happens, so bound that rather than the
+            // budget it was derived from.
+            Assert.That(
+                (resolved * WideStride)
+                    + VectorIndexFormat.ChunkHeaderSize
+                    + VectorIndexPersistenceFormat.RecordHeaderSize,
+                Is.LessThan(LargeObjectHeapThreshold),
+                "the record a wide index actually writes, headers included, must clear the threshold too");
+
+            // Establishes that the clause above discriminates: at this width the
+            // byte budget is what binds, so the arm is testing the budget rather
+            // than a configured item count that happens to be small.
+            Assert.That(
+                (long)1_024 * WideStride,
+                Is.GreaterThan(LargeObjectHeapThreshold),
+                "the arm is vacuous unless the configured item count would land on the LOH at this width");
+        });
+    }
+
+    [Test]
+    public void The_chunk_ceiling_is_the_tighter_of_its_two_independent_bounds()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                DurableVectorIndexOptions.MaxChunkBytes,
+                Is.EqualTo(Math.Min(
+                    DurableVectorIndexOptions.ChunkBytesOffLargeObjectHeap,
+                    DurableVectorIndexOptions.ChunkBytesForBatchCoalescing)),
+                "the ceiling must be the tighter of the two bounds, so neither can be relaxed by raising "
+                + "the other");
+
+            // A batch still has to coalesce several records, which is the bound
+            // the heap bound must not silently displace.
+            Assert.That(
+                DurableVectorIndexOptions.WriteBatchBytes / DurableVectorIndexOptions.MaxChunkBytes,
+                Is.GreaterThanOrEqualTo(DurableVectorIndexOptions.MinChunksPerWriteBatch),
+                "tightening the ceiling for the heap must not break the batching relationship it also has "
+                + "to satisfy");
+        });
+    }
+
     [Test]
     public void A_wide_index_takes_the_largest_item_count_that_fits_the_byte_budget()
     {
@@ -191,8 +258,7 @@ public sealed class DurableVectorIndexChunkSizingTests
     }
 
     [Test]
-    public async Task A_resumed_wide_ingest_appends_rather_than_rewriting_what_it_banked()
-    {
+    public async Task A_resumed_wide_ingest_appends_rather_than_rewriting_what_it_banked()    {
         // The reference is the same corpus built without interruption, so the
         // bound below is expressed against an observed write volume rather than
         // against a constant fitted to this corpus.
@@ -252,12 +318,26 @@ public sealed class DurableVectorIndexChunkSizingTests
     [Test]
     public async Task An_ingest_resumed_under_a_different_chunk_size_recovers_the_whole_corpus()
     {
+        // Sized below the byte budget at this width, so the CONFIGURED count is
+        // what binds and the two runs really are laid out differently. Ceilings
+        // above the byte bound would both resolve to it, leaving the resume
+        // reading a cell laid out exactly as it writes one, and the arm would
+        // pass without ever exercising a size change.
+        const int SmallerCeiling = 10;
+        const int LargerCeiling = 15;
+
+        Assert.That(
+            DurableVectorIndexOptions.ResolveItemsPerChunk(WideDimensions, LargerCeiling),
+            Is.GreaterThan(DurableVectorIndexOptions.ResolveItemsPerChunk(WideDimensions, SmallerCeiling)),
+            "the arm is vacuous unless the two ceilings resolve to different chunk sizes at this width");
+
         var source = WideSource();
         var store = new InMemoryVectorIndexStore();
 
         // Ingest a prefix at one chunk size, so the store holds committed chunks
         // whose item count is known only to the options that wrote them.
-        var index = await DurableIndexHarness.OpenAsync(store, source, WideOptions(maxItemsPerChunk: 25));
+        var index = await DurableIndexHarness.OpenAsync(
+            store, source, WideOptions(maxItemsPerChunk: SmallerCeiling));
         await index.BuildStepAsync();
         await index.BuildStepAsync();
         Assert.That(
@@ -274,7 +354,8 @@ public sealed class DurableVectorIndexChunkSizingTests
         // ended, so the overlap happens to cover everything and the damage is
         // invisible; a larger one makes them start beyond it, leaving the
         // vectors in between written nowhere at all.
-        var resumed = await DurableIndexHarness.OpenAsync(store, source, WideOptions(maxItemsPerChunk: 40));
+        var resumed = await DurableIndexHarness.OpenAsync(
+            store, source, WideOptions(maxItemsPerChunk: LargerCeiling));
         await resumed.BuildStepAsync();
         Assert.That(
             resumed.Progress.Phase,
@@ -286,7 +367,8 @@ public sealed class DurableVectorIndexChunkSizingTests
         // mis-laid prefix on the way past and hides whether it was ever
         // coherent. Only a loader that has to trust the committed chunks, and
         // is not given the chance to rewrite them, sees the damage.
-        var reloaded = await DurableIndexHarness.OpenAsync(store, source, WideOptions(maxItemsPerChunk: 40));
+        var reloaded = await DurableIndexHarness.OpenAsync(
+            store, source, WideOptions(maxItemsPerChunk: LargerCeiling));
 
         Assert.That(
             reloaded.Count,

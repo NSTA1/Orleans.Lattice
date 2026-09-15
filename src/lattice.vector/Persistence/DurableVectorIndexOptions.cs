@@ -104,10 +104,72 @@ public sealed class DurableVectorIndexOptions
     internal const int MinChunksPerWriteBatch = 16;
 
     /// <summary>
-    /// The byte ceiling one chunk record is sized against, so a record is a small
-    /// fraction of a write batch rather than the whole of one.
+    /// The byte ceiling a chunk record would need to respect for a write batch to
+    /// coalesce several of them, rather than carrying barely more than one.
     /// </summary>
-    internal const int MaxChunkBytes = WriteBatchBytes / MinChunksPerWriteBatch;
+    internal const int ChunkBytesForBatchCoalescing = WriteBatchBytes / MinChunksPerWriteBatch;
+
+    /// <summary>
+    /// The byte ceiling a chunk record must respect to be allocated off the large
+    /// object heap. The runtime's LOH threshold is 85,000 bytes, and this leaves
+    /// headroom for the chunk and record headers a payload is wrapped in.
+    /// <para>
+    /// <b>Why the heap a chunk lands on is a correctness concern, not a tuning
+    /// one.</b> A chunk is one contiguous allocation on the read path, and the
+    /// LOH is not compacted between collections. A chunk above the threshold is
+    /// therefore allocated from a heap that fragments and is only ever collected
+    /// in gen2, so a steady read load churns the LOH while gen2 stays small - and
+    /// the failure that produces is not "out of memory" but "no contiguous run
+    /// this wide", which is why an affordability check denominated in total bytes
+    /// can pass and the allocation still fail. Measured on the repository-context
+    /// vector index: 8.3 to 12.9 GB of LOH against a gen2 of 108 MB, with the
+    /// affordability gate recording the claim as FITTED immediately before an
+    /// <c>OutOfMemoryException</c> materialising a single 84 MB leaf snapshot.
+    /// </para>
+    /// <para>
+    /// This matches the value and the reasoning that
+    /// <c>PooledPayloadSequence.ChunkBytes</c> already uses in the file storage
+    /// provider for the same reason.
+    /// </para>
+    /// <para>
+    /// <b>This bound is no longer what keeps a whole leaf materialisable.</b> An
+    /// earlier revision of this comment argued the per-record ceiling had to be
+    /// tight enough that a <i>full</i> core leaf - <c>DefaultMaxLeafKeys</c>
+    /// records of <c>MaxChunkBytes</c> each - stayed affordable as one contiguous
+    /// buffer, because a leaf that cannot be captured has no durable snapshot
+    /// coverage, which leaves its durable-materialiser pin without a usable
+    /// offset, which pins the tree's WAL trim floor at zero and grows the WAL
+    /// without bound.
+    /// </para>
+    /// <para>
+    /// That reasoning was sound about the consequence and wrong about the owner.
+    /// It made an application-layer package responsible for a core invariant by
+    /// copying a core constant it cannot see change, so a core that raised
+    /// <c>DefaultMaxLeafKeys</c> would silently invalidate a bound chosen here.
+    /// The core now segments a leaf snapshot at capture, so no whole-leaf
+    /// contiguous buffer is materialised at any leaf width and the invariant is
+    /// enforced where the constant lives. This package sizes chunks only for the
+    /// two reasons it genuinely owns: batch coalescing, and staying off the large
+    /// object heap.
+    /// </para>
+    /// </summary>
+    internal const int ChunkBytesOffLargeObjectHeap = 64 * 1024;
+
+    /// <summary>
+    /// The byte ceiling one chunk record is sized against: the tighter of the two
+    /// independent bounds above, so a record is both a small fraction of a write
+    /// batch and small enough to be allocated off the large object heap.
+    /// <para>
+    /// Taking the minimum of two named bounds rather than writing one constant
+    /// keeps each reason auditable and keeps them from silently trading against
+    /// each other: raising <see cref="WriteBatchBytes"/> for throughput cannot
+    /// push a chunk onto the LOH, and lowering it cannot be mistaken for having
+    /// addressed the heap concern.
+    /// </para>
+    /// </summary>
+    internal const int MaxChunkBytes = ChunkBytesOffLargeObjectHeap < ChunkBytesForBatchCoalescing
+        ? ChunkBytesOffLargeObjectHeap
+        : ChunkBytesForBatchCoalescing;
 
     /// <summary>
     /// The number of items a chunk record is actually written at: the largest
