@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using Orleans.Serialization;
@@ -42,6 +44,7 @@ internal sealed partial class RepoContextStore
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
     private readonly RepoContextAnnIndexScheduler? _annScheduler;
+    private readonly ILogger _logger;
     private readonly string _replicaId;
 
     /// <summary>Creates the capture/maintenance adapter.</summary>
@@ -63,6 +66,13 @@ internal sealed partial class RepoContextStore
     /// retrieval plane is not composed into this host - in which case no coordinator
     /// was ever armed and there is nothing to stop.
     /// </param>
+    /// <param name="logger">
+    /// Diagnostics for the faults the index reset now tolerates instead of
+    /// propagating, or <see langword="null"/> to discard them. A tolerated fault is
+    /// still named in the failure this verb raises, but only the log carries its
+    /// stack trace, and a tree that could not be drained is exactly the case an
+    /// operator needs the stack for.
+    /// </param>
     public RepoContextStore(
         IGrainFactory grainFactory,
         IRepoIndexRunner indexRunner,
@@ -71,8 +81,8 @@ internal sealed partial class RepoContextStore
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
         TimeProvider timeProvider,
         IRepoContextReplicaIdentity? replicaIdentity = null,
-        RepoContextAnnIndexScheduler? annScheduler = null)
-    {
+        RepoContextAnnIndexScheduler? annScheduler = null,
+        ILogger<RepoContextStore>? logger = null)    {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(indexRunner);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -86,6 +96,7 @@ internal sealed partial class RepoContextStore
         _vectorWriter = vectorWriter;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
+        _logger = logger ?? (ILogger)NullLogger.Instance;
         _annScheduler = annScheduler;
         _replicaId = replicaIdentity?.ReplicaId ?? LocalRepoContextReplicaIdentity.LocalReplicaId;
     }
@@ -1216,7 +1227,19 @@ internal sealed partial class RepoContextStore
         RequireNonEmpty(repoId, "repoId");
 
         var resetStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        await TearDownIndexingControlAsync(repoId).ConfigureAwait(false);
+
+        // Collected, not thrown. TearDownIndexingControlAsync runs BEFORE any
+        // sweeping, so until now a single unresponsive control-plane grain aborted
+        // the reset before it deleted one record - and the grain most likely to be
+        // unresponsive is the approximate-index build coordinator, whose slices
+        // read the very vector trees the reset exists to drop. A damaged tree
+        // therefore starved the stop call that was supposed to precede dropping
+        // that tree, which is a deadlock in the recovery path: the worse the damage,
+        // the less able the reset was to start. RemoveRepoAsync keeps the strict
+        // behaviour (see the overload's remarks); only the recovery verb tolerates
+        // a teardown fault, and it reports every one it tolerated.
+        var teardownFailures = new List<string>();
+        await TearDownIndexingControlAsync(repoId, teardownFailures).ConfigureAwait(false);
 
         // Mark the reset observable BEFORE any deletion. TearDownIndexingControlAsync
         // above cleared the job grain (it cancels and clears any in-flight index
@@ -1294,6 +1317,8 @@ internal sealed partial class RepoContextStore
 
         long deleted = 0;
         var treesSwept = 0;
+        var sweptTrees = new List<string>();
+        var sweepFailures = new List<string>();
         foreach (var treeName in RepoContextTrees.CodeIndexTrees)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1308,9 +1333,60 @@ internal sealed partial class RepoContextStore
                     "A code-only reset refused to sweep an unclassified tree: '" + treeName + "'.");
             }
 
-            deleted += await SweepTreeForResetAsync(
-                    treeName, repoId, scanPrefix, end, cancellationToken)
-                .ConfigureAwait(false);
+            // One undrainable tree must not cost the other nine. The loop
+            // previously let the first failure propagate, which sounds like the
+            // safe default and is the opposite here: CodeIndexTrees is an ordered
+            // constant, so a tree that cannot be drained permanently shadows every
+            // tree after it, and the reset can never reach them however many times
+            // it is retried. That was measured, not theorised - a ~170 MB leaf on
+            // the symbol tree (position 2) blocked the vector-index tree (position
+            // 9) which by itself held 99.2% of a 41 GB write-ahead log, so the one
+            // verb that exists to reclaim that log could not reach the records
+            // holding it open. Continuing past a failed tree is what lets the
+            // whole-tree fallback in SweepTreeForResetAsync do its job on the
+            // trees that CAN be recovered.
+            //
+            // The catch is deliberately narrow, and each omission is load-bearing:
+            //
+            //  - ILatticeLeafUnavailable and TimeoutException are the two shapes a
+            //    tree that cannot be enumerated actually takes, and both are
+            //    properties of the tree rather than of this request, so skipping
+            //    to the next tree is the only way to make progress.
+            //  - OperationCanceledException is NOT caught: a caller that cancelled
+            //    must see the reset stop, not watch it grind through nine more
+            //    trees pretending each one failed.
+            //  - McpException is NOT caught: the refusals above it (an unclassified
+            //    tree, the sole-repo gate inside the fallback) are deliberate
+            //    fail-closed decisions, and swallowing one would turn a refusal to
+            //    act into a silently skipped tree.
+            //  - Nothing else is caught, so a genuine defect still surfaces as a
+            //    failed reset rather than as a tree quietly recorded as damaged.
+            //  - The structural tree is excluded from the catch entirely. Its
+            //    fault is not "one tree of ten is damaged": it holds the
+            //    repo/{repoId} marker that keeps the repository enumerable and the
+            //    file nodes every other tree is keyed against, and
+            //    SweepTreeForResetAsync refuses the whole-tree fallback on it
+            //    unconditionally for that reason. A reset that cannot drain it has
+            //    not partially succeeded, so it aborts with the original fault
+            //    rather than recording a skipped tree.
+            try
+            {
+                deleted += await SweepTreeForResetAsync(
+                        treeName, repoId, scanPrefix, end, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                !string.Equals(treeName, RepoContextTrees.Structural, StringComparison.Ordinal)
+                && IsUndrainableTreeFault(ex))
+            {
+                _logger.LogError(
+                    ex,
+                    "Reset of repository '{RepoId}' could not drain tree '{Tree}'; continuing with the remaining trees.",
+                    repoId,
+                    treeName);
+                sweepFailures.Add(treeName + " (" + ex.GetType().Name + ": " + ex.Message + ")");
+                continue;
+            }
 
             // Report progress after each tree drains, so index_status shows the
             // teardown advancing (evidence of progress, not merely a "resetting"
@@ -1318,6 +1394,7 @@ internal sealed partial class RepoContextStore
             // signal a caller needs; the completion marker is still withheld until
             // the whole loop finishes.
             treesSwept++;
+            sweptTrees.Add(treeName);
             await jobGrain.ReportResetProgressAsync(treesSwept, checked((int)deleted)).ConfigureAwait(false);
         }
 
@@ -1362,6 +1439,44 @@ internal sealed partial class RepoContextStore
 
         resetStopwatch.Stop();
 
+        // A reset that could not drain every tree is NOT complete, and must not
+        // say it is. CompleteResetAsync is the sole completion signal and its
+        // contract is that an interrupted reset never reaches it, so a partial
+        // sweep reports failure on the job surface and raises - it does not return
+        // a result with a quietly shorter TreesSwept list, which a caller reading
+        // a success response has no reason to inspect.
+        //
+        // Everything the sweep DID drain is already durable and is not rolled
+        // back, so the message states it: the operator needs to know both that the
+        // reset was partial and that it made real progress, because the correct
+        // response to "eight of ten trees drained, two are damaged" is to
+        // investigate those two, not to assume nothing happened and retry blindly.
+        if (sweepFailures.Count > 0 || teardownFailures.Count > 0)
+        {
+            var detail = new System.Text.StringBuilder()
+                .Append("The reset of repository '").Append(repoId)
+                .Append("' was partial. Drained ").Append(treesSwept).Append(" of ")
+                .Append(RepoContextTrees.CodeIndexTrees.Count).Append(" trees and deleted ")
+                .Append(deleted).Append(" entries; that work is durable and is not rolled back.");
+
+            if (sweepFailures.Count > 0)
+            {
+                detail.Append(" Trees that could not be drained: ")
+                    .Append(string.Join("; ", sweepFailures)).Append('.');
+            }
+
+            if (teardownFailures.Count > 0)
+            {
+                detail.Append(" Control-plane teardown steps that did not complete: ")
+                    .Append(string.Join("; ", teardownFailures))
+                    .Append(". A writer may still be live for this repository.");
+            }
+
+            var message = detail.ToString();
+            await jobGrain.FailAsync(message).ConfigureAwait(false);
+            throw new McpException(message);
+        }
+
         // The sole completion signal, written only now the sweep has finished.
         // Everything above this line ran with the job surface reporting a running
         // teardown; this is what flips it to Completed, so a caller can distinguish
@@ -1376,11 +1491,35 @@ internal sealed partial class RepoContextStore
             RepoId = repoId,
             EntriesDeleted = checked((int)deleted),
             ElapsedMilliseconds = resetStopwatch.ElapsedMilliseconds,
-            TreesSwept = RepoContextTrees.CodeIndexTrees,
+            // The trees actually swept, not the constant list. TreesSwept is
+            // documented as "named rather than counted so the caller can see
+            // exactly what was dropped instead of trusting that the sweep covered
+            // what it should have" - assigning CodeIndexTrees unconditionally
+            // asserted precisely the thing the caller was told not to trust. The
+            // two agreed only because the loop had no way to skip a tree; now that
+            // it has, reporting the constant would be a straightforward lie.
+            TreesSwept = sweptTrees,
             MemoryPreserved = true,
             CensusCleared = censusCleared,
         };
     }
+
+    /// <summary>
+    /// Whether a fault means a tree cannot be drained right now, as opposed to
+    /// the reset being refused or a defect having surfaced. Shared by the sweep
+    /// loop and the control-plane teardown so the two cannot drift apart on what
+    /// counts as recoverable.
+    /// <para>
+    /// <see cref="ILatticeLeafUnavailable"/> covers both core exceptions that mean
+    /// a leaf cannot be activated; <see cref="TimeoutException"/> covers an
+    /// Orleans response timeout on the tree grain and, because both derive from
+    /// it, the core's own stalled-scan and shard-activation timeouts. Neither is a
+    /// property of this request, so retrying it unchanged repeats the same
+    /// failure while moving to the next tree makes progress.
+    /// </para>
+    /// </summary>
+    private static bool IsUndrainableTreeFault(Exception ex) =>
+        ex is ILatticeLeafUnavailable or TimeoutException;
 
     /// <summary>
     /// Sweeps one code-index tree's <c>repo/{repoId}/</c> subtree for
@@ -1393,7 +1532,11 @@ internal sealed partial class RepoContextStore
     /// trimmed with no covering snapshot, or it cannot be materialised within the
     /// memory available) the reset cannot make progress at all. That is the exact
     /// state an operator invokes a reset to escape, so the one verb that exists to
-    /// recover a damaged index is disabled by the damage.
+    /// recover a damaged index is disabled by the damage. Both shapes carry
+    /// <see cref="ILatticeLeafUnavailable"/>, which is what lets this package catch
+    /// the condition at all - one of the two concrete types is internal to the
+    /// core, so before that marker existed only one of the two was reachable here
+    /// and the memory-exhaustion shape fell straight through the fallback.
     /// </para>
     /// <para>
     /// <see cref="ILattice.DeleteTreeAsync"/> is the one public primitive that
@@ -1437,7 +1580,7 @@ internal sealed partial class RepoContextStore
                 .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (LeafProjectionStaleException stale)
+        catch (Exception unavailable) when (unavailable is ILatticeLeafUnavailable)
         {
             if (string.Equals(treeName, RepoContextTrees.Structural, StringComparison.Ordinal))
             {
@@ -1453,13 +1596,13 @@ internal sealed partial class RepoContextStore
             if (!soleRegisteredRepo)
             {
                 throw new McpException(
-                    $"The code-index tree '{treeName}' holds a leaf that is terminally stale, so the "
+                    $"The code-index tree '{treeName}' holds a leaf that cannot be activated, so the "
                     + $"repository subtree for '{repoId}' cannot be enumerated to delete it. The whole-tree "
                     + "drop that would recover it was refused because "
                     + $"{repoIds.Count} repositories share this tree and dropping it would delete their "
                     + "index records too. Remove or reset the other repositories first, or remove this one "
                     + "with repocontext_remove_repo.",
-                    stale);
+                    unavailable);
             }
 
             // Infrastructure-authored maintenance with no user identity behind it,
@@ -1477,12 +1620,12 @@ internal sealed partial class RepoContextStore
             {
                 await tree.PurgeTreeAsync(CancellationToken.None).ConfigureAwait(false);
             }
-            catch (LeafProjectionStaleException purgeStale)
+            catch (Exception purgeUnavailable) when (purgeUnavailable is ILatticeLeafUnavailable)
             {
                 // Best-effort, matching the self-healer: the soft-delete has already
                 // unblocked the terminal state and registered a reminder-driven
                 // purge that completes the reclaim out of band.
-                _ = purgeStale;
+                _ = purgeUnavailable;
             }
 
             // A whole-tree drop tombstones no individual entries, so it contributes
@@ -1503,7 +1646,20 @@ internal sealed partial class RepoContextStore
     /// teardown - a second copy would drift from the load-bearing comment
     /// below.
     /// </summary>
-    private async Task TearDownIndexingControlAsync(string repoId)
+    /// <param name="repoId">The repository whose control plane is torn down.</param>
+    /// <param name="faults">
+    /// When <see langword="null"/> (the <see cref="RemoveRepoAsync"/> path) every
+    /// step must succeed and the first failure propagates, because a removal
+    /// deletes the repository's memory as well as its index and must not run with
+    /// a writer still live. When non-<see langword="null"/> (the
+    /// <see cref="ResetIndexAsync"/> path) a recoverable fault in one step is
+    /// appended here and the remaining steps still run, because a reset is the
+    /// verb invoked precisely when the deployment is already damaged - refusing to
+    /// start until the damaged deployment answers promptly is how the recovery
+    /// path deadlocks against the damage. The caller reports every collected fault
+    /// and never claims the reset completed.
+    /// </param>
+    private async Task TearDownIndexingControlAsync(string repoId, ICollection<string>? faults = null)
     {
         // Stop any in-flight indexing run and drain it to a full halt BEFORE
         // deleting a single record. CancelAndWaitAsync cancels the run and awaits
@@ -1514,16 +1670,24 @@ internal sealed partial class RepoContextStore
         // so a removed repository leaves no reminder firing forever and no job
         // state for a later start to resume. Doing this first (rather than last)
         // also means an error in the delete pass can no longer skip the cleanup.
-        await _indexRunner.CancelAndWaitAsync(repoId).ConfigureAwait(false);
-        await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
-            .CancelAndClearAsync()
-            .ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "cancel the in-flight indexing run",
+            () => _indexRunner.CancelAndWaitAsync(repoId),
+            repoId,
+            faults).ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "clear the index job grain",
+            () => _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId).CancelAndClearAsync(),
+            repoId,
+            faults).ConfigureAwait(false);
 
         // Tear down the repository's always-on self-index scan so a removed
         // repository leaves no keep-alive reminder firing and no checkpoint behind.
-        await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
-            .StopAsync()
-            .ConfigureAwait(false);
+        await RunTeardownStepAsync(
+            "stop the self-index scan",
+            () => _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId).StopAsync(),
+            repoId,
+            faults).ConfigureAwait(false);
 
         // Disarm the approximate-index build coordinator. This is the FOURTH
         // reminder-anchored writer for a repository, and until now teardown covered
@@ -1541,9 +1705,44 @@ internal sealed partial class RepoContextStore
         // in which case no coordinator was ever armed. The stop is not gated on the
         // scheduling switch: see RepoContextAnnIndexScheduler.TryStopAsync for why
         // the switch being off is the state that most needs stopping.
+        //
+        // This is the step measured to time out against a damaged index: the
+        // coordinator is non-reentrant and its build slice, though budgeted at five
+        // seconds of its own work, blocks indefinitely inside a single vector read
+        // against an unresponsive tree, so the stop queues behind a turn that never
+        // ends. On the reset path that fault is now collected rather than fatal.
         if (_annScheduler is not null)
         {
-            await _annScheduler.TryStopAsync(repoId, CancellationToken.None).ConfigureAwait(false);
+            await RunTeardownStepAsync(
+                "disarm the approximate-index build coordinator",
+                () => _annScheduler.TryStopAsync(repoId, CancellationToken.None),
+                repoId,
+                faults).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs one control-plane teardown step, either strictly or fault-collecting
+    /// according to whether <paramref name="faults"/> was supplied. Only the same
+    /// undrainable-tree shapes the sweep loop tolerates are collected - a
+    /// cancellation, a deliberate refusal, or any other exception still propagates,
+    /// so tolerating a wedged grain never becomes tolerating a defect.
+    /// </summary>
+    private async Task RunTeardownStepAsync(
+        string description, Func<Task> step, string repoId, ICollection<string>? faults)
+    {
+        try
+        {
+            await step().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (faults is not null && IsUndrainableTreeFault(ex))
+        {
+            _logger.LogError(
+                ex,
+                "Reset of repository '{RepoId}' could not {Step}; continuing so the sweep can still run.",
+                repoId,
+                description);
+            faults.Add(description + " (" + ex.GetType().Name + ": " + ex.Message + ")");
         }
     }
 
