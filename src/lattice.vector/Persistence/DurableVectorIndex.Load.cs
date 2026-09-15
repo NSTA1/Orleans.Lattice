@@ -145,20 +145,56 @@ public sealed partial class DurableVectorIndex
         _persistedPartitions = partitionSlots;
         _restored = true;
 
-        // The append-only ingest prefix is addressed by chunk index, so it can
-        // only be appended to while the chunks already on the store hold the same
-        // number of items each one is written at now. A durable prefix whose
-        // committed count is not that multiple was laid out at a different item
-        // count - by an earlier configuration, or by a build whose dimensionality
-        // resolves to a different one - and appending to it would number new
-        // chunks over a different range of vectors. Falling back to a full
-        // rewrite re-lays the prefix at the current size instead, which costs one
-        // rewrite of what has been ingested so far and then resumes appending.
-        if (manifest.Header.PartitionCount == 0 &&
-            chunkCounts[0] > 0 &&
-            manifest.IndexedCount != (long)chunkCounts[0] * _options.EffectiveItemsPerChunk)
+        // The append-only ingest prefix is addressed by chunk index: a checkpoint
+        // writes chunk numbers at or above the committed count and never revisits
+        // one below it. That is only sound while the committed prefix ends on a
+        // chunk boundary, because a prefix whose last chunk is partial would have
+        // its missing items silently skipped by the next append, and a loader
+        // would then read back fewer vectors than the manifest promises and
+        // correctly discard the whole index.
+        //
+        // Two different states fail that test, and they need opposite answers.
+        //
+        // A prefix laid out at a DIFFERENT item count - by an earlier
+        // configuration, or by a build whose dimensionality resolves to another
+        // one - cannot be appended to at all, because its chunk numbering spans a
+        // different range of vectors. That one has to be re-laid whole, which is
+        // what surrendering append-only asks for.
+        //
+        // A prefix laid out at THIS item count but ending mid-chunk is the
+        // ordinary output of the two writers that commit a true count rather than
+        // a rounded one: a completed ingest checkpoint, and a full rewrite. It
+        // needs no re-lay. Treating it as one is what made this unbounded: the
+        // re-lay itself commits a true count, so it lands right back in this state
+        // and re-arms the condition on the very next load. Every activation then
+        // rewrote the entire cell under a fresh epoch, and because the epoch is
+        // part of the chunk key nothing superseded anything - the write-ahead log
+        // grew without limit while the index stood still. An index whose training
+        // never completes stays under this branch forever, so the loop had no
+        // natural exit.
+        //
+        // The repair is to stop counting the partial tail chunk as committed. The
+        // vectors in it are already restored in memory, so lowering the committed
+        // count to the whole chunks lets the next checkpoint rewrite that tail in
+        // place and commit a boundary-aligned prefix, which clears the condition
+        // for good. The interval below is what separates the two states: a count
+        // laid out at a different item size misses it by more than one chunk.
+        if (manifest.Header.PartitionCount == 0 && chunkCounts[0] > 0)
         {
-            _ingestAppendOnly = false;
+            var itemsPerChunk = _options.EffectiveItemsPerChunk;
+            var upper = (long)chunkCounts[0] * itemsPerChunk;
+
+            if (manifest.IndexedCount <= upper - itemsPerChunk || manifest.IndexedCount > upper)
+            {
+                _ingestAppendOnly = false;
+            }
+            else if (_loadMode == VectorIndexLoadMode.Full)
+            {
+                // A no-op when the prefix already ends on a boundary. Confined to
+                // a full load because a lazy handle never writes, so it must keep
+                // reporting the tail chunk it may still be asked to read.
+                _persistedChunkCount[0] = (int)(manifest.IndexedCount / itemsPerChunk);
+            }
         }
 
         // Every partition's durable form matches what is now in memory, so the
