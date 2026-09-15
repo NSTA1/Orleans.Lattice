@@ -129,6 +129,127 @@ public sealed class DurableVectorIndexWriteAmplificationTests
             "a retirement that found nothing shifted nothing, so it must not make the checkpoint rewrite the cell");
     }
 
+    /// <summary>
+    /// Drives a build to the state a stalled one leaves on the store: a committed
+    /// prefix that ends part-way through a chunk.
+    /// <para>
+    /// Only two writers produce it, and both commit a true vector count rather
+    /// than one rounded down to a chunk boundary: a completed ingest checkpoint,
+    /// and the full rewrite the checkpoint falls back to when something replaced a
+    /// vector mid-build. The second is reproduced here, because it is reachable
+    /// while the build is still ingesting and so leaves the index in the state a
+    /// restart has to resume from.
+    /// </para>
+    /// </summary>
+    private static async Task<InMemoryVectorIndexStore> PrefixEndingMidChunkAsync(
+        ListVectorSource source, DurableVectorIndexOptions options)
+    {
+        var store = new InMemoryVectorIndexStore();
+        var index = await DurableIndexHarness.OpenAsync(store, source, options);
+        await index.BuildStepAsync();
+        await index.BuildStepAsync();
+        await index.BuildStepAsync();
+
+        // Appends the build's own stream can never hand over again, which is what
+        // takes the count off a chunk boundary and keeps it off one.
+        for (var i = 1; i <= 3; i++)
+        {
+            var late = $"doc-000000-late{i}";
+            source.Set(late, source[DurableIndexHarness.Id(i)]);
+            await index.UpsertAsync(late, source[late]);
+        }
+
+        // A replacement of an identifier already streamed, which is what
+        // legitimately takes the cell out of append-only for one checkpoint.
+        await index.UpsertAsync(DurableIndexHarness.Id(0), source[DurableIndexHarness.Id(LargeCorpus - 1)]);
+        await index.BuildStepAsync();
+
+        Assert.That(index.Progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ingesting));
+        return store;
+    }
+
+    /// <summary>
+    /// The cost of resuming a build must be the cost of the slice it ingests, and
+    /// nothing about the size of what is already committed.
+    /// <para>
+    /// A committed prefix that ends mid-chunk used to be read as a prefix laid out
+    /// at some other item count, and the answer to that is to re-lay the cell
+    /// whole. But the re-lay commits a true count too, so it lands straight back in
+    /// the same state and re-arms the condition for the next load. Every activation
+    /// then rewrote the entire cell under a fresh epoch, and because the epoch is
+    /// part of the chunk key nothing superseded anything: a log-structured store
+    /// retains every pass, so the write-ahead log grew without limit while the
+    /// index stood still. An index whose training never completes never leaves that
+    /// branch, which is how one deployment reached 38 GB of write-ahead log for a
+    /// 55,000 vector index across 215 epochs.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Resuming_a_build_whose_committed_prefix_ends_mid_chunk_costs_the_same_on_every_restart()
+    {
+        var source = DurableIndexHarness.Source(LargeCorpus);
+        var options = Options();
+        var store = await PrefixEndingMidChunkAsync(source, options);
+
+        var volumes = new List<long>();
+        for (var restart = 0; restart < 8; restart++)
+        {
+            var resumed = await DurableIndexHarness.OpenAsync(store, source, options);
+            store.ResetBytesWritten();
+            await resumed.BuildStepAsync();
+            volumes.Add(store.BytesWritten);
+        }
+
+        // Each restart ingests one slice of the same size, so a checkpoint that
+        // writes only what arrived is flat across the run. One that re-lays the
+        // cell instead grows with the index on every pass, which is the shape
+        // being ruled out rather than any particular byte count.
+        Assert.That(
+            (double)volumes[^1] / volumes[0],
+            Is.LessThan(1.25),
+            $"resuming cost {volumes[0]} bytes on the first restart and {volumes[^1]} on the last, so the "
+            + "checkpoint is re-laying the committed cell on every activation rather than appending to it");
+    }
+
+    /// <summary>
+    /// Resuming from a prefix that ends mid-chunk must not lose the index.
+    /// <para>
+    /// The partial chunk is the whole difficulty: an append numbers its chunks from
+    /// the committed count up, so resuming without accounting for that tail leaves
+    /// it holding fewer vectors than its chunk number claims. A loader then reads
+    /// back less than the manifest promises, and because a partially trusted index
+    /// is the one thing the coherence contract rules out, it discards the lot. That
+    /// failure is silent, arrives one restart later than the change that caused it,
+    /// and costs the entire index, so it is worth its own arm.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_prefix_ending_mid_chunk_is_resumed_and_not_discarded()
+    {
+        var source = DurableIndexHarness.Source(LargeCorpus);
+        var options = Options();
+        var store = await PrefixEndingMidChunkAsync(source, options);
+
+        var counts = new List<int>();
+        for (var restart = 0; restart < 4; restart++)
+        {
+            var resumed = await DurableIndexHarness.OpenAsync(store, source, options);
+            await resumed.BuildStepAsync();
+            counts.Add(resumed.Count);
+
+            Assert.That(
+                resumed.Count,
+                Is.GreaterThan(0),
+                $"restart {restart} loaded an empty index, so the committed prefix was discarded");
+        }
+
+        Assert.That(counts, Is.Ordered.Ascending, "a resumed build must keep what it had and add to it");
+        Assert.That(
+            store.KeysWithPrefix("vidx/k/f/"),
+            Has.Count.EqualTo(counts[^1]),
+            "the identifier mapping and the cell must still describe the same index");
+    }
+
     [Test]
     public async Task A_replacement_the_build_did_not_make_is_still_durable_across_a_restart()
     {
