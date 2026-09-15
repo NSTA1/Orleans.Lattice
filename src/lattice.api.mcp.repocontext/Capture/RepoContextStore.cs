@@ -41,6 +41,7 @@ internal sealed partial class RepoContextStore
     private readonly RepoContextVectorWriter _vectorWriter;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
+    private readonly RepoContextAnnIndexScheduler? _annScheduler;
     private readonly string _replicaId;
 
     /// <summary>Creates the capture/maintenance adapter.</summary>
@@ -56,6 +57,12 @@ internal sealed partial class RepoContextStore
     /// replication companion registers a cluster-id identity so cross-cluster
     /// concurrent memory writes mint distinct dots and both survive the merge.
     /// </param>
+    /// <param name="annScheduler">
+    /// The approximate-index build scheduler, used to disarm a repository's build
+    /// coordinator during teardown, or <see langword="null"/> when the approximate
+    /// retrieval plane is not composed into this host - in which case no coordinator
+    /// was ever armed and there is nothing to stop.
+    /// </param>
     public RepoContextStore(
         IGrainFactory grainFactory,
         IRepoIndexRunner indexRunner,
@@ -63,7 +70,8 @@ internal sealed partial class RepoContextStore
         RepoContextVectorWriter vectorWriter,
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
         TimeProvider timeProvider,
-        IRepoContextReplicaIdentity? replicaIdentity = null)
+        IRepoContextReplicaIdentity? replicaIdentity = null,
+        RepoContextAnnIndexScheduler? annScheduler = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(indexRunner);
@@ -78,6 +86,7 @@ internal sealed partial class RepoContextStore
         _vectorWriter = vectorWriter;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
+        _annScheduler = annScheduler;
         _replicaId = replicaIdentity?.ReplicaId ?? LocalRepoContextReplicaIdentity.LocalReplicaId;
     }
 
@@ -1299,8 +1308,8 @@ internal sealed partial class RepoContextStore
                     "A code-only reset refused to sweep an unclassified tree: '" + treeName + "'.");
             }
 
-            deleted += await Tree(treeName)
-                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
+            deleted += await SweepTreeForResetAsync(
+                    treeName, repoId, scanPrefix, end, cancellationToken)
                 .ConfigureAwait(false);
 
             // Report progress after each tree drains, so index_status shows the
@@ -1374,9 +1383,122 @@ internal sealed partial class RepoContextStore
     }
 
     /// <summary>
+    /// Sweeps one code-index tree's <c>repo/{repoId}/</c> subtree for
+    /// <see cref="ResetIndexAsync"/>, falling back to a whole-tree drop when the
+    /// subtree cannot be walked at all.
+    /// <para>
+    /// The normal path is the resilient range-delete every other sweep uses. It
+    /// enumerates, and enumeration activates leaves - so on a tree holding a leaf
+    /// that is terminally un-activatable (its durable projection checkpoint was
+    /// trimmed with no covering snapshot, or it cannot be materialised within the
+    /// memory available) the reset cannot make progress at all. That is the exact
+    /// state an operator invokes a reset to escape, so the one verb that exists to
+    /// recover a damaged index is disabled by the damage.
+    /// </para>
+    /// <para>
+    /// <see cref="ILattice.DeleteTreeAsync"/> is the one public primitive that
+    /// makes progress there: it marks every shard root deleted through shard-root
+    /// state alone and never activates the throwing leaf. It drops the
+    /// <b>whole</b> tree, though, and these trees are shared by every repository,
+    /// so it is only equivalent to the requested subtree delete when this
+    /// repository is the only registered one. When another repository shares the
+    /// tree the fault is rethrown rather than silently widened into someone else's
+    /// data - the same fail-closed discipline
+    /// <see cref="RepoContextTrees.IsRebuildableVectorTree"/> applies to the
+    /// self-healer.
+    /// </para>
+    /// <para>
+    /// <see cref="RepoContextTrees.Structural"/> is excluded from the fallback
+    /// unconditionally. It carries the separator-free <c>repo/{repoId}</c> marker
+    /// that <see cref="ResetIndexAsync"/> deliberately preserves to keep the
+    /// repository enumerable, and that marker is outside the swept range precisely
+    /// so the sweep cannot take it. A whole-tree drop is not bounded by the range
+    /// and would delete it, turning a reset back into the disappearance the
+    /// preserve branch exists to prevent.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">The code-index tree to sweep.</param>
+    /// <param name="repoId">The repository being reset.</param>
+    /// <param name="scanPrefix">The inclusive start of the repository's subtree.</param>
+    /// <param name="end">The exclusive upper bound of the repository's subtree.</param>
+    /// <param name="cancellationToken">Cancels the sweep between steps.</param>
+    /// <returns>The number of entries tombstoned, or zero when the tree was dropped whole.</returns>
+    private async Task<long> SweepTreeForResetAsync(
+        string treeName,
+        string repoId,
+        string scanPrefix,
+        string end,
+        CancellationToken cancellationToken)
+    {
+        var tree = Tree(treeName);
+        try
+        {
+            return await tree
+                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (LeafProjectionStaleException stale)
+        {
+            if (string.Equals(treeName, RepoContextTrees.Structural, StringComparison.Ordinal))
+            {
+                throw;
+            }
+
+            // Only equivalent to the requested subtree delete when nothing else
+            // lives in the tree. Read the registration census rather than assume:
+            // a shared tree must keep the fault.
+            var repoIds = await ListRepoIdsAsync(cancellationToken).ConfigureAwait(false);
+            var soleRegisteredRepo = repoIds.Count <= 1
+                && (repoIds.Count == 0 || string.Equals(repoIds[0], repoId, StringComparison.Ordinal));
+            if (!soleRegisteredRepo)
+            {
+                throw new McpException(
+                    $"The code-index tree '{treeName}' holds a leaf that is terminally stale, so the "
+                    + $"repository subtree for '{repoId}' cannot be enumerated to delete it. The whole-tree "
+                    + "drop that would recover it was refused because "
+                    + $"{repoIds.Count} repositories share this tree and dropping it would delete their "
+                    + "index records too. Remove or reset the other repositories first, or remove this one "
+                    + "with repocontext_remove_repo.",
+                    stale);
+            }
+
+            // Infrastructure-authored maintenance with no user identity behind it,
+            // exactly as RepoContextVectorPlaneReDeriver documents for the same
+            // primitive. The bypass is bounded the same way: it is entered only
+            // after the fail-closed code-index classification accepted the tree,
+            // the tree name is a local layout constant rather than any wire- or
+            // exception-derived value, the scope contains nothing but the
+            // delete/purge of that one tree, and it is lexical and disposed on
+            // every path.
+            using var systemOrigin = LatticeSystemOrigin.Enter();
+
+            await tree.DeleteTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await tree.PurgeTreeAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (LeafProjectionStaleException purgeStale)
+            {
+                // Best-effort, matching the self-healer: the soft-delete has already
+                // unblocked the terminal state and registered a reminder-driven
+                // purge that completes the reclaim out of band.
+                _ = purgeStale;
+            }
+
+            // A whole-tree drop tombstones no individual entries, so it contributes
+            // nothing to the deletion count. That is deliberate rather than a lost
+            // figure: the count feeds the "was anything here?" test that decides
+            // whether to re-derive an absent marker, and a dropped tree is not
+            // evidence about THIS repository's records specifically.
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Cancels any in-flight indexing run for a repository, clears the job
-    /// grain's durable state and its resume reminder, and stops the always-on
-    /// self-index scan. Shared by <see cref="RemoveRepoAsync"/> and
+    /// grain's durable state and its resume reminder, stops the always-on
+    /// self-index scan, and disarms the approximate-index build coordinator.
+    /// Shared by <see cref="RemoveRepoAsync"/> and
     /// <see cref="ResetIndexAsync"/> so both take the same control-plane
     /// teardown - a second copy would drift from the load-bearing comment
     /// below.
@@ -1402,6 +1524,27 @@ internal sealed partial class RepoContextStore
         await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
             .StopAsync()
             .ConfigureAwait(false);
+
+        // Disarm the approximate-index build coordinator. This is the FOURTH
+        // reminder-anchored writer for a repository, and until now teardown covered
+        // only three - so a removed or reset repository left a durable keep-alive
+        // registered for a build over records that were about to be deleted.
+        //
+        // Two consequences, both observed. The coordinator reactivates on that
+        // reminder after every restart and re-opens the index into the process,
+        // which is resident memory held for a repository that may no longer exist;
+        // and it is a live writer to the vector-index tree racing the range-delete
+        // below, which is precisely the state the CancelAndWaitAsync comment above
+        // exists to prevent for the other three.
+        //
+        // Null when the approximate retrieval plane is not composed into this host,
+        // in which case no coordinator was ever armed. The stop is not gated on the
+        // scheduling switch: see RepoContextAnnIndexScheduler.TryStopAsync for why
+        // the switch being off is the state that most needs stopping.
+        if (_annScheduler is not null)
+        {
+            await _annScheduler.TryStopAsync(repoId, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private async Task<RepoContextRepoSummary> BuildRepoSummaryAsync(
