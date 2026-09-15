@@ -31,10 +31,17 @@ namespace Orleans.Lattice;
 /// generated same-silo deep copier can resolve a base-type copier, which Orleans
 /// registers for <see cref="Exception"/> but not for its BCL subclasses.
 /// </para>
+/// <para>
+/// Implements <see cref="ILatticeLeafUnavailable"/> so a caller outside this
+/// assembly can recognise the condition without naming this type, which stays
+/// <see langword="internal"/>. The marker is an interface precisely so that the
+/// "derives directly from <see cref="Exception"/>" property above survives
+/// intact - a shared base class would have taken it away.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafSnapshotUnaffordable)]
-internal sealed class LeafSnapshotUnaffordableException : Exception
+internal sealed class LeafSnapshotUnaffordableException : Exception, ILatticeLeafUnavailable
 {
     /// <summary>The tree whose leaf could not be hydrated.</summary>
     [Id(0)] public string TreeId { get; set; } = string.Empty;
