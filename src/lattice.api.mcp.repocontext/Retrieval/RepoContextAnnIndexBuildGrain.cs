@@ -284,6 +284,31 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     public Task<bool> IsConvergedAsync() => Task.FromResult(state.State.Converged);
 
     /// <inheritdoc />
+    public async Task StopAsync()
+    {
+        // Clear the durable intent BEFORE retiring the reminder, not after. The two
+        // writes cannot be made atomic, so the ordering decides which way a crash
+        // between them fails. Clearing first leaves, at worst, a registered
+        // keep-alive over an unspecified space: the reminder fires once, the base
+        // class evaluates InProgress as false (the space is no longer specified)
+        // and unregisters it, so the stray converges to stopped on its own. The
+        // opposite order leaves the intent durable with no reminder to drive it -
+        // a coordinator that believes it has work and will never be woken to do
+        // it, which nothing repairs.
+        await state.ClearStateAsync().ConfigureAwait(true);
+        state.State = new RepoContextAnnIndexBuildState();
+
+        // Disposes the phase timer, withdraws from the phase-tick census,
+        // unregisters the keep-alive reminder, and deactivates on idle. Reusing the
+        // base class's terminal transition rather than open-coding those four steps
+        // keeps a stop indistinguishable from a convergence as far as the
+        // coordinator's own bookkeeping is concerned - in particular the census
+        // withdrawal, which an open-coded stop would be easy to forget and whose
+        // omission would leave this coordinator counted as live forever.
+        await CompleteCoordinatorAsync().ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
     protected override Task OnActivateCoreAsync(CancellationToken cancellationToken)
     {
         // Perpetual-coordinator override: re-arm the pump from the activation hook

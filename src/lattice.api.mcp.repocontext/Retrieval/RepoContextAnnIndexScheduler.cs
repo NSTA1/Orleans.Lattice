@@ -127,4 +127,54 @@ internal sealed class RepoContextAnnIndexScheduler
             space.Dimension);
         return true;
     }
+
+    /// <summary>
+    /// Disarms the build coordinator for one repository's index in the live
+    /// embedding space: clears its persisted intent and unregisters its durable
+    /// keep-alive reminder. The symmetric counterpart to <see cref="TryArmAsync"/>,
+    /// called when a repository is removed or its index reset.
+    /// <para>
+    /// Unlike <see cref="TryArmAsync"/> this is deliberately <b>not</b> gated on
+    /// <see cref="RepoContextIndexingOptions.AnnIndexSchedulingEnabled"/>. The
+    /// keep-alive reminder is durable and the switch is not, so the state that most
+    /// needs stopping is precisely a coordinator armed by an earlier run and left
+    /// registered after the switch was turned off. Gating the stop on the switch
+    /// would make it a no-op in the only configuration where it has work to do.
+    /// </para>
+    /// <para>
+    /// It is still gated on an embedding provider being bound, because the
+    /// coordinator key embeds the space fingerprint and there is no way to address
+    /// a coordinator without knowing which space it was armed for. Coordinators for
+    /// <em>superseded</em> spaces are reclaimed by the live coordinator, and failing
+    /// that retire themselves on their next keep-alive fire once their intent is
+    /// stale, so the live space is the one that has to be stopped explicitly.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns><see langword="true"/> when a coordinator was addressed and stopped.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<bool> TryStopAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        if (_embedder is null)
+        {
+            return false;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var space = EmbeddingSpaceTag.FromSpace(_embedder.Space);
+        await _grainFactory
+            .GetGrain<IRepoContextAnnIndexBuildGrain>(RepoContextAnnIndexKeys.BuildGrainKey(repoId, space))
+            .StopAsync()
+            .ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Repo {RepoId}: approximate-index build coordinator stopped for space {ModelId}/{Dimension}; "
+            + "its durable keep-alive reminder is unregistered and its persisted build intent cleared.",
+            repoId,
+            space.ModelId,
+            space.Dimension);
+        return true;
+    }
 }
