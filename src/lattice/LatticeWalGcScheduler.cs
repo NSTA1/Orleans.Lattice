@@ -264,6 +264,76 @@ internal sealed class LatticeWalGcScheduler(
     private const int MaxReactivationTouchesPerPass = 4;
 
     /// <summary>
+    /// How many orphaned durable materialiser pins the bulk sweep may retire
+    /// from one tree in a single pass (issue #3105).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three orders of magnitude above <see cref="MaxReactivationTouchesPerPass"/>
+    /// because it bounds an entirely different operation. A reactivation touch
+    /// drives a live leaf: it activates a grain, takes a permit from the
+    /// per-silo replay gate, and replays a WAL prefix, so four of them is a
+    /// blast-radius bound on real work. Retiring an orphan deletes a row whose
+    /// publisher no longer exists - there is no leaf to activate, nothing to
+    /// replay, and no permit to take - so the only cost it can impose is one
+    /// grain call per pin per key it was found under.
+    /// </para>
+    /// <para>
+    /// <b>Why the two must not share a bound.</b> Before this sweep existed, an
+    /// orphan could only be retired as a by-product of a reactivation touch,
+    /// which inherited every limit sized for driving a live leaf:
+    /// <see cref="ReactivationMinBlockAge"/>, <see cref="ReactivationRetryCooldown"/>,
+    /// <see cref="MaxReactivationAttempts"/>, and a report capped at
+    /// <c>LatticeWalGc.MaxReportedBlockingConsumers</c>. The resulting ceiling
+    /// was about eight pins per minimum block age, measured at 63 pins an hour
+    /// on a deployment carrying 9,468 orphans on one tree - a 6.3-day drain
+    /// during which the trim floor, being a minimum over every pin, reclaimed
+    /// nothing at all and 11.7 GB of WAL stayed resident. This is the same
+    /// class of defect as issue #2768, which moved
+    /// <c>MaxReportedBlockingConsumers</c> off 1 for exactly the reason that a
+    /// bound justified for one population was strangling another.
+    /// </para>
+    /// </remarks>
+    private const int MaxOrphanRetirementsPerPass = 512;
+
+    /// <summary>
+    /// How many leaf-state reads the orphan sweep issues concurrently while
+    /// classifying a tree's durable pins.
+    /// </summary>
+    /// <remarks>
+    /// The reads go straight to the storage provider and never activate a
+    /// grain, so this bounds provider I/O and nothing else. Kept modest so a
+    /// sweep over a tree with tens of thousands of pins cannot crowd out the
+    /// foreground request path on a shared provider connection pool.
+    /// </remarks>
+    private const int OrphanSweepReadConcurrency = 16;
+
+    /// <summary>
+    /// Minimum interval between bulk orphan sweeps of the same tree.
+    /// </summary>
+    /// <remarks>
+    /// The sweep enumerates the whole durable pin store for a tree, so it is
+    /// materially more expensive than a pass and must not run at the blocked
+    /// tree's cadence floor. It is only ever entered for a tree whose floor is
+    /// actually blocked, so an unblocked tree pays nothing for it at all.
+    /// </remarks>
+    private static readonly TimeSpan OrphanSweepInterval = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// UTC instant of the last bulk orphan sweep per tree, so the sweep honours
+    /// <see cref="OrphanSweepInterval"/> rather than the blocked tree's pass
+    /// cadence.
+    /// </summary>
+    private readonly Dictionary<string, DateTimeOffset> _lastOrphanSweep = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Trees whose <see cref="LatticeMetrics.WalGcOrphanPinSweep"/> arms have
+    /// been zero-primed in this process, so a reader sees a measured zero on
+    /// every status rather than an absence they must interpret.
+    /// </summary>
+    private readonly HashSet<string> _primedOrphanSweepTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// How long a consumer's budget survives after the floor stops reporting it
     /// as blocking, before it is pruned from the episode's map.
     /// </summary>
@@ -2464,6 +2534,18 @@ internal sealed class LatticeWalGcScheduler(
         await ClassifyBlockingPinsAsync(treeId, blockingConsumerIds, budgets, treeTag, tenantTag, stoppingToken)
             .ConfigureAwait(false);
 
+        // Drain orphaned pins in bulk before any reactivation machinery runs
+        // (issue #3105). Placed here because the machinery below is the wrong
+        // instrument for an orphan in every particular: it acts only on the
+        // floor's capped blocking report, it waits out a minimum block age and
+        // a retry cooldown sized for driving a live leaf, and it spends a
+        // scarce attempt budget activating a grain that will replay nothing.
+        // An orphan needs none of that - its publisher is gone and the remedy
+        // is deleting a row - so it is retired here, off that budget entirely,
+        // and only genuinely live leaves reach the code below.
+        await SweepOrphanedMaterialiserPinsAsync(treeId, treeTag, tenantTag, stoppingToken)
+            .ConfigureAwait(false);
+
         PruneBlockedConsumerBudgets(budgets, now);
 
         // The escalation for a block the sweep cannot get purchase on at all.
@@ -2955,6 +3037,7 @@ internal sealed class LatticeWalGcScheduler(
             WalGcBlockingPinState.NeverCheckpointed => LatticeMetrics.BlockingPinNeverCheckpointed,
             WalGcBlockingPinState.NoDurableState => LatticeMetrics.BlockingPinNoDurableState,
             WalGcBlockingPinState.Unreadable => LatticeMetrics.BlockingPinUnreadable,
+            WalGcBlockingPinState.Orphaned => LatticeMetrics.BlockingPinOrphaned,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(state),
                 state,
@@ -3247,6 +3330,328 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Enumerates a blocked tree's entire durable materialiser pin store and
+    /// retires every pin whose leaf no longer exists, bounded by
+    /// <see cref="MaxOrphanRetirementsPerPass"/> (issue #3105).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this cannot be left to the reactivation sweep.</b> That sweep
+    /// retires an orphan only as a by-product of a reactivation touch, and its
+    /// every input is sized for driving a <i>live but stuck</i> leaf: it acts
+    /// on the floor's blocking report, which names at most
+    /// <c>LatticeWalGc.MaxReportedBlockingConsumers</c> consumers; it waits
+    /// <see cref="ReactivationMinBlockAge"/> before a first touch; it spends one
+    /// of <see cref="MaxReactivationAttempts"/> and then waits
+    /// <see cref="ReactivationRetryCooldown"/>. Every one of those bounds is
+    /// justified for a live leaf and <i>none</i> of them applies to an orphan,
+    /// where the remedy is deleting a row. The resulting ceiling of roughly
+    /// eight pins per minimum block age cannot converge on a backlog of
+    /// thousands, and because the trim floor is a minimum over every pin, a
+    /// backlog that is 99% drained still reclaims exactly nothing.
+    /// </para>
+    /// <para>
+    /// <b>Why the pin store is read directly.</b> The floor's blocking report is
+    /// a capped diagnostic, so it can never reveal how many pins a tree holds,
+    /// let alone how many are orphaned. Reading
+    /// <see cref="BPlusTree.Grains.IWalMaterialiserPinGrain.GetPinsAsync"/>
+    /// across <see cref="BPlusTree.Grains.WalMaterialiserPinRouting.EnumerateReadKeys"/>
+    /// - the same union the floor itself minimises over - is the only way to see
+    /// the whole population, and it is what makes
+    /// <see cref="LatticeMetrics.WalGcOrphanPinSweep"/> summable.
+    /// </para>
+    /// <para>
+    /// <b>Why a husk proves the leaf is gone.</b> A leaf's pin registration is
+    /// birth-gated on a persisted tree id, so a durable pin can only exist if
+    /// the leaf's state carried one when the pin was written. Reading that state
+    /// back and finding no record, or a record with no tree id, therefore
+    /// establishes that the state was cleared <i>after</i> the pin was
+    /// published. That is the same conclusion
+    /// <c>DriveStarvedCheckpointAsync</c> reaches when it reports
+    /// <c>NotDriven</c>, arrived at by a storage read that never activates the
+    /// leaf and never takes a replay permit.
+    /// </para>
+    /// <para>
+    /// <b>Fail-closed.</b> A read that throws counts as <c>unreadable</c> and is
+    /// never retired, and the sweep does not run at all on a silo with no
+    /// storage provider. Retiring a pin whose leaf might still be live would
+    /// authorise a trim over a prefix that leaf has not replayed, so every
+    /// uncertain case leaves the pin exactly where it is - blocking, and
+    /// re-examined on the next sweep.
+    /// </para>
+    /// <para>
+    /// <b>Why removal is per key rather than through the reporter.</b>
+    /// <c>ILeafCursorReporter.UnregisterAsync</c> must fan out to every read key
+    /// because it does not know which one holds the pin - 17 grain calls per pin
+    /// at eight shards. The sweep enumerated the store itself, so it knows
+    /// exactly which keys a pin was found under and removes it from precisely
+    /// those. There is no in-memory registration to clear: the durable floor is
+    /// consulted only for consumers absent from the in-memory cursor registry,
+    /// which is what makes them eligible to be examined here.
+    /// </para>
+    /// </remarks>
+    private async Task SweepOrphanedMaterialiserPinsAsync(
+        string treeId,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        CancellationToken stoppingToken)
+    {
+        // No provider means no way to distinguish an orphan from a live leaf,
+        // and the sweep's whole authority to delete rests on that distinction.
+        if (leafStateStorage is null)
+        {
+            return;
+        }
+
+        var now = _time.GetUtcNow();
+        if (_lastOrphanSweep.TryGetValue(treeId, out var last) && now - last < OrphanSweepInterval)
+        {
+            return;
+        }
+
+        _lastOrphanSweep[treeId] = now;
+        PrimeOrphanPinSweep(treeId, treeTag, tenantTag);
+
+        var shardCount = BPlusTree.Grains.WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+        var keys = BPlusTree.Grains.WalMaterialiserPinRouting.EnumerateReadKeys(treeId, shardCount);
+
+        // Consumer id -> the read keys it was found under. Keyed by consumer so
+        // the population counted is the logical pin, not the row: a pin
+        // duplicated across keys by an earlier routing is one pin to a reader
+        // and must be removed from all of them.
+        var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            IReadOnlyDictionary<string, HybridLogicalClock> pins;
+            try
+            {
+                pins = await grainFactory
+                    .GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i])
+                    .GetPinsAsync()
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                // One unreadable shard must not abandon the rest: the others
+                // hold pins this sweep can still retire, and the floor is a
+                // minimum over all of them either way.
+                logger.LogDebug(
+                    ex,
+                    "WAL GC orphan sweep could not read durable pins at shard key {GrainKey} on tree {Tree}; the remaining shards are still swept.",
+                    keys[i],
+                    treeId);
+                continue;
+            }
+
+            foreach (var consumerId in pins.Keys)
+            {
+                if (!located.TryGetValue(consumerId, out var foundAt))
+                {
+                    foundAt = new List<string>(1);
+                    located[consumerId] = foundAt;
+                }
+
+                foundAt.Add(keys[i]);
+            }
+        }
+
+        if (located.Count == 0)
+        {
+            return;
+        }
+
+        var retired = 0;
+        var deferred = 0;
+        var live = 0;
+        var unresolved = 0;
+        var unreadable = 0;
+
+        // Classify in bounded-concurrency batches. The reads go straight to the
+        // storage provider, so the batch is I/O against the provider and never
+        // an activation storm.
+        var batch = new List<KeyValuePair<string, List<string>>>(OrphanSweepReadConcurrency);
+        var classifications = new Task<WalGcBlockingPinState>[OrphanSweepReadConcurrency];
+        var resolvable = new bool[OrphanSweepReadConcurrency];
+
+        foreach (var entry in located)
+        {
+            batch.Add(entry);
+            if (batch.Count < OrphanSweepReadConcurrency)
+            {
+                continue;
+            }
+
+            await ClassifyAndRetireBatchAsync().ConfigureAwait(false);
+            if (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        if (batch.Count > 0 && !stoppingToken.IsCancellationRequested)
+        {
+            await ClassifyAndRetireBatchAsync().ConfigureAwait(false);
+        }
+
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinRetired, treeTag, tenantTag, retired);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinDeferred, treeTag, tenantTag, deferred);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinLive, treeTag, tenantTag, live);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinUnresolved, treeTag, tenantTag, unresolved);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinUnreadable, treeTag, tenantTag, unreadable);
+
+        if (retired > 0 || deferred > 0)
+        {
+            logger.LogInformation(
+                "WAL GC orphan sweep examined {Examined} durable materialiser pins on tree {Tree}: retired {Retired}, deferred {Deferred} to a later sweep because the per-pass budget was spent, left {Live} belonging to live leaves. A non-zero deferred count means the backlog is still draining.",
+                located.Count,
+                treeId,
+                retired,
+                deferred,
+                live);
+        }
+
+        async Task ClassifyAndRetireBatchAsync()
+        {
+            for (var i = 0; i < batch.Count; i++)
+            {
+                var consumerId = batch[i].Key;
+                resolvable[i] = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
+                classifications[i] = resolvable[i]
+                    ? ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken)
+                    : Task.FromResult(WalGcBlockingPinState.Unreadable);
+            }
+
+            for (var i = 0; i < batch.Count; i++)
+            {
+                var consumerId = batch[i].Key;
+                var state = await classifications[i].ConfigureAwait(false);
+
+                // Unresolved and unreadable are separated here rather than at
+                // the read, because ReadBlockingPinStateAsync folds both onto
+                // Unreadable - correct for a diagnostic, but this sweep must
+                // distinguish "the id does not parse" from "the provider
+                // failed" to be actionable.
+                if (!resolvable[i])
+                {
+                    unresolved++;
+                    continue;
+                }
+
+                switch (state)
+                {
+                    case WalGcBlockingPinState.Orphaned:
+                    case WalGcBlockingPinState.NoDurableState:
+                        if (retired >= MaxOrphanRetirementsPerPass)
+                        {
+                            deferred++;
+                            continue;
+                        }
+
+                        retired++;
+                        await RemovePinFromKeysAsync(treeId, consumerId, batch[i].Value, stoppingToken)
+                            .ConfigureAwait(false);
+                        break;
+
+                    case WalGcBlockingPinState.Unreadable:
+                        unreadable++;
+                        break;
+
+                    default:
+                        live++;
+                        break;
+                }
+            }
+
+            batch.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Removes one orphaned durable pin from exactly the read keys it was found
+    /// under.
+    /// </summary>
+    /// <remarks>
+    /// Each key is attempted independently so one failure cannot abandon the
+    /// rest, matching <c>LeafCursorReporter.RemoveDurablePinAsync</c>. A failure
+    /// is logged and nothing else: retirement is a repair, not a precondition of
+    /// the pass, and a pin left behind is simply re-examined by the next sweep.
+    /// </remarks>
+    private async Task RemovePinFromKeysAsync(
+        string treeId,
+        string consumerId,
+        List<string> keys,
+        CancellationToken stoppingToken)
+    {
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await grainFactory
+                    .GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i])
+                    .RemoveAsync(consumerId)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogWarning(
+                    ex,
+                    "WAL GC orphan sweep could not remove orphaned materialiser pin {Consumer} on tree {Tree} at shard key {GrainKey}; it stays registered and keeps flooring the trim point until a later sweep removes it.",
+                    consumerId,
+                    treeId,
+                    keys[i]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records one <see cref="LatticeMetrics.WalGcOrphanPinSweep"/> arm.
+    /// </summary>
+    private static void RecordOrphanPinSweep(
+        in KeyValuePair<string, object?> status,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag,
+        long delta) =>
+        LatticeMetrics.WalGcOrphanPinSweep.Add(delta, treeTag, status, tenantTag);
+
+    /// <summary>
+    /// Zero-primes every <see cref="LatticeMetrics.WalGcOrphanPinSweep"/> arm
+    /// for one tree, once per process.
+    /// </summary>
+    /// <remarks>
+    /// Without this, a tree that holds no orphans exports no series at all, and
+    /// "the sweep found nothing" is indistinguishable from "the sweep is not
+    /// running on this build" - which is precisely the ambiguity that let issue
+    /// #3105 go undetected for days.
+    /// </remarks>
+    private void PrimeOrphanPinSweep(
+        string treeId,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        if (!_primedOrphanSweepTrees.Add(treeId))
+        {
+            return;
+        }
+
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinRetired, treeTag, tenantTag, 0);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinDeferred, treeTag, tenantTag, 0);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinLive, treeTag, tenantTag, 0);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinUnresolved, treeTag, tenantTag, 0);
+        RecordOrphanPinSweep(LatticeMetrics.OrphanPinUnreadable, treeTag, tenantTag, 0);
+    }
+
+    /// <summary>
     /// Parses a materialiser consumer id back into the grain id of the leaf
     /// that published it <i>and</i> the WAL partition the pin belongs to.
     /// </summary>
@@ -3407,6 +3812,22 @@ internal sealed class LatticeWalGcScheduler(
             if (!grainState.RecordExists || grainState.State is null)
             {
                 return WalGcBlockingPinState.NoDurableState;
+            }
+
+            // The tree id is read before the checkpoint, and that order is the
+            // whole of issue #3105's diagnostic half. A leaf's pin registration
+            // is birth-gated on a persisted tree id, so a durable pin can only
+            // exist if the leaf carried one when the pin was written; finding
+            // none now proves the state was cleared afterwards and the pin has
+            // outlived its publisher. ClassifyCheckpoint cannot see that - it
+            // reads only the projection checkpoint, which a husk retains - so
+            // before this branch existed every orphan classified as
+            // 'checkpointed_uncovered', i.e. repairable by a snapshot. That is
+            // how a 9,468-pin orphan backlog on one tree presented as a
+            // coverage problem.
+            if (string.IsNullOrEmpty(grainState.State.TreeId))
+            {
+                return WalGcBlockingPinState.Orphaned;
             }
 
             return ClassifyCheckpoint(grainState.State, partition);

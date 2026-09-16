@@ -37,7 +37,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private const string BlockingPinStatusTag = LatticeMetrics.TagStatus;
 
     private static readonly string[] EveryBlockingPinArm =
-        ["checkpointed_uncovered", "never_checkpointed", "no_durable_state", "unreadable"];
+        ["checkpointed_uncovered", "never_checkpointed", "no_durable_state", "unreadable", "orphaned"];
 
     /// <summary>
     /// A storage provider that serves one canned leaf state, counting reads so
@@ -92,6 +92,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         return new LeafNodeState
         {
+            // A bound tree id is not incidental here. Pin registration is
+            // birth-gated on one, so a leaf that published a durable pin
+            // necessarily persisted it; a state without one is a husk whose
+            // leaf has been reclaimed, and the classifier reports that as
+            // 'orphaned' before it ever looks at the checkpoint (issue #3105).
+            // Omitting it would arrange a husk and assert the live-leaf arms.
+            TreeId = StrandedTree,
             ProjectionCheckpointOffset = partition == 0 ? offset : -1L,
             ProjectionCheckpointOffsetsByPartition = byPartition,
         };
@@ -255,7 +262,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Assert.Multiple(() =>
         {
             Assert.That(armsAtNone, Is.EquivalentTo(EveryBlockingPinArm),
-                "a tree that never blocked must still mint all four arms, so an absent series means the "
+                "a tree that never blocked must still mint all five arms, so an absent series means the "
                     + "classifier is not running on this silo rather than that nothing was classified.");
             Assert.That(states.Measurements.Where(m =>
                     (m.Tag(LatticeMetrics.TagPartition) as string) == LatticeMetrics.PartitionNone)

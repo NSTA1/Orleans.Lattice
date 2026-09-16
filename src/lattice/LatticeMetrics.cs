@@ -4067,7 +4067,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockingPinStates =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocking_pin_state", unit: "{consumer}",
-            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All four arms are zero-primed once per tree per process under partition 'none', latched on the tree's first collection rather than repeated per pass, and again per classified partition. That priming establishes that the classifier is wired on this silo and nothing more: Add(0) is idempotent on a counter's exported value, so a primed series can never show that the region ran on any particular pass - see 'orleans.lattice.wal.gc.pass.reach' and 'orleans.lattice.wal.gc.tree.reach' for the advancing layer that can. Diagnostic only: it never changes what a pass is allowed to trim.");
+            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. 'orphaned' is the leaf's durable state existing but carrying no bound tree id, so the leaf was reclaimed or purged after publishing the pin (issue #3105); it is the only arm that is actionable without driving anything, and before it existed such a pin classified as 'checkpointed_uncovered' because the checkpoint classifier never read the tree id. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All five arms are zero-primed once per tree per process under partition 'none', latched on the tree's first collection rather than repeated per pass, and again per classified partition. That priming establishes that the classifier is wired on this silo and nothing more: Add(0) is idempotent on a counter's exported value, so a primed series can never show that the region ran on any particular pass - see 'orleans.lattice.wal.gc.pass.reach' and 'orleans.lattice.wal.gc.tree.reach' for the advancing layer that can. Diagnostic only: it never changes what a pass is allowed to trim.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockingPinStates"/>.</summary>
     public const string WalGcBlockingPinStatesName = "orleans.lattice.wal.gc.blocking_pin_state";
@@ -4129,6 +4129,101 @@ public static class LatticeMetrics
     /// the leaf, so it is counted separately from every arm that does.
     /// </summary>
     public static readonly KeyValuePair<string, object?> BlockingPinUnreadable =
+        new(TagStatus, "unreadable");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcBlockingPinStates"/>
+    /// for <see cref="WalGcBlockingPinState.Orphaned"/> - the leaf's durable
+    /// state exists but carries no bound tree id, so the leaf was reclaimed or
+    /// purged after publishing the pin and the pin has outlived its publisher
+    /// (issue #3105). Distinct from every other arm because it is the only one
+    /// that is <i>actionable without driving anything</i>: the sweep retires
+    /// such a pin outright rather than spending a reactivation attempt on a
+    /// leaf that cannot lift it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockingPinOrphaned =
+        new(TagStatus, "orphaned");
+
+    /// <summary>
+    /// Outcome of each durable materialiser pin examined by the WAL GC's bulk
+    /// orphan sweep (issue #3105), tagged by tree and status.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The status arms <b>partition</b> the population examined, so
+    /// <c>sum by (tree)</c> over one sweep is exactly the number of durable
+    /// pins that tree holds. That summability is the point: the sweep reads the
+    /// pin store directly rather than through the floor's
+    /// <c>MaxReportedBlockingConsumers</c>-capped diagnostic report, so this is
+    /// the only instrument on which the true pin population is visible at all.
+    /// </para>
+    /// <para>
+    /// <b><c>deferred</c> is the backlog signal, and it is why this is a counter
+    /// rather than a gauge.</b> A pin classified orphan but left unretired
+    /// because the pass's retirement budget was spent increments
+    /// <c>deferred</c>. A sustained non-zero <c>deferred</c> rate therefore
+    /// means "orphans remain and the sweep is still draining them", and
+    /// <c>deferred</c> falling to zero while <c>retired</c> stops advancing
+    /// means the backlog is gone. That reads the operational question - is there
+    /// still a backlog? - off an advancing series, with none of the declaration-
+    /// order hazards an observable gauge carries.
+    /// </para>
+    /// <para>
+    /// The absence of any backlog signal is what let issue #3105 run for days
+    /// undetected: the only orphan series in existence was the reactivation
+    /// sweep's monotonically-advancing <c>orphaned</c> counter, on which a 63
+    /// pins-per-hour drain against a 9,468-pin backlog is indistinguishable from
+    /// steady healthy progress. Every arm is zero-primed per tree so a zero is a
+    /// measured zero rather than an absence a reader has to interpret.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> WalGcOrphanPinSweep =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.orphan_pin_sweep", unit: "{pin}",
+            description: "Outcome of each durable materialiser pin examined by the WAL GC bulk orphan sweep (issue #3105), tagged by tree and status. The arms partition the examined population, so sum by tree over one sweep is the tree's whole durable pin count - the only place it is visible, since the floor's blocking report is capped. 'retired' is a pin whose leaf state carries no bound tree id and which was removed. 'deferred' is such a pin left in place because the pass's retirement budget was spent, and is the backlog signal: a sustained non-zero rate means orphans remain, and zero while 'retired' stops advancing means the backlog has drained. 'live' is a pin whose leaf still holds a bound tree id, which the sweep never touches. 'unresolved' is a consumer id that does not parse back to a leaf grain id. 'unreadable' is a storage read that failed, and the sweep fails closed on it - an unreadable leaf is never retired. All arms are zero-primed per tree.");
+
+    /// <summary>Canonical name of <see cref="WalGcOrphanPinSweep"/>.</summary>
+    public const string WalGcOrphanPinSweepName = "orleans.lattice.wal.gc.orphan_pin_sweep";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for a
+    /// pin whose leaf state carries no bound tree id and which the sweep
+    /// removed.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinRetired =
+        new(TagStatus, "retired");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for an
+    /// orphaned pin left in place because the pass's retirement budget was
+    /// spent. The backlog signal - see the remarks on
+    /// <see cref="WalGcOrphanPinSweep"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinDeferred =
+        new(TagStatus, "deferred");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for a
+    /// pin whose leaf still carries a bound tree id. The sweep never touches
+    /// one: a live leaf's pin is retention the WAL GC is obliged to honour.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinLive =
+        new(TagStatus, "live");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for a
+    /// consumer id that does not parse back to a leaf grain id, so no leaf can
+    /// be read for it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinUnresolved =
+        new(TagStatus, "unresolved");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcOrphanPinSweep"/> for a
+    /// leaf-state read that failed. The sweep fails closed here: an unreadable
+    /// leaf is never retired, because retiring a pin whose leaf might still be
+    /// live would authorise a trim over a prefix that leaf has not replayed.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OrphanPinUnreadable =
         new(TagStatus, "unreadable");
 
     /// <summary>
