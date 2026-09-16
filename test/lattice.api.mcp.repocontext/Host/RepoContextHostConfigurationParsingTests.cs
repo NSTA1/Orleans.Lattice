@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -213,5 +214,59 @@ public sealed class RepoContextHostConfigurationParsingTests
             Assert.That(config.GrainStorage, Is.EqualTo(expected));
             Assert.That(config.Reminders, Is.EqualTo(expected));
         });
+    }
+
+    [Test]
+    public void The_wal_compaction_dead_byte_ceiling_defaults_to_disabled()
+    {
+        var config = From((RepoContextHostConfiguration.WalProviderKey, "file"));
+
+        Assert.That(config.WalCompactionMaximumDeadBytes, Is.Zero);
+    }
+
+    [Test]
+    public void The_wal_compaction_dead_byte_ceiling_is_read_from_the_environment()
+    {
+        var config = From(
+            (RepoContextHostConfiguration.WalProviderKey, "file"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey, "5368709120"));
+
+        Assert.That(config.WalCompactionMaximumDeadBytes, Is.EqualTo(5_368_709_120L));
+    }
+
+    [Test]
+    public void A_wal_compaction_dead_byte_ceiling_beyond_int_range_is_not_truncated()
+    {
+        // The ceiling bounds a multi-gigabyte log, so a 32-bit parse would silently
+        // wrap a legitimate operator value into a nonsensical one.
+        var beyondInt32 = (long)int.MaxValue + 1L;
+
+        var config = From(
+            (RepoContextHostConfiguration.WalProviderKey, "file"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
+                beyondInt32.ToString(CultureInfo.InvariantCulture)));
+
+        Assert.That(config.WalCompactionMaximumDeadBytes, Is.EqualTo(beyondInt32));
+    }
+
+    [Test]
+    public void A_negative_wal_compaction_dead_byte_ceiling_is_rejected()
+    {
+        var ex = Rejects(
+            (RepoContextHostConfiguration.WalProviderKey, "file"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey, "-1"));
+
+        Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey));
+    }
+
+    [Test]
+    public void A_non_numeric_wal_compaction_dead_byte_ceiling_is_rejected()
+    {
+        var ex = Rejects(
+            (RepoContextHostConfiguration.WalProviderKey, "file"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey, "2GiB"));
+
+        Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey)
+            .And.Contain("2GiB"));
     }
 }

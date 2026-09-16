@@ -163,6 +163,34 @@ public sealed class DurabilitySelectorWiringTests
         Assert.That(options.RootDirectory, Is.EqualTo("/mnt/data/wal"));
     }
 
+    [Test]
+    public void The_file_wal_arm_leaves_the_dead_byte_ceiling_at_the_provider_default_when_unset()
+    {
+        using var provider = Wire((RepoContextHostConfiguration.WalDirKey, "/mnt/data/wal"));
+
+        var options = provider
+            .GetRequiredService<IOptions<Orleans.Lattice.Storage.File.FileWalStorageOptions>>()
+            .Value;
+
+        Assert.That(
+            options.CompactionMaximumDeadBytes,
+            Is.EqualTo(Orleans.Lattice.Storage.File.FileWalStorageOptions.DefaultCompactionMaximumDeadBytes));
+    }
+
+    [Test]
+    public void The_file_wal_arm_wires_the_dead_byte_compaction_ceiling()
+    {
+        using var provider = Wire(
+            (RepoContextHostConfiguration.WalDirKey, "/mnt/data/wal"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey, "1073741824"));
+
+        var options = provider
+            .GetRequiredService<IOptions<Orleans.Lattice.Storage.File.FileWalStorageOptions>>()
+            .Value;
+
+        Assert.That(options.CompactionMaximumDeadBytes, Is.EqualTo(1_073_741_824L));
+    }
+
     /// <summary>
     /// Applies only the named <see cref="IConfigureOptions{TOptions}"/> delegates
     /// the wiring registered, which is exactly the code under test. Going through

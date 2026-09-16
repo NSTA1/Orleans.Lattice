@@ -176,4 +176,68 @@ public class AzureTableWalStorageProviderOffsetSizeIntegrationTests
         Assert.That(afterSecond, Is.GreaterThan(afterFirst),
             "a second committed batch must increase the retained-byte total");
     }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_falls_when_a_fully_covered_batch_is_trimmed()
+    {
+        // The reclamation property this provider relies on: because
+        // TrimAsync deletes the entry rows and the manifest row of a
+        // fully-covered batch outright, the byte total it is summed
+        // from must fall. A log-structured backend that only advances
+        // a watermark would hold this total flat.
+        await _sut.AppendBatchAsync(_treeId, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+        await _sut.AppendBatchAsync(_treeId, 0, new[] { Entry(2), Entry(3) }, CancellationToken.None);
+        var beforeTrim = await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None);
+
+        await _sut.TrimAsync(_treeId, 0, throughOffsetInclusive: 1L, CancellationToken.None);
+
+        var afterTrim = await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None);
+        Assert.That(afterTrim, Is.LessThan(beforeTrim),
+            "trimming a fully-covered batch must return its bytes, not merely mark them dead");
+    }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_returns_zero_once_every_batch_is_trimmed()
+    {
+        // Trim-is-reclamation, stated absolutely: a fully-trimmed shard
+        // retains nothing. There is no dead-byte residue awaiting a
+        // later compaction pass, which is why this provider needs no
+        // compaction trigger and no physical-byte accounting.
+        await _sut.AppendBatchAsync(_treeId, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+        await _sut.AppendBatchAsync(_treeId, 0, new[] { Entry(2), Entry(3) }, CancellationToken.None);
+        Assert.That(
+            await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None),
+            Is.GreaterThan(0L),
+            "sanity: the appended batches must register before the trim");
+
+        await _sut.TrimAsync(_treeId, 0, throughOffsetInclusive: 3L, CancellationToken.None);
+
+        var afterTrim = await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None);
+        Assert.That(afterTrim, Is.EqualTo(0L),
+            "a fully-trimmed shard must retain zero bytes, leaving no residue to compact");
+    }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_over_reports_a_partially_trimmed_boundary_batch()
+    {
+        // The one inaccuracy in this provider's byte accounting, pinned
+        // so its direction cannot silently invert. A boundary batch
+        // keeps its manifest row - and so its full PayloadBytes - until
+        // it is itself fully trimmed, so the total reads HIGH by at
+        // most one batch. Over-reporting is the safe direction for a
+        // capacity ceiling; the file provider's defect was an
+        // unbounded under-report, which is the dangerous one.
+        await _sut.AppendBatchAsync(_treeId, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+        var wholeBatch = await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None);
+
+        await _sut.TrimAsync(_treeId, 0, throughOffsetInclusive: 0L, CancellationToken.None);
+
+        var afterPartialTrim = await _sut.GetRetainedByteSizeAsync(_treeId, 0, CancellationToken.None);
+        Assert.That(afterPartialTrim, Is.EqualTo(wholeBatch),
+            "a partially-trimmed boundary batch keeps its manifest row, so the total is unchanged");
+        Assert.That(
+            await _sut.GetLowestOffsetAsync(_treeId, 0, CancellationToken.None),
+            Is.EqualTo(1L),
+            "the trimmed entry row is nonetheless gone, so the over-report is bounded by one batch");
+    }
 }
