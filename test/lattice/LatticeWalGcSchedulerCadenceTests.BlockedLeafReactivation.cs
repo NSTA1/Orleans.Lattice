@@ -714,9 +714,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     // Four lifecycle arms, named individually because no enum
                     // backs them.
                     "attempted", "healed", "abandoned", "rearmed",
-                    // Four terminal arms, primed by walking ReactivationOutcome
-                    // (issue #2938).
-                    "completed", "unresolvable", "faulted", "undelivered",
+                    // Five terminal arms, primed by walking ReactivationOutcome
+                    // (issue #2938, extended for 'orphaned' by issue #3101).
+                    "completed", "unresolvable", "faulted", "undelivered", "orphaned",
                     // Six drive verdicts, primed by walking
                     // LeafStarvationDriveOutcome (issue #2692).
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",

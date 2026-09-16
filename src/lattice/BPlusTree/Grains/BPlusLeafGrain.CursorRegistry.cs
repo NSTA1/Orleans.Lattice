@@ -348,6 +348,97 @@ internal sealed partial class BPlusLeafGrain
             treeId, reports, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Deregisters every one of this leaf's materialiser cursors - the death
+    /// seam that mirrors <see cref="SeedDurableMaterialiserBlockPinAsync"/>'s
+    /// birth seam (issue #3101).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists.</b> A leaf's materialiser pin is a WAL retention
+    /// <i>floor</i>: until it resolves to a real offset, the GC cannot trim past
+    /// it. Registration is birth-gated - <see cref="ResolveConsumerIdBase"/>
+    /// returns <see langword="null"/> while the tree id is unset, so only a leaf
+    /// with a persisted tree id can ever hold a pin - but nothing retired the
+    /// pin at death. A reclaimed leaf therefore left its pin behind, and the pin
+    /// pinned the WAL forever.
+    /// </para>
+    /// <para>
+    /// <b>Why it must run before the state clear.</b> The consumer ids are
+    /// derived from <c>state.State.TreeId</c>, which
+    /// <c>state.ClearStateAsync()</c> nulls. Deregistering afterwards is not
+    /// merely late, it is impossible: the ids can no longer be computed. The
+    /// ordering is the whole correctness of the fix, so
+    /// <see cref="ClearGrainStateAsync"/> calls this first.
+    /// </para>
+    /// <para>
+    /// <b>Why it is safe.</b> This runs only from
+    /// <see cref="ClearGrainStateAsync"/>, which is terminal by construction -
+    /// it clears durable state and deactivates. That is exactly the "leaf
+    /// eviction during a purge" case
+    /// <see cref="ILeafCursorReporter.UnregisterAsync"/> reserves itself for.
+    /// Routine deactivation does not come here and must never deregister, or the
+    /// GC could trim entries the next activation still needs to replay.
+    /// </para>
+    /// <para>
+    /// <b>Failures are swallowed.</b> The caller has already committed the fold
+    /// that removed this leaf from the chain, so throwing here would report a
+    /// completed structural change as failed. A missed deregistration degrades
+    /// to the pre-fix behaviour - a retained WAL prefix - rather than to
+    /// corruption, and the GC's own orphan sweep retires the pin independently.
+    /// </para>
+    /// </remarks>
+    private async Task UnregisterMaterialiserPinsAsync()
+    {
+        var reporter = ResolveCursorReporter();
+        if (reporter is null)
+        {
+            return;
+        }
+
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
+        {
+            return;
+        }
+
+        var treeId = state.State.TreeId!;
+
+        int partitionCount;
+        try
+        {
+            var options = await GetOptionsAsync();
+            partitionCount = Math.Max(1, options.WalPartitions);
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {Leaf} of tree '{TreeId}' could not resolve its WAL partition count while retiring its materialiser pins; the pins are left registered and the WAL GC's orphan sweep will retire them instead.",
+                context.GrainId,
+                treeId);
+            return;
+        }
+
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            try
+            {
+                await reporter.UnregisterAsync(treeId, consumerId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Leaf {Leaf} of tree '{TreeId}' failed to retire materialiser pin {Consumer}; the WAL prefix behind it stays retained until the WAL GC's orphan sweep retires it.",
+                    context.GrainId,
+                    treeId,
+                    consumerId);
+            }
+        }
+    }
+
     private ILeafCursorReporter? ResolveCursorReporter()
     {
         if (_cursorReporterResolved)
