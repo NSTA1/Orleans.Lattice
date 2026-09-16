@@ -120,6 +120,17 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
             throw ex;
         }
         State = new();
+
+        // Drop the row, not just its contents. A real provider's
+        // ClearStateAsync deletes the underlying record and the bridge reports
+        // RecordExists false thereafter, which is what every hand-rolled
+        // IGrainStorage double in this project already models (see
+        // ProcessScopeMemoryGrainStorage.ClearStateAsync). Leaving it true here
+        // modelled the opposite, so a test asserting that a cleared grain reads
+        // as absent could not have been written against this fake - notably the
+        // WAL GC's no_durable_state classification (issue #3101), whose whole
+        // premise is that a reclaimed leaf's row is gone.
+        RecordExistsValue = false;
         return Task.CompletedTask;
     }
 

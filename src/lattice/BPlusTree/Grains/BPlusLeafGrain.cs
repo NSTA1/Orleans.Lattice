@@ -3710,6 +3710,14 @@ internal sealed partial class BPlusLeafGrain(
         // remove, in the window before the deactivation below takes effect.
         RetireReplayBarrier();
 
+        // Retire the materialiser pins BEFORE the clear too, and for a stricter
+        // reason than ordering hygiene (issue #3101). The pins' consumer ids are
+        // derived from state.State.TreeId, which the clear nulls, so after it
+        // they cannot be computed at all. A pin left behind here is a permanent
+        // WAL retention floor: the GC resolves the leaf, activates it, finds no
+        // tree id bound, and gets NotDriven for the life of the deployment.
+        await UnregisterMaterialiserPinsAsync();
+
         await state.ClearStateAsync();
         context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
     }

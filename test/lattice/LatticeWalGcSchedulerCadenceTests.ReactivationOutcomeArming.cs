@@ -53,7 +53,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     /// <summary>The terminal arms, which partition every attempted touch.</summary>
     private static readonly string[] TerminalOutcomeArms =
-        ["completed", "unresolvable", "faulted", "undelivered"];
+        ["completed", "unresolvable", "faulted", "undelivered", "orphaned"];
 
     [Test]
     public void ReactivationOutcomeTag_arms_every_declared_terminal_outcome()
@@ -162,6 +162,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "arming-faulted", () => throw new InvalidOperationException("silo refused the call")),
             ["undelivered"] = await TerminalArmCountsAsync(
                 "arming-undelivered", () => throw new TimeoutException("silo busy")),
+            ["orphaned"] = await TerminalArmCountsAsync(
+                "arming-orphaned", () => Task.FromResult<string?>(null)),
         };
 
         Assert.Multiple(() =>
@@ -198,6 +200,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ("sum-faulted", () => throw new InvalidOperationException("silo refused the call"), null),
             ("sum-undelivered", () => throw new TimeoutException("silo busy"), null),
             ("sum-unresolvable", () => Task.FromResult<string?>("sum-unresolvable"), "not-a-materialiser-consumer-id"),
+            ("sum-orphaned", () => Task.FromResult<string?>(null), null),
         })
         {
             var time = new VirtualTimeProvider();

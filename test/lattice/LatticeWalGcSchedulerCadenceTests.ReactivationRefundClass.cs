@@ -88,7 +88,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         VirtualTimeProvider time,
         Func<Task<string?>> probe,
         string? consumerId = null,
-        string treeId = StrandedTree)
+        string treeId = StrandedTree,
+        Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -116,7 +117,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeId));
 
         var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, treeId);
-        return (CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time), recorder);
+        return (CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time, cursorReporter: cursorReporter), recorder);
     }
 
     /// <summary>

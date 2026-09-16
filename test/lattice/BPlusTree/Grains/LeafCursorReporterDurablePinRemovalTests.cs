@@ -68,6 +68,16 @@ public sealed class LeafCursorReporterDurablePinRemovalTests
     /// calls were made.
     /// </summary>
     private static (LeafCursorReporter Reporter, ConcurrentBag<string> RemovedFrom) Create()
+        => CreateWithRegistry().Dropping;
+
+    /// <summary>
+    /// As <see cref="Create"/>, but also hands back the in-memory registry so a
+    /// test can assert the OTHER half of deregistration. Removing the durable
+    /// pin alone would leave the consumer present in the live registry, where
+    /// the cursor floor still reads it - so the WAL would stay floored even
+    /// though every durable row had been cleared.
+    /// </summary>
+    private static ((LeafCursorReporter Reporter, ConcurrentBag<string> RemovedFrom) Dropping, IWalCursorRegistry Registry) CreateWithRegistry()
     {
         var registry = Substitute.For<IWalCursorRegistry>();
         registry.UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -89,7 +99,7 @@ public sealed class LeafCursorReporterDurablePinRemovalTests
             return grain;
         });
 
-        return (new LeafCursorReporter(registry, factory, Monitor()), removedFrom);
+        return ((new LeafCursorReporter(registry, factory, Monitor()), removedFrom), registry);
     }
 
     private static string CurrentKey() =>
@@ -157,5 +167,42 @@ public sealed class LeafCursorReporterDurablePinRemovalTests
 
         Assert.That(removedFrom, Is.Empty,
             "Only leaf-materialiser consumer ids own a durable pin.");
+    }
+
+    [Test]
+    public async Task Unregister_also_removes_the_consumer_from_the_live_cursor_registry()
+    {
+        // The complementary half of the assertions above, and the reason one
+        // UnregisterAsync is complete deregistration rather than half of it
+        // (relied on by issue #3101's reclaim-time retirement). The durable pin
+        // and the live registry entry are read by DIFFERENT parts of the floor
+        // computation, so clearing either alone leaves the WAL floored: the
+        // durable rows are gone but the consumer is still enumerated, or the
+        // consumer is gone but its persisted pin is still read back.
+        var (dropping, registry) = CreateWithRegistry();
+
+        await dropping.Reporter.UnregisterAsync(Tree, Consumer, CancellationToken.None);
+
+        await registry.Received(1).UnregisterAsync(Tree, Consumer, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Unregister_removes_a_non_materialiser_consumer_from_the_registry_but_owns_no_durable_pin()
+    {
+        // The asymmetry between the two halves, pinned deliberately because it
+        // is surprising and an over-eager "negative control" here would assert
+        // the opposite of the real contract. The live registry is keyed by
+        // whatever consumer the caller names, so removing exactly that consumer
+        // is always right; the durable pin store holds rows for materialiser
+        // consumers only, so it must be left untouched for anyone else. This is
+        // why the durable-pin assertions above carry a prefix-scoped negative
+        // control and the registry assertion cannot.
+        var (dropping, registry) = CreateWithRegistry();
+
+        await dropping.Reporter.UnregisterAsync(Tree, "peer-consumer", CancellationToken.None);
+
+        Assert.That(dropping.RemovedFrom, Is.Empty,
+            "Only leaf-materialiser consumer ids own a durable pin.");
+        await registry.Received(1).UnregisterAsync(Tree, "peer-consumer", Arg.Any<CancellationToken>());
     }
 }

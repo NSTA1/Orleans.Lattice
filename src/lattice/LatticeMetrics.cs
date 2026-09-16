@@ -4503,6 +4503,32 @@ public static class LatticeMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a blocking pin whose leaf
+    /// reported no bound tree id, so the pin is an orphan left behind by a
+    /// reclaimed or purged leaf and the sweep retired it (issue #3101).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The arm that distinguishes a repair from a vacuous success. An orphaned
+    /// pin previously reported as <see cref="BlockedLeafReactivationCompleted"/>
+    /// - a success arm - so a sweep that could never clear the block was
+    /// indistinguishable from one that cleared it, and the tree's WAL was
+    /// retained without bound while the counter said the touches were fine.
+    /// </para>
+    /// <para>
+    /// A non-zero rate here is a signal about the <i>leaf lifecycle</i>, not
+    /// about the GC: it counts pins that outlived their leaf. The sweep repairs
+    /// them, so the series should fall to zero once a deployment has drained the
+    /// orphans it accumulated before the retirement seam existed. A rate that
+    /// stays non-zero means something is still retiring leaves without retiring
+    /// their pins.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationOrphaned =
+        new(TagOutcome, "orphaned");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
     /// <see cref="WalGcBlockedLeafReactivations"/> for a touch whose probe call
     /// threw something other than a timeout (issue #2938).
     /// </summary>

@@ -88,7 +88,8 @@ internal sealed class LatticeWalGcScheduler(
     ILogger<LatticeWalGcScheduler> logger,
     TimeProvider? timeProvider = null,
     BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null,
-    [FromKeyedServices(LatticeOptions.StorageProviderName)] IGrainStorage? leafStateStorage = null) : BackgroundService
+    [FromKeyedServices(LatticeOptions.StorageProviderName)] IGrainStorage? leafStateStorage = null,
+    BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null) : BackgroundService
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -576,6 +577,38 @@ internal sealed class LatticeWalGcScheduler(
         /// </para>
         /// </remarks>
         Undelivered,
+
+        /// <summary>
+        /// The leaf resolved and was driven, and reported
+        /// <see cref="LeafStarvationDriveOutcome.NotDriven"/> - it has no tree id
+        /// bound, so its durable state has been cleared and the pin blocking the
+        /// cursor floor is an orphan (issue #3101). The sweep retires the pin
+        /// rather than retrying it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Why this is terminal rather than refundable.</b> Registration is
+        /// birth-gated: a leaf's consumer id is derived from its tree id, so
+        /// <c>BPlusLeafGrain.ResolveConsumerIdBase</c> returns
+        /// <see langword="null"/> until the tree id is persisted and no pin can
+        /// exist before then. A registered pin whose leaf reports no tree id
+        /// therefore proves the state was cleared <i>after</i> the pin was
+        /// registered - a reclaimed or purged leaf - and not a leaf that has yet
+        /// to be born. No number of retries can bind a tree id to a leaf that has
+        /// been reclaimed, so retrying is futile by construction. That proof is
+        /// also what makes retirement safe: the pin cannot be protecting WAL a
+        /// live leaf still needs to replay.
+        /// </para>
+        /// <para>
+        /// <b>Why it is not folded into <see cref="Unresolvable"/>.</b> The two
+        /// are both permanent, but they say different things and only one is
+        /// actionable. An unresolvable id never named a leaf; an orphaned pin
+        /// named a real leaf that has since been reclaimed, which is a fault in
+        /// whatever retired the leaf without retiring its pin. Folding them would
+        /// hide a repairable source behind a parse failure.
+        /// </para>
+        /// </remarks>
+        Orphaned,
     }
 
     /// <summary>
@@ -605,6 +638,7 @@ internal sealed class LatticeWalGcScheduler(
             ReactivationOutcome.Unresolvable => LatticeMetrics.BlockedLeafReactivationUnresolvable,
             ReactivationOutcome.Faulted => LatticeMetrics.BlockedLeafReactivationFaulted,
             ReactivationOutcome.Undelivered => LatticeMetrics.BlockedLeafReactivationUndelivered,
+            ReactivationOutcome.Orphaned => LatticeMetrics.BlockedLeafReactivationOrphaned,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -3087,6 +3121,21 @@ internal sealed class LatticeWalGcScheduler(
                 blockingConsumerId,
                 drive);
 
+            // NotDriven means the leaf has no tree id bound, which proves its
+            // durable state was cleared after the pin was registered - a
+            // reclaimed or purged leaf whose pin was left behind (issue #3101).
+            // Registration is birth-gated on a persisted tree id, so this cannot
+            // be a leaf that is merely not born yet, and retrying can never bind
+            // a tree id to a leaf that has been reclaimed. Retire the orphan
+            // instead of spending the budget on it forever; that same proof is
+            // what makes retirement safe, because the pin cannot be protecting
+            // WAL a live leaf still needs.
+            if (drive == LeafStarvationDriveOutcome.NotDriven)
+            {
+                await RetireOrphanedPinAsync(treeId, blockingConsumerId).ConfigureAwait(false);
+                return ReactivationOutcome.Orphaned;
+            }
+
             return ReactivationOutcome.Completed;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -3142,6 +3191,60 @@ internal sealed class LatticeWalGcScheduler(
     /// </remarks>
     private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId) =>
         TryResolveLeafGrainId(treeId, consumerId, out leafGrainId, out _);
+
+    /// <summary>
+    /// Retires a materialiser pin whose leaf has been reclaimed or purged, so
+    /// the cursor floor can advance past it (issue #3101).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the sweep retires it rather than the leaf.</b> The leaf now does
+    /// retire its own pins at its terminal seam, which closes the source. That
+    /// is not sufficient on its own: every deployment that reclaimed a leaf
+    /// before that seam existed is already carrying orphans, and those pins have
+    /// no leaf left to retire them. Without a repair here they would retain
+    /// their WAL prefix for the life of the store, so the source fix alone would
+    /// stop the bleeding without healing the wound.
+    /// </para>
+    /// <para>
+    /// <b>Why a failure here is only logged.</b> Retirement is a repair, not a
+    /// precondition of the pass. A failed removal leaves the pin exactly as it
+    /// was - blocking, and re-examined on the next sweep - which is the
+    /// behaviour that held before this repair existed, so the pass proceeds and
+    /// reclaims whatever it would otherwise have reclaimed.
+    /// </para>
+    /// <para>
+    /// A host with no reporter registered (a pre-WAL host) has no registry to
+    /// remove from, so this is a no-op there.
+    /// </para>
+    /// </remarks>
+    private async Task RetireOrphanedPinAsync(string treeId, string consumerId)
+    {
+        if (cursorReporter is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await cursorReporter
+                .UnregisterAsync(treeId, consumerId, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            logger.LogInformation(
+                "WAL GC retired orphaned materialiser pin {Consumer} on tree {Tree}: its leaf reported no bound tree id, so the leaf was reclaimed or purged and the pin outlived it. The cursor floor is no longer blocked on its account.",
+                consumerId,
+                treeId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "WAL GC could not retire orphaned materialiser pin {Consumer} on tree {Tree}; it stays registered and keeps blocking the cursor floor until a later sweep retires it.",
+                consumerId,
+                treeId);
+        }
+    }
 
     /// <summary>
     /// Parses a materialiser consumer id back into the grain id of the leaf
