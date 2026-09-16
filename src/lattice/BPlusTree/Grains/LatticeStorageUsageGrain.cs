@@ -71,7 +71,12 @@ internal sealed class LatticeStorageUsageGrain(
         metrics.Publish(report);
         if (options.WalMaxRetainedBytes is { } ceiling && ceiling > 0 && walComplete)
         {
-            metrics.PublishOverThreshold(report.TreeId, report.WalRetainedBytes > ceiling);
+            // Compared against physical occupancy, not the logical retained
+            // total: a ceiling expressed in bytes exists to bound disk, and
+            // the retained total omits dead bytes, so comparing it lets a WAL
+            // occupy approaching twice the ceiling without ever tripping the
+            // flag (issue #3107).
+            metrics.PublishOverThreshold(report.TreeId, report.WalPhysicalBytes > ceiling);
         }
 
         // Publish the per-tree admission aggregate so the observable admission
@@ -137,8 +142,11 @@ internal sealed class LatticeStorageUsageGrain(
         // partly-filled array is never read; seeding makes that safety a
         // property of the array itself rather than of the caller's control
         // flow, matching how the nullable shard slots above fail safe.
-        var walRetained = new long[walPartitions];
-        Array.Fill(walRetained, -1L);
+        // One array of pairs rather than two parallel arrays: the report needs
+        // both figures per partition, and a (long, long) element keeps them in
+        // one allocation and one cache line.
+        var walBytes = new (long Retained, long Physical)[walPartitions];
+        Array.Fill(walBytes, (-1L, -1L));
 
         // Slots [0, shardCount) are shard roots; the remainder are WAL
         // partitions. One gate covers both so the per-tree ceiling is a ceiling
@@ -158,7 +166,7 @@ internal sealed class LatticeStorageUsageGrain(
                 {
                     var partition = slot - shardCount;
                     var wal = grainFactory.GetGrain<IWalShardGrain>($"{routing.PhysicalTreeId}/{partition}");
-                    walRetained[partition] = await GetWalRetainedBytesAsync(wal, partition, cancellationToken);
+                    walBytes[partition] = await GetWalByteSizesAsync(wal, partition, cancellationToken);
                 }
             },
             cancellationToken);
@@ -188,10 +196,11 @@ internal sealed class LatticeStorageUsageGrain(
         }
 
         long walRetainedBytes = 0;
+        long walPhysicalBytes = 0;
         var walComplete = true;
-        foreach (var bytes in walRetained)
+        foreach (var (retained, physical) in walBytes)
         {
-            if (bytes < 0)
+            if (retained < 0)
             {
                 // -1 sentinel: the provider does not support byte
                 // accounting, or the fan-out to it failed. The surface
@@ -201,16 +210,25 @@ internal sealed class LatticeStorageUsageGrain(
             }
             else
             {
-                walRetainedBytes += bytes;
+                walRetainedBytes += retained;
+            }
+
+            // The physical figure falls back to the retained one inside the
+            // fan-out helper, so a negative here means the partition answered
+            // neither - already reflected in walComplete above.
+            if (physical >= 0)
+            {
+                walPhysicalBytes += physical;
             }
         }
 
-        var total = walRetainedBytes + snapshotBytes + leafStateBytes;
+        var total = walPhysicalBytes + snapshotBytes + leafStateBytes;
 
         var report = new TreeStorageUsageReport
         {
             TreeId = TreeId,
             WalRetainedBytes = walRetainedBytes,
+            WalPhysicalBytes = walPhysicalBytes,
             SnapshotBytes = snapshotBytes,
             LeafStateBytes = leafStateBytes,
             TotalBytes = total,
@@ -282,11 +300,26 @@ internal sealed class LatticeStorageUsageGrain(
         }
     }
 
-    private async Task<long> GetWalRetainedBytesAsync(IWalShardGrain wal, int partition, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads a WAL partition's logical retained total and its physical
+    /// occupancy, returning <c>-1</c> for either that is unavailable.
+    /// <para>
+    /// Physical is asked for first and falls back to the retained figure when
+    /// the provider returns the unsupported sentinel. That fallback is exact,
+    /// not approximate, for a backend whose trim deletes rows outright: with
+    /// no dead bytes its retained total already is its occupancy. It also
+    /// costs such a backend nothing, because the unsupported default returns
+    /// without doing any I/O.
+    /// </para>
+    /// </summary>
+    private async Task<(long Retained, long Physical)> GetWalByteSizesAsync(
+        IWalShardGrain wal, int partition, CancellationToken cancellationToken)
     {
         try
         {
-            return await wal.GetRetainedByteSizeAsync(cancellationToken);
+            var physical = await wal.GetPhysicalByteSizeAsync(cancellationToken);
+            var retained = await wal.GetRetainedByteSizeAsync(cancellationToken);
+            return (retained, physical < 0 ? retained : physical);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -294,10 +327,10 @@ internal sealed class LatticeStorageUsageGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "WAL retained-byte fan-out failed for partition {Partition} in tree {TreeId}", partition, TreeId);
+            logger.LogWarning(ex, "WAL byte-size fan-out failed for partition {Partition} in tree {TreeId}", partition, TreeId);
             // Treat a transient WAL fan-out failure as "no data" rather than
             // a wrong zero so the report is flagged Partial by the caller.
-            return -1;
+            return (-1, -1);
         }
     }
 }

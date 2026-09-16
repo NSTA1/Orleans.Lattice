@@ -196,6 +196,25 @@ drives autonomic splitting.
 | `orleans.lattice.storage.wal.stored_bytes` | `Counter<long>` | `By` | Post-compression WAL payload bytes actually stored for the tree, summed once per append batch. Dividing this by `uncompressed_bytes` gives the realised compression ratio; `1 -` that ratio is the savings. Tagged `tree`. |
 | `orleans.lattice.storage.wal.compression_skipped` | `Counter<long>` | `{row}` | WAL rows the compressing provider stored verbatim instead of compressed. Tagged `tree` and `reason`: `below_threshold` (payload shorter than `CompressionMinPayloadBytes`), `inflation_guard` (compressing did not shrink the payload), or `disabled` (compression off for the row). |
 
+### WAL compaction (sourced from `FileWalShard`)
+
+A log-structured WAL provider does not free disk when the garbage
+collector trims: trimming marks entries dead, and only a **compaction**
+- a rewrite of the surviving entries into a fresh file - returns the
+bytes. These two counters are the only signal that the rewrite half is
+happening at all. Issue #3107 ran undetected precisely because it was
+absent: a tree trimmed 113,675 entries over 55 minutes while its WAL
+**grew** by 1.1 MB, and no series anywhere distinguished that from a
+healthy drain. Read them against
+`orleans.lattice.wal.entries_trimmed`: sustained trimming with a flat
+`wal.compactions` means dead bytes are accumulating and the configured
+thresholds are not being reached.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.wal.compactions` | `Counter<long>` | `{compaction}` | Compactions completed by the file WAL provider, tagged `tree`, `tenant`, and `trigger`, whose three arms are the **complete set of paths that can rewrite a shard**: `ratio` (dead bytes reached `CompactionThreshold` of the file, the historical trigger), `ceiling` (dead bytes reached the absolute `CompactionMaximumDeadBytes` cap added by issue #3107), and `reconcile` (an unconditional compaction at shard activation). Every arm is **zero-primed per tree** when a shard first loads, so a flat zero is a measured zero rather than an unpublished series - the distinction that mattered in #3107, where "this WAL has never reclaimed a byte" was indistinguishable from "this deployment does not run the file provider". **`ceiling` is flat by default and that is correct, not a fault**: `CompactionMaximumDeadBytes` defaults to `0` (disabled), because compaction rewrites every *live* byte to reclaim the *dead* ones, so an absolute cap far below the live size raises write amplification without bound. A tree whose `ratio` arm never advances while `wal.entries_trimmed` climbs is stranding space at a dead fraction below the threshold, and is the case the ceiling exists to bound. |
+| `orleans.lattice.wal.compaction.reclaimed_bytes` | `Counter<long>` | `By` | Dead bytes released by completed compactions, tagged `tree` and `tenant`, summed at the moment each rewrite finishes. Deliberately a **monotonic counter rather than an up/down gauge of current dead bytes**: a gauge of that kind needs a compensating write per trim, and issue #2700 established here that a compensating write which can be lost - to a disposed shard, a re-created provider, or a torn activation - ratchets the series permanently, leaving real waste indistinguishable from accumulated drift, which is the exact question the instrument exists to answer. Present-truth occupancy is reported instead by `ILattice.GetStorageUsageAsync`'s `WalPhysicalBytes`, which is derived per sample and so cannot drift. Zero-primed per tree alongside `wal.compactions`. |
+
 ### Per-tree admission control
 
 Opt-in, fail-open per-tree quota enforcement. These per-tree instruments are on the `orleans.lattice` meter and tagged `tree`; the two counters (`admission.rejected`, `admission.would_reject`) and the `admission.utilization` gauge additionally carry a low-cardinality `dimension` tag whose value is `keys` or `bytes`. The observable gauges are observed lazily from the same cached, TTL-coalesced per-tree aggregate that backs the storage-usage gauges, so they cost nothing on the write path; they populate once the per-tree storage-usage aggregator has sampled the tree (which happens on any `GetStorageUsageAsync` call, whenever `StorageUsageDeepPollInterval` is enabled, and automatically whenever a cap or advisory ceiling is configured, because the write guard refreshes the aggregate at most once per `StorageUsageCacheTtl`).

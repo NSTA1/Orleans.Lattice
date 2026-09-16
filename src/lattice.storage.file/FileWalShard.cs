@@ -40,6 +40,13 @@ internal sealed class FileWalShard : IDisposable
     private long _deadBytes;
     private long _trimWatermark = -1;
 
+    // Built once per shard rather than per emission. The priming pass and the
+    // compaction record site are both on paths that must not allocate to
+    // report, so the two tags every compaction measurement carries are cached
+    // here instead of being constructed at each call.
+    private readonly KeyValuePair<string, object?> _treeTag;
+    private readonly KeyValuePair<string, object?> _tenantTag;
+
     internal FileWalShard(string directory, FileWalStorageOptions options)
         : this(directory, options, string.Empty, 0, GcWalReadPressureGovernor.Instance)
     {
@@ -58,6 +65,8 @@ internal sealed class FileWalShard : IDisposable
         _treeId = treeId;
         _shardIndex = shardIndex;
         _governor = governor;
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        _tenantTag = LatticeTenantLabel.ForTree(treeId);
     }
 
     /// <summary>
@@ -437,6 +446,47 @@ internal sealed class FileWalShard : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the shard's physical on-disk footprint: every byte the log
+    /// file occupies, including per-record framing and dead (trimmed but
+    /// not yet compacted) payload.
+    /// <para>
+    /// This is the figure that bounds disk, and it is not the one
+    /// <see cref="GetRetainedByteSizeAsync"/> returns. A log-structured
+    /// backend reclaims space only by rewriting the file, so dead bytes are a
+    /// designed-in component of occupancy - up to the compaction threshold's
+    /// share of the file - and a policy that reads only the live payload can
+    /// be satisfied while the file is twice the size it believes.
+    /// </para>
+    /// <para>
+    /// The read is O(1) and exact rather than a <c>FileInfo.Length</c> stat:
+    /// <c>_writePosition</c> tracks the file length by construction, since
+    /// recovery truncates to the last good record end and sets the field to
+    /// it, every append advances both together, and compaction rewrites to
+    /// exactly the new position.
+    /// </para>
+    /// </summary>
+    internal async Task<long> GetPhysicalByteSizeAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            return _writePosition;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Payload bytes belonging to trimmed entries that compaction has not yet
+    /// reclaimed. Exposed so a test can assert on the quantity the ceiling
+    /// bounds rather than inferring it from file size alone.
+    /// </summary>
+    internal long DeadBytes => _deadBytes;
+
     /// <summary>Trims every entry with offset &lt;= <paramref name="throughOffsetInclusive"/>.</summary>
     internal async Task TrimAsync(long throughOffsetInclusive, CancellationToken cancellationToken)
     {
@@ -495,7 +545,7 @@ internal sealed class FileWalShard : IDisposable
             EnsureLoaded();
             if (_deadBytes > 0)
             {
-                Compact();
+                Compact(LatticeMetrics.WalCompactionTriggerReconcile);
             }
         }
         finally
@@ -517,6 +567,33 @@ internal sealed class FileWalShard : IDisposable
         _stream = new FileStream(_logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         RecoverFromDisk();
         _loaded = true;
+        PrimeCompactionCounters();
+    }
+
+    /// <summary>
+    /// Writes a zero on every arm of the compaction counters the first time a
+    /// shard is loaded.
+    /// <para>
+    /// Without it, a deployment whose WAL has simply never needed compacting
+    /// is indistinguishable on a scrape from one where this provider is not
+    /// registered at all - both render as an absent series. That was exactly
+    /// the reading that made issue #3107 take as long to diagnose as it did,
+    /// so the arms are armed before anything can fire them.
+    /// </para>
+    /// </summary>
+    private void PrimeCompactionCounters()
+    {
+        if (_treeId.Length == 0)
+        {
+            // A bare shard constructed directly by a test has no tree
+            // identity to attribute a measurement to.
+            return;
+        }
+
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _tenantTag);
     }
 
     private void RecoverFromDisk()
@@ -709,16 +786,29 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
+        // The absolute ceiling is checked first and independently of the
+        // ratio. That ordering is the entire point of the option: the ratio
+        // bounds waste only relative to live data, so on a large shard it
+        // can sit far below its threshold while holding an amount of dead
+        // space that is, in absolute terms, unacceptable.
+        var ceiling = _options.CompactionMaximumDeadBytes;
+        if (ceiling > 0L && _deadBytes >= ceiling)
+        {
+            Compact(LatticeMetrics.WalCompactionTriggerCeiling);
+            return;
+        }
+
         if ((double)_deadBytes / totalPayload < _options.CompactionThreshold)
         {
             return;
         }
 
-        Compact();
+        Compact(LatticeMetrics.WalCompactionTriggerRatio);
     }
 
-    private void Compact()
+    private void Compact(KeyValuePair<string, object?> trigger)
     {
+        var reclaimed = _deadBytes;
         var stream = _stream!;
         var tempPath = _logPath + ".compacting";
 
@@ -776,6 +866,34 @@ internal sealed class FileWalShard : IDisposable
         _entries.AddRange(newEntries);
         _writePosition = newWritePosition;
         _deadBytes = 0;
+        RecordCompaction(trigger, reclaimed);
+    }
+
+    /// <summary>
+    /// Records one completed compaction and the dead bytes it released.
+    /// <para>
+    /// Both instruments are monotonic counters rather than an
+    /// <c>UpDownCounter</c> of outstanding dead bytes, for the reason issue
+    /// #2700 established: an up-down counter is process-lifetime state, so a
+    /// lost compensating write - a disposed shard, a re-created provider, a
+    /// torn activation - ratchets the series permanently and makes real waste
+    /// indistinguishable from accumulated drift, which is the one question
+    /// the instrument exists to answer. Present occupancy is reported instead
+    /// as derived truth, by <see cref="GetPhysicalByteSizeAsync"/>.
+    /// </para>
+    /// </summary>
+    private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
+    {
+        if (_treeId.Length == 0)
+        {
+            return;
+        }
+
+        LatticeMetrics.WalCompactions.Add(1, _treeTag, trigger, _tenantTag);
+        if (reclaimedBytes > 0)
+        {
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _tenantTag);
+        }
     }
 
     private int LowerBound(long target)

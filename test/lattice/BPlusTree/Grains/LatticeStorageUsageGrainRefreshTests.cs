@@ -274,6 +274,12 @@ public sealed class LatticeStorageUsageGrainRefreshTests
                 cts.Cancel();
                 throw new OperationCanceledException(cts.Token);
             });
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<long>>(_ =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 1, SnapshotBytes = 1, LiveKeys = 1 });
 
@@ -290,6 +296,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain();
         h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
             .Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 64, SnapshotBytes = 8, LiveKeys = 2 });
 
@@ -312,6 +319,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
         h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -331,6 +339,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
         h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
 
         await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -348,6 +357,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
         h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
             .Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -356,6 +366,62 @@ public sealed class LatticeStorageUsageGrainRefreshTests
             Assert.That(report.Partial, Is.True);
             Assert.That(ReadPolicyGauge(TreeId), Is.Null,
                 "an unmeasured WAL surface must leave the gauge unpublished, not publish a false negative");
+        });
+    }
+
+    [Test]
+    public async Task The_over_threshold_gauge_fires_on_physical_bytes_inside_the_retained_ceiling()
+    {
+        // The defect issue #3107 measured, reduced to its smallest form. The
+        // ceiling is 4096. Live payload is 100, so a gauge driven by the
+        // retained figure reports compliance with room to spare - while the
+        // WAL actually occupies 8192 bytes, twice the budget. A
+        // log-structured backend reclaims space only by rewriting the file,
+        // so trimmed-but-uncompacted payload is real occupancy that the
+        // retained total does not count, and the gap grows toward the
+        // compaction threshold's share of the file.
+        var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 4_096 });
+        h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
+        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(100L);
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(8_192L);
+
+        var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.False);
+            Assert.That(report.WalRetainedBytes, Is.EqualTo(100), "live payload only");
+            Assert.That(report.WalPhysicalBytes, Is.EqualTo(8_192), "actual on-disk footprint");
+            Assert.That(
+                ReadPolicyGauge(TreeId),
+                Is.EqualTo(1),
+                "the ceiling must be compared against occupancy; comparing the 100 retained bytes reports a healthy tree using twice its budget");
+        });
+    }
+
+    [Test]
+    public async Task A_provider_without_physical_accounting_falls_back_to_the_retained_figure()
+    {
+        // An unsupported provider returns -1 rather than a wrong zero. That
+        // must not be summed as zero (which would silently zero the tree's
+        // WAL footprint) nor mark the report partial (the retained figure IS
+        // occupancy for a backend whose trim deletes rows outright). It falls
+        // back, and the fallback is exact for such a backend.
+        var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 1_000 });
+        h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
+        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(-1L);
+
+        var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.False, "the retained figure answered, so the surface is accounted");
+            Assert.That(report.WalPhysicalBytes, Is.EqualTo(4_096), "falls back rather than reporting zero");
+            Assert.That(report.TotalBytes, Is.EqualTo(4_106));
+            Assert.That(ReadPolicyGauge(TreeId), Is.EqualTo(1));
         });
     }
 
@@ -373,6 +439,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
         h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
 
         var first = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
         var second = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);

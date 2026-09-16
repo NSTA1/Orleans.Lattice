@@ -1390,6 +1390,88 @@ public static class LatticeMetrics
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 
     /// <summary>
+    /// Counter of WAL shard compactions - the operation that actually returns
+    /// trimmed space to the filesystem - tagged with <see cref="TagTree"/> and
+    /// <see cref="TagTrigger"/>. Emitted by the file WAL provider.
+    /// <para>
+    /// Trimming and reclaiming are different events, and conflating them is the
+    /// blindness issue #3107 was filed for. A trim only marks a prefix dead;
+    /// for a log-structured backend the bytes are returned to the filesystem
+    /// only when the shard is rewritten. So
+    /// <see cref="WalEntriesTrimmed"/> can climb steadily for hours while disk
+    /// usage does not move at all, which is normal rather than a fault - and
+    /// with no counter for the second event there was no way to tell that
+    /// healthy convergence apart from dead space stranded permanently below the
+    /// compaction threshold.
+    /// </para>
+    /// <para>
+    /// The <see cref="TagTrigger"/> arms say which rule fired. <c>ratio</c> is
+    /// the default amortised policy (dead bytes reached
+    /// <c>CompactionThreshold</c> of payload). <c>ceiling</c> is the opt-in
+    /// absolute bound <c>CompactionMaximumDeadBytes</c>, and a sustained
+    /// non-zero rate on it means the deployment is buying bounded disk at the
+    /// cost of write amplification. <c>reconcile</c> is the unconditional
+    /// activation-time compaction, which reclaims whatever the steady-state
+    /// triggers left behind. All arms are zero-primed per tree.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalCompactions =
+        Meter.CreateCounter<long>("orleans.lattice.wal.compactions", unit: "{compaction}",
+            description: "WAL shard compactions - the operation that returns trimmed space to the filesystem - tagged by tree and by the trigger that fired. 'ratio' is the default amortised policy (dead bytes reached the configured fraction of payload); 'ceiling' is the opt-in absolute dead-byte bound, whose sustained use trades write amplification for bounded disk; 'reconcile' is the unconditional activation-time compaction. Distinct from orleans.lattice.wal.entries_trimmed, which counts entries marked dead rather than bytes returned: the two can diverge for hours, and that divergence is normal convergence rather than a fault. All arms are zero-primed per tree.");
+
+    /// <summary>Canonical name of <see cref="WalCompactions"/>.</summary>
+    public const string WalCompactionsName = "orleans.lattice.wal.compactions";
+
+    /// <summary>
+    /// <see cref="TagTrigger"/> value on <see cref="WalCompactions"/> for the
+    /// default amortised policy: dead bytes reached the configured fraction of
+    /// payload. Compaction rewrites every live byte to reclaim the dead ones,
+    /// so triggering on a fraction is what keeps the cost near one byte written
+    /// per byte reclaimed.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalCompactionTriggerRatio =
+        new(TagTrigger, "ratio");
+
+    /// <summary>
+    /// <see cref="TagTrigger"/> value on <see cref="WalCompactions"/> for the
+    /// opt-in absolute dead-byte ceiling. Deliberately checked before the
+    /// ratio, because a large shard can sit far below its threshold while
+    /// holding an absolutely unacceptable amount of dead space.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalCompactionTriggerCeiling =
+        new(TagTrigger, "ceiling");
+
+    /// <summary>
+    /// <see cref="TagTrigger"/> value on <see cref="WalCompactions"/> for the
+    /// unconditional activation-time compaction. Note this fires only when a
+    /// WAL shard grain activates, so it never rescues an actively-written tree,
+    /// whose shard grain does not deactivate.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalCompactionTriggerReconcile =
+        new(TagTrigger, "reconcile");
+
+    /// <summary>
+    /// Counter of bytes physically returned to the filesystem by WAL shard
+    /// compaction, tagged with <see cref="TagTree"/>. Zero-primed per tree.
+    /// <para>
+    /// Monotonic by design. The obvious alternative - an up/down gauge of dead
+    /// bytes currently held - needs a compensating write per compaction, and
+    /// issue #2700 established in this codebase that a compensating write which
+    /// can be lost ratchets the series permanently and makes real waste
+    /// indistinguishable from accumulated drift. Present-truth occupancy is
+    /// reported instead by
+    /// <see cref="BPlusTree.TreeStorageUsageReport.WalPhysicalBytes"/>, which is
+    /// derived on each sample and so cannot drift.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalCompactionReclaimedBytes =
+        Meter.CreateCounter<long>("orleans.lattice.wal.compaction.reclaimed_bytes", unit: "By",
+            description: "Bytes physically returned to the filesystem by WAL shard compaction, tagged by tree. Monotonic by design: an up/down gauge of currently-held dead bytes would need a compensating write that can be lost, which ratchets the series (issue #2700). For present-truth occupancy compare the tree's physical and retained WAL bytes on the storage-usage report instead. Zero-primed per tree.");
+
+    /// <summary>Canonical name of <see cref="WalCompactionReclaimedBytes"/>.</summary>
+    public const string WalCompactionReclaimedBytesName = "orleans.lattice.wal.compaction.reclaimed_bytes";
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
     /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
     /// <para>
