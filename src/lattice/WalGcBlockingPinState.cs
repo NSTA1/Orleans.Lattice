@@ -104,4 +104,34 @@ public enum WalGcBlockingPinState
     /// </para>
     /// </summary>
     Unreadable = 3,
+
+    /// <summary>
+    /// The leaf's durable state blob exists but carries no bound tree id: the
+    /// leaf was reclaimed or purged after publishing this pin, leaving a husk
+    /// behind. The pin has outlived its publisher and can never be lifted by
+    /// the leaf, so it is retired outright rather than driven (issue #3105).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a husk is proof rather than a guess.</b> A leaf's pin registration
+    /// is birth-gated on a persisted tree id, so a durable pin can only exist if
+    /// the leaf's state carried one at the moment the pin was written. Reading
+    /// that state back and finding no tree id therefore establishes that the
+    /// state was cleared <i>after</i> the pin was published - the exact
+    /// condition <c>DriveStarvedCheckpointAsync</c> reports as
+    /// <c>NotDriven</c>, reached without activating the leaf.
+    /// </para>
+    /// <para>
+    /// <b>Why this arm has to exist separately.</b> Before it did, a husk was
+    /// classified by <c>ClassifyCheckpoint</c>, which reads only the persisted
+    /// projection checkpoint and never the tree id. A husk retains whatever
+    /// checkpoint offset it last wrote, so it classified as
+    /// <see cref="CheckpointedUncovered"/> - "repairable" - and an estate of
+    /// 9,468 orphaned pins on one tree presented as a coverage problem that a
+    /// snapshot would fix. The one diagnostic that could have revealed the
+    /// backlog instead concealed it, which is why the misclassification is part
+    /// of the defect and not a cosmetic detail of it.
+    /// </para>
+    /// </remarks>
+    Orphaned = 4,
 }
