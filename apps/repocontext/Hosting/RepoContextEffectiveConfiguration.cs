@@ -153,6 +153,7 @@ public static class RepoContextEffectiveConfiguration
             RepoContextHostConfiguration.ClusterIdKey,
             RepoContextHostConfiguration.ServiceIdKey,
             RepoContextHostConfiguration.WorkspaceRootKey,
+            RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
             RepoContextPinBucketing.PinBucketsKey,
             RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
             RepoContextClaimLeases.MaxLockLeaseSecondsKey,

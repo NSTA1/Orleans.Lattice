@@ -37,6 +37,13 @@ public sealed class RepoContextHostConfiguration
     /// <summary>Environment variable for the SQLite database file (defaults under the data root).</summary>
     public const string SqlitePathKey = "LATTICE_SQLITE_PATH";
 
+    /// <summary>
+    /// Environment variable for the absolute dead-byte ceiling that forces a file WAL
+    /// compaction regardless of the dead-byte ratio. Zero (the default) leaves the
+    /// ceiling disabled, so only the ratio trigger applies.
+    /// </summary>
+    public const string WalCompactionMaxDeadBytesKey = "LATTICE_WAL_COMPACTION_MAX_DEAD_BYTES";
+
     /// <summary>Environment variable for the PostgreSQL connection string.</summary>
     public const string PostgresConnectionKey = "LATTICE_POSTGRES_CONNECTION_STRING";
 
@@ -92,6 +99,7 @@ public sealed class RepoContextHostConfiguration
         string dataRoot,
         string walDirectory,
         string sqlitePath,
+        long walCompactionMaximumDeadBytes,
         string? postgresConnectionString,
         string? azureConnectionString,
         string azureWalTableName,
@@ -111,6 +119,7 @@ public sealed class RepoContextHostConfiguration
         DataRoot = dataRoot;
         WalDirectory = walDirectory;
         SqlitePath = sqlitePath;
+        WalCompactionMaximumDeadBytes = walCompactionMaximumDeadBytes;
         PostgresConnectionString = postgresConnectionString;
         AzureConnectionString = azureConnectionString;
         AzureWalTableName = azureWalTableName;
@@ -146,6 +155,15 @@ public sealed class RepoContextHostConfiguration
 
     /// <summary>The SQLite database file path (under the data root by default).</summary>
     public string SqlitePath { get; }
+
+    /// <summary>
+    /// The absolute dead-byte ceiling that forces a file WAL compaction regardless of
+    /// the dead-byte ratio. Zero leaves the ceiling disabled, so a shard reclaims space
+    /// only once dead bytes reach the ratio threshold - which bounds waste relative to
+    /// live data rather than absolutely, and so permits the log to roughly double before
+    /// anything is returned to the filesystem.
+    /// </summary>
+    public long WalCompactionMaximumDeadBytes { get; }
 
     /// <summary>The PostgreSQL connection string, when a relational store selects PostgreSQL.</summary>
     public string? PostgresConnectionString { get; }
@@ -244,6 +262,8 @@ public sealed class RepoContextHostConfiguration
         var clusterId = Trimmed(configuration[ClusterIdKey]) ?? "repo-context";
         var serviceId = Trimmed(configuration[ServiceIdKey]) ?? "repo-context";
         var workspaceRoot = Trimmed(configuration[WorkspaceRootKey]) ?? DefaultWorkspaceRoot;
+        var walCompactionMaximumDeadBytes =
+            ParseLong(configuration[WalCompactionMaxDeadBytesKey], WalCompactionMaxDeadBytesKey) ?? 0L;
 
         var config = new RepoContextHostConfiguration(
             profile,
@@ -254,6 +274,7 @@ public sealed class RepoContextHostConfiguration
             dataRoot,
             walDirectory,
             sqlitePath,
+            walCompactionMaximumDeadBytes,
             postgresConnectionString,
             azureConnectionString,
             azureWalTableName,
@@ -305,6 +326,13 @@ public sealed class RepoContextHostConfiguration
         if (EmbeddingDimension <= 0)
         {
             failures.Add($"{EmbeddingDimensionKey} must be a positive integer; was {EmbeddingDimension}.");
+        }
+
+        if (WalCompactionMaximumDeadBytes < 0)
+        {
+            failures.Add(
+                $"{WalCompactionMaxDeadBytesKey} must be zero (disabled) or positive; "
+                + $"was {WalCompactionMaximumDeadBytes}.");
         }
 
         if (failures.Count > 0)
@@ -408,6 +436,22 @@ public sealed class RepoContextHostConfiguration
         if (!int.TryParse(value, out var parsed))
         {
             throw new InvalidOperationException($"{key}='{raw}' is not a valid integer.");
+        }
+
+        return parsed;
+    }
+
+    private static long? ParseLong(string? raw, string key)
+    {
+        var value = Trimmed(raw);
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!long.TryParse(value, out var parsed))
+        {
+            throw new InvalidOperationException($"{key}='{raw}' is not a valid 64-bit integer.");
         }
 
         return parsed;

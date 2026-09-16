@@ -183,7 +183,14 @@ public static class DurabilitySelector
                 break;
             case WalProvider.File:
             default:
-                silo.AddFileWalStorage(options => options.RootDirectory = config.WalDirectory);
+                silo.AddFileWalStorage(options =>
+                {
+                    options.RootDirectory = config.WalDirectory;
+                    if (config.WalCompactionMaximumDeadBytes > 0)
+                    {
+                        options.CompactionMaximumDeadBytes = config.WalCompactionMaximumDeadBytes;
+                    }
+                });
                 break;
         }
     }

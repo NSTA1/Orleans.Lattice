@@ -242,6 +242,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextHostConfiguration.ClusterIdKey,
         RepoContextHostConfiguration.ServiceIdKey,
         RepoContextHostConfiguration.WorkspaceRootKey,
+        RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
         RepoContextPinBucketing.PinBucketsKey,
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
@@ -337,6 +338,9 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             Line(RepoContextHostConfiguration.ClusterIdKey, c => c.ClusterId),
             Line(RepoContextHostConfiguration.ServiceIdKey, c => c.ServiceId),
             Line(RepoContextHostConfiguration.WorkspaceRootKey, c => c.WorkspaceRoot),
+            Line(
+                RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
+                c => c.WalCompactionMaximumDeadBytes.ToString(CultureInfo.InvariantCulture)),
 
             Knob(
                 RepoContextPinBucketing.PinBucketsKey,
