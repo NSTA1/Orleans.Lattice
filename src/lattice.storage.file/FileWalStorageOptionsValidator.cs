@@ -37,6 +37,13 @@ internal sealed class FileWalStorageOptionsValidator : IValidateOptions<FileWalS
                 + $"was {options.CompactionMinimumDeadBytes}.");
         }
 
+        if (options.CompactionMaximumDeadBytes < 0L)
+        {
+            failures.Add(
+                $"{nameof(FileWalStorageOptions.CompactionMaximumDeadBytes)} must be non-negative "
+                + $"(0 disables the absolute ceiling); was {options.CompactionMaximumDeadBytes}.");
+        }
+
         if (options.MaxReadBatchBytes < 1L)
         {
             failures.Add(

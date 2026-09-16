@@ -198,6 +198,33 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the bytes this WAL shard's backend <b>physically occupies</b>,
+    /// inclusive of per-record framing and of dead (trimmed but not yet
+    /// reclaimed) payload, or <c>-1</c> when the configured
+    /// <see cref="IWalStorageProvider"/> does not support physical accounting.
+    /// Forwards directly to
+    /// <see cref="IWalStorageProvider.GetPhysicalByteSizeAsync"/>.
+    /// <para>
+    /// This, not <see cref="GetRetainedByteSizeAsync"/>, is the figure that
+    /// answers "how much disk is this shard using". The retained total omits
+    /// dead bytes, which for a log-structured backend are a designed-in
+    /// component of occupancy that can equal the live payload, so it can
+    /// understate real usage by a factor approaching two.
+    /// </para>
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for
+    /// the same reason as <see cref="GetRetainedByteSizeAsync"/>: a
+    /// storage-usage poll must never queue behind an in-flight append or trim
+    /// turn. The call reads a counter on the provider and touches no shared
+    /// in-grain state, so the returned figure is an at-a-moment snapshot that a
+    /// concurrent append or compaction may immediately invalidate.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<long> GetPhysicalByteSizeAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Diagnostic helper: returns the number of entries currently
     /// persisted in this WAL shard. <b>Trim-unaware</b> -
     /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the

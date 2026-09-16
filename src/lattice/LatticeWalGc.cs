@@ -1131,12 +1131,26 @@ public sealed class LatticeWalGc(
 
     /// <summary>
     /// Samples the advisory WAL byte-pressure inputs: the configured ceiling
-    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and the retained-byte
+    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and the occupancy
     /// total summed across every partition. Returns <c>(null, null)</c> when
     /// the policy is disabled and <c>(ceiling, null)</c> when the provider does
     /// not support byte accounting (every partition returned the <c>-1</c>
     /// sentinel). The policy never trims past the safe frontier; the sampled
     /// total only feeds the advisory report and metrics.
+    /// <para>
+    /// Each partition is sampled with
+    /// <see cref="IWalStorageProvider.GetPhysicalByteSizeAsync"/> in
+    /// preference to <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>,
+    /// falling back per-partition when a provider does not support physical
+    /// accounting. A ceiling expressed in bytes exists to bound disk, and the
+    /// retained figure cannot do that: it omits dead (trimmed but not yet
+    /// compacted) bytes, which for a log-structured backend can equal the live
+    /// payload, so sampling it lets a WAL legitimately occupy approaching twice
+    /// the configured ceiling without ever reporting a breach (issue #3107).
+    /// The fallback is exact rather than a degradation for the backends that
+    /// take it: a provider whose trim deletes rows outright carries no dead
+    /// bytes, so its retained total already is its occupancy.
+    /// </para>
     /// </summary>
     private static async Task<(long? Ceiling, long? Retained)> SampleRetainedBytesAsync(
         Func<int, IWalStorageProvider?> resolveProvider,
@@ -1164,14 +1178,28 @@ public sealed class LatticeWalGc(
                 // that owns the key).
                 continue;
             }
-            var bytes = await provider.GetRetainedByteSizeAsync(treeName, partition, cancellationToken).ConfigureAwait(false);
+
+            var bytes = await provider
+                .GetPhysicalByteSizeAsync(treeName, partition, cancellationToken)
+                .ConfigureAwait(false);
             if (bytes < 0)
             {
-                // -1 sentinel: this partition's provider does not support
-                // byte accounting. Skip it; if every partition is
+                // -1 sentinel: no physical accounting. Fall back to the
+                // logical retained total, which is this backend's occupancy
+                // when its trim deletes rather than marks dead.
+                bytes = await provider
+                    .GetRetainedByteSizeAsync(treeName, partition, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (bytes < 0)
+            {
+                // -1 again: this partition's provider supports neither form
+                // of byte accounting. Skip it; if every partition is
                 // unsupported the policy reports "no data".
                 continue;
             }
+
             anySupported = true;
             retained += bytes;
         }

@@ -1779,6 +1779,30 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, status) (increase(orleans_lattice_wal_gc_orphan_pin_sweep_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}} {{status}}" }
       ]
+    },
+    {
+      "id": 3107,
+      "title": "WAL compactions by trigger over range - issue #3107",
+      "description": "Totals (not a rate) of orleans.lattice.wal.compactions over the selected range, per tree and trigger (issue #3107). THE QUESTION THIS ANSWERS: is the WAL actually RETURNING the space its garbage collector trims? TRIMMING DOES NOT FREE DISK ON A LOG-STRUCTURED PROVIDER. A trim marks entries dead and appends a trim marker; only a COMPACTION - a rewrite of the surviving entries into a fresh file - returns the bytes, and until issue #3107 no series anywhere said whether that rewrite was happening. MEASURED ON A LIVE CONTAINER: a tree trimmed 113,675 entries over 55 minutes while its WAL GREW by 1.1 MB, and orleans.lattice.wal.entries_trimmed charted that as healthy progress because it counts ENTRIES, never BYTES. READ IT AGAINST orleans.lattice.wal.entries_trimmed: sustained trimming with this panel flat means dead bytes are accumulating and the configured thresholds are not being reached. THE TRIGGER ARMS ARE THE COMPLETE SET OF PATHS THAT CAN REWRITE A SHARD. ratio = dead bytes reached CompactionThreshold as a FRACTION of the file (the historical and only pre-#3107 trigger), which is well amortised - at the 0.5 default it writes about one live byte per dead byte reclaimed - but is UNBOUNDED IN ABSOLUTE TERMS: a tree that stalls at a dead fraction of 0.49 strands that space indefinitely however many gigabytes it is, which is exactly what the measurement above caught at a dead fraction of 0.08 on 11.7 GB. ceiling = dead bytes reached the ABSOLUTE CompactionMaximumDeadBytes cap added by #3107. reconcile = an unconditional compaction at shard activation, which never fires for an actively-written tree because its WAL grain does not deactivate. A FLAT ceiling ARM IS CORRECT, NOT A FAULT: CompactionMaximumDeadBytes defaults to 0 (disabled), because compaction rewrites every LIVE byte to reclaim the DEAD ones, so cost per byte reclaimed is live/dead and an absolute cap far below the live size raises write amplification without bound. Enabling it by default would be a silent I/O regression on every existing deployment, so it is opt-in and this arm stays at a measured zero until an operator sets the cap. EVERY ARM IS ZERO-PRIMED PER TREE when a shard first loads, so a flat zero is a MEASURED zero rather than an unpublished series - the distinction that mattered in #3107, where 'this WAL has never reclaimed a byte' and 'this deployment does not run the file provider' both rendered as no-data. SCOPE: emitted by the FILE WAL provider only. A deployment on a backend whose trim deletes rows outright carries no dead bytes and needs no compaction, so an absent series there is correct.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 309 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, trigger) (increase(orleans_lattice_wal_compactions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",trigger=~\"ratio|ceiling|reconcile\"}[$__range]))", "legendFormat": "{{tree}} {{trigger}}" }
+      ]
+    },
+    {
+      "id": 3207,
+      "title": "WAL bytes reclaimed by compaction over range - issue #3107",
+      "description": "Totals (not a rate) of orleans.lattice.wal.compaction.reclaimed_bytes over the selected range, per tree (issue #3107). The BYTES half of the compaction pair above, which counts EVENTS: a tree can compact regularly and still reclaim almost nothing, and only this panel separates the two. DELIBERATELY A MONOTONIC COUNTER RATHER THAN A GAUGE OF CURRENT DEAD BYTES. A gauge of that kind needs a compensating write on every trim, and issue #2700 established on this repository that a compensating write which can be lost - to a disposed shard, a re-created provider, or a torn activation - RATCHETS THE SERIES PERMANENTLY, leaving real waste indistinguishable from accumulated drift, which is the exact question the instrument exists to answer. FOR PRESENT-TRUTH OCCUPANCY READ ILattice.GetStorageUsageAsync's WalPhysicalBytes INSTEAD, which is derived per sample from the shard's write position and so cannot drift. That field is also what the WalMaxRetainedBytes ceiling now compares against: before #3107 the ceiling was compared to the LOGICAL retained total, which omits dead bytes, so a WAL could legitimately occupy approaching TWICE its configured ceiling without ever reporting a breach. READ IT AGAINST THE PANEL ABOVE: compactions advancing with this flat means the rewrites are finding nothing to reclaim; both advancing together is the healthy shape; trimming with both flat is the #3107 condition. Zero-primed per tree alongside orleans.lattice.wal.compactions, so a flat zero here is likewise measured rather than absent.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 309 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_wal_compaction_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
+      ]
     }
   ]
 }

@@ -27,6 +27,19 @@ public sealed class FileWalStorageOptions
     public const int DefaultCompactionMinimumDeadBytes = 64 * 1024;
 
     /// <summary>
+    /// The default absolute dead-byte ceiling (<c>0</c>: disabled, leaving
+    /// <see cref="DefaultCompactionThreshold"/> as the sole trigger).
+    /// Disabled by default because the ratio policy is what keeps
+    /// compaction amortised: a compaction rewrites every <i>live</i> byte to
+    /// reclaim the dead ones, so triggering at a dead fraction of <c>0.5</c>
+    /// costs roughly one byte written per byte reclaimed, whereas an
+    /// absolute ceiling on a large shard can cost many. The ceiling
+    /// deliberately trades that amortisation for a hard bound on wasted
+    /// disk, so it is opt-in rather than a silent I/O regression.
+    /// </summary>
+    public const long DefaultCompactionMaximumDeadBytes = 0L;
+
+    /// <summary>
     /// The default per-read payload byte ceiling (<c>16 MiB</c>). Four
     /// times <see cref="LatticeOptions.DefaultWalMaxBatchBytes"/>, so a
     /// page always has room for a full default-sized write batch and the
@@ -73,6 +86,38 @@ public sealed class FileWalStorageOptions
     /// <see cref="DefaultCompactionMinimumDeadBytes"/>.
     /// </summary>
     public int CompactionMinimumDeadBytes { get; set; } = DefaultCompactionMinimumDeadBytes;
+
+    /// <summary>
+    /// An absolute ceiling, in dead (trimmed but not yet physically
+    /// reclaimed) payload bytes, above which a
+    /// <see cref="IWalStorageProvider.TrimAsync"/> call compacts the shard
+    /// <b>regardless of <see cref="CompactionThreshold"/></b>. <c>0</c> (the
+    /// default) disables the ceiling, leaving the ratio as the sole trigger.
+    /// <para>
+    /// <see cref="CompactionThreshold"/> bounds waste only <i>relative</i> to
+    /// live data, so absolute waste grows without limit as a shard grows: at
+    /// the default fraction a 100 GB shard may hold approaching 100 GB of
+    /// dead bytes before compaction is due. This option is how an operator
+    /// under disk pressure expresses "never waste more than N bytes per
+    /// shard, whatever it costs to honour".
+    /// </para>
+    /// <para>
+    /// It does cost. Compaction rewrites every live byte in the shard to
+    /// reclaim the dead ones, so the work done per byte reclaimed is
+    /// <c>live / dead</c>: at the 0.5 ratio that is about 1, while a ceiling
+    /// set far below the live size drives it proportionally higher and
+    /// compacts more often. Size it against the shard sizes the deployment
+    /// actually reaches rather than as small as disk allows, and prefer
+    /// leaving it disabled unless bounded disk genuinely outranks write
+    /// amplification.
+    /// </para>
+    /// <para>
+    /// <see cref="CompactionMinimumDeadBytes"/> still applies: a shard below
+    /// that floor is never compacted by either trigger, so a ceiling set
+    /// below the floor has no effect.
+    /// </para>
+    /// </summary>
+    public long CompactionMaximumDeadBytes { get; set; } = DefaultCompactionMaximumDeadBytes;
 
     /// <summary>
     /// Maximum total payload bytes a single read page may materialise,

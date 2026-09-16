@@ -45,7 +45,8 @@ public sealed class LatticeStorageUsageGrainTests
         Func<int, Task<ShardStorageUsage>> shardBehaviour,
         Func<int, Task<long>> walBehaviour,
         LatticeOptions? options = null,
-        string? treeId = null)
+        string? treeId = null,
+        Func<int, Task<long>>? walPhysicalBehaviour = null)
     {
         var tree = treeId ?? TreeId;
         var context = Substitute.For<IGrainContext>();
@@ -75,6 +76,12 @@ public sealed class LatticeStorageUsageGrainTests
             var wal = Substitute.For<IWalShardGrain>();
             wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
                 .Returns(_ => walBehaviour(partition));
+            // Physical size defaults to mirroring retained, which is the
+            // shape of a backend holding no dead bytes. A test that needs
+            // the two to diverge - the whole point of the split - passes
+            // walPhysicalBehaviour explicitly.
+            wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>())
+                .Returns(_ => (walPhysicalBehaviour ?? walBehaviour)(partition));
             factory.GetGrain<IWalShardGrain>($"{tree}/{partition}").Returns(wal);
         }
 
@@ -269,6 +276,37 @@ public sealed class LatticeStorageUsageGrainTests
             Assert.That(report.LiveKeys, Is.EqualTo(15));
             Assert.That(report.WalRetainedBytes, Is.EqualTo(14));
             Assert.That(report.TotalBytes, Is.EqualTo(344));
+        });
+    }
+
+    [Test]
+    public async Task GetReportAsync_totals_physical_bytes_not_live_payload()
+    {
+        // The defect issue #3107 measured: a log-structured WAL reclaims
+        // space only by rewriting the file, so payload that has been trimmed
+        // but not yet compacted is real occupancy the retained figure does
+        // not count. Here each of the two partitions holds 7 live bytes
+        // inside a 50-byte file, the ~7x gap a real shard reaches as dead
+        // bytes accumulate. The report must carry both, and the total - the
+        // number a capacity decision is made on - must be the physical one.
+        var grain = CreateGrain(
+            shardCount: 3,
+            walPartitions: 2,
+            shardBehaviour: _ => Usage(leaf: 100, snapshot: 10, liveKeys: 5),
+            walBehaviour: _ => Task.FromResult(7L),
+            walPhysicalBehaviour: _ => Task.FromResult(50L));
+
+        var report = await grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.False);
+            Assert.That(report.WalRetainedBytes, Is.EqualTo(14), "live payload across both partitions");
+            Assert.That(report.WalPhysicalBytes, Is.EqualTo(100), "actual file footprint across both partitions");
+            Assert.That(
+                report.TotalBytes,
+                Is.EqualTo(430),
+                "330 of shard state plus the 100 physical WAL bytes; totalling the 14 retained bytes instead understates the tree by the dead space, which is the whole defect");
         });
     }
 

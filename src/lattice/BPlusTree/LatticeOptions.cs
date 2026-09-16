@@ -2393,9 +2393,9 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalGcMinInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.
-    /// When set and the byte-accounting core reports that a tree's retained
-    /// WAL exceeds this value, the host-scheduled WAL garbage collector
+    /// Optional advisory per-tree ceiling, in bytes, on WAL size.
+    /// When set and the byte-accounting core reports that a tree's WAL
+    /// exceeds this value, the host-scheduled WAL garbage collector
     /// (<see cref="ILatticeWalGc"/>) lowers its effective trim frontier
     /// toward <see cref="WalBytePressureReclaimTarget"/> of the ceiling -
     /// but <b>only within the already-safe frontier</b> (the minimum
@@ -2415,7 +2415,7 @@ public class LatticeOptions
     /// mechanism: a correct value is a fraction of the volume the WAL lives on,
     /// which the library cannot know, and any value the library picked would be
     /// wrong for most deployments in one direction or the other. Enabling it also
-    /// costs one <c>GetRetainedByteSizeAsync</c> probe per WAL partition on every
+    /// costs one <c>GetPhysicalByteSizeAsync</c> probe per WAL partition on every
     /// garbage-collection pass - a cost every consumer would pay for a signal
     /// most do not need. Leaving it off does not blind an operator: the
     /// unconditional pass counter still reports every pass and its outcome, and
@@ -2423,6 +2423,23 @@ public class LatticeOptions
     /// reporting passes but no retained-byte samples is knowably "not measured"
     /// rather than "no backlog". Set it when the WAL volume has a hard size
     /// budget and the provider accounts bytes.
+    /// </para>
+    /// <para>
+    /// <b>The ceiling bounds physical occupancy, not live payload.</b> It is
+    /// compared against <c>IWalStorageProvider.GetPhysicalByteSizeAsync</c> -
+    /// every byte the WAL occupies on disk, including per-record framing and
+    /// dead payload that has been trimmed but not yet reclaimed by compaction.
+    /// The property name predates that correction and is retained because it is
+    /// public API. Before issue #3107 the comparison was made against the
+    /// <i>retained</i> total, which counts live payload only; since a
+    /// log-structured backend reclaims space only by rewriting the file, dead
+    /// bytes are a designed-in component of occupancy up to the compaction
+    /// threshold's share of the file, so a WAL could legitimately occupy
+    /// approaching twice this ceiling while never reporting a breach. A
+    /// provider that cannot report physical size falls back to the retained
+    /// figure per partition and is understated to that same degree; both
+    /// figures are surfaced separately on the storage-usage report so the gap
+    /// is visible rather than inferred.
     /// </para>
     /// </summary>
     public long? WalMaxRetainedBytes { get; set; }

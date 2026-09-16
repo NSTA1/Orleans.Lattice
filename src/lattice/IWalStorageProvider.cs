@@ -360,8 +360,8 @@ public interface IWalStorageProvider
     /// live WAL entry between the lowest and highest still-stored offset
     /// (post-trim). Used by the byte-accurate storage-usage aggregator
     /// (<c>ILattice.GetStorageUsageAsync</c>) and the advisory
-    /// byte-pressure WAL retention policy to report and bound a tree's
-    /// physical footprint without scanning the log on the hot path.
+    /// byte-pressure WAL retention policy to report the tree's <b>logical</b>
+    /// WAL size without scanning the log on the hot path.
     /// <para>
     /// The figure is the retained <b>payload</b> byte total: it counts the
     /// encoded mutation bytes a provider stores per entry and deliberately
@@ -373,6 +373,19 @@ public interface IWalStorageProvider
     /// every call. A provider whose trim leaves a partially-trimmed
     /// boundary batch may over-report by at most one batch's payload, which
     /// is bounded and acceptable for the advisory uses above.
+    /// </para>
+    /// <para>
+    /// <b>This figure does not bound physical disk usage, and must not be
+    /// used to.</b> It excludes framing, and - the dominant term for a
+    /// log-structured backend - it excludes <i>dead</i> bytes: payload
+    /// already trimmed but not yet physically reclaimed. A provider that
+    /// reclaims space by rewriting a segment (the file provider compacts
+    /// only once dead bytes reach a configured fraction of payload) can
+    /// legitimately hold as many dead bytes as live ones, so the retained
+    /// total can understate real occupancy by a factor approaching two.
+    /// Callers that need occupancy - a disk ceiling, a usage report - must
+    /// use <see cref="GetPhysicalByteSizeAsync"/> and fall back to this
+    /// figure only when the provider returns the unsupported sentinel.
     /// </para>
     /// <para>
     /// The default implementation returns <c>-1</c> to signal "byte
@@ -387,6 +400,52 @@ public interface IWalStorageProvider
     /// <param name="cancellationToken">Cancellation token observed before any read.</param>
     /// <returns>The retained payload byte total (>= 0), or <c>-1</c> when the provider does not support byte accounting.</returns>
     Task<long> GetRetainedByteSizeAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(-1L);
+    }
+
+    /// <summary>
+    /// Returns the number of bytes this provider <b>physically occupies</b>
+    /// for <paramref name="treeId"/> / <paramref name="shardIndex"/>: every
+    /// byte the backend is holding on the shard's behalf, whether or not it
+    /// is still logically live. This is the figure that bounds disk, and the
+    /// one a capacity ceiling or a usage report must consult.
+    /// <para>
+    /// It differs from <see cref="GetRetainedByteSizeAsync"/> in two ways,
+    /// both of which it <i>includes</i> where the retained total excludes
+    /// them: per-record framing overhead, and <b>dead bytes</b> - payload
+    /// that has been trimmed but not yet physically reclaimed. Dead bytes
+    /// are not an anomaly to be smoothed over; for a log-structured backend
+    /// that reclaims space by rewriting a segment, they are a designed-in
+    /// component of occupancy whose steady-state size is set by the
+    /// provider's compaction policy, and they can equal the live payload.
+    /// </para>
+    /// <para>
+    /// The figure must be cheap: providers answer it from a running counter
+    /// or a bounded metadata read (the file provider returns its write
+    /// position, which is the literal file length), and must never scan the
+    /// log. It is permitted to be an at-a-moment snapshot that a concurrent
+    /// append or compaction immediately invalidates.
+    /// </para>
+    /// <para>
+    /// The default implementation returns <c>-1</c> to signal "physical
+    /// accounting unsupported", the same sentinel convention
+    /// <see cref="GetRetainedByteSizeAsync"/> uses. Callers fall back to the
+    /// retained total in that case, which is the right approximation for a
+    /// backend whose trim deletes rows outright (the in-memory and Azure
+    /// Table providers) and therefore carries no dead bytes at all.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any read.</param>
+    /// <returns>The physical byte total (&gt;= 0), or <c>-1</c> when the provider does not support physical accounting.</returns>
+    Task<long> GetPhysicalByteSizeAsync(
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken)
