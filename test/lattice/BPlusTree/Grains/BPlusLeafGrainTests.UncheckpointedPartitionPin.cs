@@ -314,4 +314,72 @@ public partial class BPlusLeafGrainTests
         Assert.That(reports[dataPartition].Frontier, Is.EqualTo(HybridLogicalClock.Zero),
             "an unreadable WAL head must keep the block pin - the probe fails closed");
     }
+
+    /// <summary>
+    /// The self-healing half of the #3103 fix, and the half without which the
+    /// resolver change is unreachable in production.
+    /// <para>
+    /// Releasing the pin inside <c>ResolveDurablePinForPartition</c> only
+    /// changes what a leaf <em>would</em> report. A leaf in this trap never
+    /// checkpoints (its WAL is empty, so replay advances nothing), and the
+    /// durable frontier flush is driven by the checkpoint path - so nothing
+    /// ever re-reports, and the stale Zero block pin the leaf seeded at birth
+    /// stands for ever even though the pin now resolves to a released
+    /// frontier. The WAL GC's starvation drive is the one seam that reaches
+    /// such a leaf, so the drive republishes the pin and reports
+    /// <c>Lifted</c>.
+    /// </para>
+    /// <para>
+    /// Pins three things at once: the drive flushes, the flushed pin carries
+    /// the released frontier rather than Zero, and the verdict says a block was
+    /// lifted. The verdict matters on its own - the drive reaches this outcome
+    /// without replaying anything, so the replay-based predicate scores it
+    /// <c>NoAdvance</c> and the sweep would record a repair it really performed
+    /// as a failure, which is exactly the vacuous-success class the drive's
+    /// enum verdict exists to prevent.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task DriveStarvedCheckpoint_republishes_a_released_pin_when_the_partition_wal_is_empty()
+    {
+        const int partitions = 4;
+
+        var flushes = new List<IReadOnlyList<MaterialiserPinReport>>();
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(),
+                Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => flushes.Add(r)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, state) = CreateGrainWithReporterForPartitions(
+            partitions, reporter, walHead: 0L);
+        var projection = AsProjection(grain);
+
+        string dataKey = Enumerable.Range(0, 4096)
+            .Select(i => $"k{i}")
+            .First(k => WalPartitionHash.Compute(k, partitions) != 0);
+        int dataPartition = WalPartitionHash.Compute(dataKey, partitions);
+
+        // Live rows, no checkpoint, empty WAL: the trapped shape. No checkpoint
+        // is driven here, so nothing on the ordinary path would ever flush.
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: UncheckpointedTreeId));
+        Assert.That(flushes, Is.Empty,
+            "control: a leaf in this state never checkpoints, so nothing has "
+            + "flushed a durable frontier - which is why the drive has to");
+
+        var verdict = await grain.DriveStarvedCheckpointAsync();
+
+        Assert.That(flushes, Is.Not.Empty,
+            "the drive must republish the durable pin, or the released frontier "
+            + "never reaches the pin store and the tree stays blocked for ever");
+
+        var reports = flushes[^1];
+        Assert.That(reports[dataPartition].Frontier, Is.EqualTo(state.State.Clock),
+            "the republished pin must carry the released frontier, not Zero");
+        Assert.That(verdict, Is.EqualTo(LeafStarvationDriveOutcome.Lifted),
+            "a drive that released an empty-WAL partition genuinely lifted a "
+            + "block, and must not be scored NoAdvance merely because it got "
+            + "there without replaying anything");
+    }
 }

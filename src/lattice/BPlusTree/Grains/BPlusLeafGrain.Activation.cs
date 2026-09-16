@@ -1199,6 +1199,26 @@ internal sealed partial class BPlusLeafGrain
         // needs its own because the first may consume most of the budget.
         await TryRepairZeroCoverageAsync(partitionCount, cancellationToken);
 
+        // Republish the durable pin (issue #3103). Everything above repairs the
+        // leaf so that the pin it ALREADY reported becomes usable; neither arm
+        // re-reports it. That is sufficient whenever the leaf has a route back
+        // to a checkpoint, because the checkpoint flush publishes the new
+        // frontier itself - but it is exactly what a leaf with an EMPTY WAL
+        // does not have. Its replay advances nothing, so it never checkpoints,
+        // so it never flushes, so the stale Zero block pin it seeded at birth
+        // stands for ever even though the pin now resolves to a released
+        // frontier. Publishing here closes that loop and is what makes the
+        // repair self-healing rather than merely correct in principle: the GC
+        // drives the leaf, the leaf republishes, and the tree unblocks on the
+        // next pass without an operator, a restart, or a rebuild.
+        //
+        // Safe on every other path into this method. The flush reports exactly
+        // what ResolveDurablePinForPartition resolves, which is the same value
+        // any other report would publish, and the pin store merges by
+        // monotonic max, so a republish can only ever hold a pin where it is
+        // or move it forward.
+        var emptyWalReleases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+
         // Report the property the pin actually depends on, not a proxy for
         // it. `advanced` alone is the same class of mistake this issue is
         // about: it is an output correlated with a usable pin, and the
@@ -1207,7 +1227,14 @@ internal sealed partial class BPlusLeafGrain
         // and the sweep would nevertheless have recorded a success. Both
         // halves are asserted here, against the same predicate the WAL GC
         // cursor floor evaluates.
-        return advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount)
+        //
+        // The second arm is the #3103 release. A drive that frees a partition
+        // whose WAL is empty has genuinely lifted a block, but it reaches that
+        // outcome without replaying anything, so the replay-based predicate
+        // above scores it NoAdvance and the sweep would report a repair it
+        // actually performed as a failure.
+        return (advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount))
+                || emptyWalReleases > 0
             ? LeafStarvationDriveOutcome.Lifted
             : LeafStarvationDriveOutcome.NoAdvance;
     }

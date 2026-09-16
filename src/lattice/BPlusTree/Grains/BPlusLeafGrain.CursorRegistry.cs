@@ -193,24 +193,24 @@ internal sealed partial class BPlusLeafGrain
     /// is best-effort: the WAL is the durability boundary and the next
     /// activation re-reports the frontier.
     /// </param>
-    private async Task FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+    private async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
         {
-            return;
+            return 0;
         }
 
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
-            return;
+            return 0;
         }
 
         var idBase = ResolveConsumerIdBase();
         if (idBase is null)
         {
-            return;
+            return 0;
         }
 
         var treeId = state.State.TreeId!;
@@ -220,16 +220,33 @@ internal sealed partial class BPlusLeafGrain
         var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
             partitionCount, partitionsWithLiveData, treeId);
         var reports = new MaterialiserPinReport[partitionCount];
+        var emptyWalReleases = 0;
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
                 partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reports[partition] = new MaterialiserPinReport(consumerId, frontier, offset);
+
+            // Count the partitions this flush released under the #3103 rule -
+            // ones that held live rows and no checkpoint, and so would have
+            // published a permanent block pin, but whose WAL turned out to be
+            // empty. The starvation drive needs this to answer honestly whether
+            // it lifted anything, because its replay-based predicate cannot
+            // see a release it did not reach through a replay.
+            if (partitionsWithEmptyWal is not null
+                && partition < partitionsWithEmptyWal.Length
+                && partitionsWithEmptyWal[partition]
+                && partitionsWithLiveData[partition]
+                && GetCurrentCheckpointForPartition(partition) < 0)
+            {
+                emptyWalReleases++;
+            }
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
             treeId, reports, cancellationToken);
+        return emptyWalReleases;
     }
 
     /// <summary>
