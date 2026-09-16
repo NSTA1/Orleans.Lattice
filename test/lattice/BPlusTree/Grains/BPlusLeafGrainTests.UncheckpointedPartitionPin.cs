@@ -47,7 +47,9 @@ public partial class BPlusLeafGrainTests
     private const string UncheckpointedReplicaId = "leaf-uncheckpointed-pin";
 
     private static (BPlusLeafGrain Grain, ILeafCursorReporter Reporter, FakePersistentState<LeafNodeState> State)
-        CreateGrainWithReporterForPartitions(int walPartitions, ILeafCursorReporter reporter)
+        CreateGrainWithReporterForPartitions(
+            int walPartitions, ILeafCursorReporter reporter, long walHead = 64L,
+            bool headReadThrows = false)
     {
         var sc = new ServiceCollection();
         sc.AddSingleton(reporter);
@@ -62,6 +64,20 @@ public partial class BPlusLeafGrainTests
         state.State.ProjectionCheckpointOffset = 0;
 
         var grainFactory = Substitute.For<IGrainFactory>();
+
+        // The per-partition WAL head. Every scenario here other than the #3103
+        // regression assumes the partition's WAL actually holds the entries the
+        // block pin exists to protect, so the head must be non-zero; an
+        // unstubbed coordinator returns 0, which means "no entry was ever
+        // appended" and correctly releases the pin.
+        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>())
+            .Returns(headReadThrows
+                ? Task.FromException<long>(new InvalidOperationException("head unavailable"))
+                : Task.FromResult(walHead));
+        grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>())
+            .Returns(coordinator);
+
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions
             {
@@ -155,5 +171,215 @@ public partial class BPlusLeafGrainTests
         // checkpointed, offset < 0, e.g. `emptyPartition` above) still release.
         Assert.That(reports[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero));
         Assert.That(reports[0].CheckpointOffset, Is.EqualTo(-1L));
+    }
+
+    /// <summary>
+    /// Drives the #3103 shape: the data-bearing partition has never
+    /// checkpointed <em>and</em> its WAL is empty (head offset <c>0</c> - no
+    /// entry was ever appended). The pin must be released.
+    /// <para>
+    /// Left blocking this pin is permanent, not merely conservative. An empty
+    /// WAL has nothing to replay, so the starved-checkpoint drive returns
+    /// <c>NoAdvance</c> for ever, the per-partition checkpoint never leaves
+    /// <c>-1</c>, and the zero-coverage repair's "checkpointed WITHOUT
+    /// coverage" predicate is permanently unreachable. Because a block pin is
+    /// tree-wide, one leaf in this state strands every other leaf's WAL in the
+    /// same tree, which is the unbounded-retention failure #3103 reports. The
+    /// state is reached by a WAL reset that preserves snapshots: the leaf
+    /// rehydrates real rows from the surviving blob while the WAL behind them
+    /// is gone.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task FlushDurableFrontier_releases_block_pin_when_partition_wal_is_empty()
+    {
+        const int partitions = 4;
+
+        IReadOnlyList<MaterialiserPinReport>? captured = null;
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(),
+                Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        // walHead 0 == "the WAL shard is empty" (see ICommitLogReader).
+        var (grain, _, state) = CreateGrainWithReporterForPartitions(
+            partitions, reporter, walHead: 0L);
+        var projection = AsProjection(grain);
+
+        string dataKey = Enumerable.Range(0, 4096)
+            .Select(i => $"k{i}")
+            .First(k => WalPartitionHash.Compute(k, partitions) != 0);
+        int dataPartition = WalPartitionHash.Compute(dataKey, partitions);
+
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: UncheckpointedTreeId));
+        await projection.SetCheckpointOffsetAsync(1, default);
+
+        Assert.That(captured, Is.Not.Null);
+        var reports = captured!;
+        var clock = state.State.Clock;
+
+        Assert.That(reports[dataPartition].Frontier, Is.EqualTo(clock),
+            $"partition {dataPartition} has an EMPTY WAL, so its block pin protects "
+            + "no committed prefix and must be released - retaining it strands the "
+            + "whole tree's WAL for ever (#3103)");
+        Assert.That(reports[dataPartition].CheckpointOffset, Is.EqualTo(-1L),
+            "releasing the block must not invent coverage - the offset stays at the "
+            + "-1 never-applied sentinel, exactly as the genuinely-empty-partition "
+            + "release already reports");
+    }
+
+    /// <summary>
+    /// The narrowness control for the #3103 release above, pinned at the exact
+    /// boundary: a single WAL entry (head <c>1</c>) is enough to make the
+    /// partition's committed prefix real, so the block pin must be retained.
+    /// <para>
+    /// This is the half of the fix that must not regress. Releasing on anything
+    /// other than a proven-empty WAL would authorise the shared-shard GC to
+    /// trim a prefix no snapshot covers, which is the #1535 no-loss invariant
+    /// and the #945 fall-off guard. The release predicate is therefore
+    /// <c>head == 0</c>, not <c>head &lt;= checkpoint</c> or any other
+    /// inequality that a non-empty WAL could satisfy.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task FlushDurableFrontier_retains_block_pin_when_partition_wal_holds_one_entry()
+    {
+        const int partitions = 4;
+
+        IReadOnlyList<MaterialiserPinReport>? captured = null;
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(),
+                Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, _) = CreateGrainWithReporterForPartitions(
+            partitions, reporter, walHead: 1L);
+        var projection = AsProjection(grain);
+
+        string dataKey = Enumerable.Range(0, 4096)
+            .Select(i => $"k{i}")
+            .First(k => WalPartitionHash.Compute(k, partitions) != 0);
+        int dataPartition = WalPartitionHash.Compute(dataKey, partitions);
+
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: UncheckpointedTreeId));
+        await projection.SetCheckpointOffsetAsync(1, default);
+
+        Assert.That(captured, Is.Not.Null);
+        var reports = captured!;
+
+        Assert.That(reports[dataPartition].Frontier, Is.EqualTo(HybridLogicalClock.Zero),
+            $"partition {dataPartition} has ONE un-checkpointed WAL entry, so its "
+            + "block pin protects a real committed prefix and must be retained");
+        Assert.That(reports[dataPartition].CheckpointOffset, Is.EqualTo(-1L));
+    }
+
+    /// <summary>
+    /// The head probe must fail closed. A coordinator whose head read throws
+    /// leaves the pin exactly as it was, because retaining WAL is always safe
+    /// while releasing it on an unknown head could authorise trimming a live
+    /// prefix.
+    /// </summary>
+    [Test]
+    public async Task FlushDurableFrontier_retains_block_pin_when_wal_head_read_fails()
+    {
+        const int partitions = 4;
+
+        IReadOnlyList<MaterialiserPinReport>? captured = null;
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(),
+                Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, _) = CreateGrainWithReporterForPartitions(
+            partitions, reporter, walHead: 0L, headReadThrows: true);
+        var projection = AsProjection(grain);
+
+        string dataKey = Enumerable.Range(0, 4096)
+            .Select(i => $"k{i}")
+            .First(k => WalPartitionHash.Compute(k, partitions) != 0);
+        int dataPartition = WalPartitionHash.Compute(dataKey, partitions);
+
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: UncheckpointedTreeId));
+        await projection.SetCheckpointOffsetAsync(1, default);
+
+        Assert.That(captured, Is.Not.Null);
+        var reports = captured!;
+
+        Assert.That(reports[dataPartition].Frontier, Is.EqualTo(HybridLogicalClock.Zero),
+            "an unreadable WAL head must keep the block pin - the probe fails closed");
+    }
+
+    /// <summary>
+    /// The self-healing half of the #3103 fix, and the half without which the
+    /// resolver change is unreachable in production.
+    /// <para>
+    /// Releasing the pin inside <c>ResolveDurablePinForPartition</c> only
+    /// changes what a leaf <em>would</em> report. A leaf in this trap never
+    /// checkpoints (its WAL is empty, so replay advances nothing), and the
+    /// durable frontier flush is driven by the checkpoint path - so nothing
+    /// ever re-reports, and the stale Zero block pin the leaf seeded at birth
+    /// stands for ever even though the pin now resolves to a released
+    /// frontier. The WAL GC's starvation drive is the one seam that reaches
+    /// such a leaf, so the drive republishes the pin and reports
+    /// <c>Lifted</c>.
+    /// </para>
+    /// <para>
+    /// Pins three things at once: the drive flushes, the flushed pin carries
+    /// the released frontier rather than Zero, and the verdict says a block was
+    /// lifted. The verdict matters on its own - the drive reaches this outcome
+    /// without replaying anything, so the replay-based predicate scores it
+    /// <c>NoAdvance</c> and the sweep would record a repair it really performed
+    /// as a failure, which is exactly the vacuous-success class the drive's
+    /// enum verdict exists to prevent.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task DriveStarvedCheckpoint_republishes_a_released_pin_when_the_partition_wal_is_empty()
+    {
+        const int partitions = 4;
+
+        var flushes = new List<IReadOnlyList<MaterialiserPinReport>>();
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(),
+                Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => flushes.Add(r)),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, state) = CreateGrainWithReporterForPartitions(
+            partitions, reporter, walHead: 0L);
+        var projection = AsProjection(grain);
+
+        string dataKey = Enumerable.Range(0, 4096)
+            .Select(i => $"k{i}")
+            .First(k => WalPartitionHash.Compute(k, partitions) != 0);
+        int dataPartition = WalPartitionHash.Compute(dataKey, partitions);
+
+        // Live rows, no checkpoint, empty WAL: the trapped shape. No checkpoint
+        // is driven here, so nothing on the ordinary path would ever flush.
+        projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: UncheckpointedTreeId));
+        Assert.That(flushes, Is.Empty,
+            "control: a leaf in this state never checkpoints, so nothing has "
+            + "flushed a durable frontier - which is why the drive has to");
+
+        var verdict = await grain.DriveStarvedCheckpointAsync();
+
+        Assert.That(flushes, Is.Not.Empty,
+            "the drive must republish the durable pin, or the released frontier "
+            + "never reaches the pin store and the tree stays blocked for ever");
+
+        var reports = flushes[^1];
+        Assert.That(reports[dataPartition].Frontier, Is.EqualTo(state.State.Clock),
+            "the republished pin must carry the released frontier, not Zero");
+        Assert.That(verdict, Is.EqualTo(LeafStarvationDriveOutcome.Lifted),
+            "a drive that released an empty-WAL partition genuinely lifted a "
+            + "block, and must not be scored NoAdvance merely because it got "
+            + "there without replaying anything");
     }
 }
