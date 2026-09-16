@@ -149,11 +149,13 @@ internal sealed partial class BPlusLeafGrain
         else
         {
             var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+            var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+                partitionCount, partitionsWithLiveData, treeId);
             for (var partition = 0; partition < partitionCount; partition++)
             {
                 var consumerId = BuildConsumerId(idBase, partition, partitionCount);
                 var (frontier, offset) = ResolveDurablePinForPartition(
-                    partition, clock, partitionsWithLiveData);
+                    partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
                 reporter.NoteDurableMaterialiserFrontier(
                     treeId, consumerId, frontier, offset);
             }
@@ -215,12 +217,14 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+            partitionCount, partitionsWithLiveData, treeId);
         var reports = new MaterialiserPinReport[partitionCount];
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
-                partition, clock, partitionsWithLiveData);
+                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reports[partition] = new MaterialiserPinReport(consumerId, frontier, offset);
         }
 
@@ -293,11 +297,13 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+            partitionCount, partitionsWithLiveData, treeId);
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
-                partition, clock, partitionsWithLiveData);
+                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reporter.NoteDurableMaterialiserFrontier(
                 treeId, consumerId, frontier, offset);
         }
@@ -508,6 +514,98 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Per-activation memo of WAL partitions observed to hold at least one
+    /// entry. A partition's head offset is the next sequence number to be
+    /// assigned, so it is monotonic and <c>head &gt; 0</c> is a one-way
+    /// transition: once a partition is known non-empty it can never become
+    /// empty again, and re-probing it is pure cost. Lazily allocated because
+    /// the probe itself only runs for the rare state that needs it.
+    /// </summary>
+    private bool[]? _partitionWalKnownNonEmpty;
+
+    /// <summary>
+    /// Resolves which WAL partitions are <b>empty</b> (head offset <c>0</c>,
+    /// i.e. no entry was ever appended) among those that would otherwise
+    /// publish a permanent block pin, or <c>null</c> when no partition is in
+    /// that state and the probe can be skipped entirely.
+    /// <para>
+    /// This exists for issue #3103. A partition that holds live cache rows but
+    /// has never durably checkpointed (<c>checkpoint &lt; 0</c>) publishes the
+    /// <see cref="HybridLogicalClock.Zero"/> block pin, and that pin is
+    /// <b>permanent</b> when the partition's WAL is empty: there is nothing to
+    /// replay, so the starved-checkpoint drive returns <c>NoAdvance</c> for
+    /// ever, the checkpoint never advances, and the coverage repair's
+    /// "checkpointed WITHOUT coverage" predicate stays unreachable. Because a
+    /// block pin is tree-wide, one such partition strands every other leaf in
+    /// the tree and its WAL can never be trimmed again. The state is reached by
+    /// a WAL reset that preserves snapshots: the leaf rehydrates rows from the
+    /// surviving blob while the partition's WAL is empty.
+    /// </para>
+    /// <para>
+    /// An empty WAL holds no committed prefix, so the block protects nothing
+    /// and costs only liveness - which is exactly the reasoning the existing
+    /// genuinely-empty-partition branch already applies. This probe is what
+    /// lets that branch tell "empty WAL" from "unapplied prefix". It is
+    /// deliberately <b>not</b> a claim of coverage: a partition whose WAL holds
+    /// unapplied entries still keeps its block, preserving the #1535 no-loss
+    /// invariant and the #945 fall-off guard.
+    /// </para>
+    /// <para>
+    /// Fails closed. A probe that throws returns <c>null</c>, which keeps every
+    /// block pin exactly as it was - retaining more WAL is always safe, so a
+    /// transient read failure can never authorise a trim.
+    /// </para>
+    /// </summary>
+    private async Task<bool[]?> ComputeEmptyWalPartitionsAsync(
+        int partitionCount, bool[] partitionsWithLiveData, string treeId)
+    {
+        var known = _partitionWalKnownNonEmpty;
+        var needsProbe = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (!partitionsWithLiveData[p] || GetCurrentCheckpointForPartition(p) >= 0)
+                continue;
+            if (known is not null && p < known.Length && known[p])
+                continue;
+            needsProbe = true;
+            break;
+        }
+        if (!needsProbe)
+            return null;
+
+        long[] heads;
+        try
+        {
+            heads = await CaptureWalHeadsByPartitionAsync(treeId);
+        }
+        catch (Exception)
+        {
+            // Fail closed: keep every block pin. Retaining WAL is always safe.
+            return null;
+        }
+
+        if (known is null || known.Length < partitionCount)
+        {
+            var grown = new bool[partitionCount];
+            if (known is not null)
+                Array.Copy(known, grown, Math.Min(known.Length, partitionCount));
+            _partitionWalKnownNonEmpty = known = grown;
+        }
+
+        var empty = new bool[partitionCount];
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (p >= heads.Length)
+                continue;
+            if (heads[p] > 0)
+                known[p] = true;
+            else
+                empty[p] = true;
+        }
+        return empty;
+    }
+
+    /// <summary>
     /// Resolves the durable materialiser pin (frontier HLC and checkpoint
     /// offset) this leaf reports for <paramref name="partition"/>. This is the
     /// coverage-gated trim floor: the pin may only authorise the shared-shard
@@ -532,6 +630,19 @@ internal sealed partial class BPlusLeafGrain
     /// partition is never released on the strength of a momentarily empty cache.
     /// </description></item>
     /// <item><description>
+    /// <b>Data-bearing with an empty WAL</b> (issue #3103): the partition holds
+    /// live cache rows and has never checkpointed, but its WAL head is
+    /// <c>0</c>, so no entry was ever appended and the block protects nothing.
+    /// Reached by a WAL reset that preserves snapshots - the leaf rehydrates
+    /// rows from the surviving blob while the WAL behind them is gone. Left
+    /// blocking, the pin is <em>permanent</em>: there is nothing to replay, so
+    /// the checkpoint can never advance and the coverage repair can never
+    /// become reachable, and because a block pin is tree-wide one such
+    /// partition strands the whole tree's WAL for ever. Released, exactly as
+    /// the genuinely-empty-partition case is released and on the same
+    /// reasoning. See <see cref="ComputeEmptyWalPartitionsAsync"/>.
+    /// </description></item>
+    /// <item><description>
     /// <b>Data-bearing, not durably recoverable</b>: the partition holds live
     /// data whose only durable copy is the WAL prefix from offset 0, because
     /// it either never durably checkpointed (offset <c>&lt; 0</c>, the
@@ -551,7 +662,8 @@ internal sealed partial class BPlusLeafGrain
     /// </list>
     /// </summary>
     private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
-        int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData)
+        int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData,
+        bool[]? partitionsWithEmptyWal = null)
     {
         var checkpoint = GetCurrentCheckpointForPartition(partition);
 
@@ -580,6 +692,33 @@ internal sealed partial class BPlusLeafGrain
         // must therefore be coverage-gated exactly like a cache-populated one,
         // regardless of whether the cache momentarily shows it empty.
         if (!partitionsWithLiveData[partition] && checkpoint < 0)
+        {
+            return (clock, checkpoint);
+        }
+
+        // Issue #3103: data-bearing, never checkpointed, and its WAL is EMPTY
+        // (head offset 0 - no entry was ever appended). This is the same
+        // "nothing to lose" case as the branch above, reached the other way
+        // round: the rows are real but the WAL behind them is not, because a
+        // WAL reset preserved the snapshot the leaf rehydrated them from.
+        // Blocking here is not conservative, it is terminal - an empty WAL has
+        // nothing to replay, so the starved-checkpoint drive returns NoAdvance
+        // for ever, the checkpoint never leaves -1, and the coverage repair's
+        // "checkpointed WITHOUT coverage" predicate stays permanently
+        // unreachable. Since a block pin is tree-wide, one such partition
+        // strands every leaf in the tree. Release it: an empty WAL holds no
+        // committed prefix, so the block protects nothing at all.
+        //
+        // Narrow by construction. This releases ONLY on a proven-empty WAL; a
+        // partition whose WAL holds unapplied entries keeps its block exactly
+        // as before, so neither the #1535 no-loss invariant nor the #945
+        // fall-off guard is weakened. The probe fails closed (see
+        // ComputeEmptyWalPartitionsAsync), so an unreadable head keeps the
+        // block too.
+        if (checkpoint < 0
+            && partitionsWithEmptyWal is not null
+            && partition < partitionsWithEmptyWal.Length
+            && partitionsWithEmptyWal[partition])
         {
             return (clock, checkpoint);
         }

@@ -107,6 +107,11 @@ public partial class BPlusLeafGrainTests
 
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        // The fixture's premise is that the leaf's rows have a durable WAL claim
+        // that has not been replayed, so the partition WAL must be non-empty.
+        // An unstubbed head returns 0, which is the #3103 empty-WAL shape and
+        // legitimately releases the block pin - a different scenario entirely.
+        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(64L));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
