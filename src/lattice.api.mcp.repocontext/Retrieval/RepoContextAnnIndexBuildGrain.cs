@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Runtime;
@@ -200,10 +200,62 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     protected override string KeepaliveReminderName => KeepaliveReminder;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>The third disjunct is what keeps a REBUILD running, and without it a
+    /// rebuild runs at one slice per sweep (issue #3112).</b> <c>Converged</c> is a
+    /// one-way latch - see the convergence block in <c>ProcessNextPhaseAsync</c>,
+    /// where it closes once and never reopens - so it records that this plane has
+    /// EVER converged, not that it is converged now. Scheduling needs the second
+    /// question, and for a long time asked the first.
+    /// </para>
+    /// <para>
+    /// With the latch closed, the predicate collapses to
+    /// <c>!_advancedThisActivation</c>, which is set unconditionally the moment a
+    /// step returns. So the first tick of an activation takes a step and every later
+    /// tick in that activation stands the coordinator down. That is exactly right
+    /// for a plane that really is Ready: one confirming step per activation, which
+    /// is the seam the diagnostics refresh (#2712) and the partition self-heal
+    /// (#2711) both ride on, and it is deliberately cheap because a converged plane
+    /// only ever needs to catch up by a small delta.
+    /// </para>
+    /// <para>
+    /// It is catastrophic when the index has been LOST and the plane is rebuilding
+    /// from nothing, because the delta is then the whole corpus. Nothing clears the
+    /// latch on an index load that comes back <c>fresh</c>, so the coordinator still
+    /// believes it is in its cheap confirming mode and takes a single slice per
+    /// activation - and the only thing that re-activates it is
+    /// <see cref="RepoContextIndexingOptions.AnnSweepInterval"/>, fifteen minutes.
+    /// Against the phase timer's two-second cadence that is a 450x throughput loss:
+    /// the deployment this was found on held 2,924 of 94,928 vectors and was
+    /// advancing at roughly five vectors a minute, a little over twelve days to
+    /// finish, and it would have started over on the next index loss.
+    /// </para>
+    /// <para>
+    /// Consulting the observed phase asks the question scheduling actually has. A
+    /// plane that is not Ready has work outstanding whatever the latch remembers, so
+    /// the coordinator keeps its timer and runs at the ordinary cadence until it
+    /// gets there - which is precisely how a never-converged plane already behaves,
+    /// so this introduces no new regime, it stops the latched plane being excluded
+    /// from the existing one. The refused-corpus path still throttles itself through
+    /// <c>_denialSkipTicks</c>, so a permanently denied coordinator does not spin.
+    /// </para>
+    /// <para>
+    /// <b>The term can only ever ADD liveness.</b> It is a disjunct, and
+    /// <see cref="_previousProgress"/> is activation-local and defaults to
+    /// <c>NotStarted</c>, so it can never stand a coordinator down that today keeps
+    /// running - a step that throws before it reports leaves the baseline at
+    /// <c>NotStarted</c>, which is not Ready, and the coordinator retries exactly as
+    /// it did. That monotonicity is why this cannot regress the stand-down
+    /// behaviour the fault fixtures pin.
+    /// </para>
+    /// </remarks>
     protected override bool InProgress =>
         options.AnnIndexSchedulingEnabled
         && state.State.Space.IsSpecified
-        && (!state.State.Converged || !_advancedThisActivation);
+        && (!state.State.Converged
+            || !_advancedThisActivation
+            || _previousProgress.Phase != VectorIndexBuildPhase.Ready);
 
     private string GrainKey => Context.GrainId.Key.ToString() ?? string.Empty;
 
