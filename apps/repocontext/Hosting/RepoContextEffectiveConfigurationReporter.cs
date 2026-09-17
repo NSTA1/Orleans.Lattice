@@ -244,6 +244,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextHostConfiguration.WorkspaceRootKey,
         RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
         RepoContextPinBucketing.PinBucketsKey,
+        RepoContextWalRetention.MaxRetainedBytesKey,
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
         RepoContextShutdownBudget.StopGracePeriodKey,
@@ -346,6 +347,15 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 RepoContextPinBucketing.PinBucketsKey,
                 RepoContextPinBucketing.ResolveBucketCount,
                 RepoContextPinBucketing.DefaultPinBuckets),
+
+            // Rendered through its own helper rather than Knob, because its resolved value
+            // is nullable and null is a meaningful state rather than an absence: it is the
+            // library default, under which nothing is reclaimed at all. Reporting that as
+            // a blank would hide the one reading an operator most needs to recognise.
+            OptionalByteCeiling(
+                RepoContextWalRetention.MaxRetainedBytesKey,
+                RepoContextWalRetention.ResolveMaxRetainedBytes,
+                RepoContextWalRetention.DefaultMaxRetainedBytes),
             Knob(
                 RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
                 RepoContextReplayConcurrency.ResolveMaxConcurrentReplays,
@@ -439,6 +449,31 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         }
 
         static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+        string OptionalByteCeiling(string key, Func<IConfiguration, long?> read, long fallback)
+        {
+            // Same discipline as Knob: report a malformed value as malformed rather than
+            // taking the process down from inside the diagnostic meant to explain it.
+            string current;
+            try
+            {
+                current = Ceiling(read(configuration));
+            }
+            catch (InvalidOperationException ex)
+            {
+                current = string.Create(CultureInfo.InvariantCulture, $"<invalid: {ex.Message}>");
+            }
+
+            return RepoContextEffectiveConfiguration.DescribeSetting(
+                key,
+                current,
+                Ceiling(fallback),
+                Provenance(key));
+
+            static string Ceiling(long? value) => value is null
+                ? "disabled"
+                : value.Value.ToString(CultureInfo.InvariantCulture);
+        }
 
         string DescribeGrant()
         {

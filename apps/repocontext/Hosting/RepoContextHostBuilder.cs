@@ -277,6 +277,13 @@ public static class RepoContextHostBuilder
             // Reap re-embed / prune tombstones on the churn trees in every profile.
             silo.ConfigureRepoContextCompaction();
 
+            // Arm the advisory WAL byte-pressure policy on every repo-context tree.
+            // The library leaves it off because it cannot know the volume the WAL
+            // lives on; this container can. Without it every tree reported
+            // wal_gc_backlog_bytes_unavailable{reason="policy_disabled"} and
+            // reclaimed exactly zero bytes. See RepoContextWalRetention.
+            silo.ConfigureRepoContextWalRetention(builder.Configuration);
+
             // Split the WAL materialiser pin state across buckets so an advancing
             // retention floor rewrites a fraction of the pin blob instead of all of
             // it. Global (not per-tree) by design - see RepoContextPinBucketing.

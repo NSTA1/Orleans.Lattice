@@ -60,7 +60,8 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
         GrainId LeafId,
         ArmableOptionsMonitor Options,
         ITimerRegistry TimerRegistry,
-        IGrainTimer Timer);
+        IGrainTimer Timer,
+        IGrainContext Context);
 
     private static Harness CreateGrain(
         int preWarmCount = 4,
@@ -125,7 +126,7 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
             NullLogger<ShardRootGrain>.Instance,
             TestMutationObservers.NoObservers());
 
-        return new Harness(grain, state, cache, leafId, monitor, timerRegistry, grainTimer);
+        return new Harness(grain, state, cache, leafId, monitor, timerRegistry, grainTimer, context);
     }
 
     /// <summary>
@@ -294,14 +295,24 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
     /// into one run), and <c>ThrowOnWrite</c> is one-shot, so a persistent fault
     /// has to be re-armed for every tick rather than once.
     /// </summary>
+    /// <param name="harness">The grain under test.</param>
+    /// <param name="tick">The captured flush-timer callback.</param>
+    /// <param name="sequence">A per-tick discriminator, so each tick dirties the model afresh.</param>
+    /// <param name="fault">
+    /// The fault to arm. Defaults to a transient one: the failure <em>class</em> is what
+    /// decides whether suspension also requests deactivation, so a helper that hard-coded
+    /// one class would make the discriminating tests untestable through it.
+    /// </param>
     private static async Task FireFailingTickAsync(
         Harness harness,
         Func<CancellationToken, Task> tick,
-        int sequence)
+        int sequence,
+        Func<Exception>? fault = null)
     {
         await harness.Grain.GetAsync($"k-fail-{sequence}");
-        harness.State.ThrowOnWrite = new InvalidOperationException(
-            "Version conflict (WriteState): ETag=5220. Expected Etag= Received Etag=");
+        harness.State.ThrowOnWrite = fault is null
+            ? new InvalidOperationException("database is locked")
+            : fault();
         await tick(CancellationToken.None);
     }
 
@@ -410,8 +421,90 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
     }
 
     [Test]
-    public async Task The_model_flush_loop_keeps_retrying_below_the_ceiling()
+    public async Task A_poisoned_etag_suspension_requests_deactivation_so_a_later_activation_re_reads()
     {
+        // Issue 2419 bounded the wasted writes and deliberately stopped there, which
+        // left the shard root poisoned: its own warning said pending state "will not
+        // reach storage until it is re-read" while nothing re-read it. A grain timer
+        // does not shorten an activation's lifetime, so a shard root held active by
+        // inbound traffic stayed broken indefinitely - as two vector-membership shard
+        // roots on a live container did, neither ever logging a recovery.
+        //
+        // Deactivation is the re-read: the next activation loads the stored row and
+        // its current ETag, and writes are accepted again.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState): ETag=5220."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task A_transient_fault_suspension_does_not_request_deactivation()
+    {
+        // The discriminating arm, and the reason the repair is conditional. A fresh
+        // activation does not fix a storage layer that is down - it would re-fail on
+        // the same storage - so deactivating for a transient fault would trade a
+        // bounded write stall for an availability cost, and could recycle every shard
+        // root on a tree at once while the fault lasted.
+        //
+        // Both tests drive the SAME loop to the SAME ceiling and differ only in the
+        // failure class, so a fix that deactivated unconditionally passes the test
+        // above and fails here.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new TimeoutException("storage operation timed out"));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task A_poisoned_etag_below_the_ceiling_does_not_request_deactivation()
+    {
+        // Deactivation must be caused by the loop GIVING UP, not by seeing a conflict.
+        // Without this, an implementation that deactivated on the first version
+        // conflict would pass both tests above while tearing down a shard root that
+        // was still retrying - and the flush loop's whole retry budget would become
+        // dead code.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures - 1; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState): ETag=5220."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.DidNotReceive().Dispose();
+            harness.Context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task The_model_flush_loop_keeps_retrying_below_the_ceiling()    {
         // Negative control for the test above: the suspension must be caused by
         // reaching the ceiling, not merely by any failure at all. Without this,
         // a loop that gave up on the FIRST failure would pass the suspension
