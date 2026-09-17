@@ -775,6 +775,17 @@ internal sealed partial class BPlusLeafGrain
             HighKeyExclusive = donorPreSplitHigh,
             NextSibling = oldNextId,
             PrevSibling = context.GrainId,
+
+            // The moved-away seal rides the existing round-trip rather than a call
+            // of its own, and it is armed here - before the transfer loop below
+            // makes any migrated row visible on the sibling - for exactly the
+            // reason TransferShadowMarkersToSiblingAsync is ordered ahead of
+            // MergeEntriesAsync. A sibling that received rows before the seal would
+            // serve migrated orphans in the gap. Issue 3121.
+            MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } sealedSlots
+                ? sealedSlots
+                : null,
+            MovedAwayVirtualShardCount = state.State.MovedAwayVirtualShardCount,
         });
 
         // Join the back-pointer fixup before mutating the donor's own

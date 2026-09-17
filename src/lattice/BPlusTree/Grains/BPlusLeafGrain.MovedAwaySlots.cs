@@ -145,6 +145,14 @@ internal sealed partial class BPlusLeafGrain
     /// before letting it absorb the victim's range (issue #2143). Anything
     /// else that grows a sealed leaf's span owes the same question.
     /// </para>
+    /// <para>
+    /// A division is the other seam that owes it, and it answers differently.
+    /// Widening an existing leaf is declined; a split cannot be declined without
+    /// wedging a growing tree, so instead the sibling <em>inherits</em> the seal at
+    /// birth through <see cref="SiblingInitialization.MovedAwaySlots"/> and
+    /// <see cref="MovedAwaySealInheritance"/>. Both halves of a divided sealed leaf
+    /// therefore stay sealed (issue 3121).
+    /// </para>
     /// </summary>
     private bool IsKeyMovedAway(string key)
     {
