@@ -30,7 +30,18 @@
     "FullyQualifiedName, which is Namespace.Class.Method. A trailing dot pins",
     "the match to a namespace segment ('Grains.'); no trailing dot lets it",
     "match a class-name prefix ('ChaosPredicate'), which is how the chaos",
-    "fixtures that all share one namespace are split."
+    "fixtures that all share one namespace are split.",
+    "",
+    "CROSSING WITH TIERS IS OPTIONAL. By default a sharded package's shards are",
+    "crossed with the deterministic / coyote / chaos filters, so each shard",
+    "becomes three invocations. That pays off only when the tiers are",
+    "independently large enough to fill separate runners, which is true of",
+    "'lattice' and of nothing else so far. A package whose suite carries no",
+    "Chaos and no Coyote category at all sets \"crossTiers\": false and gets one",
+    "untiered invocation per shard instead, saving two empty process starts per",
+    "shard. It is safe against a future fixture because it removes the tier",
+    "filter rather than naming the tiers to keep: the shard expressions are",
+    "still a partition, so a new Chaos test lands in a shard and runs."
   ],
   "lattice": {
     "namespaceRoot": "Orleans.Lattice.Tests",
@@ -79,6 +90,32 @@
         "shard": "rest",
         "complement": true,
         "note": "Root-namespace fixtures plus PublicApiContract, Hygiene, Fakes, Docs, Testing."
+      }
+    ]
+  },
+  "lattice.api.mcp.repocontext": {
+    "namespaceRoot": "Orleans.Lattice.Api.Mcp.RepoContext.Tests",
+    "crossTiers": false,
+    "shards": [
+      {
+        "shard": "capture",
+        "include": ["Capture."],
+        "note": "3.3 min over 198 tests. Store, memory-convergence and TTL fixtures; the heaviest area per test by a wide margin."
+      },
+      {
+        "shard": "retrieval",
+        "include": ["Retrieval."],
+        "note": "3.2 min over 941 tests. Vector ingestor, embedding gap scanner, search and coverage fixtures."
+      },
+      {
+        "shard": "host",
+        "include": ["Host.", "Symbols.", "Indexing."],
+        "note": "1.9 min over 991 tests. Host integration plus the two reconciler areas that pair with it."
+      },
+      {
+        "shard": "rest",
+        "complement": true,
+        "note": "2.2 min over 1166 tests. Root-namespace fixtures plus Archive, Bootstrap, Claims, Content, Docs, Fakes, Graph, Harness, Source, Usage."
       }
     ]
   }
