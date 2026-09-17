@@ -250,6 +250,24 @@ services:
       # retained, so setting this back to "1" and restarting is a safe rollback
       # that over-retains WAL rather than over-trimming it.
       LATTICE_WAL_PIN_BUCKETS: "8"
+      # Advisory per-tree ceiling on the WAL bytes held on disk. The library ships
+      # this DISABLED and is right to: the only correct value is a fraction of the
+      # volume the WAL lives on, which a library cannot know. This deployment
+      # declares its own volume, so it names one.
+      #
+      # Left unset, every tree here reported
+      #   wal_gc_backlog_bytes_unavailable_total{reason="policy_disabled"}
+      # and reclaimed_bytes_total sat at zero on all but one tree, so a 3 GB WAL
+      # only ever grew. 1 GiB comes from measured occupancy: every tree except the
+      # two vector accelerators sits under 200 MB, so this arms exactly the two
+      # that grew (vector-index 1710 MB, vector-payload 1097 MB) and leaves the
+      # rest paying one physical-size probe per partition per GC pass.
+      #
+      # It cannot lose data and cannot block a write: it only lowers the trim
+      # frontier WITHIN the frontier that was already safe, never past a live
+      # consumer cursor. Setting it to "0" restores the library default and is a
+      # safe rollback that over-retains rather than over-trims.
+      LATTICE_WAL_MAX_RETAINED_BYTES: "1073741824"
       # Per-silo ceiling on concurrent activation-time leaf WAL replays. Left
       # UNSET here deliberately, so this sample behaves identically on every
       # host: unset defers to the library, which sizes the gate from
