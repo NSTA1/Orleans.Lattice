@@ -8,11 +8,11 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 
 /// <summary>
 /// Convergence chaos test for the <see cref="LatticeMergeMode.MvRegister"/>
-/// dispatch path. Three sites issue concurrent writes against a single
-/// key while a partition isolates one site mid-workload; after the
-/// partition heals and the delivery pump drains, every site must
-/// observe exactly the multi-value frontier - the set of values whose
-/// dots are not strictly dominated by any other authored dot.
+/// dispatch path. Three sites issue writes against a single key across
+/// a partitioned mesh; after the partition heals and the delivery pump
+/// drains, every site must observe exactly the multi-value frontier -
+/// the set of values whose dots are not strictly dominated by any other
+/// authored dot.
 /// <para>
 /// The fixture configures the test tree with
 /// <c>LatticeMergeMode.MvRegister</c> on every silo, so the producer
@@ -52,12 +52,26 @@ public class MvRegisterConvergenceChaosTests
         var fixture = runner.Fixture;
         var pump = runner.Pump;
 
-        // Phase 1: isolate site 2, then have every site author its own
-        // value concurrently. Sites 0/1 see each other through the pump;
-        // site 2 writes behind the partition. After the heal, every
+        // Phase 1: isolate every site into a full mesh partition, then
+        // have each site author its own value. After the heal, every
         // site's authored value must survive because none was observed
         // by any other replica before being written.
-        pump.IsolateSite(2);
+        //
+        // The full mesh is load-bearing, not belt-and-braces. Isolating
+        // site 2 alone leaves the 0<->1 edge live, and the pump polls it
+        // every PollInterval; the three writes are dispatched with
+        // Task.Run, so nothing orders them against that poll. A tick
+        // that ships "site-1-v1" to site 0 before site 0 authors its own
+        // write puts site 1's dot in site 0's dot context, at which
+        // point "site-1-v1" is *correctly* strictly dominated and drops
+        // out of the frontier. The assertion below would then fail on a
+        // perfectly convergent CRDT. IsolateSite sets both directions
+        // per edge, so the loop below yields a full mesh partition and
+        // HealAllAndDrainAsync clears the whole matrix.
+        for (var site = 0; site < SiteCount; site++)
+        {
+            pump.IsolateSite(site);
+        }
 
         var perSiteValue = new string[SiteCount];
         for (var i = 0; i < SiteCount; i++)
@@ -116,6 +130,14 @@ public class MvRegisterConvergenceChaosTests
         // (the partition was healed before phase 2 started), then
         // gets isolated; its write "site-2-v1" is concurrent with
         // site 1's because the pump cannot deliver between them.
+        //
+        // Unlike phase 1 of the sibling test above, isolating site 2
+        // alone is sufficient here: the only two writers are sites 1
+        // and 2, and every edge touching site 2 is down, so neither
+        // writer can observe the other's dot however the pump ticks.
+        // Site 0's live edge to site 1 carries nothing new, because
+        // site 0 does not write in this phase. The precondition is
+        // therefore true by construction rather than by timing.
         pump.IsolateSite(2);
 
         var write1 = Task.Run(() => SetWithRetryAsync(fixture.ClientOf(1).GetGrain<ILattice>(TreeName), MultiSiteClusterFixture.ClusterIdFor(1), "site-1-v1"));
