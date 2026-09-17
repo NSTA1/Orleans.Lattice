@@ -186,7 +186,14 @@ public sealed partial class VectorIndex
         }
         else
         {
-            var perSegment = (capacity + _segmentCount - 1) / _segmentCount;
+            // Computed in 64-bit and clamped. In 32-bit arithmetic
+            // `capacity + _segmentCount - 1` wraps NEGATIVE for a capacity near
+            // int.MaxValue, which made every ReserveSegment take its
+            // `capacity <= current` early return - so the request silently
+            // reserved nothing and surfaced much later, and misleadingly, as an
+            // OutOfMemoryException from the location map below.
+            var perSegment = (int)Math.Min(
+                int.MaxValue, ((long)capacity + _segmentCount - 1) / _segmentCount);
             for (var segment = 0; segment < _segmentCount; segment++)
             {
                 ReserveSegment(segment, perSegment);
@@ -420,9 +427,25 @@ public sealed partial class VectorIndex
                 $"A cell block of {target} vectors by {_dimensions} dimensions exceeds the largest array the runtime can allocate.");
         }
 
-        Array.Resize(ref _segmentVectors[segment], (int)blockLength);
-        Array.Resize(ref _segmentNorms[segment], target);
-        Array.Resize(ref _segmentKeys[segment], target);
+        // All-or-nothing. Three in-place Array.Resize calls can leave the cell
+        // TORN if the second or third allocation fails: vectors sized for
+        // `target`, norms and keys still at `current`, and `_capacity` never
+        // updated. That state was previously unreachable because the exception
+        // destroyed the whole index, but the restore path now survives a failed
+        // reservation, so the tear became reachable for the first time. Build
+        // into locals and publish only once every allocation has succeeded; the
+        // allocation and copy cost is identical to Array.Resize.
+        var vectors = new float[(int)blockLength];
+        var norms = new float[target];
+        var keys = new long[target];
+
+        Array.Copy(_segmentVectors[segment], vectors, current * _dimensions);
+        Array.Copy(_segmentNorms[segment], norms, current);
+        Array.Copy(_segmentKeys[segment], keys, current);
+
+        _segmentVectors[segment] = vectors;
+        _segmentNorms[segment] = norms;
+        _segmentKeys[segment] = keys;
         _capacity += target - current;
     }
 
