@@ -19,7 +19,12 @@ WORK ITEMS AND BIN PACKING
 --------------------------
 A work item is one `dotnet test` invocation: a (package, shard, tier) triple.
 Packages listed in test-shards.json are split into shards; everything else runs
-whole. Items are packed into legs with LPT (longest processing time first): sort
+whole. A sharded package is crossed with the tier filters unless it sets
+`"crossTiers": false`, in which case each shard runs once, untiered - see the
+UNSHARDED_FILTER comment for why that is the right default for a suite with no
+fault-injection tier.
+
+Items are packed into legs with LPT (longest processing time first): sort
 by estimate descending, then repeatedly put the next item in the least loaded
 leg. LPT is within 4/3 of optimal for this problem, which is far inside the
 error bar on the estimates themselves, so nothing fancier is warranted.
@@ -84,6 +89,24 @@ TIERS: list[tuple[str, str]] = [
 # ci.yml's deterministic tier. Any De Morgan expression built on the intuitive
 # reading of `!=` reduces to a tautology and matches everything anyway - it
 # would just look like it was doing something.
+#
+# The same argument applies to a SHARDED package whose suite has no
+# fault-injection tier at all. Sharding is about splitting a long suite across
+# runners, and crossing it with tiers is a separate decision that only pays off
+# when the tiers are independently large: `test/lattice` gains because its
+# 3.9-minute chaos tier then runs beside its 3.8-minute deterministic tier on
+# another runner. A package with zero Chaos and zero Coyote tests gains nothing
+# and pays two empty `dotnet test` starts per shard. Such a package sets
+# `"crossTiers": false` in test-shards.json and each of its shards becomes one
+# untiered invocation filtered only by FullyQualifiedName.
+#
+# That opt-out is deliberately a TIER-COUNT choice and not a tier ALLOW-LIST,
+# because an allow-list is the shape that rots. Naming the tiers a package has
+# today ("deterministic only") silently stops running the first Chaos fixture
+# somebody adds to it, which is the failure mode this file exists to prevent.
+# Dropping the tier filter entirely cannot do that: the shard expressions are a
+# partition of FullyQualifiedName, so a new fixture lands in exactly one shard
+# and runs there whatever categories it carries.
 UNSHARDED_FILTER: str | None = None
 
 # Fallback estimates for any work item absent from the durations file. Small on
@@ -207,7 +230,29 @@ def make_items(
             )
             continue
 
+        cross_tiers = config.get("crossTiers", True)
         for shard in build_shard_filters(config):
+            if not cross_tiers:
+                # One untiered invocation per shard, filtered only by name. See
+                # the UNSHARDED_FILTER comment: this is the sharded form of the
+                # same measurement, and it cannot drop a newly added fixture
+                # because no tier filter stands between the shard and the test.
+                estimate = durations.get(
+                    (package, shard["shard"], "all"), DEFAULT_ESTIMATE["all"]
+                )
+                items.append(
+                    {
+                        "package": package,
+                        "shard": shard["shard"],
+                        "tier": "all",
+                        "filter": shard["filter"],
+                        "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
+                        "label": f"{package} / {shard['shard']}",
+                        "seeded": package in seeded,
+                    }
+                )
+                continue
+
             for tier, tier_filter in TIERS:
                 combined = f"({shard['filter']})&({tier_filter})"
                 estimate = durations.get(
