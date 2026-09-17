@@ -90,6 +90,33 @@ CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, Grai
 -- the total_changes() / temp-table version bookkeeping is connection-scoped and
 -- independent of any surrounding transaction. Each statement therefore
 -- auto-commits and no open transaction can leak onto a pooled connection.
+--
+-- The two trailing SELECTs report the new version to Orleans, which reads them
+-- with SingleOrDefault(): more than one returned row throws
+-- InvalidOperationException("Sequence contains more than one element") out of
+-- AdoNetGrainStorage.WriteStateAsync. Both therefore compute the version as a
+-- scalar rather than selecting Version back out of OrleansStorage, because that
+-- read returns one row PER STORAGE ROW matching the grain identity. Nothing in
+-- this schema constrains that to one row - IX_OrleansStorage is deliberately
+-- non-unique (see design criterion 4 above), so a grain that ever acquires a
+-- second row becomes permanently unwritable while still reading cleanly, since
+-- ReadFromStorageKey below caps itself with LIMIT 1. Observed in production as a
+-- storm of write failures against leaf, internal and leaf-snapshot rows.
+--
+-- This is a deliberate divergence from the upstream script this file is derived
+-- from, which reads the version back out of the table in both queries and is
+-- affected. Reported as dotnet/orleans#11303; every other Orleans dialect
+-- (PostgreSQL, SQL Server, MySQL, Oracle) already computes the version as a
+-- scalar, so revert this local change once upstream SQLite does the same.
+--
+-- The scalar is exact, not an approximation of the stored value. The UPDATE
+-- matches only on Version = @GrainStateVersion and sets Version = Version + 1,
+-- so a successful update always lands @GrainStateVersion + 1; the INSERT fires
+-- only when @GrainStateVersion IS NULL and always writes 1. Exactly one of the
+-- two can fire - the UPDATE cannot match when @GrainStateVersion is NULL
+-- (Version = NULL is never true) and the INSERT is gated on it being NULL - so
+-- @GrainStateVersion IS NULL discriminates them precisely. This also removes a
+-- redundant indexed lookup from every write.
 INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('WriteToStorageKey', '
     CREATE TEMP TABLE IF NOT EXISTS OrleansStorageWriteState
@@ -125,13 +152,8 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
         AND ServiceId = @ServiceId
     );
 
-    SELECT Version AS NewGrainStateVersion FROM OrleansStorage
-    WHERE total_changes() > (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
-        AND GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
-        AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
-        AND GrainTypeString = @GrainTypeString
-        AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId;
+    SELECT (CASE WHEN @GrainStateVersion IS NULL THEN 1 ELSE @GrainStateVersion + 1 END) AS NewGrainStateVersion
+    WHERE total_changes() > (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1);
 
     SELECT @GrainStateVersion AS NewGrainStateVersion
     WHERE total_changes() = (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
@@ -156,6 +178,11 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Clears the grain state by setting the payload to null and incrementing the version for consistency.
+-- The version is computed as a scalar for the same reason as WriteToStorageKey
+-- above: selecting Version back out of OrleansStorage returns one row per
+-- storage row, and Orleans' SingleOrDefault() throws on more than one. The
+-- UPDATE matches only on Version = @GrainStateVersion and sets Version + 1, so
+-- a cleared row is always at @GrainStateVersion + 1.
 INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('ClearStorageKey', '
     UPDATE OrleansStorage
@@ -171,13 +198,8 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
         AND ServiceId = @ServiceId
         AND Version = @GrainStateVersion;
 
-    SELECT Version AS NewGrainStateVersion FROM OrleansStorage
-    WHERE changes() > 0
-        AND GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
-        AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
-        AND GrainTypeString = @GrainTypeString
-        AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId;
+    SELECT @GrainStateVersion + 1 AS NewGrainStateVersion
+    WHERE changes() > 0;
 
     SELECT @GrainStateVersion AS NewGrainStateVersion
     WHERE changes() = 0
