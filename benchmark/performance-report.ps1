@@ -1247,6 +1247,20 @@ function Aggregate-Layer1Cells {
 			cohortN             = $p50s.Count
 		}
 	}
+	# A partial miss is a warning above: one row losing its samples is a real
+	# but survivable measurement gap, and the rest of the table still publishes.
+	# A TOTAL miss is categorically different and is never legitimate - cohorts
+	# ran, yet not one of the Layer 1 rows resolved a single p50. That is the
+	# signature of the whole microbench class having aborted (a [GlobalSetup]
+	# throw is reported by BenchmarkDotNet as 'ExitCode != 0 and no results
+	# reported' and does not fail the run), and the consequence is that the
+	# perf-table:layer1 block of docs/lattice/performance-single-silo.md
+	# regenerates EMPTY while this script exits 0. Issue #3126 is that exact
+	# false green. Fail loudly instead: an empty published table must cost a red
+	# run, not a warning nobody reads.
+	if ($rows.Count -eq 0) {
+		throw "[aggregate-l1] $($Cohorts.Count) cohort(s) ran but not one of the $(@($Layer1Rows).Count) Layer 1 rows resolved a p50 sample. This is a total Layer 1 miss, which is never legitimate: it means the microbench class produced no results at all (most often a [GlobalSetup] throw, which BenchmarkDotNet reports as 'ExitCode != 0 and no results reported' without failing the run). Publishing would blank the perf-table:layer1 block of docs/lattice/performance-single-silo.md. Inspect the BenchmarkDotNet output above for the underlying failure."
+	}
 	return $rows
 }
 

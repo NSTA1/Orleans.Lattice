@@ -753,6 +753,13 @@ public class LatticeMicroBenchmarks
         var monitor = Substitute.For<IHotShardMonitorGrain>();
         _grainFactory.RouteByString<IHotShardMonitorGrain>(_ => monitor);
 
+        // Armed from the same LatticeGrain.EnsureMonitorAsync activation step as
+        // the hot shard monitor above, so an unrouted orchestrator throws on the
+        // first SetAsync of the seeding loop - inside GlobalSetup - and takes
+        // every Layer 1 row of the published performance doc down with it.
+        var shardHealing = Substitute.For<IShardHealingOrchestratorGrain>();
+        _grainFactory.RouteByString<IShardHealingOrchestratorGrain>(_ => shardHealing);
+
         var stats = Substitute.For<ILatticeStats>();
         _grainFactory.RouteByString<ILatticeStats>(_ => stats);
 
