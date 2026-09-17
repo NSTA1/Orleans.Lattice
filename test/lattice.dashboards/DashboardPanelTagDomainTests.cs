@@ -139,11 +139,11 @@ public sealed class DashboardPanelTagDomainTests
             // charted on the replication dashboard (panel 70) and the remaining
             // arms are diagnostic rather than operational.
             ["CommitPath|135|orleans.lattice.wal.gc.passes|outcome"] =
-                ["blocked", "failed", "idle", "no_consumer", "unclassified"],
+                ["blocked", "failed", "idle", "no_consumer", "over_ceiling", "unclassified"],
 
             // Panel 70 is the blocked-pass panel, the mirror of panel 135.
             ["Replication|70|orleans.lattice.wal.gc.passes|outcome"] =
-                ["failed", "idle", "no_consumer", "reclaimed", "unclassified"],
+                ["failed", "idle", "no_consumer", "over_ceiling", "reclaimed", "unclassified"],
 
             // Panel 143 charts both arms on its unfiltered target, and adds a
             // second target narrowed to outcome="withheld" so the withheld arm

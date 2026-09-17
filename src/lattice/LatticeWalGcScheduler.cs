@@ -1785,9 +1785,28 @@ internal sealed class LatticeWalGcScheduler(
             var blocked = !reclaimed
                 && report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
+            // The third reason a pass reclaims nothing, and the one the floor
+            // state cannot express (issue #3119). A tree over its configured
+            // WalMaxRetainedBytes reports Available - it evaluated a usable
+            // cursor floor - and trims nothing, which is byte for byte the
+            // reading a quiet tree produces. The byte verdict is the only thing
+            // that separates them, and it is already on the report, decided
+            // against the post-trim footprint.
+            //
+            // This is a statement about the tree, not about the pass, so it is
+            // deliberately not guarded on `!reclaimed`: both consumers below
+            // already resolve `reclaimed` first, so such a guard would be
+            // unreachable, and an unreachable guard is one no test can hold to
+            // account. ClassifyPass owns the precedence and is tested for it.
+            //
+            // False whenever the policy is disabled or the provider supports no
+            // byte accounting, so a deployment that configured no ceiling is
+            // untouched by everything this flag drives.
+            var overCeiling = report.BytePressureOverThreshold;
+
             RecordPass(
                 1,
-                reclaimed ? LatticeMetrics.OutcomeReclaimed : ClassifyUnreclaimed(report.CursorFloorState),
+                ClassifyPass(reclaimed, overCeiling, report.CursorFloorState),
                 treeTag,
                 tenantTag);
 
@@ -1818,7 +1837,7 @@ internal sealed class LatticeWalGcScheduler(
             //
             // `blocked` still drives the cadence floor, and the pass outcome
             // label is derived from the same floor state through
-            // ClassifyUnreclaimed; only the episode reads the state directly.
+            // ClassifyPass; only the episode reads the state directly.
             var floorBlocked = report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
             if (floorBlocked)
@@ -1872,7 +1891,46 @@ internal sealed class LatticeWalGcScheduler(
             // The residual is deliberate: a tree blocked and unable to heal polls
             // at the floor indefinitely. That is the alarm state, and its cost is
             // bounded by the floor while the damage it signals is not.
-            next = reclaimed || blocked ? minInterval : Relax(currentInterval, minInterval, interval);
+            //
+            // The same reasoning reaches the byte ceiling through a third arm
+            // (issue #3119), and it had to be applied a second time because the
+            // predicate above encodes a *cause* while a breach is a *condition*.
+            // A tree over its WalMaxRetainedBytes that reclaims nothing reports
+            // Available, classifies as idle under the old rule, and relaxes - so
+            // the byte-pressure policy was starved of passes on precisely the
+            // trees it exists to bound. The ceiling was observable, breaching,
+            // and inert.
+            //
+            // When the safe trim frontier is pinned, pass frequency is the only
+            // lever the policy has left, because the GC must never trim past that
+            // frontier to honour a ceiling. Relaxing removed the one remaining
+            // lever at the one moment it mattered.
+            //
+            // This arm is deliberately independent of the floor state rather than
+            // folded into `blocked`. A breaching tree whose consumers never
+            // reported a cursor is NoCursorReported, not BlockedByUnusablePin,
+            // and it relaxed for the same reason; conditioning the floor on a
+            // cause would have fixed one of those and left the other.
+            //
+            // Cost. The byte probe is two samples per pass per partition when the
+            // policy is armed, so holding a breaching tree at the floor raises
+            // probe load on the tree that is already unhealthy. That is the
+            // intended trade and it is bounded on both sides. It introduces no
+            // new load level, exactly as the blocked arm does not: a reclaiming
+            // tree already runs at minInterval indefinitely and pays the same two
+            // samples, so this is a cadence the system sustains by construction,
+            // and the probe is O(1) for the provider that supports physical
+            // accounting. It is also self-limiting in the way that matters: a
+            // tree that drops back under its ceiling stops being over-threshold
+            // and relaxes as before, and the flag is false outright wherever no
+            // ceiling is configured, which is every deployment that did not ask
+            // for this enforcement. What is left is a tree that is over its
+            // ceiling and cannot reclaim, polling at the floor for as long as
+            // that holds - the same deliberate residual as above, and the cost of
+            // an operator's ceiling being unreachable rather than of this rule.
+            next = reclaimed || blocked || overCeiling
+                ? minInterval
+                : Relax(currentInterval, minInterval, interval);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -2072,6 +2130,17 @@ internal sealed class LatticeWalGcScheduler(
         RecordPass(0, LatticeMetrics.OutcomeNoConsumer, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeUnclassified, treeTag, tenantTag);
 
+        // The third arm split out of `idle` (issue #3119), primed on the same
+        // terms and with one extra reason. A tree only reaches `over_ceiling`
+        // while it is breaching, so on the healthy fleet the arm never fires -
+        // and unprimed, "this tree has never breached its ceiling" and "no
+        // ceiling is configured on this silo" and "the arm is not wired" would
+        // be the same silence. The distinction matters because a breach that
+        // clears makes the counter stop advancing, so an operator confirming a
+        // remedy is reading for a series that stopped rather than one that was
+        // never there.
+        RecordPass(0, LatticeMetrics.OutcomeOverCeiling, treeTag, tenantTag);
+
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
         // this epic - once as "the sweep healed nothing" and once as "the sweep
@@ -2245,6 +2314,16 @@ internal sealed class LatticeWalGcScheduler(
     /// <see cref="LatticeMetrics.OutcomeUnclassified"/> is impossible against
     /// today's enum, so a permanent zero there is the expected reading.
     /// </para>
+    /// <para>
+    /// The byte-ceiling refinement is deliberately <i>not</i> a parameter here
+    /// (issue #3119). This method is the cursor-floor enum's declared tag
+    /// mapping, and <c>InstrumentedEnumArmingTests</c> resolves it by signature
+    /// and asserts it is a total, injective function of the enum alone. A
+    /// breach is an orthogonal axis rather than a floor state, so folding it in
+    /// would make the mapping depend on something the enum does not carry, and
+    /// would silently unresolve the gate that checks it. <see cref="ClassifyPass"/>
+    /// composes the two instead.
+    /// </para>
     /// </remarks>
     private static KeyValuePair<string, object?> ClassifyUnreclaimed(WalGcCursorFloorState floorState)
         => floorState switch
@@ -2254,6 +2333,39 @@ internal sealed class LatticeWalGcScheduler(
             WalGcCursorFloorState.Available => LatticeMetrics.OutcomeIdle,
             _ => LatticeMetrics.OutcomeUnclassified,
         };
+
+    /// <summary>
+    /// The outcome arm for a completed pass: the affirmative arm, the
+    /// byte-ceiling arm, or whichever arm names why nothing was trimmed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="overCeiling"/> refines the
+    /// <see cref="WalGcCursorFloorState.Available"/> arm only, and it is the
+    /// third split out of <c>idle</c> (issue #3119). The floor state cannot
+    /// distinguish those two cases: a lagging consumer that has breached the
+    /// byte ceiling and a quiet tree with nothing to trim both report a usable
+    /// floor and trim nothing, so the byte verdict is the only thing that
+    /// separates them.
+    /// </para>
+    /// <para>
+    /// It deliberately does not refine the other arms. <c>blocked</c> and
+    /// <c>no_consumer</c> already name a cause and neither claims health, so
+    /// folding a breach into them would trade a specific diagnosis for a
+    /// general one; <c>unclassified</c> must keep naming a state this build
+    /// cannot name, which a breach says nothing about. Only <c>idle</c> asserts
+    /// the tree is fine, and only that assertion was false.
+    /// </para>
+    /// </remarks>
+    private static KeyValuePair<string, object?> ClassifyPass(
+        bool reclaimed,
+        bool overCeiling,
+        WalGcCursorFloorState floorState)
+        => reclaimed
+            ? LatticeMetrics.OutcomeReclaimed
+            : overCeiling && floorState == WalGcCursorFloorState.Available
+                ? LatticeMetrics.OutcomeOverCeiling
+                : ClassifyUnreclaimed(floorState);
 
     /// <summary>
     /// Adds <paramref name="addTicks"/> to <paramref name="nowTicks"/>,
