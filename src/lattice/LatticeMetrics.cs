@@ -1501,7 +1501,15 @@ public static class LatticeMetrics
     ///   <item><description>
     ///     <see cref="OutcomeIdle"/> - it evaluated a usable cursor floor
     ///     (<see cref="WalGcCursorFloorState.Available"/>) and found nothing
-    ///     above it. The genuinely quiet, healthy case, and <i>only</i> that.
+    ///     above it, with the tree inside its byte ceiling (or no ceiling
+    ///     configured). The genuinely quiet, healthy case, and <i>only</i> that.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="OutcomeOverCeiling"/> - it evaluated a usable cursor floor
+    ///     and found nothing above it, yet the tree is still over its configured
+    ///     <see cref="LatticeOptions.WalMaxRetainedBytes"/>. Same floor state as
+    ///     <see cref="OutcomeIdle"/> and the opposite condition: the safe trim
+    ///     frontier is pinned below bytes the policy wants back (issue #3119).
     ///   </description></item>
     ///   <item><description>
     ///     <see cref="OutcomeUnclassified"/> - the floor state was one this
@@ -1766,8 +1774,51 @@ public static class LatticeMetrics
     /// Both are now separate arms, so a rise in <c>idle</c> is a statement about
     /// a tree with a working floor and no backlog above it.
     /// </para>
+    /// <para>
+    /// <see cref="OutcomeOverCeiling"/> is the third such split (issue #3119),
+    /// and the one that most directly contradicted the word: a tree over its
+    /// configured <see cref="LatticeOptions.WalMaxRetainedBytes"/> that reclaims
+    /// nothing has a working floor and an enormous backlog, which is the
+    /// opposite of quiet. Only with that arm split out is <c>idle</c> the
+    /// healthy case rather than merely the unexplained one.
+    /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>over_ceiling</c> (a WAL GC pass that
+    /// evaluated a usable consumer-cursor floor, trimmed nothing, and left the
+    /// tree still above its configured
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> - see
+    /// <see cref="LatticeWalGcReport.BytePressureOverThreshold"/>).
+    /// <para>
+    /// Split out of <see cref="OutcomeIdle"/> by issue #3119. The floor state is
+    /// <see cref="WalGcCursorFloorState.Available"/> in both cases, so before
+    /// this arm existed the two were the same measurement: a tree whose
+    /// consumers are lagging far enough to breach the operator's byte ceiling
+    /// reported as quiet and healthy. That is not a presentational complaint -
+    /// <c>idle</c> is the arm an operator reads as "nothing to do", so the
+    /// breach was visible only on a different instrument
+    /// (<see cref="StoragePolicyOverThresholdName"/>) that a pass-rate panel
+    /// does not show.
+    /// </para>
+    /// <para>
+    /// This arm says the safe trim frontier is pinned below bytes the policy
+    /// wants back: the cursor branch ran, found nothing it was permitted to
+    /// remove, and the footprint is still over the ceiling. It is advisory about
+    /// the <i>cause</i> and definite about the <i>condition</i> - the GC never
+    /// trims past the safe frontier to honour a ceiling, so this is "the bytes
+    /// could not be safely reclaimed", never "the trim failed".
+    /// </para>
+    /// <para>
+    /// It is reported only when the byte-pressure policy is enabled and the
+    /// provider supports byte accounting; otherwise there is no ceiling to
+    /// breach and such a pass stays <see cref="OutcomeIdle"/>. Like the other
+    /// arms it is primed at zero per collected tree, so an absent series means
+    /// this silo is not reporting rather than that the tree never breached.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOverCeiling = new(TagOutcome, "over_ceiling");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>no_consumer</c> (a WAL GC pass that
@@ -1824,8 +1875,10 @@ public static class LatticeMetrics
     /// does not name).
     /// <para>
     /// No pass can reach this arm today: <see cref="WalGcCursorFloorState"/> has
-    /// three members and all three are named by
-    /// <see cref="OutcomeIdle"/>, <see cref="OutcomeNoConsumer"/> and
+    /// three members and all three are named -
+    /// <see cref="WalGcCursorFloorState.Available"/> by
+    /// <see cref="OutcomeIdle"/> and <see cref="OutcomeOverCeiling"/> between
+    /// them, and the other two by <see cref="OutcomeNoConsumer"/> and
     /// <see cref="OutcomeBlocked"/>. A permanent measured zero here is therefore
     /// the expected reading and is exactly the point: the arm exists so that a
     /// floor state added later falls somewhere it can be seen, instead of being
