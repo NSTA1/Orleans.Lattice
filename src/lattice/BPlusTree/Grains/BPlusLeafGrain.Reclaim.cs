@@ -311,6 +311,13 @@ internal sealed partial class BPlusLeafGrain
     /// owner of keys it would then refuse to serve.
     /// </para>
     /// <para>
+    /// There is a third question neither of these can answer, because both
+    /// concern leaves that already exist: may a NEW leaf be minted over part of a
+    /// sealed leaf's range without the seal? That is a division, and it is
+    /// answered at the birth seam by <see cref="MovedAwaySealInheritance"/>
+    /// instead of by a predicate here (issue 3121).
+    /// </para>
+    /// <para>
     /// The moved-away seal is the answer to the second question and it is the
     /// only one, because it is the only leaf state that makes a leaf refuse a
     /// key it legitimately owns. Every other arm of

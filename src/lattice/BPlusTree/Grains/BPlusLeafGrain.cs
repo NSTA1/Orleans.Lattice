@@ -2353,11 +2353,14 @@ internal sealed partial class BPlusLeafGrain(
         // Batched birth-time seeding for a freshly created split sibling.
         // Collapses the five separate gated setter RPCs (tree id, shard
         // index, key range, next/prev sibling pointers) the donor used to
-        // issue serially into one gate acquire and one PersistAsync.
+        // issue serially into one gate acquire and one PersistAsync, and
+        // additionally seeds the donor's moved-away seal, which never had a
+        // setter of its own (issue 3121).
         // Preserves each setter's idempotent semantics: the write-once
         // slots (tree id, shard index, key-range low bound) are skipped
         // when already seeded, so a recovery-path re-call against a
-        // partially-seeded sibling is safe.
+        // partially-seeded sibling is safe. The seal is unioned rather than
+        // write-once for the same reason, stated at its own site below.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -2371,6 +2374,8 @@ internal sealed partial class BPlusLeafGrain(
             var prevHighKey = state.State.HighKeyExclusive;
             var prevNext = state.State.NextSibling;
             var prevPrev = state.State.PrevSibling;
+            var prevMovedSlots = state.State.MovedAwaySlots;
+            var prevMovedVsc = state.State.MovedAwayVirtualShardCount;
 
             var changed = false;
 
@@ -2413,6 +2418,43 @@ internal sealed partial class BPlusLeafGrain(
                 changed = true;
             }
 
+            // The donor's moved-away seal. Unioned rather than assigned, so seeding
+            // is monotonic: a seal is sticky by design, and a re-call against a
+            // partially seeded sibling must never drop a slot. The donor keeps its
+            // own seal - this is a copy, not a move.
+            //
+            // Deliberately NOT gated on the write-once test the range uses. A
+            // freshly minted sibling has no seal, so the two agree in the universal
+            // case; but where they differ - a sibling that has somehow already been
+            // sealed - the write-once rule would silently discard the donor's seal,
+            // which is the very defect this seeding exists to close. Issue 3121.
+            if (MovedAwaySealInheritance.TryInherit(
+                    state.State.MovedAwaySlots,
+                    state.State.MovedAwayVirtualShardCount,
+                    init.MovedAwaySlots,
+                    init.MovedAwayVirtualShardCount,
+                    out var inheritedSlots,
+                    out var inheritedVsc))
+            {
+                // Copy when the adopted array is the sender's own instance. The core
+                // is a pure function and hands the donor's array straight back on the
+                // universal path, which is right for a core but wrong to retain here:
+                // this array becomes durable state, and a co-located donor's
+                // [Immutable] payload is handed over without a deep copy, so
+                // retaining it would alias two leaves' persisted state to one array.
+                // That is the same ingress rule TrackedCrdtCarrierExemptions records,
+                // and ImmutableGrainBoundaryContractTests enforces it.
+                //
+                // The union path already built a fresh array, so it is not copied
+                // again, and an unsealed donor never reaches here at all. The cost is
+                // therefore one small copy per split of a sealed leaf.
+                state.State.MovedAwaySlots = ReferenceEquals(inheritedSlots, init.MovedAwaySlots)
+                    ? inheritedSlots!.AsSpan().ToArray()
+                    : inheritedSlots;
+                state.State.MovedAwayVirtualShardCount = inheritedVsc;
+                changed = true;
+            }
+
             if (changed)
             {
                 try
@@ -2427,6 +2469,8 @@ internal sealed partial class BPlusLeafGrain(
                     state.State.HighKeyExclusive = prevHighKey;
                     state.State.NextSibling = prevNext;
                     state.State.PrevSibling = prevPrev;
+                    state.State.MovedAwaySlots = prevMovedSlots;
+                    state.State.MovedAwayVirtualShardCount = prevMovedVsc;
                     throw;
                 }
             }

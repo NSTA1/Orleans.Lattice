@@ -51,6 +51,8 @@ public sealed class BPlusLeafGrainSiblingInitTests
             HighKeyExclusive = "z",
             NextSibling = next,
             PrevSibling = prev,
+            MovedAwaySlots = new[] { 3, 9 },
+            MovedAwayVirtualShardCount = 16,
         });
 
         Assert.That(state.State.TreeId, Is.EqualTo("tree-1"));
@@ -59,6 +61,11 @@ public sealed class BPlusLeafGrainSiblingInitTests
         Assert.That(state.State.HighKeyExclusive, Is.EqualTo("z"));
         Assert.That(state.State.NextSibling, Is.EqualTo(next));
         Assert.That(state.State.PrevSibling, Is.EqualTo(prev));
+
+        // The moved-away seal is a birth-time slot like any other, so "every
+        // slot" has to include it or this fixture's name over-claims. Issue 3121.
+        Assert.That(state.State.MovedAwaySlots, Is.EqualTo(new[] { 3, 9 }));
+        Assert.That(state.State.MovedAwayVirtualShardCount, Is.EqualTo(16));
 
         // One write covers the whole batch, not five.
         Assert.That(state.WriteCount, Is.EqualTo(1));

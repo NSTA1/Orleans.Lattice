@@ -58,6 +58,18 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
         + "(LatticeVectorClockContext setter) and the egress seam (LwwEntry), so no shared instance "
         + "ever becomes durable state or escapes to a caller.";
 
+    /// <summary>
+    /// A mutable array inside an <c>[Immutable]</c> carrier that the receiver
+    /// does retain - so acknowledgement alone would be wrong - made safe by a
+    /// defensive copy taken at the one seam where the shared instance would
+    /// otherwise become durable state.
+    /// </summary>
+    private const string CopiedOnReceipt =
+        "Sorted moved-away slot array inside an [Immutable] carrier. The receiving leaf retains the seal in "
+        + "durable state, so BPlusLeafGrain.InitializeSiblingAsync copies it on receipt (guarded by "
+        + "ReferenceEquals, so only the shared path pays) before persisting; the sender's instance is never "
+        + "retained and neither side writes into the array in place.";
+
     /// <inheritdoc />
     protected override Assembly PackageAssembly => typeof(LatticeWriteFencedException).Assembly;
 
@@ -100,6 +112,8 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.EntryHistoryPage"] = ReadModel,
             ["Orleans.Lattice.LatticeSnapshotCoordinate"] = ReadModel,
             ["Orleans.Lattice.RangeDeleteResult"] = ReadModel,
+
+            ["Orleans.Lattice.BPlusTree.SiblingInitialization"] = CopiedOnReceipt,
 
             ["Orleans.Lattice.LatticePredicateNode"] =
                 "Caller-authored predicate tree; the grain walks it to evaluate a match and never writes into it.",
