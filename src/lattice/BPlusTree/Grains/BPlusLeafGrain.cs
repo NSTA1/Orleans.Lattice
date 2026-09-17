@@ -3451,14 +3451,40 @@ internal sealed partial class BPlusLeafGrain(
             return null;
         }
 
-        // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs). A
-        // cross-shard migration import is exempt: it is a topology-seeding
-        // operation whose coordinator places rows deliberately and sets the
-        // destination's range as a separate step, so its keys are legitimately
-        // outside the range at the moment they arrive. That is the same reason
-        // MergeEntriesAsync - the primitive CompleteSplitAsync and bulk load
-        // use to seed a leaf - carries no span guard either.
-        if (!isCrossShardMigration && ContainsOutOfSpanKey(entries))
+        // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs).
+        //
+        // This deliberately applies to cross-shard migration imports as well.
+        // An earlier revision exempted them, reasoning that migration is a
+        // topology-seeding operation whose coordinator places rows deliberately
+        // and sets the destination's range as a separate step, so its keys are
+        // legitimately outside the range at the moment they arrive. The premise
+        // is sound but the exemption is not needed to honour it, because the
+        // seeding shape is already admitted by two independent properties of
+        // the admission path itself:
+        //
+        //   * a destination whose range has not been set yet has two null
+        //     bounds, so HasDeclaredSpan is false and ContainsOutOfSpanKey
+        //     returns false without a single comparison; and
+        //   * a freshly-seeded destination has no chain pointers yet, so
+        //     TryResolveSpanForwardTarget resolves nothing and
+        //     ForwardOutOfSpanMergeAsync falls open to the local commit.
+        //
+        // On the seeding shape the exemption was therefore already a no-op, and
+        // the only shape it actually changed was the one it was never meant to
+        // cover: a leaf whose span was narrowed by its OWN split, receiving a
+        // late import for a key that split moved to its sibling. There the
+        // exemption re-created the key locally as an IsMigrated=true pre-saga
+        // row on a leaf that no longer owns it. The asymmetric
+        // migration-vs-foreground guard in MergeIntoStateAsync cannot suppress
+        // that row, because that guard fires only when the destination already
+        // holds a non-migrated entry for the key and split had removed the row
+        // entirely. The next split then handed the stale row forward into the
+        // live topology, where it was served as a torn read (issue #3117).
+        //
+        // Routing the import to the leaf that actually declares the key fixes
+        // that at the seam where ownership is decided, and leaves the saga
+        // machinery untouched.
+        if (ContainsOutOfSpanKey(entries))
         {
             entries = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
             if (entries.Count == 0)
