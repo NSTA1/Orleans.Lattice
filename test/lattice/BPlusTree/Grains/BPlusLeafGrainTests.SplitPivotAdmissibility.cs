@@ -1,6 +1,7 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using System.Text;
@@ -190,6 +191,72 @@ public partial class BPlusLeafGrainTests
                 Is.EqualTo(Orleans.Lattice.Primitives.SplitState.Unsplit),
                 "a declined division must not leave split intent behind");
         });
+    }
+
+    /// <summary>
+    /// The decline must be <em>observable</em>, not merely correct. A leaf that
+    /// silently refuses to divide is indistinguishable from one nothing is
+    /// trying to divide, which is the exact ambiguity
+    /// <see cref="LatticeMetrics.LeafSplitAttempts"/> exists to remove - so the
+    /// decline records its own outcome arm rather than returning quietly.
+    /// <para>
+    /// The arm is also pre-minted at zero on the capture seam, so an operator
+    /// reading a flat zero learns "no division was ever declined" rather than
+    /// "this build predates the guard". Both halves are needed: this test pins
+    /// the emission, and
+    /// <c>LeafSplitAttemptAccountingTests.The_capture_seam_mints_every_outcome_at_zero_so_never_sought_is_readable</c>
+    /// pins the prime.
+    /// </para>
+    /// <para>
+    /// Perturbation: drop the <c>RecordSplitAttempt</c> call on the decline
+    /// branch and the measurement list holds no non-zero
+    /// <c>no_admissible_pivot</c>, failing below while every other arm of this
+    /// file still passes.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Split_records_the_no_admissible_pivot_outcome_when_it_declines()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var sibling = CreateCapturingSiblingStub(out _);
+        var grain = CreateGrain(
+            state,
+            siblingStub: sibling,
+            maxLeafKeys: PivotAdmissibilityMaxLeafKeys);
+
+        state.State.LowKeyInclusive = "k30";
+        state.State.HighKeyExclusive = "k50";
+
+        var declines = 0;
+        using (MeterListening.StartForInstrument(
+            LatticeMetrics.LeafSplitAttempts,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagOutcome
+                        && string.Equals(
+                            tag.Value?.ToString(),
+                            LatticeMetrics.LeafSplitNoAdmissiblePivot.Value?.ToString(),
+                            StringComparison.Ordinal)
+                        && value != 0)
+                    {
+                        Interlocked.Increment(ref declines);
+                    }
+                }
+            })))
+        {
+            foreach (var key in new[] { "k60", "k70", "k80", "k90", "k95" })
+            {
+                await grain.SetAsync(key, Encoding.UTF8.GetBytes(key));
+            }
+        }
+
+        Assert.That(
+            declines,
+            Is.GreaterThan(0),
+            "a declined division must be readable, or it is indistinguishable from a division "
+            + "nothing ever sought - which is the ambiguity the attempt counter exists to remove");
     }
 
     /// <summary>

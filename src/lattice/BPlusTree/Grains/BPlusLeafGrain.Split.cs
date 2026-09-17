@@ -219,6 +219,15 @@ internal sealed partial class BPlusLeafGrain
         RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended, 0);
         RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity, 0);
 
+        // Primed for the same reason, and it is the arm where the reasoning
+        // bites hardest: declining a division for want of an admissible pivot
+        // is rare, so absence is the expected reading on a healthy estate. That
+        // is exactly what makes it uninterpretable unprimed - a reader who
+        // finds no line cannot tell "no division was ever declined" from "this
+        // build predates the guard", and the second is the reading they need
+        // when a key has frozen. A measured zero settles it.
+        RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot, 0);
+
         // The fault arm is primed per failure class, because the class tag is
         // part of its series identity: priming `faulted` on one class would
         // leave the other two absent, so a reader could not tell "no division
