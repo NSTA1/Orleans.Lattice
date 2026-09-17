@@ -954,10 +954,27 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        var bySaga = CollectShadowMarkers(movedKeys);
+        if (bySaga is null)
+            return;
+
+        foreach (var (txid, keys) in bySaga)
+            await sibling.MarkSagaShadowAsync(txid, keys);
+    }
+
+    /// <summary>
+    /// Gathers the saga shadow markers this leaf holds that cover any of
+    /// <paramref name="movedKeys"/>, grouped by transaction. Returns
+    /// <c>null</c> - without allocating - when this leaf holds neither
+    /// markers nor prepared buckets, which is the steady state.
+    /// </summary>
+    private Dictionary<Guid, List<string>>? CollectShadowMarkers(
+        IReadOnlyCollection<string> movedKeys)
+    {
         var haveMarkers = _shadowedSagas is { Count: > 0 };
         var havePending = _pendingTx is { Count: > 0 };
         if (!haveMarkers && !havePending)
-            return;
+            return null;
 
         Dictionary<Guid, List<string>>? bySaga = null;
 
@@ -989,11 +1006,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        if (bySaga is null)
-            return;
-
-        foreach (var (txid, keys) in bySaga)
-            await sibling.MarkSagaShadowAsync(txid, keys);
+        return bySaga;
     }
 
     private static void AddSagaKeyMarker(

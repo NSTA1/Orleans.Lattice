@@ -219,14 +219,39 @@ internal sealed partial class BPlusLeafGrain
         {
             foreach (var (target, bucket) in buckets)
             {
+                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+
+                // Carry the shadow markers across WITH the rows, and before
+                // them. A forwarded row keeps its IsMigrated flag, so the
+                // destination read gate will consult a marker for it - but the
+                // marker lives on THIS leaf, keyed by this leaf's
+                // _shadowedSagas and _pendingTx, and the forward would
+                // otherwise leave it stranded here. The receiving leaf would
+                // then hold a migrated row with no gate and serve the
+                // pre-saga value ungated, splitting atomic visibility against
+                // a sibling key whose backstop terminal had landed (#3117).
+                //
+                // Split already does exactly this via the same helper, for the
+                // same reason; a span forward moves rows between leaves just
+                // as a split does, so it owes the same transfer. Installing
+                // the markers FIRST means there is no instant at which the
+                // destination holds the row without its gate. Over-installing
+                // is harmless and self-healing: once the saga's terminal has
+                // been applied on the destination, _recentlyTerminal makes the
+                // marker a no-op (see IsShadowedReadSafeAsync).
+                //
+                // Allocation-free on the steady-state path - the helper
+                // returns immediately on two null checks when this leaf holds
+                // neither markers nor prepared buckets.
+                await TransferShadowMarkersToSiblingAsync(sibling, bucket.Keys);
+
                 // The forwarded SplitResult is deliberately discarded. It
                 // describes a split of the *sibling*, and the shard root
                 // installs a separator against the leaf it called; returning a
                 // sibling's result would make it install that separator against
                 // the wrong leaf. The sibling's own callers observe its splits.
                 // This matches the existing split-recovery forward above it.
-                await grainFactory.GetGrain<IBPlusLeafGrain>(target)
-                    .MergeManyAsync(bucket, isCrossShardMigration);
+                await sibling.MergeManyAsync(bucket, isCrossShardMigration);
             }
         }
 

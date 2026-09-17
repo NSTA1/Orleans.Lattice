@@ -3426,6 +3426,15 @@ internal sealed partial class BPlusLeafGrain(
             if (siblingEntries.Count > 0)
             {
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
+                // Carry this leaf's shadow markers for the re-routed keys
+                // across before the rows themselves, for the same reason the
+                // span forward does (see ForwardOutOfSpanMergeAsync): a
+                // forwarded row keeps its IsMigrated flag and so will be
+                // gated on the sibling, but the marker that gates it lives
+                // here and would otherwise be stranded, leaving the sibling
+                // serving a pre-saga value ungated (#3117). Markers first, so
+                // the sibling never holds the row without its gate.
+                await TransferShadowMarkersToSiblingAsync(sibling, siblingEntries.Keys);
                 // Forward the caller's migration intent verbatim - a cross-shard migration
                 // import that arrives during split recovery is still a migration on the sibling.
                 await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration);

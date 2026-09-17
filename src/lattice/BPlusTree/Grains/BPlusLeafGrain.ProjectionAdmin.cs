@@ -117,6 +117,20 @@ internal sealed partial class BPlusLeafGrain
         _pendingTxOffsets = null;
         _recentlyTerminal = null;
         _backstoppedTerminals = null;
+        // The destination-side shadow markers are activation-scoped in exactly
+        // the same way, and dropping them is load-bearing rather than tidy.
+        // _shadowedSagas is gated against _recentlyTerminal: a marker is safe
+        // to serve past only once its saga's terminal has been seen on this
+        // leaf. Clearing _recentlyTerminal while leaving the markers in place
+        // therefore does not preserve the markers, it strands them - every
+        // marked key becomes permanently unsafe for the life of the
+        // activation, because the terminal that would have cleared it has
+        // already been forgotten and cannot arrive twice. The read gate would
+        // raise StaleShardRoutingException for those keys until the grain
+        // deactivates. A fresh activation holds no markers, so dropping them
+        // is what actually makes the rebuild indistinguishable from one, which
+        // is the property the comment above claims.
+        _shadowedSagas = null;
 
         // Drop the cached XxHash128 hasher so the rebuild's first
         // contribution allocates a fresh instance. The cached hasher
