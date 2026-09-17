@@ -69,6 +69,11 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var result = await SplitAsync();
+            if (result is null)
+            {
+                // SplitAsync already recorded the decline outcome.
+                return null;
+            }
             RecordSplitAttempt(LatticeMetrics.LeafSplitDivided);
             return result;
         }
@@ -213,6 +218,15 @@ internal sealed partial class BPlusLeafGrain
         RecordSplitAttempt(LatticeMetrics.LeafSplitDivided, 0);
         RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended, 0);
         RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity, 0);
+
+        // Primed for the same reason, and it is the arm where the reasoning
+        // bites hardest: declining a division for want of an admissible pivot
+        // is rare, so absence is the expected reading on a healthy estate. That
+        // is exactly what makes it uninterpretable unprimed - a reader who
+        // finds no line cannot tell "no division was ever declined" from "this
+        // build predates the guard", and the second is the reading they need
+        // when a key has frozen. A measured zero settles it.
+        RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot, 0);
 
         // The fault arm is primed per failure class, because the class tag is
         // part of its series identity: priming `faulted` on one class would
@@ -551,7 +565,7 @@ internal sealed partial class BPlusLeafGrain
         _ => "none",
     };
 
-    private async Task<SplitResult> SplitAsync()
+    private async Task<SplitResult?> SplitAsync()
     {
         // Only the median key is needed to pivot the split. Asking the cache's
         // ordered key view for it looks free - it reads as a projection over an
@@ -586,6 +600,44 @@ internal sealed partial class BPlusLeafGrain
             var keys = Cache.Keys;
             int mid = keys.Count() / 2;
             splitKey = keys.ElementAt(mid);
+        }
+
+        // Admissibility. A pivot has to fall strictly inside this leaf's own
+        // declared range, because the division hands [Low, pivot) to the donor
+        // and [pivot, High) to the sibling: a pivot equal to Low leaves the
+        // donor owning nothing, and one at or past High leaves the sibling
+        // owning nothing. Either half is then a leaf that still holds rows and
+        // still answers reads, but that no routing descent can ever select,
+        // because every descent tests a key against exactly this range. Writes
+        // land on the real custodian while reads can be served the marooned
+        // copy, which is a torn read that never heals (issue 3117).
+        //
+        // The pivot comes from the row set, not from the range, so it is only
+        // as sound as the row set is. A leaf can legitimately hold rows outside
+        // its own span: the span-admission forward is deliberately fail-open
+        // (see BPlusLeafGrain.SpanAdmission.cs), and a cross-shard migration
+        // grafts rows before the range fixup lands. Bisecting such a leaf can
+        // therefore return an out-of-span key, and did.
+        if (!IsAdmissibleSplitPivot(splitKey))
+        {
+            splitKey = TryFindAdmissibleSplitPivot();
+            if (splitKey is null)
+            {
+                // Every row is out of span, so there is nothing here this leaf
+                // owns to divide. Declining is safe and self-correcting: the
+                // orphan rows drain to their real custodians, after which the
+                // leaf is either under threshold or divisible.
+                RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot);
+                ResolveLogger()?.LogWarning(
+                    "Leaf {LeafId} is over capacity with {RowCount} rows but no admissible split pivot inside its "
+                    + "declared range [{Low}, {High}); declining the division rather than minting a leaf that owns "
+                    + "no key range.",
+                    context.GrainId,
+                    Cache.Count,
+                    state.State.LowKeyInclusive ?? "(unbounded)",
+                    state.State.HighKeyExclusive ?? "(unbounded)");
+                return null;
+            }
         }
 
         // Snapshot the WAL head per partition before the split's
@@ -954,10 +1006,27 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        var bySaga = CollectShadowMarkers(movedKeys);
+        if (bySaga is null)
+            return;
+
+        foreach (var (txid, keys) in bySaga)
+            await sibling.MarkSagaShadowAsync(txid, keys);
+    }
+
+    /// <summary>
+    /// Gathers the saga shadow markers this leaf holds that cover any of
+    /// <paramref name="movedKeys"/>, grouped by transaction. Returns
+    /// <c>null</c> - without allocating - when this leaf holds neither
+    /// markers nor prepared buckets, which is the steady state.
+    /// </summary>
+    private Dictionary<Guid, List<string>>? CollectShadowMarkers(
+        IReadOnlyCollection<string> movedKeys)
+    {
         var haveMarkers = _shadowedSagas is { Count: > 0 };
         var havePending = _pendingTx is { Count: > 0 };
         if (!haveMarkers && !havePending)
-            return;
+            return null;
 
         Dictionary<Guid, List<string>>? bySaga = null;
 
@@ -989,11 +1058,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        if (bySaga is null)
-            return;
-
-        foreach (var (txid, keys) in bySaga)
-            await sibling.MarkSagaShadowAsync(txid, keys);
+        return bySaga;
     }
 
     private static void AddSagaKeyMarker(

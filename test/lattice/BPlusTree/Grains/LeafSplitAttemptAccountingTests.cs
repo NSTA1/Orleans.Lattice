@@ -202,7 +202,7 @@ public sealed class LeafSplitAttemptAccountingTests
             // "sought zero divisions" from "never looked".
             Assert.That(
                 measurements.Select(m => m.Outcome).Distinct().OrderBy(o => o, StringComparer.Ordinal),
-                Is.EquivalentTo(new[] { "already_under_capacity", "divided", "faulted", "gate_contended" }),
+                Is.EquivalentTo(new[] { "already_under_capacity", "divided", "faulted", "gate_contended", "no_admissible_pivot" }),
                 "every outcome must be minted, or the absent one is unreadable at zero");
 
             // And every one of them is a measured zero, not a count.

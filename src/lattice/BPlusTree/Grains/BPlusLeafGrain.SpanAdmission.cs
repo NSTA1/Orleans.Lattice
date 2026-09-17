@@ -91,6 +91,32 @@ internal sealed partial class BPlusLeafGrain
         SplitBoundary.Owns(key, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
 
     /// <summary>
+    /// Whether <paramref name="pivot"/> may be used to divide this leaf, via the
+    /// shared <see cref="SplitPivotAdmission"/> core the Coyote model also
+    /// executes. Admissibility is strictly stronger than
+    /// <see cref="DeclaresKey"/>; see that core for why ownership is not a
+    /// sufficient test for a pivot. Issue 3117.
+    /// </summary>
+    private bool IsAdmissibleSplitPivot(string? pivot) =>
+        SplitPivotAdmission.IsAdmissible(
+            pivot, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
+
+    /// <summary>
+    /// Selects the median admissible pivot, or <see langword="null"/> when this
+    /// leaf holds no row strictly inside its own declared range and the split
+    /// must therefore be declined.
+    /// <para>
+    /// <c>Cache.Keys</c> is touched only here, on the cold repair path, because
+    /// reading it hydrates the whole snapshot. The hot path returns on
+    /// <see cref="IsAdmissibleSplitPivot"/> alone, so a healthy split still
+    /// bisects without hydrating.
+    /// </para>
+    /// </summary>
+    private string? TryFindAdmissibleSplitPivot() =>
+        SplitPivotAdmission.SelectMedianAdmissible(
+            Cache.Keys, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
+
+    /// <summary>
     /// Resolves the leaf that should receive <paramref name="key"/> when this
     /// leaf's declared range excludes it, returning <see langword="false"/> when
     /// the key is in span (the common case) or when no forward target can be
@@ -219,14 +245,39 @@ internal sealed partial class BPlusLeafGrain
         {
             foreach (var (target, bucket) in buckets)
             {
+                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+
+                // Carry the shadow markers across WITH the rows, and before
+                // them. A forwarded row keeps its IsMigrated flag, so the
+                // destination read gate will consult a marker for it - but the
+                // marker lives on THIS leaf, keyed by this leaf's
+                // _shadowedSagas and _pendingTx, and the forward would
+                // otherwise leave it stranded here. The receiving leaf would
+                // then hold a migrated row with no gate and serve the
+                // pre-saga value ungated, splitting atomic visibility against
+                // a sibling key whose backstop terminal had landed (#3117).
+                //
+                // Split already does exactly this via the same helper, for the
+                // same reason; a span forward moves rows between leaves just
+                // as a split does, so it owes the same transfer. Installing
+                // the markers FIRST means there is no instant at which the
+                // destination holds the row without its gate. Over-installing
+                // is harmless and self-healing: once the saga's terminal has
+                // been applied on the destination, _recentlyTerminal makes the
+                // marker a no-op (see IsShadowedReadSafeAsync).
+                //
+                // Allocation-free on the steady-state path - the helper
+                // returns immediately on two null checks when this leaf holds
+                // neither markers nor prepared buckets.
+                await TransferShadowMarkersToSiblingAsync(sibling, bucket.Keys);
+
                 // The forwarded SplitResult is deliberately discarded. It
                 // describes a split of the *sibling*, and the shard root
                 // installs a separator against the leaf it called; returning a
                 // sibling's result would make it install that separator against
                 // the wrong leaf. The sibling's own callers observe its splits.
                 // This matches the existing split-recovery forward above it.
-                await grainFactory.GetGrain<IBPlusLeafGrain>(target)
-                    .MergeManyAsync(bucket, isCrossShardMigration);
+                await sibling.MergeManyAsync(bucket, isCrossShardMigration);
             }
         }
 
