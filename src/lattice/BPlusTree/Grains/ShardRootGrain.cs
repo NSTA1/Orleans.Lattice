@@ -177,7 +177,7 @@ internal sealed partial class ShardRootGrain(
     /// is not a repair: a grain timer does not extend an activation's lifetime
     /// (<c>GrainTimerCreationOptions.KeepAlive</c> defaults to <see langword="false"/>),
     /// so stopping the loop does not by itself hasten collection, and a shard root
-    /// held active by inbound traffic would stay poisoned until it was collected and a
+    /// held active by inbound traffic would stay stuck until it was collected and a
     /// later activation re-read its state. <see cref="ReportFlushRetriesSuspended"/>
     /// therefore requests that deactivation itself when - and only when - the
     /// terminating failure is a version conflict, which is the one class that a fresh
@@ -190,9 +190,9 @@ internal sealed partial class ShardRootGrain(
     /// Reports a coalescing flush loop suspending itself after
     /// <see cref="MaxConsecutiveFlushFailures"/> consecutive failures. Emits the
     /// operator-visible warning and the metric, and - when the terminating failure is
-    /// a version conflict - requests deactivation so a later activation re-reads a
-    /// clean ETag. The caller disposes its own timer and latches its own suspension
-    /// flag.
+    /// a version conflict - requests deactivation so a later activation re-reads the
+    /// stored row and its current ETag. The caller disposes its own timer and latches
+    /// its own suspension flag.
     /// </summary>
     /// <param name="kind">The loop that gave up, used as the metric's kind tag.</param>
     /// <param name="ex">The failure observed on the final attempt.</param>
@@ -209,7 +209,7 @@ internal sealed partial class ShardRootGrain(
     /// <b>Why suspension alone was not enough.</b> Issue 2419 bounded the wasted
     /// writes and made the condition visible, and stopped there - deliberately, and
     /// it said so: stopping a grain timer does not extend or shorten an activation's
-    /// lifetime, so a shard root held active by inbound traffic stayed poisoned
+    /// lifetime, so a shard root held active by inbound traffic stayed stuck
     /// indefinitely, with every write from it failing and its own warning saying
     /// "pending state will not reach storage until it is re-read" while nothing
     /// re-read it. A live container showed both halves of that: two vector-membership
@@ -236,14 +236,40 @@ internal sealed partial class ShardRootGrain(
     /// tree at once while the fault lasted. Those keep the pre-existing behaviour:
     /// suspend, report, and stay up.
     /// </para>
+    /// <para>
+    /// <b>The exception type is the whole discriminator. Never gate this on the
+    /// etag properties.</b> <see cref="InconsistentStateException.StoredEtag"/> and
+    /// <see cref="InconsistentStateException.CurrentEtag"/> look like a way to
+    /// confirm a real mismatch, and they are not: <c>AdoNetGrainStorage</c> - the
+    /// provider this repository's own deployments register - raises every conflict
+    /// through the message-only constructor and never populates either property.
+    /// Measured on a real deployment, <b>0 of 134</b> version conflicts carried a
+    /// non-empty etag, including conflicts on rows that plainly existed
+    /// (<c>ETag=245</c>, <c>ETag=164</c>, <c>ETag=7718</c>); see
+    /// <see cref="TopologySeedPersist"/>, which documents the same measurement for
+    /// the same reason. Adding <c>&amp;&amp; !string.IsNullOrEmpty(ex.StoredEtag)</c>
+    /// here therefore reads as a tightening and acts as a disabling: the condition
+    /// is false for every conflict AdoNet can raise, so no shard root would ever be
+    /// deactivated and this repair would silently become dead code. The
+    /// <c>ETag=NNN</c> that does appear is part of the provider's message text - the
+    /// version the rejected write carried - not a property, and must not be parsed.
+    /// </para>
+    /// <para>
+    /// For the same reason this condition is <em>not</em> named for a damaged or
+    /// absent etag. What it detects is a conflict that repeated to the ceiling, which
+    /// on an established row means another writer advanced it and this activation's
+    /// cached version can no longer be accepted by any retry. That is an ordinary
+    /// stale-state conflict - the #1560 fail-loud contract working - and the repair
+    /// is to re-read, not to repair anything.
+    /// </para>
     /// </remarks>
     private void ReportFlushRetriesSuspended(string kind, Exception ex)
     {
-        var poisonedEtag = ex is InconsistentStateException;
+        var permanentConflict = ex is InconsistentStateException;
 
         logger.LogWarning(ex,
-            "Shard {ShardKey} suspended its {FlushKind} flush loop after {FailureCount} consecutive failures; retries are stopped for this activation and pending state will not reach storage until it is re-read. A repeating version conflict here means this shard root's ETag no longer matches its stored row. Deactivation requested to force that re-read: {DeactivationRequested}.",
-            context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures, poisonedEtag);
+            "Shard {ShardKey} suspended its {FlushKind} flush loop after {FailureCount} consecutive failures; retries are stopped for this activation and pending state will not reach storage until it is re-read. A repeating version conflict here means another writer advanced this grain's stored row, so this activation's cached version can no longer be accepted by any retry. Deactivation requested to force that re-read: {DeactivationRequested}.",
+            context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures, permanentConflict);
 
         LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
@@ -251,7 +277,7 @@ internal sealed partial class ShardRootGrain(
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
             LatticeTenantLabel.ForTree(TreeId));
 
-        if (!poisonedEtag)
+        if (!permanentConflict)
         {
             return;
         }
@@ -268,7 +294,7 @@ internal sealed partial class ShardRootGrain(
         catch (Exception deactivateFailure)
         {
             logger.LogDebug(deactivateFailure,
-                "Could not request deactivation of shard {ShardKey} after a poisoned-ETag flush suspension (likely a test harness without a grain runtime); the activation stays up and its writes keep failing until it is collected.",
+                "Could not request deactivation of shard {ShardKey} after a permanent version-conflict flush suspension (likely a test harness without a grain runtime); the activation stays up and its writes keep failing until it is collected.",
                 context.GrainId.Key.ToString());
         }
     }

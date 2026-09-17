@@ -421,10 +421,10 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
     }
 
     [Test]
-    public async Task A_poisoned_etag_suspension_requests_deactivation_so_a_later_activation_re_reads()
+    public async Task A_version_conflict_suspension_requests_deactivation_so_a_later_activation_re_reads()
     {
         // Issue 2419 bounded the wasted writes and deliberately stopped there, which
-        // left the shard root poisoned: its own warning said pending state "will not
+        // left the shard root stuck: its own warning said pending state "will not
         // reach storage until it is re-read" while nothing re-read it. A grain timer
         // does not shorten an activation's lifetime, so a shard root held active by
         // inbound traffic stayed broken indefinitely - as two vector-membership shard
@@ -479,7 +479,7 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
     }
 
     [Test]
-    public async Task A_poisoned_etag_below_the_ceiling_does_not_request_deactivation()
+    public async Task A_version_conflict_below_the_ceiling_does_not_request_deactivation()
     {
         // Deactivation must be caused by the loop GIVING UP, not by seeing a conflict.
         // Without this, an implementation that deactivated on the first version
@@ -500,6 +500,69 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
         {
             harness.Timer.DidNotReceive().Dispose();
             harness.Context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        });
+    }
+
+    /// <summary>
+    /// Pins the discriminator to the exception <em>type</em>, against the conflict
+    /// shape the deployed provider actually raises.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sibling arms above all arm a message reading <c>ETag=5220</c>, which makes
+    /// it easy to read the repair as keying off a mismatched etag - and the local it
+    /// used to be named for said the same. It does not, and it must not.
+    /// <c>AdoNetGrainStorage</c>, which this repository's own deployments register,
+    /// raises every conflict through the message-only constructor and leaves
+    /// <c>StoredEtag</c> and <c>CurrentEtag</c> empty: measured on a real deployment,
+    /// 0 of 134 conflicts carried a non-empty etag, including conflicts on rows that
+    /// plainly existed. <c>TopologySeedPersist</c> documents the same measurement.
+    /// </para>
+    /// <para>
+    /// So a future tightening to <c>ex is InconsistentStateException ise
+    /// &amp;&amp; !string.IsNullOrEmpty(ise.StoredEtag)</c> reads as a narrowing and
+    /// acts as a disabling: it is false for every conflict AdoNet can raise, so no
+    /// shard root would ever be deactivated and the #2432 repair would become dead
+    /// code in production while every other arm in this fixture stayed green.
+    /// </para>
+    /// <para>
+    /// This fixture is the one that can observe that, because it is the only one that
+    /// drives a flush loop to <see cref="ShardRootGrain.MaxConsecutiveFlushFailures"/>
+    /// and asserts on <c>Deactivate</c>. This arm differs from its sibling only in
+    /// carrying no etag text at all, so it fails - and reports
+    /// <c>Expected 1 call, actually received 0</c> - precisely when the
+    /// implementation has started to depend on etag content.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task A_version_conflict_carrying_no_etag_still_requests_deactivation()
+    {
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        // Assert the shape this arm depends on, so it cannot quietly decay into a
+        // duplicate of the sibling above if the constructor ever starts inferring
+        // etags from the message.
+        var adoNetShape = new InconsistentStateException("Version conflict (WriteState).");
+        Assert.Multiple(() =>
+        {
+            Assert.That(adoNetShape.StoredEtag, Is.Null.Or.Empty,
+                "AdoNetGrainStorage raises conflicts with the message-only constructor");
+            Assert.That(adoNetShape.CurrentEtag, Is.Null.Or.Empty,
+                "AdoNetGrainStorage raises conflicts with the message-only constructor");
+        });
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState)."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.ReceivedWithAnyArgs(1).Deactivate(default!);
         });
     }
 
