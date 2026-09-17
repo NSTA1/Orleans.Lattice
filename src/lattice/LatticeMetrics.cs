@@ -1993,12 +1993,13 @@ public static class LatticeMetrics
     /// WAL saturation sampler on every tick
     /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
     /// while the drain-lag input is enabled. Measured live from in-memory state as
-    /// the WAL head wall-clock timestamp minus the slowest leaf-materialiser cursor
-    /// frontier (the cursor-registry minimum), clamped at zero, so a caught-up tree
-    /// reads zero rather than the full head age. Recorded for every checked tree,
-    /// not only the over-threshold ones, so the histogram carries the whole
-    /// distribution leading up to a trip; a tree with no materialiser frontier yet
-    /// records a zero rather than being skipped.
+    /// the WAL head wall-clock timestamp minus the slowest fresh
+    /// leaf-materialiser cursor frontier, clamped at zero. The freshness filter is
+    /// a lag-plane-only classifier input; cold consumers remain registered for the
+    /// WAL GC trim floor. Recorded for every checked tree, not only the
+    /// over-threshold ones, so the histogram carries the whole distribution leading
+    /// up to a trip; a tree with no fresh materialiser frontier yet records a zero
+    /// rather than being skipped.
     /// <para>
     /// A rising drain lag is the back-pressure signal (issue #1030): when it stays
     /// at or above <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
@@ -2028,9 +2029,10 @@ public static class LatticeMetrics
     /// whose aggregate lag is <b>already over</b>
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> on that
     /// tick. A consumer counts when its own reported cursor trails the WAL head
-    /// wall clock by more than that same threshold; consumers that have never
-    /// reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are excluded, as
-    /// they are from the <c>min(cursor)</c> meet that produces the aggregate.
+    /// wall clock by more than that same threshold and its report is fresh under
+    /// <see cref="LatticeOptions.WalDrainLagConsumerFreshness"/>; consumers that
+    /// have never reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are
+    /// excluded, as they are from the lag-plane meet that produces the aggregate.
     /// <para>
     /// <b>Why this exists (issue #2444).</b>
     /// <see cref="MaterialiserDrainLag"/> is a minimum across consumers, so a

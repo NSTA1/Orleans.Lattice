@@ -171,6 +171,10 @@ public partial class LatticeCursorGrainTests
             string treeName, CancellationToken cancellationToken = default)
             => Task.FromResult<HybridLogicalClock?>(null);
 
+        public Task<HybridLogicalClock?> GetMinCursorForDrainLagAsync(
+            string treeName, long reportedAtOrAfterTicks, CancellationToken cancellationToken = default)
+            => Task.FromResult<HybridLogicalClock?>(null);
+
         public Task<VersionVector?> GetCausalStableAsync(
             string treeName, CancellationToken cancellationToken = default)
             => Task.FromResult<VersionVector?>(null);

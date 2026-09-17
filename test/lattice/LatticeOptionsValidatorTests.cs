@@ -1064,6 +1064,37 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void WalDrainLagConsumerFreshness_default_is_five_minutes()
+    {
+        Assert.That(new LatticeOptions().WalDrainLagConsumerFreshness, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        Assert.That(LatticeOptions.DefaultWalDrainLagConsumerFreshness, Is.EqualTo(TimeSpan.FromMinutes(5)));
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_positive_passes()
+    {
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.FromMinutes(1));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_zero_passes()
+    {
+        // Zero is the documented compatibility setting: the lag plane
+        // includes every registered consumer, matching the historical input.
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_negative_fails()
+    {
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalDrainLagConsumerFreshness)));
+    }
+
+    [Test]
     public void DefaultLockLeaseDuration_zero_fails()
     {
         // A zero fallback lease is granted verbatim, so LeaseExpiresAtTicks equals

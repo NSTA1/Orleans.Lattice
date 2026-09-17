@@ -3258,15 +3258,15 @@ public class LatticeOptions
     /// leaf-materialiser drain frontier falls more than this far behind the
     /// WAL head - the direct "the materialiser is not keeping up with the
     /// write rate" surface that the indirect admission-depth and flush-latency
-    /// inputs only approximate. The WAL GC measures the lag on each pass as
+    /// inputs only approximate. The saturation sampler measures the lag each
+    /// tick as
     /// <c>walHead.WallClockTicks - materialiserFrontier.WallClockTicks</c>
-    /// (clamped at zero): the age of the oldest WAL entry the slowest durable
+    /// (clamped at zero): the age of the oldest WAL entry the slowest fresh
     /// leaf-materialiser checkpoint has not yet drained. Because the measure is
-    /// head-relative rather than wall-clock-relative it reads zero on an
-    /// idle-but-caught-up tree (the frontier reaches the head), so a quiescent
-    /// tree never trips. The GC records the standing lag as a per-tree level
-    /// that the saturation sampler re-reads every tick; once the level stays
-    /// above this threshold for
+    /// a pure lag-plane classifier input, it applies
+    /// <see cref="WalDrainLagConsumerFreshness"/> before reading the minimum so
+    /// a cold leaf that remains registered for WAL GC safety cannot hold a live
+    /// tree throttled forever. Once the live level stays above this threshold for
     /// <see cref="WalSaturationMaterialiserLagSampleWindows"/> consecutive
     /// sampler windows the tree is held at Throttled.
     /// <para>
@@ -3287,14 +3287,13 @@ public class LatticeOptions
     /// <para>
     /// Defaults to <see cref="DefaultWalSaturationMaterialiserLagThreshold"/>
     /// (30 seconds); set to <c>null</c> to disable the input entirely (the
-    /// classifier then ignores drain lag and the GC skips the WAL-head read). A
+    /// classifier then ignores drain lag and skips the WAL-head read). A
     /// block pin (a never-checkpointed leaf, which disables the cursor trim
     /// branch) is not treated as lag and never trips this input. The registered
     /// options validator rejects a non-positive value when the option is set.
-    /// The level observation refreshes at the WAL GC cadence (the replication
-    /// maintenance interval for replicated trees, <see cref="WalGcInterval"/>
-    /// otherwise), so the input engages for trees whose GC runs frequently
-    /// enough to keep the observation fresh.
+    /// The level observation refreshes at
+    /// <see cref="WalSaturationSampleInterval"/>, so the input engages without
+    /// waiting for a WAL GC pass.
     /// </para>
     /// </summary>
     public TimeSpan? WalSaturationMaterialiserLagThreshold { get; set; } = DefaultWalSaturationMaterialiserLagThreshold;
@@ -3319,6 +3318,39 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalSaturationMaterialiserLagSampleWindows"/> (3).</summary>
     public const int DefaultWalSaturationMaterialiserLagSampleWindows = 3;
+
+    /// <summary>
+    /// Freshness window applied to WAL cursor reports before they can
+    /// contribute to the materialiser drain-lag classifier input. A registered
+    /// consumer whose most recent report is older than this window is excluded
+    /// from the lag-plane minimum, while remaining fully registered for
+    /// <see cref="IWalCursorRegistry.GetMinCursorAsync(string, System.Threading.CancellationToken)"/>
+    /// and therefore still pinning the WAL GC trim floor.
+    /// <para>
+    /// This split is deliberate. A routinely deactivated leaf must not be
+    /// deregistered or aged out of the registry, because the trim floor needs
+    /// its cursor when that activation later replays. The saturation classifier
+    /// gates only <see cref="WalThrottledAdmissionPace"/>, a pure advisory
+    /// pacing delay, so excluding cold consumers here cannot permit trimming or
+    /// data loss. It only prevents an idle leaf inside a live tree from holding
+    /// the tree permanently <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalDrainLagConsumerFreshness"/> (5
+    /// minutes), which is 1,500 times the default
+    /// <see cref="WalSaturationSampleInterval"/> of 200 milliseconds. That is
+    /// comfortably wider than sampler jitter and brief scheduler stalls while
+    /// still bounded enough to exclude leaf cursors that have gone cold for
+    /// operationally meaningful time. Set to <see cref="System.TimeSpan.Zero"/>
+    /// to disable the freshness exclusion and restore the historical
+    /// all-consumers lag-plane behaviour. The registered options validator
+    /// rejects negative values.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalDrainLagConsumerFreshness { get; set; } = DefaultWalDrainLagConsumerFreshness;
+
+    /// <summary>Default value for <see cref="WalDrainLagConsumerFreshness"/> (5 minutes).</summary>
+    public static readonly TimeSpan DefaultWalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// WAL saturation input that escalates a tree to

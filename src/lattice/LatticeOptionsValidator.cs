@@ -387,6 +387,13 @@ if (options.WalSaturationMaterialiserLagSampleWindows < 1)
         + "(the number of consecutive saturation-sampler windows the tree's drain-lag level must exceed the threshold "
         + "before the classifier holds the tree at Throttled via the drain-lag branch).");
 }
+if (options.WalDrainLagConsumerFreshness < TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalDrainLagConsumerFreshness)} must be non-negative "
+        + "(zero disables the lag-plane freshness exclusion; a positive value excludes cold consumer reports from "
+        + "the saturation classifier without changing the WAL GC trim floor).");
+}
 if (options.WalSaturationMaterialiserPinLatencyThreshold is { } materialiserPinLatencyThreshold
     && materialiserPinLatencyThreshold <= TimeSpan.Zero)
 {

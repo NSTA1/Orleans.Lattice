@@ -24,6 +24,18 @@ public sealed class InMemoryWalCursorRegistryTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
+    private static long WaitUntilAfter(long ticks)
+    {
+        var current = DateTime.UtcNow.Ticks;
+        while (current <= ticks)
+        {
+            Thread.SpinWait(64);
+            current = DateTime.UtcNow.Ticks;
+        }
+
+        return current;
+    }
+
     [Test]
     public async Task GetCausalStableAsync_returns_independent_clone_per_call()
     {
@@ -64,9 +76,82 @@ public sealed class InMemoryWalCursorRegistryTests
         Assert.That(min, Is.EqualTo(Hlc(200)),
             "Blocked-floor-only consumers must be excluded from the cursor meet so a buffer pin does not disable cursor-based trimming.");
 
+        var drainLagMin = await registry.GetMinCursorForDrainLagAsync(Tree, long.MinValue, CancellationToken.None);
+        Assert.That(drainLagMin, Is.EqualTo(Hlc(200)),
+            "Blocked-floor-only consumers must also be excluded from the drain-lag meet so a buffer pin cannot masquerade as lag.");
+
         var blockedFloor = await registry.GetBlockedFloorAsync(Tree, CancellationToken.None);
         Assert.That(blockedFloor, Is.EqualTo(Hlc(50)),
             "Blocked-floor consumer must still contribute to the blocked-floor meet.");
+    }
+
+    [Test]
+    public async Task GetMinCursorForDrainLagAsync_excludes_cold_consumer_but_GetMinCursorAsync_keeps_trim_floor()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+
+        await registry.ReportCursorAsync(Tree, "cold-leaf", Hlc(100), CancellationToken.None);
+        var coldReportTicks = (await registry.SnapshotAsync(Tree, CancellationToken.None))
+            .Single(s => s.ConsumerId == "cold-leaf")
+            .LastReportedAtTicks;
+        var freshnessFloor = WaitUntilAfter(coldReportTicks);
+
+        await registry.ReportCursorAsync(Tree, "fresh-leaf", Hlc(300), CancellationToken.None);
+
+        var lagPlaneMin = await registry.GetMinCursorForDrainLagAsync(Tree, freshnessFloor, CancellationToken.None);
+        var trimFloorMin = await registry.GetMinCursorAsync(Tree, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lagPlaneMin, Is.EqualTo(Hlc(300)),
+                "the lag plane must exclude the ancient cold-leaf report so it does not hold a live tree Throttled forever");
+            Assert.That(trimFloorMin, Is.EqualTo(Hlc(100)),
+                "the trim floor must still include the cold-leaf report so WAL GC cannot trim entries that leaf may need on reactivation");
+        });
+    }
+
+    [Test]
+    public async Task GetMinCursorForDrainLagAsync_includes_fresh_consumer_that_is_genuinely_behind()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var beforeReport = DateTime.UtcNow.Ticks;
+
+        await registry.ReportCursorAsync(Tree, "fresh-behind", Hlc(100), CancellationToken.None);
+        await registry.ReportCursorAsync(Tree, "fresh-caught-up", Hlc(500), CancellationToken.None);
+
+        var lagPlaneMin = await registry.GetMinCursorForDrainLagAsync(Tree, beforeReport, CancellationToken.None);
+
+        Assert.That(lagPlaneMin, Is.EqualTo(Hlc(100)),
+            "a fresh consumer that is still the slowest cursor must remain the drain-lag minimum so real backlog still trips the classifier");
+    }
+
+    [Test]
+    public async Task GetMinCursorForDrainLagAsync_all_consumers_cold_returns_null()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+
+        await registry.ReportCursorAsync(Tree, "cold-leaf-a", Hlc(100), CancellationToken.None);
+        await registry.ReportCursorAsync(Tree, "cold-leaf-b", Hlc(200), CancellationToken.None);
+        var freshnessFloor = WaitUntilAfter(DateTime.UtcNow.Ticks);
+
+        var lagPlaneMin = await registry.GetMinCursorForDrainLagAsync(Tree, freshnessFloor, CancellationToken.None);
+
+        Assert.That(lagPlaneMin, Is.Null,
+            "when every registered consumer is cold, the lag plane has no fresh minimum and the sampler must read that as zero lag");
+    }
+
+    [Test]
+    public async Task GetMinCursorForDrainLagAsync_min_value_floor_restores_all_consumers_behaviour()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+
+        await registry.ReportCursorAsync(Tree, "oldest-leaf", Hlc(100), CancellationToken.None);
+        await registry.ReportCursorAsync(Tree, "newest-leaf", Hlc(300), CancellationToken.None);
+
+        var lagPlaneMin = await registry.GetMinCursorForDrainLagAsync(Tree, long.MinValue, CancellationToken.None);
+
+        Assert.That(lagPlaneMin, Is.EqualTo(Hlc(100)),
+            "the sampler passes long.MinValue when WalDrainLagConsumerFreshness is zero, restoring the historical all-consumers lag-plane meet");
     }
 
     [Test]
