@@ -91,74 +91,30 @@ internal sealed partial class BPlusLeafGrain
         SplitBoundary.Owns(key, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
 
     /// <summary>
-    /// Whether <paramref name="pivot"/> may be used to divide this leaf.
-    /// <para>
-    /// Admissibility is strictly stronger than <see cref="DeclaresKey"/>. A
-    /// division hands <c>[Low, pivot)</c> to the donor and <c>[pivot, High)</c>
-    /// to the sibling, so the pivot must be strictly greater than <c>Low</c> as
-    /// well as strictly less than <c>High</c>. <see cref="SplitBoundary.Owns"/>
-    /// admits <c>pivot == Low</c>, which would leave the donor declaring an
-    /// empty range - the mirror image of the sibling case and equally fatal, so
-    /// it cannot be reused here. Issue 3117.
-    /// </para>
+    /// Whether <paramref name="pivot"/> may be used to divide this leaf, via the
+    /// shared <see cref="SplitPivotAdmission"/> core the Coyote model also
+    /// executes. Admissibility is strictly stronger than
+    /// <see cref="DeclaresKey"/>; see that core for why ownership is not a
+    /// sufficient test for a pivot. Issue 3117.
     /// </summary>
-    private bool IsAdmissibleSplitPivot(string? pivot)
-    {
-        if (pivot is null)
-        {
-            return false;
-        }
-
-        var low = state.State.LowKeyInclusive;
-        var high = state.State.HighKeyExclusive;
-        return (low is null || string.CompareOrdinal(pivot, low) > 0)
-            && (high is null || string.CompareOrdinal(pivot, high) < 0);
-    }
+    private bool IsAdmissibleSplitPivot(string? pivot) =>
+        SplitPivotAdmission.IsAdmissible(
+            pivot, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
 
     /// <summary>
     /// Selects the median admissible pivot, or <see langword="null"/> when this
-    /// leaf holds no row strictly inside its own declared range.
+    /// leaf holds no row strictly inside its own declared range and the split
+    /// must therefore be declined.
     /// <para>
-    /// Two passes over the cache's ordered key view rather than one pass into a
-    /// list: the count is not known ahead of time, and this runs only on the
-    /// cold repair path, so a second walk is cheaper than the intermediate
-    /// buffer a single pass would need. Nothing is allocated beyond the two
-    /// enumerators.
+    /// <c>Cache.Keys</c> is touched only here, on the cold repair path, because
+    /// reading it hydrates the whole snapshot. The hot path returns on
+    /// <see cref="IsAdmissibleSplitPivot"/> alone, so a healthy split still
+    /// bisects without hydrating.
     /// </para>
     /// </summary>
-    private string? TryFindAdmissibleSplitPivot()
-    {
-        var admissible = 0;
-        foreach (var key in Cache.Keys)
-        {
-            if (IsAdmissibleSplitPivot(key))
-            {
-                admissible++;
-            }
-        }
-
-        if (admissible == 0)
-        {
-            return null;
-        }
-
-        var target = admissible / 2;
-        var seen = 0;
-        foreach (var key in Cache.Keys)
-        {
-            if (!IsAdmissibleSplitPivot(key))
-            {
-                continue;
-            }
-
-            if (seen++ == target)
-            {
-                return key;
-            }
-        }
-
-        return null;
-    }
+    private string? TryFindAdmissibleSplitPivot() =>
+        SplitPivotAdmission.SelectMedianAdmissible(
+            Cache.Keys, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
 
     /// <summary>
     /// Resolves the leaf that should receive <paramref name="key"/> when this
