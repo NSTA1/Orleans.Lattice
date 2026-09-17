@@ -31,13 +31,16 @@ namespace Orleans.Lattice.Tests;
 /// six. <c>no_consumer</c> and <c>unclassified</c> were previously absorbed by
 /// <c>idle</c>, which made <c>idle</c> a catch-all and therefore made
 /// <c>blocked = 0</c> read as evidence of reclamation when it was only evidence
-/// that one named predicate had not fired.
+/// that one named predicate had not fired. Issue #3119 widened it to seven,
+/// splitting out <c>over_ceiling</c>: a tree parked over its configured
+/// <c>WalMaxRetainedBytes</c> behind a pinned frontier reports a usable floor
+/// and trims nothing, and so claimed the one arm that asserts the tree is fine.
 /// </para>
 /// </summary>
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private static readonly string[] EveryOutcome =
-        ["reclaimed", "idle", "blocked", "no_consumer", "unclassified", "failed"];
+        ["reclaimed", "idle", "blocked", "no_consumer", "over_ceiling", "unclassified", "failed"];
 
     /// <summary>
     /// Configures the collaborator so a single pass lands on <paramref name="outcome"/>.
@@ -65,6 +68,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                         entriesTrimmed: 0,
                         cursorFloorState: WalGcCursorFloorState.NoCursorReported)));
                 break;
+            case "over_ceiling":
+                gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(OverCeilingReport()));
+                break;
             case "unclassified":
                 // A floor state this build does not name. The cast is the whole
                 // point of the case: it stands in for the enum member a future
@@ -90,6 +97,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("idle")]
     [TestCase("blocked")]
     [TestCase("no_consumer")]
+    [TestCase("over_ceiling")]
     [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task Every_pass_outcome_is_primed_so_an_absent_arm_is_never_a_healthy_reading(string reached)
@@ -192,6 +200,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("idle")]
     [TestCase("blocked")]
     [TestCase("no_consumer")]
+    [TestCase("over_ceiling")]
     [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task A_completed_pass_advances_exactly_one_outcome_arm_by_one(string expected)
