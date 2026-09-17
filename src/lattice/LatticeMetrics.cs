@@ -3200,6 +3200,17 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitAlreadyUnderCapacity =
         new(TagOutcome, "already_under_capacity");
+    /// <summary>
+    /// <see cref="LeafSplitAttempts"/>: the division was declined because no
+    /// admissible pivot exists. A pivot must fall strictly inside the leaf's own
+    /// declared <c>(LowKeyInclusive, HighKeyExclusive)</c> range, or one of the
+    /// two halves is born owning an empty key range. A leaf holding only
+    /// out-of-span rows - orphans parked by the fail-open span-admission path,
+    /// or a migration graft - has no such pivot, and dividing it would mint a
+    /// leaf that can never be routed a write. Issue 3117.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitNoAdmissiblePivot =
+        new(TagOutcome, "no_admissible_pivot");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>faulted</c> on

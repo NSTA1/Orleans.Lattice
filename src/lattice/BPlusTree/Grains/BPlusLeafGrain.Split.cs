@@ -69,6 +69,11 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var result = await SplitAsync();
+            if (result is null)
+            {
+                // SplitAsync already recorded the decline outcome.
+                return null;
+            }
             RecordSplitAttempt(LatticeMetrics.LeafSplitDivided);
             return result;
         }
@@ -551,7 +556,7 @@ internal sealed partial class BPlusLeafGrain
         _ => "none",
     };
 
-    private async Task<SplitResult> SplitAsync()
+    private async Task<SplitResult?> SplitAsync()
     {
         // Only the median key is needed to pivot the split. Asking the cache's
         // ordered key view for it looks free - it reads as a projection over an
@@ -586,6 +591,44 @@ internal sealed partial class BPlusLeafGrain
             var keys = Cache.Keys;
             int mid = keys.Count() / 2;
             splitKey = keys.ElementAt(mid);
+        }
+
+        // Admissibility. A pivot has to fall strictly inside this leaf's own
+        // declared range, because the division hands [Low, pivot) to the donor
+        // and [pivot, High) to the sibling: a pivot equal to Low leaves the
+        // donor owning nothing, and one at or past High leaves the sibling
+        // owning nothing. Either half is then a leaf that still holds rows and
+        // still answers reads, but that no routing descent can ever select,
+        // because every descent tests a key against exactly this range. Writes
+        // land on the real custodian while reads can be served the marooned
+        // copy, which is a torn read that never heals (issue 3117).
+        //
+        // The pivot comes from the row set, not from the range, so it is only
+        // as sound as the row set is. A leaf can legitimately hold rows outside
+        // its own span: the span-admission forward is deliberately fail-open
+        // (see BPlusLeafGrain.SpanAdmission.cs), and a cross-shard migration
+        // grafts rows before the range fixup lands. Bisecting such a leaf can
+        // therefore return an out-of-span key, and did.
+        if (!IsAdmissibleSplitPivot(splitKey))
+        {
+            splitKey = TryFindAdmissibleSplitPivot();
+            if (splitKey is null)
+            {
+                // Every row is out of span, so there is nothing here this leaf
+                // owns to divide. Declining is safe and self-correcting: the
+                // orphan rows drain to their real custodians, after which the
+                // leaf is either under threshold or divisible.
+                RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot);
+                ResolveLogger()?.LogWarning(
+                    "Leaf {LeafId} is over capacity with {RowCount} rows but no admissible split pivot inside its "
+                    + "declared range [{Low}, {High}); declining the division rather than minting a leaf that owns "
+                    + "no key range.",
+                    context.GrainId,
+                    Cache.Count,
+                    state.State.LowKeyInclusive ?? "(unbounded)",
+                    state.State.HighKeyExclusive ?? "(unbounded)");
+                return null;
+            }
         }
 
         // Snapshot the WAL head per partition before the split's

@@ -91,6 +91,76 @@ internal sealed partial class BPlusLeafGrain
         SplitBoundary.Owns(key, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
 
     /// <summary>
+    /// Whether <paramref name="pivot"/> may be used to divide this leaf.
+    /// <para>
+    /// Admissibility is strictly stronger than <see cref="DeclaresKey"/>. A
+    /// division hands <c>[Low, pivot)</c> to the donor and <c>[pivot, High)</c>
+    /// to the sibling, so the pivot must be strictly greater than <c>Low</c> as
+    /// well as strictly less than <c>High</c>. <see cref="SplitBoundary.Owns"/>
+    /// admits <c>pivot == Low</c>, which would leave the donor declaring an
+    /// empty range - the mirror image of the sibling case and equally fatal, so
+    /// it cannot be reused here. Issue 3117.
+    /// </para>
+    /// </summary>
+    private bool IsAdmissibleSplitPivot(string? pivot)
+    {
+        if (pivot is null)
+        {
+            return false;
+        }
+
+        var low = state.State.LowKeyInclusive;
+        var high = state.State.HighKeyExclusive;
+        return (low is null || string.CompareOrdinal(pivot, low) > 0)
+            && (high is null || string.CompareOrdinal(pivot, high) < 0);
+    }
+
+    /// <summary>
+    /// Selects the median admissible pivot, or <see langword="null"/> when this
+    /// leaf holds no row strictly inside its own declared range.
+    /// <para>
+    /// Two passes over the cache's ordered key view rather than one pass into a
+    /// list: the count is not known ahead of time, and this runs only on the
+    /// cold repair path, so a second walk is cheaper than the intermediate
+    /// buffer a single pass would need. Nothing is allocated beyond the two
+    /// enumerators.
+    /// </para>
+    /// </summary>
+    private string? TryFindAdmissibleSplitPivot()
+    {
+        var admissible = 0;
+        foreach (var key in Cache.Keys)
+        {
+            if (IsAdmissibleSplitPivot(key))
+            {
+                admissible++;
+            }
+        }
+
+        if (admissible == 0)
+        {
+            return null;
+        }
+
+        var target = admissible / 2;
+        var seen = 0;
+        foreach (var key in Cache.Keys)
+        {
+            if (!IsAdmissibleSplitPivot(key))
+            {
+                continue;
+            }
+
+            if (seen++ == target)
+            {
+                return key;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Resolves the leaf that should receive <paramref name="key"/> when this
     /// leaf's declared range excludes it, returning <see langword="false"/> when
     /// the key is in span (the common case) or when no forward target can be
