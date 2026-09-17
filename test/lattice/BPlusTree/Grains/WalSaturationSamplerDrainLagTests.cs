@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Testing;
+using Orleans.Lattice.Tests.Fakes;
 using System.Diagnostics.Metrics;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -16,10 +17,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// that <see cref="WalSaturationSampler"/> computes live every tick from the
 /// in-memory WAL head wall clock
 /// (<see cref="WalCommitLogWriter._walHeadWallClockTicks"/>) minus the slowest
-/// in-memory materialiser cursor (the <see cref="IWalCursorRegistry"/> min) -
+/// fresh in-memory materialiser cursor (the
+/// <see cref="IWalCursorRegistry.GetMinCursorForDrainLagAsync(string, long, CancellationToken)"/> min) -
 /// the direct leaf-materialiser drain-lag back-pressure surface (issue #1030).
-/// The lag is recomputed fresh each tick (no GC dependency, no staleness
-/// window), and a sustained run drives
+/// The lag is recomputed fresh each tick (no GC dependency), and a sustained run drives
 /// <see cref="WalSaturationState.Throttled"/> - a pure back-off - rather than
 /// Saturated, so it never engages the writer admission gate's fast-fail.
 /// </summary>
@@ -58,6 +59,16 @@ public class WalSaturationSamplerDrainLagTests
 
         options.WalSaturationRecoveryWindow = TimeSpan.Zero;
 
+        return CreateSampler(options, TimeProvider.System, _cursors, signal, dispatcher);
+    }
+
+    private static WalSaturationSampler CreateSampler(
+        LatticeOptions options,
+        TimeProvider time,
+        IWalCursorRegistry cursors,
+        WalSaturationSignal signal,
+        WalSaturationObserverDispatcher dispatcher)
+    {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(options);
 
@@ -66,7 +77,8 @@ public class WalSaturationSamplerDrainLagTests
             dispatcher,
             monitor,
             NullLogger<WalSaturationSampler>.Instance,
-            _cursors);
+            time,
+            cursors);
     }
 
     // Drives a fresh per-tick drain-lag of exactly <paramref name="lag"/> for the
@@ -78,7 +90,7 @@ public class WalSaturationSamplerDrainLagTests
         var t = tree ?? _treeId;
         WalCommitLogWriter._walHeadWallClockTicks[t] = _headTicks;
         var frontier = new HybridLogicalClock { WallClockTicks = _headTicks - lag.Ticks, Counter = 0 };
-        _cursors.GetMinCursorAsync(t, Arg.Any<CancellationToken>())
+        _cursors.GetMinCursorForDrainLagAsync(t, Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<HybridLogicalClock?>(frontier));
     }
 
@@ -248,7 +260,7 @@ public class WalSaturationSamplerDrainLagTests
         // branch): the registry returns null. We cannot measure a head-relative
         // lag, so the block-pin contract requires zero lag - never a trip.
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = _headTicks;
-        _cursors.GetMinCursorAsync(_treeId, Arg.Any<CancellationToken>())
+        _cursors.GetMinCursorForDrainLagAsync(_treeId, Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<HybridLogicalClock?>(null));
 
         for (var i = 0; i < 5; i++)
@@ -258,6 +270,108 @@ public class WalSaturationSamplerDrainLagTests
 
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
             "a never-checkpointed leaf (null frontier) must never pin the regime, even with an advancing head");
+    }
+
+    private static MeterListener ListenForDrainLag(
+        List<(double Value, string? Tree)> sink)
+        => MeterListening.StartForInstrument(
+            LatticeMetrics.MaterialiserDrainLag,
+            listener => listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+            {
+                string? tree = null;
+                foreach (var tag in tags)
+                {
+                    if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal))
+                    {
+                        tree = tag.Value as string;
+                    }
+                }
+
+                lock (sink)
+                {
+                    sink.Add((value, tree));
+                }
+            }));
+
+    [Test]
+    public async Task All_consumers_cold_records_zero_lag_and_does_not_trip()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var observedAt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(10);
+        var headTicks = observedAt.UtcTicks;
+        await registry.ReportCursorAsync(
+            _treeId,
+            "cold-leaf",
+            new HybridLogicalClock { WallClockTicks = headTicks - TimeSpan.FromHours(1).Ticks, Counter = 0 },
+            CancellationToken.None);
+
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationRecoveryWindow = TimeSpan.Zero,
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+                WalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5),
+            },
+            new VirtualTimeProvider(observedAt),
+            registry,
+            signal,
+            dispatcher);
+        var sink = new List<(double Value, string? Tree)>();
+        using var listener = ListenForDrainLag(sink);
+        WalCommitLogWriter._walHeadWallClockTicks[_treeId] = headTicks;
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+                "an all-cold lag-plane frontier must read as zero lag, not as a permanent throttle");
+            Assert.That(sink.Where(m => m.Tree == _treeId).Select(m => m.Value), Is.EqualTo(new[] { 0d }),
+                "the histogram must record the checked tree at zero so the recovery path has observable evidence");
+        });
+    }
+
+    [Test]
+    public async Task Zero_freshness_restores_all_consumers_behaviour()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var observedAt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(10);
+        var headTicks = observedAt.UtcTicks;
+        await registry.ReportCursorAsync(
+            _treeId,
+            "cold-leaf",
+            new HybridLogicalClock { WallClockTicks = headTicks - TimeSpan.FromHours(1).Ticks, Counter = 0 },
+            CancellationToken.None);
+
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationRecoveryWindow = TimeSpan.Zero,
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+                WalDrainLagConsumerFreshness = TimeSpan.Zero,
+            },
+            new VirtualTimeProvider(observedAt),
+            registry,
+            signal,
+            dispatcher);
+        WalCommitLogWriter._walHeadWallClockTicks[_treeId] = headTicks;
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "zero freshness must disable cold-consumer exclusion and restore the historical all-consumers drain-lag input");
     }
 
     // Marks a consumer that has never reported a cursor. The registry stores
