@@ -78,6 +78,7 @@ public sealed partial class DurableVectorIndex
     private bool _restored;
     private int _slicesDeadlined;
     private int _slicesDeadlinedWithoutProgress;
+    private int _emptyDeadlinesSinceAdvance;
 
     private DurableVectorIndex(
         IVectorIndexStore store,
@@ -272,7 +273,10 @@ public sealed partial class DurableVectorIndex
         _index.PartitionCount,
         _restored,
         _slicesDeadlined,
-        _slicesDeadlinedWithoutProgress);
+        _slicesDeadlinedWithoutProgress)
+    {
+        EmptyDeadlinesSinceLastAdvance = _emptyDeadlinesSinceAdvance,
+    };
 
     /// <summary>
     /// Searches the resident index, writing hits into the caller's span in

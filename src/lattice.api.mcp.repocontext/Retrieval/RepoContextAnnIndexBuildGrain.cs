@@ -647,18 +647,27 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // only that case - names which one is happening while the run is still
         // observable, instead of leaving it to be argued about afterwards from a
         // corpus figure that reads 0 either way.
+        //
+        // THE FIGURE REPORTED IS THE ONE THE PREDICATE READ. It is the count of
+        // empty deadlines SINCE THE BUILD LAST BANKED ANYTHING, not the lifetime
+        // total beside it, and the two are only equal on a build that has never
+        // advanced. Logging the lifetime total here is what made this warning read
+        // as an indictment of a build that was advancing perfectly well: the
+        // sentence claimed "all 22 slices banked nothing" and "the build is not
+        // advancing" while the corpus figure in the very same line climbed a
+        // hundred vectors a tick.
         if (progress.IsStarvedBySource)
         {
             Logger.LogWarning(
                 "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is starved by its "
-                + "source: all {Deadlined} ingest slice(s) stopped by the wall-clock budget banked nothing, so the "
-                + "build is bounded but is not advancing and holds {VectorsIndexed} vector(s). The slice budget is "
-                + "being enforced, so this is a source read that cannot complete rather than a budget that is too "
-                + "small; raising the budget will not help.",
+                + "source: the last {Deadlined} ingest slice(s) stopped by the wall-clock budget banked nothing and "
+                + "nothing has been banked since, so the build is bounded but is not advancing and holds "
+                + "{VectorsIndexed} vector(s). The slice budget is being enforced, so this is a source read that "
+                + "cannot complete rather than a budget that is too small; raising the budget will not help.",
                 repoId,
                 space.ModelId,
                 space.Dimension,
-                progress.SlicesDeadlined,
+                progress.EmptyDeadlinesSinceLastAdvance,
                 progress.VectorsIndexed);
         }
 

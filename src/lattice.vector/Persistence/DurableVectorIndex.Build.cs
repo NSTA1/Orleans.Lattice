@@ -391,6 +391,23 @@ public sealed partial class DurableVectorIndex
             await DisposeSourceEnumeratorAsync(enumerator, abandoned).ConfigureAwait(false);
         }
 
+        // THE STARVATION SIGNAL IS A CLAIM ABOUT NOW, SO PROGRESS CLEARS IT.
+        //
+        // Placed on the common exit rather than inside RecordDeadlinedSlice,
+        // because the slice that matters most here never calls it: a slice that
+        // fills its work budget, or that exhausts the source, banks items and is
+        // not deadlined at all. Clearing only on the deadlined path would leave an
+        // ordinary healthy slice unable to retract a stale starvation claim, which
+        // is precisely the defect this counter was added to remove.
+        //
+        // The faulting exit above rethrows and so does not reach this line, which
+        // is correct: a slice that threw has not demonstrated the source is
+        // answering, and the fault is reported on its own arm.
+        if (consumed > 0)
+        {
+            _emptyDeadlinesSinceAdvance = 0;
+        }
+
         await WriteIngestCheckpointAsync(exhausted, cancellationToken).ConfigureAwait(false);
 
         if (exhausted)
@@ -414,6 +431,16 @@ public sealed partial class DurableVectorIndex
     /// complete. Recording them apart is what lets a later run report a verdict
     /// rather than an argument. See
     /// <see cref="VectorIndexBuildProgress.IsStarvedBySource"/>.
+    /// <para>
+    /// The two lifetime counters are joined by a third that is CLEARED BY
+    /// PROGRESS, and the reason is that a verdict about the present cannot be
+    /// assembled out of totals that only ever rise. A slice which completes inside
+    /// its budget increments neither lifetime counter, so an advancing build
+    /// leaves them exactly as its last stall left them - and any predicate reading
+    /// only those two goes on describing that stall for the rest of the build's
+    /// life. The reset below is the whole of the remedy; see
+    /// <see cref="VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance"/>.
+    /// </para>
     /// </remarks>
     private void RecordDeadlinedSlice(int consumed)
     {
@@ -421,6 +448,7 @@ public sealed partial class DurableVectorIndex
         if (consumed == 0)
         {
             _slicesDeadlinedWithoutProgress++;
+            _emptyDeadlinesSinceAdvance++;
         }
     }
 

@@ -26,12 +26,29 @@ namespace Orleans.Lattice.Vector.Tests.Fakes;
 /// </summary>
 /// <param name="dimensions">The vector width.</param>
 /// <param name="pageSize">How many vectors one page fetch returns.</param>
-/// <param name="pagesBeforeStall">How many pages are delivered before the fetch that never returns.</param>
+/// <param name="pagesBeforeStall">
+/// How many pages are delivered before the fetch that never returns. Settable
+/// through <see cref="PagesBeforeStall"/> so a fixture can change the source's
+/// regime BETWEEN slices.
+/// </param>
 internal sealed class StallingVectorSource(int dimensions, int pageSize, int pagesBeforeStall) : IVectorSource
 {
     private readonly SortedDictionary<string, float[]> _entries = new(StringComparer.Ordinal);
     private readonly TaskCompletionSource _stalled =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// How many pages are delivered before the fetch that never returns.
+    /// <para>
+    /// Mutable, and that is the point: a source fixed at construction can only
+    /// ever exhibit ONE regime, so a fixture built on it observes a build that
+    /// starves or a build that advances and never the transition between them.
+    /// Every signal that is supposed to RETRACT - a starvation verdict above all -
+    /// is invisible to such a fixture, which is how a permanently-stuck
+    /// <c>IsStarvedBySource</c> survived a suite that covered both of its states.
+    /// </para>
+    /// </summary>
+    internal int PagesBeforeStall { get; set; } = pagesBeforeStall;
 
     public int Dimensions { get; } = dimensions;
 
@@ -76,7 +93,7 @@ internal sealed class StallingVectorSource(int dimensions, int pageSize, int pag
 
             for (var offset = 0; offset < remaining.Count; offset += pageSize)
             {
-                if (offset / pageSize == pagesBeforeStall)
+                if (offset / pageSize == PagesBeforeStall)
                 {
                     Stalls++;
                     _stalled.TrySetResult();
@@ -95,7 +112,7 @@ internal sealed class StallingVectorSource(int dimensions, int pageSize, int pag
                 }
             }
 
-            if (remaining.Count == 0 && pagesBeforeStall == 0)
+            if (remaining.Count == 0 && PagesBeforeStall == 0)
             {
                 Stalls++;
                 _stalled.TrySetResult();
