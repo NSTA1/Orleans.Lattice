@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -24,6 +25,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
+[FastInProcessHostFixture("Builds an IHost in-process with no silo or storage; measured at 1 second for 6 tests, below the 5-second threshold.")]
 public sealed class HostShutdownTimeoutBehaviourTests
 {
     /// <summary>

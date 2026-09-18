@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using Grpc.Core;
 using Orleans.Lattice.Explorer.Core.Connection;
 
@@ -15,6 +16,7 @@ namespace Orleans.Lattice.Explorer.Tests.Connection;
 /// unencrypted transport writes nothing to process-global state.
 /// </remarks>
 [TestFixture]
+[FastInProcessHostFixture("Builds a GrpcChannel in-process with no listener or cluster; measured at 90 ms for 15 tests, so it stays in the fast dev loop.")]
 public sealed class LatticeGrpcChannelFactoryTests
 {
     private const string Http2UnencryptedSwitch =

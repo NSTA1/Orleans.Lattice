@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -35,6 +36,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no silo or storage; measured at 202 ms for 8 tests, below the 5-second threshold.")]
 public sealed class RepoContextBackupHealthEndpointTests
 {
     private const string Tree = "sys-repocontext-memory";

@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Data.Sqlite;
@@ -36,6 +37,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no silo or storage; measured at 2 seconds for 3 tests, below the 5-second threshold.")]
 [NonParallelizable]
 public sealed class RepoContextBackupMetricsExpositionTests
 {

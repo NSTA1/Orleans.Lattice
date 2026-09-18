@@ -28,6 +28,7 @@ namespace Orleans.Lattice.Explorer.Tests.Web;
 /// </para>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class SecurityHeadersTests
 {
     [Test]

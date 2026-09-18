@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -32,6 +33,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no silo or storage; measured at 167 ms for 7 tests, below the 5-second threshold.")]
 public sealed class RepoContextReadinessHealthEndpointTests
 {
     private static async Task<(HttpStatusCode Status, string Body)> ProbeAsync(
