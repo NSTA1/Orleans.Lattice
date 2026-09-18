@@ -98,6 +98,135 @@ public sealed class RepositoryWideGateRunnerTests
 
     private sealed record RunListEntry(string Fixture, string Project, string ProjectFile, string Filter);
 
+    /// <summary>
+    /// The directory holding the agent playbooks whose gate invocations are checked against
+    /// the tree.
+    /// </summary>
+    private const string AgentsRelativePath = ".github/agents";
+
+    /// <summary>
+    /// Matches a documented runner invocation. <c>-Project</c> is optional because the runner
+    /// defaults it, so an invocation that omits it is still a real invocation and must still
+    /// be checked rather than silently skipped.
+    /// </summary>
+    private static readonly Regex DocumentedInvocation =
+        new(
+            @"Invoke-RepositoryWideGates\.ps1\s+-Fixture\s+(?<fixture>[A-Za-z0-9_]+)"
+                + @"(?:\s+-Project\s+(?<project>[A-Za-z0-9_./-]+))?",
+            RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches a raw <c>dotnet test --filter</c> that selects a fixture by name. The captured
+    /// name is checked against the gate table before it is treated as an offence, because the
+    /// documents legitimately show bare filters for ordinary per-package fixtures; only a
+    /// repository-wide gate must carry the runner's protection.
+    /// </summary>
+    private static readonly Regex BareGateFilter =
+        new(
+            @"dotnet test .*--filter\s+""FullyQualifiedName~(?<fixture>[A-Za-z0-9_.]+)""",
+            RegexOptions.Compiled);
+
+    private static IReadOnlyList<string> AgentPlaybooks()
+    {
+        var directory = Path.Combine(RepoRoot, AgentsRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        return Directory.Exists(directory)
+            ? Directory.GetFiles(directory, "*.agent.md", SearchOption.TopDirectoryOnly)
+            : Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Every document that criterion 2 of #3017 names: the agent playbooks plus the
+    /// instructions file that owns the gate table.
+    /// </summary>
+    private static IReadOnlyList<string> GateDocuments()
+    {
+        var documents = new List<string>(AgentPlaybooks());
+        var instructions = Path.Combine(RepoRoot, InstructionsPath.Replace('/', Path.DirectorySeparatorChar));
+        if (File.Exists(instructions))
+        {
+            documents.Add(instructions);
+        }
+
+        return documents;
+    }
+
+    private static IReadOnlyList<(string File, string Fixture, string Project)> DocumentedAgentInvocations()
+    {
+        var found = new List<(string, string, string)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var path in AgentPlaybooks())
+        {
+            foreach (Match match in DocumentedInvocation.Matches(File.ReadAllText(path)))
+            {
+                var fixture = match.Groups["fixture"].Value;
+                var project = match.Groups["project"].Success
+                    ? match.Groups["project"].Value
+                    : CoreTestProject;
+
+                // The same pair is documented in more than one playbook, and resolving it
+                // costs a process launch, so each distinct pair is resolved once.
+                if (seen.Add($"{fixture}|{project}"))
+                {
+                    found.Add((Path.GetFileName(path), fixture, project));
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Asks the runner what filter it would use for an explicitly named fixture, without
+    /// running it. This drives the real resolver rather than a reimplementation of it, for the
+    /// same reason <see cref="EmitRunList"/> does.
+    /// </summary>
+    private static string EmitNamedFixtureFilter(string fixture, string project)
+    {
+        var shell = FindShell();
+        if (shell is null)
+        {
+            Assert.Ignore("Neither pwsh nor powershell is available on this host.");
+        }
+
+        var psi = new ProcessStartInfo(shell!)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = RepoRoot,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-File");
+        psi.ArgumentList.Add(RunnerPath);
+        psi.ArgumentList.Add("-Emit");
+        psi.ArgumentList.Add("-Fixture");
+        psi.ArgumentList.Add(fixture);
+        psi.ArgumentList.Add("-Project");
+        psi.ArgumentList.Add(project);
+
+        using var process = Process.Start(psi)!;
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.That(
+            process.ExitCode,
+            Is.Zero,
+            $"{RunnerRelativePath} -Emit -Fixture {fixture} -Project {project} exited "
+                + $"{process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}"
+                + $"{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+        var cells = stdout.Trim().Split('\t');
+        Assert.That(
+            cells,
+            Has.Length.EqualTo(4),
+            $"{RunnerRelativePath} -Emit did not produce four tab-separated cells for "
+                + $"-Fixture {fixture} -Project {project}: '{stdout.Trim()}'");
+
+        return cells[3].Trim();
+    }
+
     private static string? FindShell()
     {
         var names = OperatingSystem.IsWindows()
@@ -446,6 +575,129 @@ public sealed class RepositoryWideGateRunnerTests
                 + "list's source, so the instructions must send the reader to the command "
                 + "rather than invite them to compose filters by hand - which is what "
                 + "produced a six-of-eleven run by a worker who had read the table.");
+    }
+
+    /// <summary>
+    /// Every gate invocation documented in an agent playbook must name a fixture that really
+    /// exists in the project the invocation names.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Routing the playbooks through the runner (#3017) replaced a set of hand-composed
+    /// <c>dotnet test --filter</c> lines with a set of hand-written fixture/project pairs. That
+    /// removes the silent-success failure - the runner refuses a zero-executed gate - but it
+    /// does not remove the possibility that a pair names a fixture which no longer exists, or
+    /// one that was never spelled correctly. A rename would leave the playbook naming a ghost,
+    /// and the only symptom would be a red gate at the moment somebody followed the playbook.
+    /// </para>
+    /// <para>
+    /// So the pairs are checked here against the tree, through the runner's own resolver
+    /// rather than a second one. The discriminator is the resolver's documented fallback: a
+    /// name it can locate in source resolves to a namespace-qualified filter ending in a dot,
+    /// and a name it cannot locate falls back to the bare name. That fallback is deliberate -
+    /// it keeps a bogus name runnable so the runner can report zero executed - which is
+    /// exactly why the bare shape is the signal that a documented pair is wrong.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Agent_documented_gate_invocations_name_fixtures_that_exist()
+    {
+        var invocations = DocumentedAgentInvocations();
+
+        Assert.That(
+            invocations,
+            Is.Not.Empty,
+            $"No '{RunnerRelativePath} -Fixture ...' invocation was found under "
+                + $"{AgentsRelativePath}. This test exists to check those invocations against "
+                + "the tree, so finding none means it is passing vacuously rather than that "
+                + "the playbooks are clean.");
+
+        var unresolved = new List<string>();
+        foreach (var (file, fixture, project) in invocations)
+        {
+            var filter = EmitNamedFixtureFilter(fixture, project);
+            if (!filter.EndsWith('.'))
+            {
+                unresolved.Add($"{file}: -Fixture {fixture} -Project {project} -> '{filter}'");
+            }
+        }
+
+        Assert.That(
+            unresolved,
+            Is.Empty,
+            "An agent playbook documents a gate invocation whose fixture could not be located "
+                + "in the project it names, so the runner fell back to a bare-name filter. "
+                + "Following that playbook would run zero tests and fail the gate:"
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, unresolved));
+    }
+
+    /// <summary>
+    /// No document may reach a <i>repository-wide gate</i> fixture through a hand-composed
+    /// <c>dotnet test --filter</c>, which exits 0 when it matches nothing.
+    /// </summary>
+    /// <remarks>
+    /// The offence is keyed on the gate table rather than on the shape of the name, because
+    /// these documents legitimately show bare filters for ordinary per-package fixtures - the
+    /// worked example that runs one grain's tests is not a gate and cannot be vacuous in the
+    /// way a mistyped gate name is. Only a fixture the runner would itself schedule has to
+    /// carry the runner's protection.
+    /// </remarks>
+    [Test]
+    public void Gate_documents_do_not_invoke_gate_fixtures_through_a_bare_filter()
+    {
+        var gateFixtures = EmitRunList()
+            .Select(entry => entry.Fixture)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // The runner's default run list is the metric-gate table only. The six standard
+        // content gates (em-dash, mojibake, docs-snippet, and so on) are repository-wide
+        // gates too, and the documents reach them through the runner's -Fixture mode, so
+        // the protected set is the union. This also ratchets: once a document routes a
+        // gate through the runner, that gate's name joins the set and cannot be reverted
+        // to a bare filter without failing here.
+        foreach (var (_, fixture, _) in DocumentedAgentInvocations())
+        {
+            gateFixtures.Add(fixture);
+        }
+
+        Assert.That(
+            gateFixtures,
+            Is.Not.Empty,
+            "The emitted run list named no gate fixtures, so this test would accept any bare "
+                + "filter. That is a broken run list, not a clean set of documents.");
+
+        var offenders = new List<string>();
+        foreach (var path in GateDocuments())
+        {
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var match = BareGateFilter.Match(line);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                // A filter is a substring match, so a qualified name reaches the gate too.
+                var named = match.Groups["fixture"].Value;
+                var simple = named[(named.LastIndexOf('.') + 1)..];
+                if (gateFixtures.Contains(simple))
+                {
+                    offenders.Add($"{Path.GetFileName(path)}: {line.Trim()}");
+                }
+            }
+        }
+
+        Assert.That(
+            offenders,
+            Is.Empty,
+            "A document invokes a repository-wide gate fixture through a raw "
+                + "'dotnet test --filter'. That exits 0 when the filter matches nothing "
+                + "(#3017), so a mistyped fixture name reads as a passing gate. Route it "
+                + $"through {RunnerRelativePath}, which reports the executed count and "
+                + "refuses zero:"
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, offenders));
     }
 
     /// <summary>

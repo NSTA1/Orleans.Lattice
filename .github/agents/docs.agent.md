@@ -107,16 +107,18 @@ After each batch of edits, re-run the wide-net grep that originally surfaced the
 
 Documentation edits trip three repo-wide gates. Run them, paste the tail of each transcript, and confirm `Failed: 0`. These are unskippable.
 
+The two test gates are invoked through `tools/Invoke-RepositoryWideGates.ps1`, never through a hand-composed `dotnet test --filter`. A raw filter that matches nothing - a typo, or an invented fixture name - prints `No test matches the given testcase filter` and **exits 0**, so a gate that never ran is byte-identical to a gate that passed. The runner reports the EXECUTED count per fixture and fails any gate that executed zero tests. See issue #3017.
+
 1. **Docs snippet compilation** - any new or modified `csharp verify` fence must compile:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture DocsSnippetCompilationTests -Project test/lattice
    ```
 
 2. **Em-dash hygiene** - no `U+2014` in any tracked file:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture EmDashHygieneTests -Project test/lattice
    ```
 
 3. **XML doc cref resolution** - every `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in the source you touched (and, on a full sweep, across every packable project) must resolve to a real symbol, because the generated XML ships inside the NuGet package. `Directory.Build.targets` suppresses the cref-warning family for normal builds, so re-expose it explicitly:
