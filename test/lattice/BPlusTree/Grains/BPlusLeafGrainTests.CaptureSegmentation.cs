@@ -89,6 +89,9 @@ public partial class BPlusLeafGrainTests
             return inner.StageSnapshotSegmentAsync(frame, rowCount, cancellationToken);
         }
 
+        public Task BeginStagedSnapshotAsync(CancellationToken cancellationToken)
+            => inner.BeginStagedSnapshotAsync(cancellationToken);
+
         public Task<bool> CommitStagedSnapshotAsync(LeafSnapshotBlob manifest, CancellationToken cancellationToken)
         {
             LastCommitSegmentCount = stagedSinceCommit;

@@ -56,11 +56,21 @@ internal sealed class LeafSnapshotStorageGrain(
 
     /// <summary>
     /// Generation a staged capture is writing frames into, or <c>-1</c> when no
-    /// capture is staging. Activation-scoped on purpose: a capture whose
-    /// activation is lost mid-flight leaves only frames no manifest references,
-    /// which are inert, and the next capture starts afresh. The alternative -
-    /// persisting the staging cursor - would buy nothing, since a torn capture
-    /// has to be redone either way.
+    /// capture is staging.
+    /// <para>
+    /// Activation-scoped on purpose: a capture whose activation is lost
+    /// mid-flight leaves only frames no manifest references, and the next
+    /// capture starts afresh. Persisting the cursor would buy nothing, since a
+    /// torn capture has to be redone either way.
+    /// </para>
+    /// <para>
+    /// That self-clearing property holds for a lost activation and <b>only</b>
+    /// for a lost activation. A capture that fails or is cancelled while this
+    /// activation survives leaves the cursor mid-run, which is why
+    /// <see cref="BeginStagedSnapshotAsync"/> resets it explicitly at the start
+    /// of every run rather than relying on the reset inside
+    /// <see cref="StageSnapshotSegmentAsync"/>.
+    /// </para>
     /// </summary>
     private int stagingGeneration = -1;
 
@@ -376,6 +386,38 @@ internal sealed class LeafSnapshotStorageGrain(
         return await Segment(state.State.SegmentGeneration, index)
             .LoadFrameAsync(cancellationToken)
             .ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task BeginStagedSnapshotAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (stagingGeneration < 0)
+        {
+            return;
+        }
+
+        // A run is already open, so a previous capture staged into it and never
+        // committed. Retire its frames and drop the cursor, so this capture
+        // starts at index zero instead of appending to a partial snapshot whose
+        // rows are stale.
+        var abandonedGeneration = stagingGeneration;
+        var abandonedCount = stagedSegmentCount;
+
+        stagingGeneration = -1;
+        stagedSegmentCount = 0;
+        stagedFrameBytes = 0;
+
+        // Retire only a generation that is genuinely above the live one. A
+        // staged run always targets SegmentGeneration + 1, but an inline
+        // SaveAsync can commit into that same generation while the run sits
+        // abandoned, at which point those frames are the live snapshot and
+        // deleting them would strand the coverage the manifest already claims.
+        if (abandonedGeneration > state.State.SegmentGeneration)
+        {
+            await RetireSegmentsAsync(abandonedGeneration, 0, abandonedCount, cancellationToken).ConfigureAwait(true);
+        }
     }
 
     /// <inheritdoc />
