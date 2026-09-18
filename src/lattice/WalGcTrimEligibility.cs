@@ -26,13 +26,22 @@ internal enum WalGcTrimEligibility
     Eligible = 0,
 
     /// <summary>
-    /// The HLC clause refused the entry: neither the minimum consumer cursor nor
-    /// the retention TTL ceiling accepted it.
+    /// The entitlement clause refused the entry: neither the minimum consumer
+    /// cursor, nor the retention TTL ceiling, nor the durable materialiser offset
+    /// floor accepted it.
     /// <para>
     /// Indicts the <b>consumer-cursor</b> subsystem - a reader that has not
     /// acknowledged this far, or a retention window that has not aged this entry
     /// out. It is the only one of the three rejections that can be cleared by a
     /// consumer simply catching up.
+    /// </para>
+    /// <para>
+    /// The name is retained from when the clause was HLC-only (issue #3172 added
+    /// the offset axis as a disjunct) because the cursor remains the axis a
+    /// caller can act on: the offset axis only ever ADDS entitlement, so an entry
+    /// reported here was refused by the cursor and either had no offset floor to
+    /// appeal to or sat above it - and in the second case the scan stops at the
+    /// floor before reaching this verdict anyway.
     /// </para>
     /// </summary>
     CursorFloor = 1,

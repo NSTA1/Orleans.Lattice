@@ -56,30 +56,37 @@ internal enum WalGcTrimStopReason
     /// above the durable materialiser <i>offset</i> floor - the lowest
     /// last-applied leaf-checkpoint offset across the tree's reporting leaves.
     /// <para>
-    /// This is the defect state, and it is the one that was previously
-    /// unobservable. The offset floor is a <b>minimum over leaves</b>, so a
-    /// single leaf whose checkpoint offset never advances holds the floor down
-    /// for the entire tree no matter how far every other leaf has progressed.
-    /// Every pass then stops on the first entry above that stale floor, trims
-    /// nothing, and - because the consumer-cursor floor is untouched and
-    /// therefore still <see cref="WalGcCursorFloorState.Available"/> - classifies
-    /// as <see cref="LatticeMetrics.OutcomeOverCeiling"/> rather than as
-    /// <see cref="LatticeMetrics.OutcomeBlocked"/>. The WAL then grows without
-    /// bound while every published floor-state series reads healthy.
+    /// This <b>was</b> the defect state and is no longer one (issue #3172).
+    /// While entitlement was HLC-only the offset floor could only ever subtract
+    /// trim rights: the scan stopped at the floor and the entries below it still
+    /// had to win the cursor clause on their own. A floor that is a
+    /// <b>minimum over leaves</b> - so a single leaf whose checkpoint offset
+    /// never advances holds it down for the entire tree - then produced a pass
+    /// that trimmed nothing while every published floor-state series read
+    /// healthy, classifying as <see cref="LatticeMetrics.OutcomeOverCeiling"/>
+    /// rather than <see cref="LatticeMetrics.OutcomeBlocked"/> because the
+    /// consumer-cursor floor was untouched and therefore still
+    /// <see cref="WalGcCursorFloorState.Available"/>.
     /// </para>
     /// <para>
-    /// A transient tick is benign: a floor that is merely a little behind the
-    /// head stops the scan having already trimmed a prefix. It is a
-    /// <em>sustained</em> run of this reason with zero bytes reclaimed that
-    /// identifies a tree whose floor covers none of its retained range.
+    /// Now that the floor also GRANTS entitlement, this reason means the scan
+    /// reclaimed everything the durable floor entitles it to and the floor is the
+    /// binding constraint - an honest boundary rather than a silent stall. It is
+    /// also the reason a healthy tree is expected to report once the offset axis
+    /// is doing the work, because a pass whose cursor is behind its floor now
+    /// walks to the floor instead of stopping at its first entry. What remains
+    /// diagnostic is the SUSTAINED case with zero bytes reclaimed, which still
+    /// identifies a floor that covers none of the retained range - the leaf-level
+    /// stall, not the entitlement rule.
     /// </para>
     /// </summary>
     OffsetFloor = 2,
 
     /// <summary>
-    /// The scan stopped because the first entry it could not trim failed the HLC
-    /// clause of the eligibility predicate: neither the minimum consumer cursor
-    /// nor the retention TTL ceiling accepted it.
+    /// The scan stopped because the first entry it could not trim failed the
+    /// entitlement clause of the eligibility predicate: neither the minimum
+    /// consumer cursor, nor the retention TTL ceiling, nor the durable
+    /// materialiser offset floor accepted it.
     /// <para>
     /// Indicts the <b>consumer-cursor</b> subsystem - a reader that has not
     /// acknowledged this far, or a retention window that has not aged the entry
@@ -88,6 +95,16 @@ internal enum WalGcTrimStopReason
     /// not advanced its cursor; the other points at a leaf that has not advanced
     /// its durable checkpoint. Collapsing them would send a diagnosis to the wrong
     /// subsystem, which is the failure mode this enum exists to prevent.
+    /// </para>
+    /// <para>
+    /// Since issue #3172 this reason additionally means the offset axis did not
+    /// rescue the entry, which narrows rather than muddies what it indicts: a
+    /// tree reporting it either has no durable offset floor at all (an
+    /// unreachable pin store, an all-sentinel pin set, a blocked partition), or
+    /// has one and is held by a consumer that reports cursors but no offsets -
+    /// a view maintainer, a log subscriber, the backup capture service, the
+    /// replication shipper. Both are consumer-side, which is why the name still
+    /// fits.
     /// </para>
     /// <para>
     /// Separated from <see cref="CausalFrontier"/> and <see cref="BlockPin"/> on
