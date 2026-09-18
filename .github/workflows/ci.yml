@@ -1975,7 +1975,7 @@ jobs:
       # every test in that assembly runs behind a `[SetUpFixture]` that starts
       # the Explorer host and launches Playwright chromium, so selecting even
       # one of them costs a browser install. `ui-tests.yml` is their only
-      # runner. Two of its fixtures are named `*HygieneTests` and so match the
+      # runner. Three of its fixtures are named `*HygieneTests` and so match the
       # `Hygiene` selector, but they police TEST CODE (fixture categories and
       # namespaces), not prose - they cannot regress on a markdown-only diff,
       # which is the diff shape this job exists for. `CiContentGateWiringTests`

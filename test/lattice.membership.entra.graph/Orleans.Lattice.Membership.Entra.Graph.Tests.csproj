@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.membership.entra.graph\Orleans.Lattice.Membership.Entra.Graph.csproj" />
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
 </Project>
