@@ -234,6 +234,93 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Is.EqualTo(WalGcBlockingPinState.NeverCheckpointed));
     }
 
+    [Test]
+    public void ClassifyCheckpoint_reads_an_unassigned_zero_scalar_as_never_checkpointed()
+    {
+        // The born-0 ambiguity of issue #2703, reaching the classifier by a
+        // second route (issue #3157). ProjectionCheckpointOffset has no
+        // initializer, so a leaf that has never checkpointed partition 0 is
+        // born holding 0 rather than the -1 sentinel every other partition
+        // uses, and Orleans omits default-valued members - so nothing is
+        // persisted and the read-back 0 is indistinguishable from a real
+        // checkpoint at offset 0 unless the assignment flag is consulted.
+        //
+        // This is the ONE shape that misclassifies, and it is the common one:
+        // a leaf that has checkpointed nothing at all has no per-partition
+        // array either, so every higher partition correctly reads the sentinel
+        // while partition 0 alone reads the raw scalar. Filing it under
+        // 'checkpointed_uncovered' asserts a snapshot would repair it, for the
+        // exact population that has no repair and whose block pin is correct.
+        var neverCheckpointed = new LeafNodeState
+        {
+            TreeId = StrandedTree,
+            ProjectionCheckpointOffsetsByPartition = null,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(neverCheckpointed.ProjectionCheckpointOffset, Is.Zero,
+                "the arrangement is only the real one while the scalar is born at 0 rather than at the "
+                    + "sentinel; an initializer added to the state would make this gate vacuous.");
+            Assert.That(neverCheckpointed.ProjectionCheckpointOffsetAssigned, Is.Not.True,
+                "and only while nothing has claimed that zero is real.");
+
+            Assert.That(LatticeWalGcScheduler.ClassifyCheckpoint(neverCheckpointed, partition: 0),
+                Is.EqualTo(WalGcBlockingPinState.NeverCheckpointed),
+                "an unassigned zero is the type default, not progress, so there is no WAL offset this leaf "
+                    + "could honestly claim and its blocking pin is correct by design.");
+            Assert.That(LatticeWalGcScheduler.ClassifyCheckpoint(neverCheckpointed, partition: 3),
+                Is.EqualTo(WalGcBlockingPinState.NeverCheckpointed),
+                "the higher partitions were never the ambiguous half, and must not move.");
+        });
+    }
+
+    [Test]
+    public void ClassifyCheckpoint_reads_an_assigned_zero_scalar_as_the_repairable_state()
+    {
+        // The other side of the same guard, and the reason it cannot simply
+        // treat every zero as absent: a leaf that genuinely applied up to
+        // offset 0 has a WAL offset it can honestly claim, so its unusable pin
+        // IS the repairable coverage hole. Collapsing this into
+        // never_checkpointed would strand a real repairable leaf in the arm
+        // that says "do not repair this".
+        var checkpointedAtZero = new LeafNodeState
+        {
+            TreeId = StrandedTree,
+            ProjectionCheckpointOffset = 0,
+            ProjectionCheckpointOffsetAssigned = true,
+            ProjectionCheckpointOffsetsByPartition = null,
+        };
+
+        Assert.That(LatticeWalGcScheduler.ClassifyCheckpoint(checkpointedAtZero, partition: 0),
+            Is.EqualTo(WalGcBlockingPinState.CheckpointedUncovered),
+            "offset 0 is a real checkpoint once something has claimed it, and the assignment flag is the "
+                + "only thing that separates it from the type default.");
+    }
+
+    [Test]
+    public void ClassifyCheckpoint_resolves_partition_zero_from_the_guarded_scalar_not_the_mirrored_slot()
+    {
+        // BPlusLeafGrain mirrors partition 0's checkpoint into slot 0 of the
+        // per-partition array as it writes the scalar, which makes reading the
+        // array for partition 0 look equivalent. It is not: the array carries
+        // no counterpart to the assignment flag, so it cannot express the
+        // born-0 ambiguity at all and a mirrored 0 reads as a real checkpoint.
+        // The leaf resolves its own pin from the guarded scalar, so the
+        // classifier must too or the two disagree about the very condition the
+        // instrument exists to name.
+        var mirroredZero = new LeafNodeState
+        {
+            TreeId = StrandedTree,
+            ProjectionCheckpointOffsetsByPartition = [0L, -1L, -1L, -1L],
+        };
+
+        Assert.That(LatticeWalGcScheduler.ClassifyCheckpoint(mirroredZero, partition: 0),
+            Is.EqualTo(WalGcBlockingPinState.NeverCheckpointed),
+            "slot 0 is a mirror of the scalar, never an authority over it - so an unguarded read of the "
+                + "array reintroduces exactly the ambiguity the scalar's flag resolves.");
+    }
+
     // ------------------------------------------------------------- the priming
 
     [Test]
@@ -317,8 +404,55 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
-    public async Task A_tree_that_stays_blocked_is_classified_once_not_once_per_pass()
+    public async Task A_blocking_leaf_that_has_never_checkpointed_is_not_reported_as_repairable()
     {
+        // The end-to-end half of the born-0 guard (issue #3157), asserted at the
+        // instrument rather than at the helper because the misread reached the
+        // published series and was read there as a finding: a live estate showed
+        // four trees whose every partition classified never_checkpointed except
+        // partition 0, alone, classifying as repairable - the exact signature a
+        // raw scalar read produces on a leaf that has checkpointed nothing, and
+        // one no other mechanism explains.
+        //
+        // Reporting it as repairable is not a cosmetic mislabel. It routes the
+        // remedy at the capture seam, where there is nothing to capture, and it
+        // contradicts the leaf's own coverage repairer - which correctly
+        // declines a never-checkpointed partition, because stamping coverage for
+        // a partition that applied nothing would publish a trim entitlement the
+        // leaf has not earned.
+        var time = new VirtualTimeProvider();
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
+
+        // A leaf that has checkpointed nothing: no per-partition array, and the
+        // scalar left exactly as the type initialises it.
+        var storage = new CannedLeafStateStorage(new LeafNodeState
+        {
+            TreeId = StrandedTree,
+            ProjectionCheckpointOffsetsByPartition = null,
+        });
+        var (factory, _) = FactoryWithBlockedLeaf(StrandedTree);
+
+        using var states = new InstrumentRecorder(LatticeMetrics.WalGcBlockingPinStates, StrandedTree);
+        var scheduler = CreateScheduler(factory, gc, Adaptive(), time, leafStateStorage: storage);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var recorded = states.Measurements
+            .Where(m => m.Value > 0)
+            .Select(m => (Partition: m.Tag(LatticeMetrics.TagPartition) as string,
+                          Status: m.Tag(BlockingPinStatusTag) as string))
+            .ToArray();
+
+        Assert.That(recorded, Is.EqualTo(new[] { ("0", "never_checkpointed") }),
+            "a leaf holding live data it has never checkpointed has no WAL offset it could honestly claim, "
+                + "so its blocking pin is correct by design and must be filed under the arm that has no "
+                + "repair - not under the one that asserts a snapshot would clear it.");
+    }
+
+    [Test]
+    public async Task A_tree_that_stays_blocked_is_classified_once_not_once_per_pass()    {
         // The cost bound, asserted rather than asserted-about. A LeafNodeState read
         // carries the leaf's whole projection, and a blocked tree stays blocked for
         // as long as the episode lasts - so an unlatched classifier would re-read
