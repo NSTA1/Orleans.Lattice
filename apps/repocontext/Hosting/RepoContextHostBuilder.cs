@@ -538,8 +538,20 @@ public static class RepoContextHostBuilder
         // shared factory so this mapping and the tests that exercise it cannot drift.
         app.MapHealthChecks(SiloPath, RepoContextSiloHealthEndpoint.CreateOptions(SiloTag));
 
-        app.MapGet(MetricsPath, (RepoContextMetricsCollector collector) =>
-            Results.Text(collector.Render(), RepoContextPrometheusExposition.ContentType));
+        // Stream the exposition straight to the response body rather than handing
+        // Results.Text a materialised string (issue #3136). Render() ends in
+        // StringBuilder.ToString(), which needs one contiguous ~8.3 MB allocation for
+        // this container's 4.15 MB exposition; on a fragmented heap near its ceiling
+        // that fails, and seventeen scrapes died there with OutOfMemoryException. The
+        // metrics are exactly what an operator needs at that moment, so the scrape must
+        // not be the thing that cannot allocate. WriteToAsync holds only a small
+        // reusable buffer, so its cost does not scale with the exposition.
+        app.MapGet(MetricsPath, async (
+            RepoContextMetricsCollector collector, HttpContext context, CancellationToken cancellationToken) =>
+        {
+            context.Response.ContentType = RepoContextPrometheusExposition.ContentType;
+            await collector.WriteToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+        });
 
         // The derivation, stated once at startup. Without it the relationship between
         // the budget the host enforces and the grant it was derived from is only
