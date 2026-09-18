@@ -70,7 +70,9 @@ public sealed partial class DurableVectorIndex
     private long _generation;
     private long _centroidEpoch;
     private bool _centroidsPersisted;
-    private bool _loaded;    private int _persistedPartitions;
+    private bool _loaded;
+    private bool _keysLoaded;
+    private int _persistedPartitions;
     private VectorIndexBuildPhase _phase;
     private string? _cursor;
     private int _expected;
@@ -190,16 +192,64 @@ public sealed partial class DurableVectorIndex
     /// has completed, so a caller may call it on every retry tick unconditionally.
     /// </summary>
     /// <param name="cancellationToken">Cancels the load.</param>
-    public async Task LoadOrResumeAsync(CancellationToken cancellationToken = default)
+    public Task LoadOrResumeAsync(CancellationToken cancellationToken = default)
+        => LoadOrResumeAsync(cancellationToken, cancellationToken);
+
+    /// <summary>
+    /// Runs the durable load under two separate tokens, so that a caller slicing
+    /// the load by wall clock bounds only the part of it that can resume.
+    /// </summary>
+    /// <param name="keyWalkToken">
+    /// Cancels the O(corpus) key-map walk, which banks its position per entry and
+    /// therefore resumes from where it stopped. A caller passes its slice deadline
+    /// here.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Cancels the load as a whole. A caller passes its own token here, and only
+    /// its own token.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// <b>The split is a correctness requirement, not a refinement.</b> The restore
+    /// that follows the walk - manifest, centroids, partition states, chunks -
+    /// builds into a local and is assigned only on success, so it banks NOTHING
+    /// when interrupted. Cancelling it on a slice deadline would make every
+    /// attempt restart it, so an index whose restore takes longer than one slice
+    /// could never open at all: not a slow open, but an open that provably cannot
+    /// terminate. That is the trap #2953 names, and bounding only the resumable
+    /// phase is what avoids it.
+    /// </para>
+    /// <para>
+    /// The restore is therefore unbounded in time, which is acceptable for a
+    /// different reason than the walk: its cost scales with the size of the stored
+    /// index, not with the number of cold grain activations the walk pays for.
+    /// </para>
+    /// </remarks>
+    public async Task LoadOrResumeAsync(
+        CancellationToken keyWalkToken, CancellationToken cancellationToken)
     {
         if (_loaded)
         {
             return;
         }
 
-        await LoadAsync(cancellationToken).ConfigureAwait(false);
+        await LoadAsync(keyWalkToken, cancellationToken).ConfigureAwait(false);
         _loaded = true;
     }
+
+    /// <summary>
+    /// How many identifier mappings the key walk has loaded so far. Monotonic
+    /// within a load attempt sequence, so a caller that slices the load can tell
+    /// a slice that banked progress from one that banked none.
+    /// </summary>
+    /// <remarks>
+    /// This is the open's counterpart to
+    /// <see cref="VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance"/>, and
+    /// it exists for the same reason: only a figure a caller can compare across
+    /// attempts can distinguish a load that is advancing slowly from one that is
+    /// not advancing at all.
+    /// </remarks>
+    public int LoadedKeyCount => _keys.Count;
 
     /// <summary>
     /// Whether a load has completed successfully on this instance. False on one
@@ -217,8 +267,19 @@ public sealed partial class DurableVectorIndex
     /// caller that owns the retry can record it, since only the caller knows a
     /// retry occurred.
     /// </para>
+    /// <para>
+    /// <b>A COMPLETED KEY WALK COUNTS AS BANKED PROGRESS, AND READING ONLY THE
+    /// CURSOR WOULD MISS IT.</b> The dictionary clears its cursor when its walk
+    /// finishes, so an interruption that lands AFTER the walk and before the load
+    /// completes leaves no cursor - yet the walk is exactly the O(corpus) work a
+    /// resume exists to keep, and the next call really does skip it. Reporting
+    /// that case as "not resumed" would tell an operator the resume had failed at
+    /// the very moment it did the most good. Gated on <see cref="IsLoaded"/> so a
+    /// finished load, which resumes nothing because there is nothing left to do,
+    /// does not claim banked progress.
+    /// </para>
     /// </summary>
-    public bool HasBankedLoadProgress => _keys.HasBankedLoadProgress;
+    public bool HasBankedLoadProgress => !_loaded && (_keys.HasBankedLoadProgress || _keysLoaded);
 
     /// <summary>The key prefix every durable record of this index sits under.</summary>
     public string KeyPrefix => _prefix;

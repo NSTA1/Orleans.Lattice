@@ -354,6 +354,35 @@ alone.
 - Primitive unit tests go under `test/lattice/Primitives/`.
 - Shared fixtures and fakes go under `test/lattice/BPlusTree/` or `test/lattice/Fakes/`.
 
+## Shared test helpers - use these, do not write a private copy
+
+Cross-cutting harness types live in the shared testing library
+(`test/shared/Orleans.Lattice.Testing/`, namespace `Orleans.Lattice.Testing`),
+which every test project already references. **Use them by default, and extend
+that library rather than growing a private copy.** Duplication is not the main
+cost: copies drift, and each fork tends to drift into a *weaker* helper that
+silently proves less than the original while looking identical at the call site.
+
+- **`ManualTimeProvider`** - the hand-driven clock. Use it for anything
+  time-dependent: deadlines, budgets, TTLs, backoff, cadence. It drives
+  `CreateTimer` and `GetTimestamp` as well as `GetUtcNow`, so
+  `CancellationTokenSource(delay, provider)`, `Task.Delay(delay, provider)` and
+  `GetElapsedTime` all move with `Advance`. The private copies it replaces mostly
+  override `GetUtcNow` alone, and that omission does not fail loudly: a
+  timer-based wait never fires, so the fixture **hangs** rather than failing, and
+  an elapsed-time budget is silently measured against the real clock.
+- **`TestPoll`** - the bounded-poll barrier for waiting on an observation made by
+  a background worker. Prefer `UntilAsync`, which fails *at* the barrier and
+  names what it waited for; `TryUntilAsync` is for negative assertions only.
+- **`MeterListening`** - meter and instrument listeners that take the target as a
+  parameter, so the unsafe declaration ordering is not expressible.
+
+Several private copies predate this library and have not been migrated yet - nine
+hand-written `TimeProvider` fakes under four different names, two
+`InMemoryVectorIndexStore` copies, and four `FakePersistentState<T>` copies. Issue
+#3147 tracks retiring them. Do not add to that set: reach for the shared helper, and
+if it lacks something you need, add it there.
+
 ## Running Tests
 
 The suite has grown past the point where running everything is a reasonable inner-loop action. There are ~340 test files across five test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.

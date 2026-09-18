@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </summary>
 [TestFixture]
 [NonParallelizable]
-public sealed class RepoContextAnnIndexLoadResumeTests
+public sealed partial class RepoContextAnnIndexLoadResumeTests
 {
     private const string RepoId = "acme";
     private const int Vectors = 24;
@@ -95,6 +95,7 @@ public sealed class RepoContextAnnIndexLoadResumeTests
                     RepoContextAnnIndexLoadReporter.OutcomeFreshTag,
                     RepoContextAnnIndexLoadReporter.OutcomeResumedTag,
                     RepoContextAnnIndexLoadReporter.OutcomeFaultedTag,
+                    RepoContextAnnIndexLoadReporter.OutcomeDeferredTag,
                 }),
                 "Every arm has to be PRESENT on a host that has simply never faulted. An arm that appears "
                 + "only once it is non-zero cannot distinguish a healthy plane from a build that never "

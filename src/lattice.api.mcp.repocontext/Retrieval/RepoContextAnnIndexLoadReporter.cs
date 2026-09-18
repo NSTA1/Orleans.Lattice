@@ -3,9 +3,9 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// How one attempt to load the durable approximate index ended. The three values
+/// How one attempt to load the durable approximate index ended. The four values
 /// are exhaustive over an attempt that was made, which is what lets them be
-/// counted as a partition rather than as three unrelated tallies.
+/// counted as a partition rather than as four unrelated tallies.
 /// </summary>
 internal enum RepoContextAnnIndexLoadOutcome
 {
@@ -26,6 +26,21 @@ internal enum RepoContextAnnIndexLoadOutcome
     /// should record <see cref="Resumed"/>.
     /// </summary>
     Faulted = 2,
+
+    /// <summary>
+    /// The attempt reached its wall-clock budget and yielded deliberately, banking
+    /// its progress for the next attempt to continue from.
+    /// <para>
+    /// <b>This is a healthy outcome and must never be folded into
+    /// <see cref="Faulted"/>.</b> A bounded open over a large plane produces one
+    /// of these per tick until it completes, so counting them as faults would make
+    /// the fix for issue #3130 indistinguishable from the defect it fixes - and
+    /// worse, would reproduce the "44 times in a row; the phase machine has
+    /// stopped advancing" reading that originally diagnosed it. An operator would
+    /// then see a wedge signal on a plane that is converging perfectly well.
+    /// </para>
+    /// </summary>
+    Deferred = 3,
 }
 
 /// <summary>
@@ -97,6 +112,9 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     /// <summary>The tag value for an attempt that faulted partway, banking its progress.</summary>
     internal const string OutcomeFaultedTag = "faulted";
 
+    /// <summary>The tag value for an attempt that yielded on its wall-clock budget, banking its progress.</summary>
+    internal const string OutcomeDeferredTag = "deferred";
+
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than
     // publishing an instrument against a null meter. See the metrics conventions in
@@ -108,6 +126,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     private long _fresh;
     private long _resumed;
     private long _faulted;
+    private long _deferred;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnIndexLoadReporter()
@@ -135,6 +154,10 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
             LatticeTenantLabel.Platform);
+        _loads.Add(
+            0,
+            new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records one load attempt.</summary>
@@ -150,6 +173,9 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                     break;
                 case RepoContextAnnIndexLoadOutcome.Resumed:
                     _resumed++;
+                    break;
+                case RepoContextAnnIndexLoadOutcome.Deferred:
+                    _deferred++;
                     break;
                 default:
                     _faulted++;
@@ -178,6 +204,12 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeResumedTag),
                     LatticeTenantLabel.Platform);
                 break;
+            case RepoContextAnnIndexLoadOutcome.Deferred:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
+                    LatticeTenantLabel.Platform);
+                break;
             default:
                 _loads.Add(
                     1,
@@ -195,7 +227,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted);
+            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted, _deferred);
         }
     }
 
@@ -209,7 +241,9 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
 /// <param name="Fresh">Attempts that started from nothing and completed.</param>
 /// <param name="Resumed">Attempts that continued banked progress and completed.</param>
 /// <param name="Faulted">Attempts that faulted partway, banking their progress.</param>
+/// <param name="Deferred">Attempts that yielded on their wall-clock budget, banking their progress.</param>
 internal readonly record struct RepoContextAnnIndexLoadSnapshot(
     long Fresh,
     long Resumed,
-    long Faulted);
+    long Faulted,
+    long Deferred);

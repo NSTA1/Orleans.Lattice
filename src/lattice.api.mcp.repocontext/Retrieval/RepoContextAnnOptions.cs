@@ -47,6 +47,46 @@ internal sealed class RepoContextAnnOptions
         DurableVectorIndexOptions.DefaultIngestSliceBudget;
 
     /// <summary>
+    /// The wall-clock ceiling on one attempt to OPEN the durable index, which is
+    /// the phase before any ingest budget is consulted. A non-positive value
+    /// removes the bound.
+    /// <para>
+    /// <b>This is a different bound from <see cref="IngestSliceBudget"/>, and the
+    /// absence of it is what issue #3130 is.</b> That budget governs the ingest,
+    /// and the ingest is read only once the index is already open. The open itself
+    /// restores the whole durable index - an O(corpus) walk of the identifier key
+    /// map followed by a partition-by-partition restore - and carried no bound of
+    /// any kind, inside a single non-reentrant coordinator turn. On the acceptance
+    /// rig that held the turn for over thirty minutes with the keep-alive reminder
+    /// and every arming call queued behind it.
+    /// </para>
+    /// <para>
+    /// <b>The bound is safe only because the load resumes.</b> An attempt stopped
+    /// by this budget banks what it walked and the next attempt continues past it,
+    /// so the ceiling slices one long open into several short ones rather than
+    /// restarting it. Without that property a bound would be strictly worse than
+    /// none - it would convert a slow open into one that never completes, which is
+    /// the trap issue #2953 names. Do not raise this above the coordinator's tick
+    /// interval expecting faster convergence; it is a turn-yield interval, not a
+    /// work quota.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DurableVectorIndexOptions.DefaultIngestSliceBudget"/>
+    /// so the open yields on the same cadence a slice does. There is no reason for
+    /// the two to differ: both exist to return the coordinator's turn, and a caller
+    /// blocked behind the handle cannot tell which phase is holding it.
+    /// </para>
+    /// </summary>
+    public TimeSpan OpenSliceBudget { get; init; } =
+        DurableVectorIndexOptions.DefaultIngestSliceBudget;
+
+    /// <summary>
+    /// The clock the <see cref="OpenSliceBudget"/> is measured against. Present so
+    /// a test can expire the budget deterministically rather than by sleeping.
+    /// </summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>
     /// The largest number of centroids or vectors one persisted record carries,
     /// so no record grows with the corpus.
     /// </summary>

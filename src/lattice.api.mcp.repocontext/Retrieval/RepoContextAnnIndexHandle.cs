@@ -70,6 +70,23 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// The largest identifier-mapping count any deferred open has observed, and
+    /// how many deferrals have since banked nothing. Together they let a bounded
+    /// open tell "advancing slowly" from "not advancing at all". See the escalation
+    /// in <c>OpenAsync</c>.
+    /// </summary>
+    private int _lastOpenKeyCount;
+    private int _emptyOpenDeferrals;
+
+    /// <summary>
+    /// How many consecutive budget expiries that banked no mapping are tolerated
+    /// before the open is declared unable to progress. Small on purpose: every one
+    /// of them is a wasted coordinator turn, and the only configuration that
+    /// produces them cannot be fixed by waiting.
+    /// </summary>
+    private const int MaxEmptyOpenDeferrals = 3;
+
+    /// <summary>
     /// The smallest corpus at which another threshold-crossing training may be
     /// attempted, or <c>0</c> when none has been declined yet.
     /// <para>
@@ -221,6 +238,18 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         {
             phase?.Enter(RepoContextAnnBuildStepPhase.Opening);
             var index = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            if (index is null)
+            {
+                // The open spent its budget and banked its progress. The step ends
+                // here, still in Opening, which is the honest phase: the index is
+                // opening and has not finished. Returning the unchanged progress
+                // rather than throwing is what lets the coordinator release its
+                // turn, answer its keep-alive, and resume on the next tick - the
+                // entire point of bounding the open. See
+                // RepoContextAnnOptions.OpenSliceBudget.
+                return _progress;
+            }
+
             if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
             {
                 var restoredAtOpen = index.Progress.RestoredFromDurableState;
@@ -313,20 +342,24 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// See <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
     /// </para>
     /// <para>
-    /// <b>A step is NOT bounded in time, and this paragraph replaces a claim that
-    /// said it was.</b> The vector-count and wall-clock budgets named above govern
-    /// the INGEST portion of a step only. They are consulted once the index is
-    /// open, and the open itself - <c>OpenAsync</c> in
-    /// <see cref="AdvanceAsync(CancellationToken)"/>, which restores or rebuilds
-    /// the durable index before any budget is read - carries no bound of either
-    /// kind. A cold open over a large plane therefore runs for as long as it runs,
-    /// inside a single non-reentrant coordinator turn, and the previous wording
-    /// ("which is why the step is bounded in time") asserted the exact guarantee
-    /// that does not hold. That mattered: issue #3130 spent its investigation
-    /// looking PAST the open, because the documentation said the open could not be
-    /// where the time was going. Bounding the open is tracked separately and has
-    /// to be resumable to be safe - see issue #2953 - so the claim is corrected
-    /// here rather than quietly satisfied.
+    /// <b>The open is bounded in time as well, and separately.</b> The vector-count
+    /// and wall-clock budgets named above govern the INGEST portion of a step only:
+    /// they are consulted once the index is open. <c>OpenAsync</c> - which restores
+    /// or rebuilds the durable index BEFORE any of them is read - carries its own
+    /// ceiling, <see cref="RepoContextAnnOptions.OpenSliceBudget"/>. An open that
+    /// reaches it banks what it walked, returns the turn, and continues on the next
+    /// step, so a cold open over a large plane is sliced rather than run to
+    /// completion inside one non-reentrant coordinator turn.
+    /// </para>
+    /// <para>
+    /// <b>The history matters, because this paragraph has been wrong before.</b> It
+    /// once asserted a time bound that did not exist, and issue #3130 spent its
+    /// investigation looking PAST the open because the documentation said the open
+    /// could not be where the time was going - a cold open was in fact holding the
+    /// turn for over thirty minutes. Bounding it had to wait on the load being
+    /// resumable (#2953), because a bound that discards its progress converts a
+    /// slow open into one that never finishes. Both halves are now in place; if
+    /// either is removed, this paragraph is false again.
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the build between steps.</param>
@@ -577,7 +610,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         Volatile.Write(ref _serving, false);
     }
 
-    private async Task<DurableVectorIndex> OpenAsync(CancellationToken cancellationToken)
+    private async Task<DurableVectorIndex?> OpenAsync(CancellationToken cancellationToken)
     {
         if (_index is not null)
         {
@@ -598,9 +631,105 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _loading ??= DurableVectorIndex.CreateUnloaded(
             _store, _source, _durableOptions, VectorIndexLoadMode.Full);
 
+        // THE OPEN IS BOUNDED IN TIME, AND THIS IS ISSUE #3130's ITEM 1.
+        //
+        // Everything below this line used to run for as long as it ran, inside a
+        // single non-reentrant coordinator turn, with the keep-alive reminder and
+        // every arming call queued behind it - measured at over thirty minutes on
+        // the acceptance rig. The ingest budget does not reach here: it is read
+        // once the index is already open.
+        //
+        // Two token sources rather than one because the two cancellations mean
+        // opposite things and the handler below has to tell them apart. The budget
+        // source is the one this method owns; the linked source is what the load
+        // actually sees, so a caller cancelling still cancels. Both are skipped
+        // entirely when the bound is disabled, so the unbounded configuration pays
+        // nothing for a feature it declined.
+        var budget = _options.OpenSliceBudget;
+        using var deadline = budget > TimeSpan.Zero
+            ? new CancellationTokenSource(budget, _options.TimeProvider)
+            : null;
+        using var linked = deadline is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+
         try
         {
-            await _loading.LoadOrResumeAsync(cancellationToken).ConfigureAwait(false);
+            // The deadline reaches the RESUMABLE key walk only; the caller's token
+            // governs the load as a whole. Passing the deadline to both would bound
+            // the restore too, and the restore banks nothing when interrupted - so
+            // an index whose restore exceeds one slice would restart it every
+            // attempt and could never open. See DurableVectorIndex.LoadOrResumeAsync.
+            await _loading
+                .LoadOrResumeAsync(linked?.Token ?? cancellationToken, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+            when (deadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // THE BUDGET EXPIRED, WHICH IS NOT A FAULT AND MUST NOT BE COUNTED AS
+            // ONE. The distinction is read from the two sources rather than from
+            // the exception, which carries no way to tell the difference: the
+            // deadline fired and the caller's token did not, so this is the bound
+            // working. The instance is deliberately kept - its banked progress is
+            // the whole reason the bound is safe - and the next tick resumes past
+            // it. See RepoContextAnnIndexLoadOutcome.Deferred for why folding this
+            // into Faulted would reproduce the very wedge signal that diagnosed
+            // this defect.
+            // ONE ARM IS RECORDED PER ATTEMPT, SO THE DECISION COMES FIRST.
+            // Recording Deferred here and then escalating would count a single
+            // attempt under two arms and break the partition the snapshot claims.
+            //
+            // A DEFERRAL THAT BANKED NOTHING IS THE ONE WAY THIS BOUND CAN WEDGE,
+            // so it is counted and escalated rather than retried for ever.
+            //
+            // EnsureBuiltAsync loops until the handle serves. Every slice that
+            // banks at least one mapping makes that loop terminate, which is the
+            // normal case and why a cold open over a large plane is merely sliced.
+            // A budget too small to read a single record banks nothing on every
+            // slice, and the loop then spins for ever having reproduced exactly
+            // the wedge this issue exists to remove - a bounded open being, in
+            // that configuration, strictly worse than an unbounded one.
+            //
+            // The counter is PRESENT-TENSE and is cleared by any slice that
+            // advances, deliberately mirroring
+            // VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance. A lifetime
+            // tally would be the wrong shape for the same reason documented there:
+            // a plane that took a few empty slices early and then advanced
+            // perfectly would go on reporting a wedge for ever.
+            var loaded = _loading.LoadedKeyCount;
+            if (loaded > _lastOpenKeyCount)
+            {
+                _lastOpenKeyCount = loaded;
+                _emptyOpenDeferrals = 0;
+            }
+            else if (++_emptyOpenDeferrals >= MaxEmptyOpenDeferrals)
+            {
+                // Recorded HERE and not by the fault arm below, which cannot see
+                // this: an exception thrown from inside a catch clause is not
+                // caught by a sibling clause of the same try. Same reasoning as
+                // that arm's own "record before the rethrow" note.
+                _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+                throw new InvalidOperationException(
+                    $"The repository-context approximate index for '{_repoId}' in space "
+                    + $"{_space.ModelId}/{_space.Dimension} reached its {budget} open budget "
+                    + $"{MaxEmptyOpenDeferrals} times in succession without loading a single identifier "
+                    + "mapping, so the open cannot make progress and would retry for ever. Raise "
+                    + $"{nameof(RepoContextAnnOptions)}.{nameof(RepoContextAnnOptions.OpenSliceBudget)} "
+                    + "above the time one store read takes, or set it to zero to open unbounded.");
+            }
+
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Deferred);
+
+            _logger.LogDebug(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} reached its "
+                + "{Budget} open budget and yielded; the progress it banked is resumed on the next tick.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                budget);
+
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
