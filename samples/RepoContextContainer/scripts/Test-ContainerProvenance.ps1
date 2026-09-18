@@ -1251,6 +1251,59 @@ _Assert -Name 'REFUSES a named expected repository with no indexed-root reading'
 			-and $report.Violations[0].Contains('cannot be established')) -Detail ($report.Violations -join '; ')
 
 # ---------------------------------------------------------------------------
+_Section 'Resolve-ProvenanceContainerName'
+
+# The regression this function exists for: the check defaulted -ContainerName to
+# the compose SERVICE name, which docker answers with "no such object" because
+# compose always prefixes the project. Every documented invocation omits the
+# parameter, so the guard exited before reading a label and had never once
+# adjudicated a real deployment.
+$resolution = Resolve-ProvenanceContainerName -Requested '' `
+	-CandidateName @('repocontextcontainer-repocontext-1') -ServiceName 'repocontext'
+_Assert -Name 'resolves the project-prefixed container from the service label' `
+	-Condition ($resolution.Resolved -eq 'repocontextcontainer-repocontext-1' -and $resolution.Reason -eq 'unique') `
+	-Detail ("resolved '{0}' reason '{1}'" -f $resolution.Resolved, $resolution.Reason)
+
+# An explicit name is honoured verbatim and never second-guessed, so callers
+# that already pass one keep working unchanged.
+$resolution = Resolve-ProvenanceContainerName -Requested 'some-other-container' `
+	-CandidateName @('repocontextcontainer-repocontext-1') -ServiceName 'repocontext'
+_Assert -Name 'an explicit container name overrides label resolution' `
+	-Condition ($resolution.Resolved -eq 'some-other-container' -and $resolution.Reason -eq 'explicit') `
+	-Detail ("resolved '{0}' reason '{1}'" -f $resolution.Resolved, $resolution.Reason)
+
+# docker emits a trailing newline, so a naive split yields a blank entry. If
+# blanks were counted the single-candidate arm would read as ambiguous and the
+# check would refuse a perfectly ordinary one-container stack.
+$resolution = Resolve-ProvenanceContainerName -Requested '' `
+	-CandidateName @('repocontextcontainer-repocontext-1', '', '  ') -ServiceName 'repocontext'
+_Assert -Name 'blank entries from a trailing newline do not create ambiguity' `
+	-Condition ($resolution.Resolved -eq 'repocontextcontainer-repocontext-1' -and $resolution.Reason -eq 'unique') `
+	-Detail ("resolved '{0}' reason '{1}'" -f $resolution.Resolved, $resolution.Reason)
+
+# Refused rather than guessed. Adjudicating a container the operator did not
+# mean, and reporting success about it, is worse than not running at all.
+$resolution = Resolve-ProvenanceContainerName -Requested '' `
+	-CandidateName @('stack-a-repocontext-1', 'stack-b-repocontext-1') -ServiceName 'repocontext'
+_Assert -Name 'REFUSES to guess between several labelled containers' `
+	-Condition ($null -eq $resolution.Resolved -and $resolution.Reason -eq 'ambiguous' `
+			-and $resolution.Candidates.Count -eq 2) `
+	-Detail ("reason '{0}' candidates {1}" -f $resolution.Reason, ($resolution.Candidates -join ','))
+
+$resolution = Resolve-ProvenanceContainerName -Requested '' -CandidateName @() -ServiceName 'repocontext'
+_Assert -Name 'reports none when the stack is not running' `
+	-Condition ($null -eq $resolution.Resolved -and $resolution.Reason -eq 'none') `
+	-Detail ("reason '{0}'" -f $resolution.Reason)
+
+# The old default, asserted directly so it cannot come back. 'repocontext' is a
+# service name; it must never be returned as a container name by resolution.
+$resolution = Resolve-ProvenanceContainerName -Requested '' `
+	-CandidateName @('repocontextcontainer-repocontext-1') -ServiceName 'repocontext'
+_Assert -Name 'never resolves to the bare compose service name' `
+	-Condition ($resolution.Resolved -ne 'repocontext') `
+	-Detail ("resolved '{0}'" -f $resolution.Resolved)
+
+# ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host ('  Total {0}   Passed {1}   Failed {2}' -f ($script:_PassCount + $script:_FailCount), $script:_PassCount, $script:_FailCount)
 Write-Host ''

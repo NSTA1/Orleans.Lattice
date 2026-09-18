@@ -102,8 +102,20 @@
 	the adjudicating function's parameter list rather than by a convention.
 
 .PARAMETER ContainerName
-	The running container to interrogate. Defaults to the compose service name
-	used by this sample's stack.
+	The running container to interrogate. Defaults to empty, which resolves the
+	container carrying the compose service label for -ComposeServiceName,
+	whatever project prefix compose gave it. Pass a name explicitly to override
+	that, or to disambiguate when several stacks are up.
+
+	It used to default to the bare service name 'repocontext'. That is never a
+	container name - compose prefixes the project - so 'docker inspect' answered
+	"no such object" and the check exited before reading a single label. Every
+	documented invocation omits this parameter, so the guard had never once
+	adjudicated a real deployment.
+
+.PARAMETER ComposeServiceName
+	The compose service whose container to resolve when -ContainerName is not
+	given. Defaults to this sample's service.
 
 .PARAMETER ExpectedCheckout
 	The directory the operator believes the stack was composed from. Defaults to
@@ -241,7 +253,8 @@
 #>
 [CmdletBinding()]
 param(
-	[string] $ContainerName = 'repocontext',
+	[string] $ContainerName = '',
+	[string] $ComposeServiceName = 'repocontext',
 	[string] $ExpectedCheckout,
 	[string] $ExpectedCommit,
 	[hashtable] $ExpectedSetting,
@@ -617,6 +630,44 @@ if ($null -eq $ExpectedSetting -or $ExpectedSetting.Count -eq 0) {
 			"Container provenance could not be adjudicated for '$ContainerName': $($_.Exception.Message)")
 		exit $ExitExpectedConfigurationUnreadable
 	}
+}
+
+try {
+	# Resolve the container before the first inspect (issue: the default was the
+	# compose SERVICE name, which docker never answers). An explicit
+	# -ContainerName is honoured verbatim; otherwise find the container carrying
+	# the compose service label, whatever project prefix compose gave it.
+	if ([string]::IsNullOrWhiteSpace($ContainerName)) {
+		$labelFilter = "label=com.docker.compose.service=$ComposeServiceName"
+		$listed = Invoke-Docker -DockerArgument @(
+			'ps', '--filter', $labelFilter, '--format', '{{.Names}}')
+		$resolution = Resolve-ProvenanceContainerName `
+			-Requested '' `
+			-CandidateName ($listed -split "`n") `
+			-ServiceName $ComposeServiceName
+
+		if ($null -eq $resolution.Resolved) {
+			if ($resolution.Reason -eq 'ambiguous') {
+				[Console]::Error.WriteLine(
+					"several containers carry the compose service label '$ComposeServiceName' (" +
+					($resolution.Candidates -join ', ') +
+					"); pass -ContainerName to say which one to adjudicate")
+			}
+			else {
+				[Console]::Error.WriteLine(
+					"no running container carries the compose service label '$ComposeServiceName'; " +
+					'start the stack before running this check, or pass -ContainerName explicitly')
+			}
+			exit $ExitContainerNotInterrogable
+		}
+
+		$ContainerName = $resolution.Resolved
+	}
+}
+catch {
+	[Console]::Error.WriteLine(
+		"Container provenance could not resolve a container for service '$ComposeServiceName': $($_.Exception.Message)")
+	exit $ExitContainerNotInterrogable
 }
 
 try {

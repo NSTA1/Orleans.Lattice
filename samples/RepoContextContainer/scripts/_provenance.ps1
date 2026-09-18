@@ -1363,3 +1363,84 @@ function Get-ContainerProvenanceReport {
 				-CandidateTagPrefix $(if ($buildArguments.ContainsKey('CandidateTagPrefix')) { $buildArguments['CandidateTagPrefix'] } else { 'candidate-' }))
 	}
 }
+
+<#
+.SYNOPSIS
+	Adjudicates which running container this check should interrogate.
+
+.DESCRIPTION
+	Compose names a container '<project>_<service>_<index>' (or the hyphenated
+	modern equivalent), so the compose SERVICE name is never a container name
+	unless the project happens to be called nothing at all. This script used to
+	default -ContainerName to the bare service name 'repocontext', which
+	'docker inspect' answers with "no such object" on every stack compose has
+	ever started. Every documented invocation in the runbook and the sample
+	README omits -ContainerName, so the guard exited non-zero before it read a
+	single label, and had never once adjudicated a real deployment.
+
+	That mattered more than an ordinary broken default, because the failure was
+	on the SAFE side of a check whose entire job is to catch an unsafe deploy.
+	An operator who ran it, saw it fail, and moved on lost nothing they could
+	see; an operator who never ran it because the documented form did not work
+	kept a guard that reported nothing. Either way a container launched from the
+	wrong image passed unchallenged, which is the exact failure this script
+	exists to make impossible.
+
+	Resolution is kept PURE here and the docker call stays at the call site, so
+	the interesting half - what to do with zero, one, or several candidates - is
+	testable without a daemon.
+
+	Ambiguity is refused rather than guessed. Picking the first of several
+	matching containers would let the check adjudicate a container the operator
+	did not mean, and report success about it, which is worse than not running.
+
+.PARAMETER Requested
+	The explicitly supplied -ContainerName, or an empty/absent value to
+	auto-resolve. An explicit value is always honoured verbatim and is never
+	second-guessed, so existing callers that name a container keep working
+	unchanged.
+
+.PARAMETER CandidateName
+	Container names carrying the compose service label, as read by the caller.
+
+.PARAMETER ServiceName
+	The compose service name, used only to build the diagnostic message.
+#>
+function Resolve-ProvenanceContainerName {
+	param(
+		[string] $Requested,
+		[string[]] $CandidateName,
+		[string] $ServiceName = 'repocontext'
+	)
+
+	if (-not [string]::IsNullOrWhiteSpace($Requested)) {
+		return [pscustomobject] @{
+			Resolved   = $Requested.Trim()
+			Reason     = 'explicit'
+			Candidates = @()
+		}
+	}
+
+	# Blank entries are not "a container called empty string". docker emits a
+	# trailing newline, and a split on it yields one, so dropping them here is
+	# what keeps the single-candidate arm reachable at all.
+	$candidates = @(
+		@($CandidateName) |
+			Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+			ForEach-Object { $_.Trim() } |
+			Sort-Object -Unique)
+
+	if ($candidates.Count -eq 1) {
+		return [pscustomobject] @{
+			Resolved   = $candidates[0]
+			Reason     = 'unique'
+			Candidates = $candidates
+		}
+	}
+
+	return [pscustomobject] @{
+		Resolved   = $null
+		Reason     = $(if ($candidates.Count -eq 0) { 'none' } else { 'ambiguous' })
+		Candidates = $candidates
+	}
+}
