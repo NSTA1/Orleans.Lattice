@@ -114,6 +114,11 @@ jobs:
       apps: ${{ steps.filter.outputs.apps }}
       benchmark_changed: ${{ steps.benchmark.outputs.changed }}
       version_only: ${{ steps.verbump.outputs.version_only }}
+      # Empty on a push (the classifier is pull-request-only, like every other
+      # change-detection step). The zero-leg guard treats empty as "nothing to
+      # judge" rather than as `false`, so a push lane is never failed on a
+      # property nothing measured.
+      package_source_changed: ${{ steps.pkgsrc.outputs.changed }}
       to_test: ${{ steps.discover.outputs.to_test }}
       # Defaulted so a skipped plan yields a well-formed empty matrix rather
       # than an empty string, which `fromJson` would reject and turn a
@@ -676,6 +681,32 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Zero-leg vacuity guard, first half (#3002). The aggregate vacuity guard
+      # in `summarise-test-legs.py` is conditioned on `leg_count != '0'`, so
+      # the configuration in which selection is most badly wrong - selecting
+      # NOTHING - is the one configuration in which the guard against wrong
+      # selection does not run. A zero-leg plan is a legitimate outcome for a
+      # docs-only change, so the two cases are told apart by a property the
+      # `leg_count` condition does not look at: whether the change touched a
+      # file that SEEDS a package. This step computes exactly that; the verdict
+      # half lives in `build-and-test`. The predicate itself lives in
+      # `zero-leg-guard.sh` so both halves share one implementation and one
+      # self-test.
+      - name: Classify package source changes
+        id: pkgsrc
+        # Pull-request-only: see CHANGE DETECTION above.
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # THREE-dot, for the reason spelled out on the step above.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          result=$(printf '%s\n' "$changed" | .github/workflows/zero-leg-guard.sh classify)
+          echo "changed=$result" >> "$GITHUB_OUTPUT"
+          echo "Package source or test files changed: $result"
+
       # Content-aware release-version-bump carve-out. A coordinated release
       # rewrites the `<Version>` slot of every publishable csproj in one commit
       # (see docs/RELEASING.md). That edit changes no compileable behaviour, so
@@ -818,6 +849,14 @@ jobs:
       # step in this job would validate a change to the gate.
       - name: Self-test the closing-keyword guard
         run: python3 .github/workflows/closing-keyword-guard-selftest.py
+
+      # The zero-leg guard is the check that fires precisely when NO test legs
+      # run, so the run it protects is by definition a run in which nothing
+      # else executed. It cannot be exercised as a side effect of ordinary
+      # work, and a guard that never runs is indistinguishable from a clean
+      # one. Ungated for the same reason as the three self-tests above.
+      - name: Self-test the zero-leg guard
+        run: python3 .github/workflows/zero-leg-guard-selftest.py
 
       # A samples-only change selects no package leg, because `nonSample`
       # carries '!samples/**'. That was sound while every sample was
@@ -2088,6 +2127,8 @@ jobs:
           TEST: ${{ needs.test.result }}
           CONTENT_GATES: ${{ needs['content-gates'].result }}
           LEG_COUNT: ${{ needs.plan.outputs.leg_count }}
+          PACKAGE_SOURCE_CHANGED: ${{ needs.plan.outputs.package_source_changed }}
+          VERSION_ONLY: ${{ needs.plan.outputs.version_only }}
         run: |
           set -euo pipefail
 
@@ -2117,6 +2158,17 @@ jobs:
           if [ "$ok" != "true" ]; then
             exit 1
           fi
+
+          # Zero-leg vacuity guard, second half (#3002). This is the ONLY
+          # vacuity check that can run on a zero-leg plan: the aggregate guard
+          # in `summarise-test-legs.py` is conditioned on `leg_count != '0'`,
+          # so selecting nothing skips the guard against selecting wrongly.
+          # Placed here because this step is the one thing in the rig that
+          # always runs, and it already reads LEG_COUNT.
+          .github/workflows/zero-leg-guard.sh verdict \
+            --leg-count "$LEG_COUNT" \
+            --package-source-changed "$PACKAGE_SOURCE_CHANGED" \
+            --version-only "$VERSION_ONLY"
 
           # Say plainly when nothing was tested. A green check here means the
           # gates that ran passed, not that any package's tests executed, and
