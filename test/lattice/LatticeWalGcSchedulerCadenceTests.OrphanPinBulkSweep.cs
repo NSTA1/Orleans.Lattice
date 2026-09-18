@@ -176,6 +176,23 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public void PutMissing(GrainId leaf) => _states[leaf] = null;
 
+        /// <summary>
+        /// A live leaf that has never checkpointed partition 0. The offset is
+        /// born <c>0</c> rather than at the <c>-1</c> sentinel, so
+        /// <c>ProjectionCheckpointOffsetAssigned</c> is the only thing
+        /// separating "applied up to offset 0" from "applied nothing"
+        /// (issue #2703). This is the population whose Zero pin is CORRECT, and
+        /// which must never be driven toward coverage.
+        /// </summary>
+        public void PutNeverCheckpointed(GrainId leaf, string treeId) =>
+            _states[leaf] = new LeafNodeState
+            {
+                TreeId = treeId,
+                ProjectionCheckpointOffset = 0,
+                ProjectionCheckpointOffsetAssigned = null,
+                ProjectionCheckpointOffsetsByPartition = null,
+            };
+
         public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             Reads++;
