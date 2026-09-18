@@ -304,15 +304,29 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     /// <summary>
     /// Drives <see cref="AdvanceAsync(CancellationToken)"/> until the index is
-    /// serving. Each step is bounded by both a vector count and a wall-clock
-    /// budget, and the turn is released between steps.
+    /// serving. The turn is released between steps.
     /// <para>
-    /// A concurrent <see cref="SearchAsync"/> does not wait on either: it reads
+    /// A concurrent <see cref="SearchAsync"/> does not wait on the build: it reads
     /// <see cref="IsServing"/> without taking the turn and falls back to the
     /// exact scan while a build runs. What a long step does block is every other
-    /// caller of this handle - the coordinator's own pump, and the arming path -
-    /// which is why the step is bounded in time and not only in work. See
-    /// <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
+    /// caller of this handle - the coordinator's own pump, and the arming path.
+    /// See <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
+    /// </para>
+    /// <para>
+    /// <b>A step is NOT bounded in time, and this paragraph replaces a claim that
+    /// said it was.</b> The vector-count and wall-clock budgets named above govern
+    /// the INGEST portion of a step only. They are consulted once the index is
+    /// open, and the open itself - <c>OpenAsync</c> in
+    /// <see cref="AdvanceAsync(CancellationToken)"/>, which restores or rebuilds
+    /// the durable index before any budget is read - carries no bound of either
+    /// kind. A cold open over a large plane therefore runs for as long as it runs,
+    /// inside a single non-reentrant coordinator turn, and the previous wording
+    /// ("which is why the step is bounded in time") asserted the exact guarantee
+    /// that does not hold. That mattered: issue #3130 spent its investigation
+    /// looking PAST the open, because the documentation said the open could not be
+    /// where the time was going. Bounding the open is tracked separately and has
+    /// to be resumable to be safe - see issue #2953 - so the claim is corrected
+    /// here rather than quietly satisfied.
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the build between steps.</param>
