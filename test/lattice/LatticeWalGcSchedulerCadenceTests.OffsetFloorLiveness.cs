@@ -1,6 +1,7 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
@@ -434,4 +435,84 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static bool HasBeenDriven(IBPlusLeafGrain leaf) =>
         leaf.ReceivedCalls().Any(
             c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.DriveStarvedCheckpointAsync));
+
+    // ------------------------------------- the census number (the min's terms)
+
+    [Test]
+    public void The_census_checkpoint_agrees_with_the_classification_it_is_printed_beside()
+    {
+        // The floor-holder census prints the published pin offset, which is
+        // min(checkpoint, covered). Observing a minimum bounds BOTH of its
+        // arguments and identifies NEITHER, so the offset alone cannot say
+        // whether a frozen floor is a checkpoint that will not advance or
+        // coverage that will not restamp - opposite faults wanting opposite
+        // remedies. The checkpoint term is therefore printed beside it.
+        //
+        // Its worth depends entirely on agreeing with the state it sits next
+        // to: a number derived from a different read, or from a different
+        // partition, would be worse than none at all, because it would look
+        // authoritative. Both come from ReadPersistedCheckpoint on one row.
+        var state = new LeafNodeState
+        {
+            TreeId = OrphanSweepTree,
+            ProjectionCheckpointOffsetsByPartition = [-1L, 245019L, -1L, 7L],
+        };
+
+        for (var partition = 0; partition < 4; partition++)
+        {
+            var checkpoint = LatticeWalGcScheduler.ReadPersistedCheckpoint(state, partition);
+            var classification = LatticeWalGcScheduler.ClassifyCheckpoint(state, partition);
+
+            Assert.That(
+                classification,
+                Is.EqualTo(checkpoint >= 0
+                    ? WalGcBlockingPinState.CheckpointedUncovered
+                    : WalGcBlockingPinState.NeverCheckpointed),
+                $"partition {partition}: the printed checkpoint and the printed state must be two "
+                    + "readings of one durable row. If they can disagree, the census line reports a "
+                    + "number for a partition the classification did not describe.");
+        }
+    }
+
+    [Test]
+    public void The_census_checkpoint_reports_the_sentinel_for_a_born_zero_partition_zero()
+    {
+        // The one way the printed number could lie. ProjectionCheckpointOffset
+        // has no initializer, so it is born 0 rather than at the -1 sentinel
+        // every other partition uses, and Orleans omits default-valued members
+        // (issue #2703). An unguarded read would print "durable checkpoint 0"
+        // for a leaf that has applied nothing.
+        //
+        // That is the worst available failure for THIS diagnostic specifically:
+        // a phantom 0 sits at or below every real floor, so it would read as
+        // "the checkpoint is the binding term and is pinned at the bottom" -
+        // the exact conclusion the census exists to test, handed over for free
+        // and wrong.
+        var bornZero = new LeafNodeState { TreeId = OrphanSweepTree };
+
+        Assert.That(LatticeWalGcScheduler.ReadPersistedCheckpoint(bornZero, partition: 0),
+            Is.EqualTo(-1L),
+            "an unassigned partition-0 zero is the type default, not progress, and must report the "
+                + "sentinel exactly as the leaf's own accessor does.");
+    }
+
+    [Test]
+    public void The_census_checkpoint_reports_a_claimed_partition_zero_offset_of_zero()
+    {
+        // The other half of the guard, and the reason it is a flag rather than
+        // a range check: offset 0 is a real checkpoint once something claims
+        // it. Resolving the ambiguity by treating every 0 as the sentinel would
+        // under-report a genuine floor holder sitting at the bottom of the WAL,
+        // which is a population this census is specifically meant to see.
+        var claimedZero = new LeafNodeState
+        {
+            TreeId = OrphanSweepTree,
+            ProjectionCheckpointOffsetAssigned = true,
+        };
+
+        Assert.That(LatticeWalGcScheduler.ReadPersistedCheckpoint(claimedZero, partition: 0),
+            Is.EqualTo(0L),
+            "a claimed offset 0 is progress, and the assignment flag is the only thing separating it "
+                + "from the type default.");
+    }
 }
