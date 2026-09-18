@@ -77,16 +77,54 @@ internal enum WalGcTrimStopReason
     OffsetFloor = 2,
 
     /// <summary>
-    /// The scan stopped because the first entry it could not trim failed the
-    /// HLC eligibility predicate - the consumer-cursor floor, the TTL ceiling,
-    /// the causally stable frontier, or a Zero-HLC block pin.
+    /// The scan stopped because the first entry it could not trim failed the HLC
+    /// clause of the eligibility predicate: neither the minimum consumer cursor
+    /// nor the retention TTL ceiling accepted it.
     /// <para>
-    /// Separated from <see cref="OffsetFloor"/> because the two demand different
-    /// investigations entirely. This one points at a consumer that has not
-    /// advanced its cursor; the other points at a leaf that has not advanced its
-    /// durable checkpoint. Collapsing them would send a diagnosis to the wrong
+    /// Indicts the <b>consumer-cursor</b> subsystem - a reader that has not
+    /// acknowledged this far, or a retention window that has not aged the entry
+    /// out. Separated from <see cref="OffsetFloor"/> because the two demand
+    /// different investigations entirely. This one points at a consumer that has
+    /// not advanced its cursor; the other points at a leaf that has not advanced
+    /// its durable checkpoint. Collapsing them would send a diagnosis to the wrong
     /// subsystem, which is the failure mode this enum exists to prevent.
     /// </para>
+    /// <para>
+    /// Separated from <see cref="CausalFrontier"/> and <see cref="BlockPin"/> on
+    /// exactly that same reasoning, applied to the boundary inside the predicate
+    /// rather than the one around it (issue #3155). Those three were one arm,
+    /// <c>not_eligible</c>, until a tree stopping every scan on it could be shown
+    /// to be stranded with no way to say by what.
+    /// </para>
     /// </summary>
-    NotEligible = 3,
+    CursorFloor = 3,
+
+    /// <summary>
+    /// The scan stopped because the first entry it could not trim failed the
+    /// causal-stable clause: a per-origin frontier has been reported and it does
+    /// not dominate that entry's version vector.
+    /// <para>
+    /// Indicts the <b>causal frontier</b> - a replication origin whose stability
+    /// has not advanced. It is not a restatement of <see cref="CursorFloor"/>: a
+    /// consumer's HLC cursor can be arbitrarily far ahead while one origin's entry
+    /// in its stable vector stays behind, so a tree held here has a healthy cursor
+    /// and an unhealthy origin, and looking at the cursor would clear the wrong
+    /// subsystem.
+    /// </para>
+    /// </summary>
+    CausalFrontier = 4,
+
+    /// <summary>
+    /// The scan stopped because the first entry it could not trim sits at or above
+    /// a consumer's buffer-pin floor.
+    /// <para>
+    /// Indicts a <b>buffering receiver</b> that published a non-null pin so it can
+    /// recover from buffer state. Distinct from the other two arms in kind as well
+    /// as in subsystem: this is a deliberate hold rather than a lag, so the
+    /// question it raises is whether the pin is still live, not whether something
+    /// is still moving. A sustained run of this arm against a consumer that is no
+    /// longer buffering is a leaked pin.
+    /// </para>
+    /// </summary>
+    BlockPin = 5,
 }
