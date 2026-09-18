@@ -15,6 +15,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeConstants.SystemTreePrefix"/> and is excluded from
 /// self-registration to avoid circular bootstrap.
 /// </para>
+/// <para>
+/// Read-only members of <see cref="ILatticeRegistry"/> are
+/// <c>[AlwaysInterleave]</c> and mutating members deliberately are not; the
+/// grain type itself is not <c>[Reentrant]</c>. The full rationale - why the
+/// write paths still need exclusion and why the reads are safe to admit
+/// mid-body - lives on the interface, which is where the attributes are
+/// declared.
+/// </para>
 /// </summary>
 internal sealed class LatticeRegistryGrain(
     IGrainFactory grainFactory,
@@ -281,17 +289,20 @@ internal sealed class LatticeRegistryGrain(
 
         // One concurrent wave of the same single-key read GetEntryAsync issues,
         // rather than ISystemLattice.GetManyAsync. That looks like the obvious
-        // primitive but it deadlocks from here: LatticeGrain.GetManyAsyncCore
+        // primitive but it was unsafe from here: LatticeGrain.GetManyAsyncCore
         // ends every attempt with an unconditional topology-stability re-probe
         // (`registry.GetShardMapAsync(TreeId)`) against ILatticeRegistry. Called
         // from inside this grain that closes a two-hop cycle back onto this
-        // activation, which is non-reentrant and still executing this turn, so
-        // the probe queues behind us forever. The single-key read has no such
-        // re-probe, which is why the per-entry GetEntryAsync path has always
-        // worked from here. Awaiting the whole wave keeps the caller-visible win
-        // (one round-trip for a page instead of one per entry) and collapses the
-        // registry-side cost from N sequential awaits to a single parallel wave;
-        // only the shard-level grouping is given up, and that is silo-internal.
+        // activation while it is still executing this turn. (Since #3180 that
+        // re-probe is [AlwaysInterleave] and so would no longer queue behind
+        // us, but the single-key read has never had the re-probe at all, which
+        // is why the per-entry GetEntryAsync path has always worked from here -
+        // and it costs nothing to keep, so the cycle stays closed by
+        // construction rather than by one attribute on another method.)
+        // Awaiting the whole wave keeps the caller-visible win (one round-trip
+        // for a page instead of one per entry) and collapses the registry-side
+        // cost from N sequential awaits to a single parallel wave; only the
+        // shard-level grouping is given up, and that is silo-internal.
         var reads = new Task<byte[]?>[treeIds.Count];
         for (var i = 0; i < treeIds.Count; i++)
         {
@@ -486,7 +497,7 @@ internal sealed class LatticeRegistryGrain(
         // Note this method replaces the map wholesale. A caller that needs to
         // apply a *diff* onto the live map must not build that diff from a
         // separate GetShardMapAsync call and persist it here: non-reentrancy
-        // serialises each individual call, not a sequence of two, so a
+        // serialises each individual mutating call, not a sequence of two, so a
         // concurrent coordinator can persist between the caller's read and its
         // write and have its reassignment erased. Use ReassignSlotsAsync,
         // which performs the whole read-modify-write inside one call.
@@ -506,13 +517,17 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(slots);
         ArgumentNullException.ThrowIfNull(fallbackMap);
 
-        // Atomic read-modify-write: this grain is non-reentrant and is a
-        // singleton (keyed by RegistryTreeId), so the entire method body runs
-        // without interleaving across concurrent callers. Both the read of the
-        // live map and the persist of the reassigned copy are inside that
-        // body, which is what lets a concurrent split and fold compose: each
-        // applies its own slot diff onto whatever the other has already
-        // committed, rather than onto a view that has since gone stale.
+        // Atomic read-modify-write: this grain is a singleton (keyed by
+        // RegistryTreeId) and this method carries no [AlwaysInterleave], so the
+        // entire method body runs without another mutator interleaving. Both
+        // the read of the live map and the persist of the reassigned copy are
+        // inside that body, which is what lets a concurrent split and fold
+        // compose: each applies its own slot diff onto whatever the other has
+        // already committed, rather than onto a view that has since gone stale.
+        // Read-only members are [AlwaysInterleave] and may be admitted mid-body;
+        // that is harmless, because the entry is rewritten by the single
+        // terminal SetAsync below, so a reader sees it wholly before or wholly
+        // after.
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
@@ -542,10 +557,11 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        // Atomic read-modify-write: this grain is non-reentrant and is a
-        // singleton (keyed by RegistryTreeId), so the entire method body runs
-        // without interleaving across concurrent callers, guaranteeing each
-        // split coordinator receives a distinct target shard index.
+        // Atomic read-modify-write: this grain is a singleton (keyed by
+        // RegistryTreeId) and this method carries no [AlwaysInterleave], so the
+        // entire method body runs without another mutator interleaving,
+        // guaranteeing each split coordinator receives a distinct target shard
+        // index.
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
         var allocated = floor + 1;
@@ -631,9 +647,9 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentException.ThrowIfNullOrEmpty(providerKey);
 
-        // Atomic read-validate-write: the registry grain is non-reentrant and
-        // singleton-keyed, so the compare-and-swap below cannot interleave with
-        // a concurrent placement change.
+        // Atomic read-validate-write: the registry grain is singleton-keyed and
+        // this method carries no [AlwaysInterleave], so the compare-and-swap
+        // below cannot interleave with a concurrent placement change.
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
@@ -661,9 +677,10 @@ internal sealed class LatticeRegistryGrain(
             ArgumentException.ThrowIfNullOrEmpty(providerKey, nameof(moves));
         }
 
-        // Atomic read-validate-write: the registry grain is non-reentrant and
-        // singleton-keyed, so the compare-and-swap below applies every move under
-        // one version bump with no intermediate placement observable.
+        // Atomic read-validate-write: the registry grain is singleton-keyed and
+        // this method carries no [AlwaysInterleave], so the compare-and-swap
+        // below applies every move under one version bump with no intermediate
+        // placement observable.
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)

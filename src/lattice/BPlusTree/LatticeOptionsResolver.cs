@@ -555,12 +555,30 @@ internal sealed class LatticeOptionsResolver(
     /// is supplied by the caller (the view maintainer reads it from
     /// <see cref="Orleans.Lattice.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
     /// only consulted under <see cref="HistoryRetentionMode.Hybrid"/>.
+    /// <para>
+    /// System trees (IDs beginning with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) resolve synchronously to
+    /// the documented defaults without touching the registry, matching the
+    /// <see cref="ResolveAsync"/> branch and avoiding the registry-tree
+    /// bootstrap cycle. The bypass is behaviour-preserving as well as
+    /// cycle-avoiding: a system tree is never registered (the registry excludes
+    /// the reserved prefix from self-registration and
+    /// <c>ILatticeRegistry.RegisterAsync</c> rejects it outright), so the
+    /// registry read it replaces could only ever have returned <c>null</c> and
+    /// fallen through to exactly the same defaults.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The source tree whose history retention is resolved.</param>
     /// <param name="hybridFullValueWindow">The recent-tail window for hybrid mode.</param>
     public ValueTask<Views.HistoryRetentionPolicy> GetHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<Views.HistoryRetentionPolicy>(
+                new Views.HistoryRetentionPolicy(
+                    HistoryRetentionMode.MetadataOnly, TimeSpan.Zero, hybridFullValueWindow));
+        }
         return new ValueTask<Views.HistoryRetentionPolicy>(LoadHistoryRetentionAsync(treeId, hybridFullValueWindow));
     }
 
