@@ -141,7 +141,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static (LatticeWalGcScheduler Scheduler, LeafTouchBook Leaves) SchedulerRepairing(
         FakePinStore pins,
         IGrainStorage? storage,
-        VirtualTimeProvider time)
+        VirtualTimeProvider time,
+        int walPartitions = 1)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -154,7 +155,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>())
             .Returns(call => pins.For(call.ArgAt<string>(0)));
 
-        return (CreateScheduler(factory, gc, OrphanSweepOptions(), time, leafStateStorage: storage), leaves);
+        return (
+            CreateScheduler(
+                factory, gc, OrphanSweepOptions(walPartitions: walPartitions), time, leafStateStorage: storage),
+            leaves);
     }
 
     /// <summary>

@@ -83,6 +83,24 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             grain.Pins[consumerId] = frontier;
         }
 
+        /// <summary>
+        /// Seeds a pin at an explicit frontier <i>and</i> an explicit durable
+        /// checkpoint offset.
+        /// </summary>
+        /// <remarks>
+        /// The two axes are independent minima over the same population, and the
+        /// offset one is what <c>ComputeMaterialiserOffsetFloorAsync</c> takes
+        /// (issue #3178). Every other seed here leaves the offset unset, which
+        /// the pin grain reports as absent and the sweep reads as <c>-1</c> -
+        /// the value that constrains no offset floor at all, and the shape every
+        /// pre-#3178 fixture was written against.
+        /// </remarks>
+        public void Seed(string key, string consumerId, HybridLogicalClock frontier, long offset)
+        {
+            Seed(key, consumerId, frontier);
+            _grains[key].Offsets[consumerId] = offset;
+        }
+
         public IWalMaterialiserPinGrain For(string key)
         {
             if (!_grains.TryGetValue(key, out var grain))
@@ -99,6 +117,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         private sealed class FakePinGrain(FakePinStore store, string key) : IWalMaterialiserPinGrain
         {
             public Dictionary<string, HybridLogicalClock> Pins { get; } = new(StringComparer.Ordinal);
+
+            public Dictionary<string, long> Offsets { get; } = new(StringComparer.Ordinal);
 
             public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync()
             {
@@ -122,7 +142,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
             public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
                 Task.FromResult<IReadOnlyDictionary<string, long>>(
-                    new Dictionary<string, long>(StringComparer.Ordinal));
+                    new Dictionary<string, long>(Offsets, StringComparer.Ordinal));
 
             public Task ReportAsync(string consumerId, HybridLogicalClock frontier) => Task.CompletedTask;
 
@@ -230,10 +250,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static string OrphanConsumerId(int ordinal, string treeId = OrphanSweepTree) =>
         $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{OrphanLeafGrainId(ordinal)}";
 
-    private static LatticeOptions OrphanSweepOptions(int pinShards = 1)
+    private static LatticeOptions OrphanSweepOptions(int pinShards = 1, int walPartitions = 1)
     {
         var options = Adaptive();
         options.WalMaterialiserPinShards = pinShards;
+        options.WalPartitions = walPartitions;
         return options;
     }
 

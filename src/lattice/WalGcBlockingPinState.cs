@@ -188,13 +188,28 @@ public enum WalGcBlockingPinState
     /// which was the leaf being right.
     /// </para>
     /// <para>
-    /// <b>Not repairable, and that is the point.</b> This arm is excluded from
-    /// the set #3164 drives. There is no coverage hole to repair, so a
-    /// reactivation can only cost an activation and report that it found
-    /// nothing. A tree sitting on this arm is not defective and is not healed
-    /// by touching its leaves: its WAL floor is held by a pin that is healthy
-    /// and simply old, which is a frontier-advance question rather than a
-    /// coverage one.
+    /// <b>Not a coverage defect, and that is the point.</b> This arm is excluded
+    /// from the set #3164 drives <i>for coverage</i>. There is no coverage hole
+    /// to repair, so a reactivation undertaken to close one can only cost an
+    /// activation and report that it found nothing. A tree sitting on this arm
+    /// is not defective in the way #3164 addresses: its WAL floor is held by a
+    /// pin that is healthy and simply old, which is a frontier-advance question
+    /// rather than a coverage one.
+    /// </para>
+    /// <para>
+    /// <b>That advance question has since been answered (issue #3178), and it
+    /// does not reopen this one.</b> The offset half of such a pin is a
+    /// scanned-through projection checkpoint, which advances only during replay
+    /// - that is, only while the leaf is activated - so a leaf that deactivates
+    /// freezes it at its exit position, and on a converged corpus nothing ever
+    /// reactivates it. Being a minimum over every leaf, the tree's offset floor
+    /// is then held indefinitely by whichever dormant leaf sits lowest, and the
+    /// WAL cannot be trimmed by a byte although no leaf is blocked and no pass
+    /// fails. The remedy is the same activation, sought for a different reason:
+    /// a pin on this arm whose durable offset equals the tree's offset floor is
+    /// driven for <i>liveness</i>, not for coverage. It remains true that
+    /// nothing here asserts a coverage hole, and a pin on this arm sitting above
+    /// the floor is still not driven at all - it is not in the way.
     /// </para>
     /// <para>
     /// <b>Why it is honest rather than merely cautious.</b> Naming it
