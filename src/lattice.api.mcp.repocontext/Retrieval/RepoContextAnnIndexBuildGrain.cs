@@ -611,9 +611,33 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // designed self-heal that would have cleared it was refused by the access
         // gate, so the fault was permanent rather than transient.
         _steppedThisTick = true;
-        var progress = await registry
-            .BuildStepAsync(repoId, space, _phaseProbe, CancellationToken.None)
-            .ConfigureAwait(true);
+
+        // The in-flight gauge is opened HERE, around the await, and closed in a
+        // finally. Every other instrument on this plane records after the step
+        // RETURNS, so a step that never returns is invisible to all of them - the
+        // blind spot issue #3130 had to close by hand out of a container log. The
+        // token is handed to the probe as well so that a phase entered deep inside
+        // the step (opening, ingesting, training, persisting) is attributed live
+        // rather than only once the step ends.
+        var stepToken = sliceReporter.BeginStep(repoId, space);
+        _phaseProbe.AttachSink(sliceReporter, stepToken);
+
+        VectorIndexBuildProgress progress;
+        try
+        {
+            progress = await registry
+                .BuildStepAsync(repoId, space, _phaseProbe, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        finally
+        {
+            // Detached and retired on EVERY exit, fault included. A step left open
+            // would climb for ever and report the coordinator's own bookkeeping leak
+            // as a build wedge, which is the one reading this gauge must not invent.
+            _phaseProbe.DetachSink();
+            sliceReporter.EndStep(stepToken);
+        }
+
         _steppedThisTick = false;
 
         _advancedThisActivation = true;

@@ -337,6 +337,28 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// </summary>
     internal const string SliceInstrumentName = "repocontext.ann.build.slice";
 
+    /// <summary>
+    /// The gauge reporting how long the build step currently executing has been
+    /// inside its present phase, in seconds, or zero when no step is executing.
+    /// <para>
+    /// <b>Why an observable instrument rather than another arm of the counter
+    /// above.</b> Every other instrument on this plane - this reporter's own slice
+    /// counter included - fires at a TERMINAL moment: a step that completed, an
+    /// open that finished or faulted, a build that reached Ready. A phase that
+    /// never terminates therefore emits nothing at all, and the resulting all-zero
+    /// reading is byte-identical to "this coordinator is not stepping". That is
+    /// precisely the ambiguity the slice counter exists to remove one layer up,
+    /// and it was unhandled one layer down: issue #3130 located a build wedged
+    /// inside a single non-reentrant turn only by elimination, from
+    /// <c>ann_build_slice_total</c> and <c>ann_index_load_total</c> both reading
+    /// zero on every arm, and then confirmed it by hand out of a container log.
+    /// An observable gauge is the only instrument shape that can report a phase
+    /// WHILE it is still running, because its callback is driven by the collector
+    /// rather than by the step reaching an end it may never reach.
+    /// </para>
+    /// </summary>
+    internal const string InFlightInstrumentName = "repocontext.ann.build.step.in_flight_seconds";
+
     /// <summary>The tag key carrying the progress partition.</summary>
     internal const string ProgressTagKey = "progress";
 
@@ -403,6 +425,23 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// </summary>
     internal const string PhaseTagKey = "phase";
 
+    /// <summary>
+    /// The closed set of phases, in tick order, that the in-flight gauge emits one
+    /// primed arm apiece for. Held as a static array rather than resolved with
+    /// <see cref="Enum.GetValues{TEnum}"/> so a scrape allocates nothing to walk it,
+    /// and declared ABOVE the observable that reads it for the reason given on that
+    /// field.
+    /// </summary>
+    private static readonly RepoContextAnnBuildStepPhase[] PhaseTagValues =
+    [
+        RepoContextAnnBuildStepPhase.Coordinating,
+        RepoContextAnnBuildStepPhase.Opening,
+        RepoContextAnnBuildStepPhase.Ingesting,
+        RepoContextAnnBuildStepPhase.Training,
+        RepoContextAnnBuildStepPhase.Persisting,
+        RepoContextAnnBuildStepPhase.Reconciling,
+    ];
+
     /// <summary>The tag value for a tick that never reached the build step.</summary>
     internal const string PhaseCoordinatingTag = "coordinating";
 
@@ -429,7 +468,21 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private readonly Counter<long> _slices;
 
     private readonly Lock _gate = new();
+
+    // The clock the in-flight gauge measures against, injectable so a test can pin
+    // elapsed seconds deterministically instead of sleeping. A MONOTONIC timestamp
+    // rather than wall-clock time: the elapsed reading must not be distorted by a
+    // clock adjustment landing during exactly the long step it exists to measure.
+    private readonly TimeProvider _time;
     private readonly Dictionary<(string RepoId, EmbeddingSpaceTag Space), PlaneTags> _planes = new();
+
+    // The steps currently executing, keyed by the token BeginStep minted. Keyed by
+    // token rather than by plane so a step that begins while a previous token is
+    // still outstanding cannot silently adopt the older step's start time, and so a
+    // late EndStep cannot remove a successor's entry. Read under _gate by the gauge
+    // callback, which is the collector's thread and not the coordinator's.
+    private readonly Dictionary<long, InFlightStep> _inFlight = [];
+    private long _nextStepToken;
     private long _advanced;
     private long _starved;
     private long _idle;
@@ -447,9 +500,26 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _faultedPersisting;
     private long _faultedReconciling;
 
+    // DECLARED LAST, BELOW _inFlight AND _gate, AND THAT IS LOAD-BEARING. An
+    // observable instrument's callback runs during instrument publication - re-entrantly,
+    // part-way through the initialiser sequence - as well as on every later collection,
+    // and initialisers run in declaration order. An observable declared above the state
+    // its own callback reads therefore observes a null collection at publication, throws
+    // inside the MeterListener, and takes its OWN SERIES OFF THE WIRE rather than
+    // reporting an error at the offending line. Keep this the last field in the class.
+    // See ObservableInstrumentDeclarationOrderTests and the metrics conventions in
+    // .github/copilot-instructions.md.
+    private readonly ObservableGauge<double> _inFlightSeconds;
+
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
-    public RepoContextAnnBuildSliceReporter()
+    /// <param name="timeProvider">
+    /// The clock the in-flight gauge measures elapsed phase time against. Defaults to
+    /// <see cref="TimeProvider.System"/>; supplied by tests so elapsed readings are
+    /// deterministic rather than slept for.
+    /// </param>
+    public RepoContextAnnBuildSliceReporter(TimeProvider? timeProvider = null)
     {
+        _time = timeProvider ?? TimeProvider.System;
         _meter = new Meter(RepoContextUsageRecorder.MeterName);
         _slices = _meter.CreateCounter<long>(
             SliceInstrumentName,
@@ -513,12 +583,183 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 + "every phase IS pre-minted, because phase partitions the whole population rather than the "
                 + "faults alone.");
 
+        _inFlightSeconds = _meter.CreateObservableGauge(
+            InFlightInstrumentName,
+            ObserveInFlight,
+            unit: "s",
+            description:
+                "How long the approximate-index build step currently executing has been inside its present "
+                + "phase, in seconds, or 0 when no step is executing. Every OTHER instrument on this plane "
+                + "fires at a terminal moment - a step that completed, an open that finished or faulted - so "
+                + "a phase that NEVER TERMINATES emits nothing at all and reads exactly like a coordinator "
+                + "that is not stepping (issue #3130). This gauge is the only instrument that can report a "
+                + "phase WHILE it is still running, because the collector drives it rather than the step "
+                + "reaching an end it may never reach. Carries the same 'repository', 'space' and 'phase' "
+                + "tags as the slice counter, so a wedge can be attributed to the same plane and the same "
+                + "half of the step - an 'ingesting' series climbing without bound is a corpus-read defect, "
+                + "a 'persisting' one is an index-write defect. It is primed to 0 for every plane the "
+                + "coordinator has primed, so a HEALTHY build is distinguishable from an UNWIRED one: a "
+                + "gauge that reports only the bad state makes the good state and a broken instrument the "
+                + "same reading.");
+
         // Priming is per PLANE and lives in EnsurePrimed, not here: a constructor
         // cannot know which repositories and spaces exist, and a primed series for
         // a plane that does not exist claims a build nobody asked for. See
         // EnsurePrimed for the arms and for why the coordinator calls it above
         // every early return.
     }
+
+    /// <summary>
+    /// Announces that a build step has begun executing and returns the token that
+    /// identifies it until <see cref="EndStep"/> retires it.
+    /// </summary>
+    /// <param name="repoId">The repository whose plane is being built.</param>
+    /// <param name="space">The embedding space being built.</param>
+    /// <returns>The token identifying this step.</returns>
+    /// <remarks>
+    /// Steps are tracked by TOKEN rather than by plane, and that is deliberate. Keyed
+    /// by plane, a step that begins while a previous step on the same plane is still
+    /// outstanding would silently adopt - or overwrite - the older step's start time,
+    /// so the very condition this gauge exists to expose (a step that never returns)
+    /// would be erased by the next step that did. Keyed by token, a late
+    /// <see cref="EndStep"/> also cannot retire a SUCCESSOR's entry.
+    /// </remarks>
+    public long BeginStep(string repoId, EmbeddingSpaceTag space)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        // Resolved outside the lock: ResolvePlane mints and caches the plane's
+        // rendered tags and takes the gate itself.
+        var plane = ResolvePlane(repoId, space);
+        var entered = _time.GetTimestamp();
+
+        lock (_gate)
+        {
+            var token = ++_nextStepToken;
+            _inFlight[token] = new InFlightStep(plane, RepoContextAnnBuildStepPhase.Coordinating, entered);
+            return token;
+        }
+    }
+
+    /// <summary>
+    /// Records that the step identified by <paramref name="token"/> has entered
+    /// <paramref name="phase"/>, restarting the elapsed clock the gauge reports.
+    /// </summary>
+    /// <param name="token">The token <see cref="BeginStep"/> returned.</param>
+    /// <param name="phase">The phase the step has entered.</param>
+    /// <remarks>
+    /// The clock restarts per PHASE rather than running for the whole step because
+    /// the question the gauge has to answer is not "has this step been slow" but
+    /// "WHICH HALF of it is not returning". A step that ingests for three minutes and
+    /// then wedges while persisting reports a large 'persisting' arm and a zero
+    /// 'ingesting' one, which attributes the wedge to the index write; a whole-step
+    /// clock would report one large number that both a slow read and a stuck write
+    /// produce identically.
+    /// <para>
+    /// A token with no live entry is IGNORED rather than re-created. A phase arriving
+    /// after its step was retired is a late write from a step that has already ended,
+    /// and re-creating an entry for it would leave a step in flight for ever with no
+    /// caller left to end it - the gauge would then report its own bookkeeping leak
+    /// as a build wedge, which is the one reading it must never invent.
+    /// </para>
+    /// </remarks>
+    public void ObserveStepPhase(long token, RepoContextAnnBuildStepPhase phase)
+    {
+        var entered = _time.GetTimestamp();
+
+        lock (_gate)
+        {
+            if (_inFlight.TryGetValue(token, out var step))
+            {
+                _inFlight[token] = step with { Phase = phase, EnteredTimestamp = entered };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Retires the step identified by <paramref name="token"/>, returning its plane's
+    /// arms to the primed zero.
+    /// </summary>
+    /// <param name="token">The token <see cref="BeginStep"/> returned.</param>
+    public void EndStep(long token)
+    {
+        lock (_gate)
+        {
+            _inFlight.Remove(token);
+        }
+    }
+
+    /// <summary>
+    /// The gauge callback: one arm per primed plane per phase, carrying the seconds
+    /// the executing step has spent in that phase, or zero.
+    /// </summary>
+    /// <returns>One measurement per plane and phase.</returns>
+    /// <remarks>
+    /// EVERY primed plane emits EVERY phase, including the phases no step is in. A
+    /// gauge that emitted only the phase currently executing would report nothing at
+    /// all on a healthy idle build, which is byte-identical to the instrument being
+    /// unwired - the same conflation issue #2952 removed from the slice counter. The
+    /// arm count is bounded by planes times six, so priming costs nothing that grows.
+    /// </remarks>
+    private IEnumerable<Measurement<double>> ObserveInFlight()
+    {
+        var now = _time.GetTimestamp();
+
+        lock (_gate)
+        {
+            var measurements = new List<Measurement<double>>(_planes.Count * PhaseTagValues.Length);
+
+            foreach (var plane in _planes.Values)
+            {
+                foreach (var phase in PhaseTagValues)
+                {
+                    var seconds = 0d;
+
+                    // Bounded by the number of steps genuinely in flight, which is one
+                    // per coordinator activation: a coordinator takes one non-reentrant
+                    // turn at a time.
+                    foreach (var step in _inFlight.Values)
+                    {
+                        if (step.Phase != phase || step.Plane != plane)
+                        {
+                            continue;
+                        }
+
+                        var elapsed = _time.GetElapsedTime(step.EnteredTimestamp, now).TotalSeconds;
+                        if (elapsed > seconds)
+                        {
+                            seconds = elapsed;
+                        }
+                    }
+
+                    measurements.Add(new Measurement<double>(
+                        seconds,
+                        new KeyValuePair<string, object?>(RepositoryTagKey, plane.Repository),
+                        new KeyValuePair<string, object?>(SpaceTagKey, plane.Space),
+                        new KeyValuePair<string, object?>(PhaseTagKey, DescribePhase(phase)),
+                        LatticeTenantLabel.Platform));
+                }
+            }
+
+            return measurements;
+        }
+    }
+
+    /// <summary>
+    /// One build step currently executing, as the in-flight gauge sees it.
+    /// </summary>
+    /// <param name="Plane">The rendered plane tags the step is building.</param>
+    /// <param name="Phase">The phase the step is presently inside.</param>
+    /// <param name="EnteredTimestamp">
+    /// The <see cref="TimeProvider.GetTimestamp"/> reading taken when that phase was
+    /// entered. A raw monotonic timestamp rather than a <see cref="DateTimeOffset"/>
+    /// so the elapsed time the gauge reports cannot be distorted by a wall-clock
+    /// adjustment during exactly the long step it exists to measure.
+    /// </param>
+    private readonly record struct InFlightStep(
+        PlaneTags Plane,
+        RepoContextAnnBuildStepPhase Phase,
+        long EnteredTimestamp);
 
     /// <summary>
     /// The rendered tag values for one plane, resolved once when the plane is first
