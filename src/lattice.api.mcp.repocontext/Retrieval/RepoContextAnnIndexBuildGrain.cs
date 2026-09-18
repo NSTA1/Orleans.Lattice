@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Runtime;
@@ -625,8 +625,29 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         VectorIndexBuildProgress progress;
         try
         {
+            // PhaseTickToken, NOT CancellationToken.None - this is issue #3130's
+            // item 2, and the None it replaces was load-bearing rather than
+            // cosmetic.
+            //
+            // The whole chain below already honours a token: AdvanceAsync takes the
+            // handle's turn gate with it, hands it to OpenAsync - the unbounded
+            // phase this issue is named for - and on into the index's own build
+            // step and catch-up. Every one of those awaits was uncancellable for
+            // exactly one reason: the only caller supplied a token that can never
+            // be cancelled. A step measured at 23 minutes on the acceptance rig
+            // therefore held a non-reentrant grain turn with no way to abandon it,
+            // and deactivation had to wait the full duration out.
+            //
+            // The None also made a decision one layer down UNREACHABLE.
+            // DurableVectorIndex's SliceDeadlineSpent separates "the slice budget
+            // expired, so bank the progress and report an incomplete slice" from
+            // "the caller cancelled, so stop" by asking whether the caller's token
+            // is cancelled. Against None that question has one answer forever, so
+            // the branch could only ever resolve one way. Supplying a real token is
+            // what makes that distinction exist in production rather than only in
+            // the tests that pass one.
             progress = await registry
-                .BuildStepAsync(repoId, space, _phaseProbe, CancellationToken.None)
+                .BuildStepAsync(repoId, space, _phaseProbe, PhaseTickToken)
                 .ConfigureAwait(true);
         }
         finally
@@ -704,9 +725,14 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // moment ILattice.GetRangeReadGateCoverageAsync names for itself: a range
         // read came back empty and the caller is about to act on that emptiness. A
         // build holding vectors needs no probe, so the ordinary path costs nothing.
+        //
+        // On the tick's token for the same reason as the step above: this is a read
+        // on the tick path, it can be re-driven from scratch on the next tick, and
+        // nothing is banked until it returns - so abandoning it at teardown loses
+        // no progress and blocks no shutdown.
         var coverage = progress.VectorsIndexed > 0
             ? RepoContextAnnBuildCorpusCoverage.NonEmpty
-            : await corpusGateProbe.ProbeAsync(repoId, CancellationToken.None).ConfigureAwait(true);
+            : await corpusGateProbe.ProbeAsync(repoId, PhaseTickToken).ConfigureAwait(true);
 
         // Counted before it is acted on, and counted on every completed build
         // including the ordinary non-empty ones, so the total is a denominator and
@@ -943,6 +969,19 @@ internal sealed class RepoContextAnnIndexBuildGrain(
 
         try
         {
+            // DELIBERATELY CancellationToken.None, unlike the two tick-path calls
+            // in ProcessNextPhaseCoreAsync, which now run on PhaseTickToken.
+            //
+            // The catch below is unfiltered and reports a swallowed fault as a
+            // warning. Handing it a token that is cancelled at every teardown would
+            // therefore emit "could not retire its superseded embedding-space index
+            // prefixes" on every orderly shutdown - a warning about a failure that
+            // did not happen, on the one path whose own doc says it must never be
+            // able to disturb the coordinator standing down.
+            //
+            // Nothing is lost by letting it finish: this is idempotent housekeeping
+            // over a handful of prefixes, its durable flag is written only after it
+            // succeeds, and a pass that never runs is retried by the next one.
             var retired = await backing
                 .ReclaimSupersededSpacesAsync(repoId, space, CancellationToken.None)
                 .ConfigureAwait(true);

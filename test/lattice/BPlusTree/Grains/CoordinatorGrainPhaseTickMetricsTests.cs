@@ -114,7 +114,10 @@ public partial class CoordinatorGrainPhaseTickMetricsTests
         ITimerRegistry Timers,
         CapturingLogger Logger);
 
-    private static Harness Create(string key = GrainKey, bool composite = false)
+    private static Harness Create(
+        string key = GrainKey,
+        bool composite = false,
+        Func<IGrainContext, IReminderRegistry, CapturingLogger, TestCoordinator>? factory = null)
     {
         var timerRegistry = Substitute.For<ITimerRegistry>();
         timerRegistry.RegisterGrainTimer(
@@ -133,9 +136,11 @@ public partial class CoordinatorGrainPhaseTickMetricsTests
 
         var reminders = Substitute.For<IReminderRegistry>();
         var logger = new CapturingLogger();
-        TestCoordinator grain = composite
-            ? new CompositeKeyCoordinator(context, reminders, logger)
-            : new TestCoordinator(context, reminders, logger);
+        TestCoordinator grain = factory is not null
+            ? factory(context, reminders, logger)
+            : composite
+                ? new CompositeKeyCoordinator(context, reminders, logger)
+                : new TestCoordinator(context, reminders, logger);
 
         return new Harness(grain, timerRegistry, logger);
     }
