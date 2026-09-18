@@ -1268,7 +1268,9 @@ public sealed class LatticeWalGc(
                     break;
                 }
 
-                if (IsEligible(walEntry.Mutation, minCursor, ttlCeiling, causalStable, blockedFloor))
+                var eligibility = ClassifyEligibility(
+                    walEntry.Mutation, minCursor, ttlCeiling, causalStable, blockedFloor);
+                if (eligibility == WalGcTrimEligibility.Eligible)
                 {
                     lastEligibleOffset = walEntry.Offset;
                     eligibleCount++;
@@ -1278,7 +1280,15 @@ public sealed class LatticeWalGc(
                     // First non-eligible entry stops the scan: offsets
                     // are dense and the conservative shape forbids
                     // jumping over a pinned entry to trim a later one.
-                    stopReason = WalGcTrimStopReason.NotEligible;
+                    //
+                    // Which clause refused it is carried through to the arm
+                    // (issue #3155). The three clauses are independent and indict
+                    // a consumer cursor, a replication origin and a buffering
+                    // receiver respectively, so reporting them as one stop leaves
+                    // a stranded tree observable but its holder unnameable - the
+                    // same collapse this instrument was added to remove one level
+                    // up.
+                    stopReason = ClassifyIneligibility(eligibility);
                     stop = true;
                     break;
                 }
@@ -1333,7 +1343,9 @@ public sealed class LatticeWalGc(
             WalGcTrimStopReason.Exhausted => LatticeMetrics.ReasonTrimExhausted,
             WalGcTrimStopReason.Empty => LatticeMetrics.ReasonTrimEmpty,
             WalGcTrimStopReason.OffsetFloor => LatticeMetrics.ReasonTrimOffsetFloor,
-            WalGcTrimStopReason.NotEligible => LatticeMetrics.ReasonTrimNotEligible,
+            WalGcTrimStopReason.CursorFloor => LatticeMetrics.ReasonTrimCursorFloor,
+            WalGcTrimStopReason.CausalFrontier => LatticeMetrics.ReasonTrimCausalFrontier,
+            WalGcTrimStopReason.BlockPin => LatticeMetrics.ReasonTrimBlockPin,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(reason), reason, "Unarmed WAL GC trim stop reason."),
         };
@@ -1365,16 +1377,33 @@ public sealed class LatticeWalGc(
         RecordTrimStop(treeName, WalGcTrimStopReason.Exhausted, 0);
         RecordTrimStop(treeName, WalGcTrimStopReason.Empty, 0);
         RecordTrimStop(treeName, WalGcTrimStopReason.OffsetFloor, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.NotEligible, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.CursorFloor, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.CausalFrontier, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.BlockPin, 0);
     }
 
-    private static bool IsEligible(
+    /// <summary>
+    /// Maps the clause that refused an entry onto the trim-stop reason it is
+    /// reported under. One-to-one by construction, so a clause added to the
+    /// predicate cannot inherit another clause's arm.
+    /// </summary>
+    private static WalGcTrimStopReason ClassifyIneligibility(WalGcTrimEligibility eligibility)
+        => eligibility switch
+        {
+            WalGcTrimEligibility.CursorFloor => WalGcTrimStopReason.CursorFloor,
+            WalGcTrimEligibility.CausalFrontier => WalGcTrimStopReason.CausalFrontier,
+            WalGcTrimEligibility.BlockPin => WalGcTrimStopReason.BlockPin,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(eligibility), eligibility, "An eligible entry does not stop the scan."),
+        };
+
+    private static WalGcTrimEligibility ClassifyEligibility(
         LatticeMutation entry,
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor)
-        => WalGcTrimCore.IsEntryEligible(
+        => WalGcTrimCore.ClassifyEntry(
             entry.Timestamp,
             entry.VectorClock,
             minCursor,
