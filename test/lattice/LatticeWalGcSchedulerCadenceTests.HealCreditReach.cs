@@ -245,30 +245,38 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         + $"{PartitionedLeafGrainId(ordinal)}_{partition.ToString(CultureInfo.InvariantCulture)}";
 
     [Test]
-    public async Task ExecuteAsync_spends_the_whole_touch_budget_on_one_leaf_when_it_owns_every_reported_id()
+    public async Task ExecuteAsync_spends_its_touch_budget_on_distinct_leaves_when_one_leaf_owns_most_reported_ids()
     {
-        // Characterises the denominator behind issue #3175's headline numbers,
-        // so it does not have to be re-derived. It asserts CURRENT behaviour and
-        // is expected to be flipped by the fix, not preserved by it.
+        // This fixture landed in issue #3179 as a CHARACTERISATION of the
+        // defect behind issue #3175's headline numbers, asserting that four
+        // touches bought one leaf. Its author documented it as expected to be
+        // flipped by the fix rather than preserved, and issue #3178 is that
+        // fix, so it is flipped here. The arithmetic it recorded is kept
+        // verbatim below, because it remains the denominator that makes the
+        // pre-#3178 field measurements readable - it is now history, not
+        // current behaviour.
         //
-        // The report, the attempt budget and the touch budget are all keyed per
-        // CONSUMER id - {tree}_{grain}_{partition} - while the remedy is per
-        // LEAF: DriveStarvedCheckpointAsync resolves the partition count once
-        // and repairs every partition in a single call. So a leaf contributes
-        // one id per WAL partition and each of those ids spends budget asking
-        // for work the first one has already started.
+        // WAS: the report, the attempt budget and the touch budget were all
+        // keyed per CONSUMER id - {tree}_{grain}_{partition} - while the remedy
+        // is per LEAF: DriveStarvedCheckpointAsync resolves the partition count
+        // once and repairs every partition in a single call. So a leaf
+        // contributed one id per WAL partition and each of those ids spent
+        // budget asking for work the first one had already started.
         //
         // The constants collide exactly: MaxReportedBlockingConsumers is 8 and
         // DefaultWalPartitions is 8, so one blocked leaf fills the entire
         // blocking report, and MaxReactivationTouchesPerPass is 4, so it also
-        // consumes the entire per-pass touch budget. Measured on the live
+        // consumed the entire per-pass touch budget. Measured on the live
         // container the ratio was exact - 52 touches, 13 episodes, 39
         // already-driving rejections (13 x 3) and 13 real outcomes.
         //
-        // Here the second leaf is starved by the first leaf's partitions rather
-        // than by any property of its own. Widening the touch budget does not
-        // help, because the extra touches land on the same leaf; the fix is to
-        // spend the budget per leaf, and it is deliberately not made here.
+        // NOW: the touch loop deduplicates on the resolved leaf grain id before
+        // it stamps a budget, so leaf 0's four reported partitions cost one
+        // touch rather than four and leaf 1 is reached on the same pass. The
+        // placement before the stamp is the load-bearing part: a suppressed
+        // partition must cost neither an attempt against MaxReactivationAttempts
+        // nor a retry cooldown, because exhausting those attempts marks the
+        // consumer Abandoned and abandonment is terminal for crediting.
         var consumers = new[]
         {
             PartitionedConsumerId(0, 0),
@@ -310,15 +318,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(firstTouchingPass, Has.Count.EqualTo(TouchesPerPass),
-                "the whole per-pass touch budget must have been spent, or the starvation below is not "
-                + "the budget's doing.");
-            Assert.That(firstTouchingPass.Distinct().Count(), Is.EqualTo(1),
-                "four touches bought one leaf's worth of work: the budget is spent per consumer id while "
-                + "the remedy is per leaf (issue #3175).");
-            Assert.That(firstTouchingPass, Does.Not.Contain(PartitionedLeafGrainId(1)),
-                "the second leaf is starved by the first leaf's other partitions, not by anything about "
-                + "itself - which is why widening the budget cannot fix this.");
+            Assert.That(firstTouchingPass.Distinct().Count(), Is.EqualTo(2),
+                "both leaves named by the report must be reached on the same pass: the budget is now "
+                + "spent per leaf, not per consumer id (issues #3175, #3178).");
+            Assert.That(firstTouchingPass, Has.Count.EqualTo(2),
+                "leaf 0's four reported partitions must cost one touch, not four - a duplicate that "
+                + "could only be told AlreadyDriving must not consume the budget.");
+            Assert.That(firstTouchingPass, Does.Contain(PartitionedLeafGrainId(1)),
+                "the second leaf is no longer starved by the first leaf's other partitions, which is "
+                + "the whole point of expressing the bound in leaves.");
         });
 
         await scheduler.StopAsync(CancellationToken.None);

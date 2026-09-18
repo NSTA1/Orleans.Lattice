@@ -259,14 +259,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // here would leak reads no assertion downstream could recover.
         const int Offered = 1_000;
 
-        var candidates = new List<KeyValuePair<string, HybridLogicalClock>>();
+        var candidates = new List<WalGcFloorHolderCandidate>();
         for (var i = Offered - 1; i >= 0; i--)
         {
             LatticeWalGcScheduler.OfferFloorHolderCandidate(
-                candidates, FloorHolderCap, OrphanConsumerId(i), FrontierAt(i));
+                candidates, FloorHolderCap, UnusableCandidate(OrphanConsumerId(i), FrontierAt(i)));
         }
 
-        var selected = candidates.Select(c => c.Key).ToArray();
+        var selected = candidates.Select(c => c.ConsumerId).ToArray();
         var expected = Enumerable.Range(0, FloorHolderCap).Select(i => OrphanConsumerId(i)).ToArray();
 
         Assert.Multiple(() =>
@@ -288,25 +288,37 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // would spend two of eight slots describing a single holder and evict a
         // genuine one - and it is the deduplicated frontier that must survive,
         // because the floor is a minimum.
-        var candidates = new List<KeyValuePair<string, HybridLogicalClock>>();
+        var candidates = new List<WalGcFloorHolderCandidate>();
 
         LatticeWalGcScheduler.OfferFloorHolderCandidate(
-            candidates, FloorHolderCap, OrphanConsumerId(0), FrontierAt(500));
+            candidates, FloorHolderCap, UnusableCandidate(OrphanConsumerId(0), FrontierAt(500)));
         LatticeWalGcScheduler.OfferFloorHolderCandidate(
-            candidates, FloorHolderCap, OrphanConsumerId(0), FrontierAt(1));
+            candidates, FloorHolderCap, UnusableCandidate(OrphanConsumerId(0), FrontierAt(1)));
         LatticeWalGcScheduler.OfferFloorHolderCandidate(
-            candidates, FloorHolderCap, OrphanConsumerId(1), FrontierAt(100));
+            candidates, FloorHolderCap, UnusableCandidate(OrphanConsumerId(1), FrontierAt(100)));
 
         Assert.Multiple(() =>
         {
             Assert.That(candidates, Has.Count.EqualTo(2));
-            Assert.That(candidates[0].Key, Is.EqualTo(OrphanConsumerId(0)));
-            Assert.That(candidates[0].Value, Is.EqualTo(FrontierAt(1)),
+            Assert.That(candidates[0].ConsumerId, Is.EqualTo(OrphanConsumerId(0)));
+            Assert.That(candidates[0].Frontier, Is.EqualTo(FrontierAt(1)),
                 "the lower of a pin's two recorded frontiers is the one that describes the floor, and it "
                     + "must also re-sort the sample rather than be written over the old key in place.");
-            Assert.That(candidates[1].Key, Is.EqualTo(OrphanConsumerId(1)));
+            Assert.That(candidates[1].ConsumerId, Is.EqualTo(OrphanConsumerId(1)));
         });
     }
+
+    /// <summary>
+    /// A candidate that constrains no offset floor, which is what every pin in
+    /// these pre-#3178 fixtures is: the fake pin grain publishes no offsets, so
+    /// the sweep reads them all as <c>-1</c> and the sample degenerates to the
+    /// ascending-frontier ordering these fixtures were written against.
+    /// <see cref="WalGcFloorHolderCandidate.LeafResolved"/> is false so identity
+    /// falls back to the consumer id, which is the property under test here.
+    /// </summary>
+    private static WalGcFloorHolderCandidate UnusableCandidate(
+        string consumerId, HybridLogicalClock frontier) =>
+        new(consumerId, default, LeafResolved: false, Offset: -1, frontier);
 
     [Test]
     public async Task A_floor_blocked_tree_still_classifies_only_the_consumers_its_report_named()

@@ -133,62 +133,21 @@ internal sealed class LatticeOptionsResolver(
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Registry reads issued by <see cref="GetHistoryRetentionAsync"/> that are
-    /// in flight right now, coalesced per tree on exactly the terms documented
-    /// for <see cref="_inFlightRegistryReads"/> above - a shared round trip that
-    /// retains nothing, not a cache.
-    /// <para>
-    /// A <em>separate</em> map rather than the one above because the two flights
-    /// run different fetches. The resolve path's flight seeds a missing
-    /// structural pin (<see cref="FetchRegistryEntryAsync"/>); history retention
-    /// is a pure read and must not acquire that side effect, matching
-    /// <see cref="GetMaxCacheValueBytesAsync"/>. Joining the resolve path's
-    /// flight would let a view maintainer draining an unregistered source tree
-    /// silently register it.
-    /// </para>
-    /// </summary>
-    private readonly ConcurrentDictionary<string, Task<State.TreeRegistryEntry?>> _inFlightHistoryRetentionReads =
-        new(StringComparer.Ordinal);
-
-    /// <summary>
     /// Reads <paramref name="treeId"/>'s registry entry, joining the read
     /// already in flight for that tree when there is one. Seeding a missing
     /// structural pin happens inside the shared flight, so a cold start seeds
     /// once rather than once per activation.
     /// </summary>
-    private Task<State.TreeRegistryEntry?> FetchRegistryEntryCoalescedAsync(string treeId) =>
-        CoalesceRegistryReadAsync(_inFlightRegistryReads, treeId, FetchRegistryEntryAsync);
-
-    /// <summary>
-    /// Reads <paramref name="treeId"/>'s registry entry with no seeding side
-    /// effect, joining the pure read already in flight for that tree when there
-    /// is one.
-    /// </summary>
-    private Task<State.TreeRegistryEntry?> FetchRegistryEntryPureCoalescedAsync(string treeId) =>
-        CoalesceRegistryReadAsync(_inFlightHistoryRetentionReads, treeId, ReadRegistryEntryAsync);
-
-    private Task<State.TreeRegistryEntry?> ReadRegistryEntryAsync(string treeId) =>
-        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).GetEntryAsync(treeId);
-
-    /// <summary>
-    /// Runs <paramref name="fetch"/> for <paramref name="treeId"/> under the
-    /// per-tree coalescing protocol held in <paramref name="flights"/>: a caller
-    /// arriving while a read is in flight joins it, and a caller arriving after
-    /// one completes starts a fresh one.
-    /// </summary>
-    private static Task<State.TreeRegistryEntry?> CoalesceRegistryReadAsync(
-        ConcurrentDictionary<string, Task<State.TreeRegistryEntry?>> flights,
-        string treeId,
-        Func<string, Task<State.TreeRegistryEntry?>> fetch)
+    private Task<State.TreeRegistryEntry?> FetchRegistryEntryCoalescedAsync(string treeId)
     {
-        if (flights.TryGetValue(treeId, out var joined))
+        if (_inFlightRegistryReads.TryGetValue(treeId, out var joined))
         {
             return joined;
         }
 
         var flight = new TaskCompletionSource<State.TreeRegistryEntry?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var winner = flights.GetOrAdd(treeId, flight.Task);
+        var winner = _inFlightRegistryReads.GetOrAdd(treeId, flight.Task);
         if (!ReferenceEquals(winner, flight.Task))
         {
             return winner;
@@ -201,19 +160,19 @@ internal sealed class LatticeOptionsResolver(
         {
             try
             {
-                var entry = await fetch(treeId).ConfigureAwait(false);
+                var entry = await FetchRegistryEntryAsync(treeId).ConfigureAwait(false);
 
                 // Retire the flight BEFORE publishing its result. A caller that
                 // arrives after this point must start a fresh read rather than
                 // join a completed one, which is what keeps the shared round
                 // trip from behaving as a zero-length cache.
-                flights.TryRemove(
+                _inFlightRegistryReads.TryRemove(
                     new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
                 flight.TrySetResult(entry);
             }
             catch (Exception ex)
             {
-                flights.TryRemove(
+                _inFlightRegistryReads.TryRemove(
                     new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
 
                 // Every joined caller observes the same fault, exactly as it
@@ -588,69 +547,25 @@ internal sealed class LatticeOptionsResolver(
 
     /// <summary>
     /// Reads the effective durable-history retention policy for
-    /// <paramref name="treeId"/> fresh from the registry. A tree with no
-    /// override resolves to <see cref="HistoryRetentionMode.MetadataOnly"/> and
-    /// no age bound, matching the documented defaults. The
-    /// <paramref name="hybridFullValueWindow"/> is supplied by the caller (the
-    /// view maintainer reads it from
+    /// <paramref name="treeId"/> fresh from the registry (no caching - the policy
+    /// is runtime-mutable and read once per view drain pass, never on a write hot
+    /// path). A tree with no override resolves to
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/> and no age bound,
+    /// matching the documented defaults. The <paramref name="hybridFullValueWindow"/>
+    /// is supplied by the caller (the view maintainer reads it from
     /// <see cref="Orleans.Lattice.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
     /// only consulted under <see cref="HistoryRetentionMode.Hybrid"/>.
     /// <para>
     /// System trees (IDs beginning with
     /// <see cref="LatticeConstants.SystemTreePrefix"/>) resolve synchronously to
-    /// those same defaults without touching the registry, matching the
+    /// the documented defaults without touching the registry, matching the
     /// <see cref="ResolveAsync"/> branch and avoiding the registry-tree
-    /// bootstrap cycle. The bypass is <em>result-identical</em> to the registry
-    /// path rather than merely cheap: a system tree carries no registry entry by
-    /// construction (it bypasses registration entirely), so the entry read it
-    /// replaces would return <c>null</c> and compose exactly this policy. No
-    /// caller reaches this method with a system-tree id today - each one is
-    /// guarded upstream, <see cref="Grains.LatticeGrain"/> by
-    /// <c>ThrowIfSystemTree</c> and the view maintainers by sourcing only from
-    /// registered trees - so the branch closes a latent gap rather than a live
-    /// cycle. It is stated here because that safety was previously supplied
-    /// incidentally by every caller and deliberately by none of them, which is
-    /// the one property a resolver-side invariant should never depend on: a
-    /// future caller would open the cycle with no local signal, and the failure
-    /// mode is a request-timeout wedge rather than an exception.
-    /// </para>
-    /// <para>
-    /// <b>Deliberately not cached, and this is a decision rather than an
-    /// omission (issue #3181).</b> The policy is runtime-mutable through
-    /// <see cref="ILattice.SetHistoryRetentionAsync"/> -&gt;
-    /// <see cref="ILatticeRegistry.SetHistoryRetentionAsync"/>, which writes the
-    /// registry from the <em>source tree's</em> grain activation and performs no
-    /// local invalidation. This resolver is a per-silo singleton, so any
-    /// memoisation here would be per-silo, and the writer has no channel to
-    /// reach the silo hosting the
-    /// <see cref="Views.Grains.ViewMaintainerGrain"/> that reads it: a cached
-    /// value would go stale for an unbounded time with nothing to correct it.
-    /// The only existing invalidation seam,
-    /// <see cref="InvalidateWalPartitionsCacheForTests"/>, is test-only and is
-    /// safe to be test-only precisely because the WAL partition pin it guards is
-    /// tree-immutable; history retention is not, so that shape cannot be
-    /// borrowed. Staleness here is not cosmetic either - the policy decides
-    /// whether history writes carry full values, so a stale
-    /// <see cref="HistoryRetentionMode.MetadataOnly"/> silently discards values
-    /// an operator has just asked to retain, and a stale
-    /// <see cref="HistoryRetentionMode.FullValue"/> silently retains values they
-    /// have just asked to stop retaining.
-    /// </para>
-    /// <para>
-    /// The load axis is addressed instead by coalescing. The previous
-    /// justification for the absent cache - "read once per view drain pass,
-    /// never on a write hot path" - is true and answers the wrong question: the
-    /// registry is a non-reentrant cluster singleton, so N <em>concurrent</em>
-    /// readers take N turns in series regardless of which path they arrive on.
-    /// The read therefore joins a shared in-flight round trip
-    /// (<see cref="_inFlightHistoryRetentionReads"/>), the seam this class
-    /// already uses for exactly that hazard on the activation path. It retains
-    /// nothing, so it introduces no staleness window, needs no invalidation, and
-    /// leaves the policy honestly runtime-mutable. Note the bound it does
-    /// <em>not</em> give: coalescing collapses concurrent readers, not the
-    /// steady-state per-drain-pass rate, and nothing at this seam can reduce
-    /// that without accepting the staleness above. Reducing the singleton's own
-    /// head-of-line cost is issue #3180's business, not this resolver's.
+    /// bootstrap cycle. The bypass is behaviour-preserving as well as
+    /// cycle-avoiding: a system tree is never registered (the registry excludes
+    /// the reserved prefix from self-registration and
+    /// <c>ILatticeRegistry.RegisterAsync</c> rejects it outright), so the
+    /// registry read it replaces could only ever have returned <c>null</c> and
+    /// fallen through to exactly the same defaults.
     /// </para>
     /// </summary>
     /// <param name="treeId">The source tree whose history retention is resolved.</param>
@@ -669,7 +584,8 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<Views.HistoryRetentionPolicy> LoadHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
     {
-        var entry = await FetchRegistryEntryPureCoalescedAsync(treeId).ConfigureAwait(false);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
         var mode = entry?.HistoryRetentionMode ?? HistoryRetentionMode.MetadataOnly;
         var window = entry?.HistoryRetentionWindowTicks is { } ticks
             ? TimeSpan.FromTicks(ticks)

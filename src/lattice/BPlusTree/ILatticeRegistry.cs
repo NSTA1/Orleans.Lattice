@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -12,6 +13,73 @@ namespace Orleans.Lattice.BPlusTree;
 /// self-registration.
 /// </para>
 /// Key format: singleton - use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
+/// <para>
+/// <b>Concurrency contract: point reads interleave, the enumeration and the
+/// writes do not.</b> This grain is a
+/// process-wide singleton and the serialization point for every tree-option
+/// resolution, so its turn token is the scarcest scheduling resource in the
+/// library. Every read-only member below that resolves a <em>bounded set of
+/// named entries</em> is marked <see cref="AlwaysInterleaveAttribute"/>; every
+/// member that mutates a registry entry deliberately is not, and neither are the
+/// two <see cref="GetAllTreeIdsAsync(string?)"/> range-scan overloads. The grain
+/// type itself is <b>not</b>
+/// <see cref="ReentrantAttribute"/>, which would be the blanket version of the
+/// same change and is unsafe here - see the three parts below.
+/// </para>
+/// <para>
+/// <b>Why the writes must stay exclusive.</b> Most mutators are
+/// read-modify-writes over a single registry entry
+/// (<see cref="SetAliasAsync"/>, <see cref="SetShardMapAsync"/>,
+/// <see cref="ReassignSlotsAsync"/>, <see cref="AllocateNextShardIndexAsync"/>,
+/// <see cref="UpdateWalPlacementAsync(string, long, int, string)"/> and its batch
+/// overload, and the per-field <c>Set*</c> upserts), and
+/// <see cref="RegisterAsync"/> is a read-then-write on an existence check. Each
+/// relies on the whole method body running without another <em>mutator</em>
+/// interleaving: that is what makes two concurrent split coordinators receive
+/// distinct shard indices, and what makes the placement compare-and-swap a real
+/// CAS rather than a racy read followed by an unconditional write. Marking the
+/// grain <see cref="ReentrantAttribute"/> would void all of it silently.
+/// </para>
+/// <para>
+/// <b>Why the point reads are safe to interleave.</b> A read-only member never mutates
+/// a registry entry, so admitting one mid-way through a mutator's body cannot
+/// tear anything: an entry is rewritten by exactly one terminal
+/// <c>SetAsync</c> against the backing tree, so a reader observes the entry
+/// either wholly before or wholly after that write. Losing the narrower
+/// "a read cannot land between a mutator's own read and its own write" property
+/// costs nothing a caller could rely on, because two <em>separate</em> registry
+/// calls were never atomic with respect to each other in the first place - which
+/// is precisely why <see cref="ReassignSlotsAsync"/> and
+/// <see cref="AllocateNextShardIndexAsync"/> exist as single calls.
+/// </para>
+/// <para>
+/// <b>Why the enumeration is excluded even though it is a read.</b> It is the
+/// one read here that is not a point lookup but a multi-hop range traversal of
+/// the registry's own backing tree, and the system-tree scan path deliberately
+/// omits the topology re-probes that would otherwise re-enter this grain. Those
+/// omissions are sound only while no mutator can run during the scan, so
+/// admitting one would let a concurrent registration reshape the tree under the
+/// cursor and silently drop an unrelated, already-registered id - which is a
+/// wrong answer rather than a slow one. Excluding it costs nothing against the
+/// head-of-line block, because <see cref="AlwaysInterleaveAttribute"/> admits
+/// the <em>incoming</em> call past what is already running: it is marking the
+/// point reads that lets option resolution overtake a long enumeration.
+/// See <see cref="GetAllTreeIdsAsync(string?)"/> for the full derivation.
+/// </para>
+/// <para>
+/// <b>What this fixes.</b> Without it, one whole-registry enumeration
+/// (<see cref="GetAllTreeIdsAsync(string?)"/>, whose fan-out over the backing
+/// system tree descends into shard and leaf activations) holds the singleton's
+/// only turn for the entire scan, and every unrelated option resolution -
+/// activation-time resolves, the hot-shard monitor, the shard healer, the view
+/// maintainers, the WAL GC scheduler - queues behind it until the 30s response
+/// timeout fires. That is a head-of-line block across the whole process, and it
+/// wedged WAL reclamation entirely (issue #3180), because the enumeration is the
+/// first call of a GC pass and its timeout abandons the pass for every tree at
+/// once. The enumeration still holds the turn for its whole scan - that is
+/// deliberate, and is what keeps it correct - but the option resolutions no
+/// longer wait behind it.
+/// </para>
 /// </summary>
 [Alias(TypeAliases.ILatticeRegistry)]
 internal interface ILatticeRegistry : IGrainWithStringKey
@@ -39,13 +107,25 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// </summary>
     Task UnregisterAsync(string treeId);
 
-    /// <summary>Returns <c>true</c> if the tree is registered.</summary>
+    /// <summary>
+    /// Returns <c>true</c> if the tree is registered.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: a pure read that must not
+    /// queue behind a whole-registry enumeration. See the interface remarks.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task<bool> ExistsAsync(string treeId);
 
     /// <summary>
     /// Returns the <see cref="State.TreeRegistryEntry"/> for the given tree,
     /// or <c>null</c> if not registered.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: a pure read that must not
+    /// queue behind a whole-registry enumeration. See the interface remarks.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<State.TreeRegistryEntry?> GetEntryAsync(string treeId);
 
     /// <summary>
@@ -76,10 +156,15 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// </para>
     /// </remarks>
     /// <param name="treeIds">The tree ids to read. Must not be <c>null</c>.</param>
+    [AlwaysInterleave]
     Task<Dictionary<string, State.TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds);
 
     /// <summary>
     /// Returns all registered tree IDs in sorted order.
+    /// <para>
+    /// Deliberately <b>not</b> marked <see cref="AlwaysInterleaveAttribute"/>:
+    /// see <see cref="GetAllTreeIdsAsync(string?)"/>, which this delegates to.
+    /// </para>
     /// </summary>
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync();
 
@@ -102,6 +187,28 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// visibility and authorization check stays exactly where it was, so a
     /// hand-crafted prefix can only ever return a subset of what the caller could
     /// already have enumerated.
+    /// </para>
+    /// <para>
+    /// The enumeration is deliberately <b>not</b> marked
+    /// <see cref="AlwaysInterleaveAttribute"/>, and this is the one read on this
+    /// interface that must not be. Unlike the point reads it is a multi-hop
+    /// range traversal of the registry's own backing tree that spans many awaits,
+    /// so admitting a mutator part-way through would let the backing tree's shard
+    /// topology change underneath the cursor. The registry is a system tree, and
+    /// the scan path deliberately disables both of its registry re-probes for a
+    /// system tree (the moved-slot reconciliation branch and the final
+    /// topology-stability check) precisely to avoid re-entering this grain. That
+    /// omission is sound only while no registry mutation can run during the scan,
+    /// which is exactly what excluding this method preserves; with a mutator
+    /// admitted, the scan can silently skip an already-registered, unrelated id.
+    /// </para>
+    /// <para>
+    /// Excluding it costs nothing against the head-of-line block this attribute
+    /// set exists to fix. <see cref="AlwaysInterleaveAttribute"/> admits the
+    /// <em>incoming</em> call past whatever is already running, so it is marking
+    /// the point reads that lets option resolution proceed while a long
+    /// enumeration is in flight. The enumeration does not need to interleave for
+    /// others to overtake it.
     /// </para>
     /// </remarks>
     /// <param name="prefix">The tree-id prefix to scope the enumeration to, or <c>null</c> for all ids.</param>
@@ -128,14 +235,27 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <summary>
     /// Resolves the physical tree ID for the given logical <paramref name="treeId"/>.
     /// Returns <paramref name="treeId"/> itself if no alias is set.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: a pure read on the routing
+    /// hot path - it is the first registry call of every non-system
+    /// <c>LatticeGrain</c> activation - so it must not queue behind a
+    /// whole-registry enumeration. See the interface remarks.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<string> ResolveAsync(string treeId);
 
     /// <summary>
     /// Returns the persisted <see cref="ShardMap"/> for <paramref name="treeId"/>,
     /// or <c>null</c> if the tree uses the default identity map. Callers should
     /// fall back to <see cref="ShardMap.CreateDefault"/> when this returns <c>null</c>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: a pure read, fanned out by
+    /// the scan reconciliation path and by activation-time routing, so it must
+    /// not queue behind a whole-registry enumeration. See the interface remarks.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<ShardMap?> GetShardMapAsync(string treeId);
 
     /// <summary>
@@ -155,10 +275,10 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// This exists because the read-modify-write it performs cannot be safely
     /// composed at the caller from <see cref="GetShardMapAsync"/> followed by
     /// <see cref="SetShardMapAsync"/>. Non-reentrancy makes each individual
-    /// grain call atomic; it does not make a sequence of two calls atomic,
-    /// because the grain is free to serve another caller in the gap between
-    /// them. Two topology coordinators that both read the map before either
-    /// persists each derive a copy from the same pre-state, and whichever
+    /// mutating grain call atomic; it does not make a sequence of two calls
+    /// atomic, because the grain is free to serve another caller in the gap
+    /// between them. Two topology coordinators that both read the map before
+    /// either persists each derive a copy from the same pre-state, and whichever
     /// persists second silently erases the other's reassignment.
     /// </para>
     /// <para>
@@ -179,8 +299,10 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// Atomically allocates a fresh physical shard index for an adaptive split
     ///. Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
     /// persists the new high-water mark so concurrent split coordinators each
-    /// receive a unique target shard index. The registry grain's non-reentrant
-    /// scheduling guarantees the read-modify-write is atomic across callers.
+    /// receive a unique target shard index. This method carries no
+    /// <see cref="AlwaysInterleaveAttribute"/>, so the registry grain's
+    /// non-reentrant scheduling keeps the read-modify-write atomic against every
+    /// other mutator.
     /// </summary>
     /// <param name="treeId">The tree whose shard space is being expanded.</param>
     /// <param name="currentMaxFromMap">
@@ -278,14 +400,21 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// introduced) resolves to <see cref="State.WalPlacementPin.Create"/> - the
     /// default pin in which every partition uses
     /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: a pure read, taken once per
+    /// WAL shard activation and once per GC tick, so it must not queue behind a
+    /// whole-registry enumeration. See the interface remarks.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<State.WalPlacementPin> GetWalPlacementAsync(string treeId);
 
     /// <summary>
     /// Atomically re-points a single WAL partition to a new provider key using
     /// compare-and-swap on the placement <see cref="State.WalPlacementPin.Version"/>.
-    /// The registry grain is non-reentrant and singleton-keyed, so the
-    /// read-validate-write sequence is atomic across concurrent callers.
+    /// This method carries no <see cref="AlwaysInterleaveAttribute"/>, so the
+    /// registry grain's non-reentrant scheduling keeps the read-validate-write
+    /// sequence atomic against every other mutator.
     /// <para>
     /// Throws <see cref="InvalidOperationException"/> when the current pin's
     /// version does not equal <paramref name="expectedVersion"/> - the caller
@@ -311,8 +440,9 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// reassignment in <paramref name="moves"/> is applied together and the
     /// version bumps exactly once (<paramref name="expectedVersion"/> + 1), so a
     /// multi-partition move flips atomically with no intermediate placement
-    /// observable. The registry grain is non-reentrant and singleton-keyed, so
-    /// the read-validate-write sequence is atomic across concurrent callers.
+    /// observable. This method carries no <see cref="AlwaysInterleaveAttribute"/>,
+    /// so the registry grain's non-reentrant scheduling keeps the
+    /// read-validate-write sequence atomic against every other mutator.
     /// <para>
     /// Throws <see cref="InvalidOperationException"/> when the current pin's
     /// version does not equal <paramref name="expectedVersion"/> - the caller
