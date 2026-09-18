@@ -11,9 +11,33 @@ public sealed partial class DurableVectorIndex
     /// that the coherence contract exists to rule out, and because the index is a
     /// derived projection, throwing it away costs only time.
     /// </summary>
-    private async Task LoadAsync(CancellationToken cancellationToken)
+    private async Task LoadAsync(CancellationToken keyWalkToken, CancellationToken cancellationToken)
     {
-        await _keys.LoadAsync(cancellationToken).ConfigureAwait(false);
+        // THE KEY WALK IS TAKEN ONCE PER LOAD ATTEMPT SEQUENCE, NOT ONCE PER
+        // ATTEMPT, and this flag is what makes bounding the open safe.
+        //
+        // The dictionary resumes an interrupted walk from its own cursor and
+        // clears that cursor when the walk finishes. So a load interrupted BEFORE
+        // the walk ends resumes correctly, and one interrupted AFTER it - anywhere
+        // in the restore below - used to find a null cursor and re-issue the walk
+        // from zero. On this repository's corpus that walk is the single most
+        // expensive read in the open, so re-issuing it on every attempt is #2953's
+        // amplification exactly, merely moved one phase later: a caller that
+        // bounds the open would then never finish one, because each attempt would
+        // spend its whole budget redoing the work the last attempt completed.
+        //
+        // Remembering that the walk finished costs one bool and removes the entire
+        // class. Nothing else in the restore is O(corpus) in leaf activations.
+        //
+        // THE WALK IS ALSO THE ONLY PHASE THE SLICE TOKEN REACHES. Everything
+        // below banks nothing when interrupted, so bounding it would make each
+        // attempt restart it and an index whose restore exceeds one slice could
+        // never open. See LoadOrResumeAsync's remarks.
+        if (!_keysLoaded)
+        {
+            await _keys.LoadAsync(keyWalkToken).ConfigureAwait(false);
+            _keysLoaded = true;
+        }
 
         var manifestRecord = await _store
             .ReadAsync(VectorIndexStorageKeys.Manifest(_prefix), cancellationToken).ConfigureAwait(false);
@@ -463,6 +487,12 @@ public sealed partial class DurableVectorIndex
         // were just deleted, and clearing it removes the whole class of stale
         // mappings that would otherwise outlive a rebuild. The identifier counter
         // deliberately does not rewind, so no key is ever handed out twice.
+        //
+        // The walked-the-keys flag is deliberately NOT reset. The cleared mapping
+        // is the current, authoritative one - empty, over a prefix this method has
+        // just deleted - so re-walking it could only re-read nothing. Clearing the
+        // flag here would buy a guaranteed-empty scan on the next attempt and
+        // nothing else.
         await _keys.ClearAsync(cancellationToken).ConfigureAwait(false);
         ResetInMemory();
     }
