@@ -38,11 +38,18 @@ public abstract class EmDashHygieneTestsBase
         var repoRoot = HygieneRepository.FindRepoRoot();
 
         var violations = new List<string>();
+        var unreadable = new List<string>();
         var scanned = 0;
         foreach (var file in HygieneFiles.EnumerateTextFiles(repoRoot, Scope))
         {
+            var lines = HygieneFiles.TryReadLines(file, out var failure);
+            if (lines is null)
+            {
+                unreadable.Add(failure!);
+                continue;
+            }
+
             scanned++;
-            var lines = File.ReadAllLines(file);
             for (int i = 0; i < lines.Length; i++)
             {
                 var idx = lines[i].IndexOf(EmDash);
@@ -59,6 +66,17 @@ public abstract class EmDashHygieneTestsBase
         // here rather than reporting a clean repository it never read.
         HygieneDenominator.RequireExamined(
             scanned, nameof(EmDashHygieneTestsBase), "text files", HygieneDenominator.Describe(Scope));
+
+        // Reported separately from the violations (issue #3134) so an
+        // environment condition cannot masquerade as a hygiene failure. A
+        // locked file used to abort the whole gate with an IOException, which
+        // surfaced as a red em-dash gate and read as "you introduced an
+        // em-dash".
+        Assert.That(unreadable, Is.Empty,
+            "Tracked files could not be read, so the gate reached no verdict on them. This is an environment "
+            + "condition, not an em-dash violation."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, unreadable));
 
         Assert.That(violations, Is.Empty,
             "Em-dash characters (U+2014) are not permitted in tracked files. "

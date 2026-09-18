@@ -72,17 +72,18 @@ public abstract class MojibakeHygieneTestsBase
         var repoRoot = HygieneRepository.FindRepoRoot();
 
         var violations = new List<string>();
+        var unreadable = new List<string>();
         var scanned = 0;
         foreach (var file in HygieneFiles.EnumerateTextFiles(repoRoot, Scope))
         {
-            string text;
-            try
+            var text = HygieneFiles.TryReadText(file, out var failure);
+            if (text is null)
             {
-                text = File.ReadAllText(file, Encoding.UTF8);
-            }
-            catch
-            {
-                continue; // unreadable / truly binary -> skip
+                // Reported rather than skipped (issue #3134). The bare
+                // `catch { continue; }` this replaces made an unreadable file
+                // indistinguishable from a clean one.
+                unreadable.Add(failure!);
+                continue;
             }
 
             scanned++;
@@ -112,6 +113,14 @@ public abstract class MojibakeHygieneTestsBase
         // examined - the denominator is files actually decoded and searched.
         HygieneDenominator.RequireExamined(
             scanned, nameof(MojibakeHygieneTestsBase), "readable text files", HygieneDenominator.Describe(Scope));
+
+        // Reported separately from the violations (issue #3134) so an
+        // environment condition cannot hide inside a silent skip.
+        Assert.That(unreadable, Is.Empty,
+            "Tracked files could not be read, so the gate reached no verdict on them. This is an environment "
+            + "condition, not a mojibake violation."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, unreadable));
 
         Assert.That(violations, Is.Empty,
             "Mojibake (UTF-8-bytes-decoded-as-CP1252-or-CP437) sequences are not permitted in tracked files. "
