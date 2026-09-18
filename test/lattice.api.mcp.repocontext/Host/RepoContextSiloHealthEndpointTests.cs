@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -20,6 +21,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// grain call, driving each of the four states issue #2666 requires be demonstrated.
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no silo or storage; measured at 152 ms for 4 tests, below the 5-second threshold.")]
 public sealed class RepoContextSiloHealthEndpointTests
 {
     private sealed class FixedProbe(Func<CancellationToken, Task> behaviour) : IRepoContextSiloProbe

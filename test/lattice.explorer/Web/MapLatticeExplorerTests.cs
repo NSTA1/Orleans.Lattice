@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -16,6 +17,7 @@ namespace Orleans.Lattice.Explorer.Tests.Web;
 /// server-side auth endpoints must land under the configured base path.
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no external dependency; measured at 804 ms for 5 tests, below the 5-second threshold.")]
 public class MapLatticeExplorerTests
 {
     [Test]
