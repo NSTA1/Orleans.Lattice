@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Tests;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class LatticeWalGcTrimStopReasonTests
+public sealed partial class LatticeWalGcTrimStopReasonTests
 {
     private const string Tree = "tree";
     private const string LeafConsumer = "_lattice_materialiser_tree_leaf-1";
@@ -169,7 +169,7 @@ public sealed class LatticeWalGcTrimStopReasonTests
     }
 
     [Test]
-    public async Task RunOnceAsync_scan_stopped_by_hlc_eligibility_reports_not_eligible_having_reclaimed_nothing()
+    public async Task RunOnceAsync_scan_stopped_by_hlc_eligibility_reports_cursor_floor_having_reclaimed_nothing()
     {
         // The other way to reclaim nothing, and the one that must NOT be
         // confused with the above. The offset floor is generous (10, above every
@@ -188,9 +188,9 @@ public sealed class LatticeWalGcTrimStopReasonTests
         var (report, stops) = await RunAsync(sut);
 
         Assert.That(report.EntriesTrimmed, Is.Zero);
-        Assert.That(Advanced(stops), Is.EqualTo(new[] { "not_eligible" }),
-            "A scan held by the HLC predicate is a consumer-cursor problem and must not be reported on the "
-            + "offset-floor arm.");
+        Assert.That(Advanced(stops), Is.EqualTo(new[] { "cursor_floor" }),
+            "A scan held by the HLC clause is a consumer-cursor problem and must not be reported on the "
+            + "offset-floor arm, nor on the arms that indict a causal frontier or a buffer pin.");
     }
 
     [Test]
@@ -276,8 +276,8 @@ public sealed class LatticeWalGcTrimStopReasonTests
 
         Assert.That(
             stops.Select(static s => s.Reason).Distinct().OrderBy(static r => r, StringComparer.Ordinal),
-            Is.EqualTo(new[] { "empty", "exhausted", "not_eligible", "offset_floor" }),
-            "All four arms must carry a series after a single pass, whether or not they advanced.");
+            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "empty", "exhausted", "offset_floor" }),
+            "Every arm must carry a series after a single pass, whether or not it advanced.");
 
         Assert.That(stops.Select(static s => s.Tree), Is.All.EqualTo(Tree),
             "Every measurement is attributed to the tree, so one stranded tree is never averaged away.");
@@ -305,7 +305,7 @@ public sealed class LatticeWalGcTrimStopReasonTests
         Assert.That(Advanced(stops), Is.Empty, "A pass that never scanned must not advance any arm.");
         Assert.That(
             stops.Select(static s => s.Reason).Distinct().OrderBy(static r => r, StringComparer.Ordinal),
-            Is.EqualTo(new[] { "empty", "exhausted", "not_eligible", "offset_floor" }),
+            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "empty", "exhausted", "offset_floor" }),
             "The arms are primed above the early return, not merely inside the trim loop.");
     }
 
