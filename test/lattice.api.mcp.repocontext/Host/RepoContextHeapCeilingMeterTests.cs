@@ -34,7 +34,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 public sealed class RepoContextHeapCeilingMeterTests
 {
     [Test]
-    public void All_three_instruments_are_published_on_the_host_meter()
+    public void All_four_instruments_are_published_on_the_host_meter()
     {
         using var observed = new HostMeterObserver();
         using var meter = new RepoContextHeapCeilingMeter(
@@ -60,10 +60,16 @@ public sealed class RepoContextHeapCeilingMeterTests
                 Does.Contain(RepoContextHeapCeilingMeter.HighLoadThresholdBytesGaugeName));
             Assert.That(
                 observed.Names,
-                Has.Count.EqualTo(3),
-                "control: exactly the three instruments under test were observed. A listener that saw "
+                Does.Contain(RepoContextHeapCeilingMeter.ReachableGaugeName),
+                "the ordering of the threshold against the limit depends on the deployment's GC "
+                + "hard-limit percentage, so it is measured and published rather than asserted in a "
+                + "description that is only true on some hosts (#3133).");
+            Assert.That(
+                observed.Names,
+                Has.Count.EqualTo(4),
+                "control: exactly the four instruments under test were observed. A listener that saw "
                 + "nothing would satisfy none of the above, but one that saw every instrument in the "
-                + "process would satisfy all three for the wrong reason.");
+                + "process would satisfy all four for the wrong reason.");
         });
     }
 
@@ -143,7 +149,7 @@ public sealed class RepoContextHeapCeilingMeterTests
     /// that memory is unbounded.
     /// </summary>
     [Test]
-    public void All_three_series_exist_on_the_first_scrape_while_the_readings_are_zero()
+    public void All_four_series_exist_on_the_first_scrape_while_the_readings_are_zero()
     {
         var reading = new RepoContextHeapCeiling(0, 0, 0);
 
@@ -160,10 +166,18 @@ public sealed class RepoContextHeapCeilingMeterTests
         {
             Assert.That(
                 namesWhileZero,
-                Is.EqualTo(3),
+                Is.EqualTo(4),
                 "an absent series here has to mean 'the host did not construct this meter, or the "
                 + "collector refused it at a ceiling'. If a zero reading suppressed the series, absence "
                 + "would also mean 'no memory limit', and the two would be indistinguishable.");
+            Assert.That(
+                observed.Value(RepoContextHeapCeilingMeter.ReachableGaugeName),
+                Is.EqualTo(1d),
+                "read after the second sample, where the threshold (6) sits below the limit (8). This "
+                + "pins that the derived gauge is recomputed at scrape time from the current reading "
+                + "rather than latched at construction - it is NOT a guard against the two sides being "
+                + "read from separate samples, which a substitute that changes only between scrapes "
+                + "cannot distinguish.");
             Assert.That(
                 observed.Value(RepoContextHeapCeilingMeter.LimitBytesGaugeName),
                 Is.EqualTo(8d),
@@ -200,11 +214,142 @@ public sealed class RepoContextHeapCeilingMeterTests
             Assert.That(
                 observed.Value(RepoContextHeapCeilingMeter.HighLoadThresholdBytesGaugeName),
                 Is.GreaterThan(0d));
+
+            // Deliberately NOT asserting that the threshold sits at or below the
+            // limit. That assertion used to live here, and it was the defect in
+            // #3133 wearing a green: the two figures are computed against different
+            // denominators, so the ordering is a property of the deployment's GC
+            // hard-limit percentage and not of this code. It held on a developer box
+            // (no hard limit, so the denominators coincide) and was false on the
+            // 12 GiB container (75% hard limit, threshold 1.80 GiB ABOVE the limit),
+            // which is the worst possible split: the environment that could falsify
+            // it was the only environment that never ran it.
+            Assert.That(
+                observed.Value(RepoContextHeapCeilingMeter.ReachableGaugeName),
+                Is.EqualTo(0d).Or.EqualTo(1d),
+                "the reachability gauge reports which side of the limit the threshold actually fell on "
+                + "for THIS runtime. Both values are legitimate readings; what is not legitimate is "
+                + "asserting one of them in advance.");
+        });
+    }
+
+    /// <summary>
+    /// The container case, pinned against a substitute so it is asserted on every
+    /// machine rather than only where a GC hard limit happens to be configured.
+    /// </summary>
+    /// <remarks>
+    /// The figures are the ones scraped from the live 12 GiB deployment in #3133:
+    /// a 9.00 GiB hard limit (75% of the cgroup limit) beneath a 10.80 GiB pressure
+    /// threshold (90% of it). This is the reading the old assertion declared
+    /// impossible.
+    /// </remarks>
+    [Test]
+    public void A_threshold_above_the_limit_is_reported_as_unreachable()
+    {
+        using var observed = new HostMeterObserver();
+        using var meter = new RepoContextHeapCeilingMeter(
+            () => new RepoContextHeapCeiling(9_663_676_416, 7_516_192_768, 11_596_411_699));
+
+        observed.Sample();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                observed.Value(RepoContextHeapCeilingMeter.ReachableGaugeName),
+                Is.EqualTo(0d),
+                "the hard limit binds 1.80 GiB below the threshold, so the process OOMs before the "
+                + "pressure signal can ever be crossed. Reporting this as reachable is what made the "
+                + "signal read 'memory is not under pressure' throughout a real exhaustion.");
             Assert.That(
                 observed.Value(RepoContextHeapCeilingMeter.HighLoadThresholdBytesGaugeName),
-                Is.LessThanOrEqualTo(observed.Value(RepoContextHeapCeilingMeter.LimitBytesGaugeName)),
-                "the pressure threshold sits at or below the ceiling by construction. A threshold above "
-                + "the limit would mean the two were read from unrelated quantities.");
+                Is.GreaterThan(observed.Value(RepoContextHeapCeilingMeter.LimitBytesGaugeName)),
+                "control: the arrangement under test really is the inverted one. If these ever compare "
+                + "the other way the case above is passing for the wrong reason.");
+        });
+    }
+
+    /// <summary>
+    /// The developer-machine case: no hard limit configured, so the denominators
+    /// coincide and the threshold does sit below the limit.
+    /// </summary>
+    [Test]
+    public void A_threshold_below_the_limit_is_reported_as_reachable()
+    {
+        using var observed = new HostMeterObserver();
+        using var meter = new RepoContextHeapCeilingMeter(
+            () => new RepoContextHeapCeiling(12_884_901_888, 7_516_192_768, 11_596_411_699));
+
+        observed.Sample();
+
+        Assert.That(
+            observed.Value(RepoContextHeapCeilingMeter.ReachableGaugeName),
+            Is.EqualTo(1d),
+            "with no hard limit the threshold is 90% of the same figure the limit resolves to, so it is "
+            + "genuinely crossable and an alert on it is live.");
+    }
+
+    /// <summary>
+    /// The boundary: equal figures are reachable, because the threshold is crossed
+    /// at the same commitment the limit binds at rather than after it.
+    /// </summary>
+    [Test]
+    public void A_threshold_equal_to_the_limit_is_reported_as_reachable()
+    {
+        using var observed = new HostMeterObserver();
+        using var meter = new RepoContextHeapCeilingMeter(
+            () => new RepoContextHeapCeiling(9_663_676_416, 1_000, 9_663_676_416));
+
+        observed.Sample();
+
+        Assert.That(
+            observed.Value(RepoContextHeapCeilingMeter.ReachableGaugeName),
+            Is.EqualTo(1d),
+            "stated as its own case because it is the one value an off-by-one in the comparison moves, "
+            + "and neither neighbouring case would notice.");
+    }
+
+    /// <summary>
+    /// The exported descriptions must not reinstate the claim that #3133 removed.
+    /// </summary>
+    /// <remarks>
+    /// Asserted on the description text an operator actually reads at scrape time,
+    /// not on a comment. The original defect was not a wrong implementation - the
+    /// runtime value was reported correctly throughout - it was a wrong sentence
+    /// shipped beside a right number, so the sentence is what has to be pinned.
+    /// </remarks>
+    [Test]
+    public void No_exported_description_claims_the_threshold_sits_below_the_limit()
+    {
+        using var observed = new HostMeterObserver();
+        using var meter = new RepoContextHeapCeilingMeter();
+
+        observed.Sample();
+
+        var threshold = observed.Description(
+            RepoContextHeapCeilingMeter.HighLoadThresholdBytesGaugeName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                threshold,
+                Is.Not.Null.And.Not.Empty,
+                "control: an empty description would pass every 'does not contain' arm below without "
+                + "establishing anything.");
+            Assert.That(
+                threshold,
+                Does.Not.Contain("It sits below"),
+                "the exact sentence #3133 was filed about. An operator following it treats the threshold "
+                + "as an early warning crossed before the ceiling, when the ceiling is reached first.");
+            Assert.That(
+                threshold,
+                Does.Contain("different denominators"),
+                "the description has to say WHY the ordering is not guaranteed, or the next author "
+                + "reads two byte counts with no reason not to assume the obvious ordering.");
+            Assert.That(
+                threshold,
+                Does.Contain(RepoContextHeapCeilingMeter.ReachableGaugeName),
+                "and it has to point at the series that answers the question, so the reader is not left "
+                + "to recompute percentages against a cgroup limit.");
         });
     }
 
@@ -295,9 +440,11 @@ public sealed class RepoContextHeapCeilingMeterTests
             RepoContextHeapCeilingMeter.LimitBytesGaugeName,
             RepoContextHeapCeilingMeter.CommittedBytesGaugeName,
             RepoContextHeapCeilingMeter.HighLoadThresholdBytesGaugeName,
+            RepoContextHeapCeilingMeter.ReachableGaugeName,
         ];
 
         private readonly Dictionary<string, double> _values = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string?> _descriptions = new(StringComparer.Ordinal);
         private readonly MeterListener _listener = new();
 
         public HostMeterObserver()
@@ -307,6 +454,11 @@ public sealed class RepoContextHeapCeilingMeterTests
                 if (instrument.Meter.Name == RepoContextHostMeter.Name
                     && Wanted.Contains(instrument.Name, StringComparer.Ordinal))
                 {
+                    lock (_descriptions)
+                    {
+                        _descriptions[instrument.Name] = instrument.Description;
+                    }
+
                     l.EnableMeasurementEvents(instrument);
                 }
             };
@@ -348,6 +500,18 @@ public sealed class RepoContextHeapCeilingMeterTests
             lock (_values)
             {
                 return _values.GetValueOrDefault(instrumentName);
+            }
+        }
+
+        /// <summary>
+        /// The description one instrument was published with - the text an operator
+        /// reads on the scrape, which is where #3133's false claim actually lived.
+        /// </summary>
+        public string? Description(string instrumentName)
+        {
+            lock (_descriptions)
+            {
+                return _descriptions.GetValueOrDefault(instrumentName);
             }
         }
 

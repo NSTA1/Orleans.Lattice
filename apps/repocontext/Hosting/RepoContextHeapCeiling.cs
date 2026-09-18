@@ -8,10 +8,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// reports a container memory limit and a developer machine's physical memory without
 /// being told which it is on. See <see cref="RepoContextHeapCeilingMeter"/>.
 /// </remarks>
-/// <param name="LimitBytes">Memory the garbage collector believes it may use.</param>
+/// <param name="LimitBytes">
+/// Memory the garbage collector believes it may use: the GC hard limit, which in a
+/// container defaults to 75% of the cgroup limit.
+/// </param>
 /// <param name="CommittedBytes">Memory committed as of the last collection.</param>
 /// <param name="HighLoadThresholdBytes">
-/// The commitment at which the collector treats memory as under pressure.
+/// The commitment at which the collector treats memory as under pressure. Computed
+/// against total physical or cgroup memory (90% by default), NOT against
+/// <paramref name="LimitBytes"/>, so it may sit above the limit and be unreachable.
+/// See issue #3133 and the remarks on <see cref="RepoContextHeapCeilingMeter"/>.
 /// </param>
 public readonly record struct RepoContextHeapCeiling(
     long LimitBytes,
