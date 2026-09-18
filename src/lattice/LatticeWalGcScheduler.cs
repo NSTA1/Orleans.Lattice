@@ -2066,7 +2066,7 @@ internal sealed class LatticeWalGcScheduler(
                 if (_repairableFloorHolders.TryGetValue(treeId, out var repairableHolders))
                 {
                     logger.LogInformation(
-                        "WAL GC is driving {Count} repairable dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers, but every one of them classified as checkpointed_uncovered - a leaf with a proven durable checkpoint whose pin is not covered by it. That pin resolves to the blocking sentinel and holds the WAL floor, and the repair can only run inside an activation the dormant leaf does not have.",
+                        "WAL GC is driving {Count} repairable dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers; these are the sampled holders whose own pin frontier is nonetheless at or below the blocking sentinel, which the floor skipped because their consumer is present in the live registry. That is what makes checkpointed_uncovered sound for them - a proven durable checkpoint over an unusable pin is a coverage hole - and the repair can only run inside an activation the dormant leaf does not have. Holders whose frontier is usable are classified checkpointed_coverage_unknown and are deliberately not driven (issue #3168).",
                         repairableHolders.Count,
                         treeId);
 
@@ -3387,6 +3387,8 @@ internal sealed class LatticeWalGcScheduler(
             WalGcBlockingPinState.NoDurableState => LatticeMetrics.BlockingPinNoDurableState,
             WalGcBlockingPinState.Unreadable => LatticeMetrics.BlockingPinUnreadable,
             WalGcBlockingPinState.Orphaned => LatticeMetrics.BlockingPinOrphaned,
+            WalGcBlockingPinState.CheckpointedCoverageUnknown =>
+                LatticeMetrics.BlockingPinCheckpointedCoverageUnknown,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(state),
                 state,
@@ -4348,6 +4350,42 @@ internal sealed class LatticeWalGcScheduler(
                 ? await ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
                 : WalGcBlockingPinState.Unreadable;
 
+            // Withdraw the one conclusion this arm has no premise for (issue
+            // #3168). ReadBlockingPinStateAsync reports CheckpointedUncovered
+            // from the persisted checkpoint ALONE; the "uncovered" half is never
+            // measured, because coverage is per-activation in-memory state no
+            // storage read can reach. What normally licenses it is knowing the
+            // pin is unusable - the published pin is min(checkpoint, covered),
+            // so unusable AND checkpoint >= 0 entails coverage is absent.
+            //
+            // The blocked arm has that premise by construction, because
+            // ApplyDurableMaterialiserFloorAsync names a consumer only when its
+            // pin is <= Zero. This arm does not: it runs only when the cursor
+            // floor reports usable - i.e. precisely when NO dormant pin is
+            // <= Zero - and it samples by lowest frontier, not by usability. So
+            // the pins here are the oldest, which is not the same property at
+            // all, and asserting a coverage hole over them asserted it in the
+            // one population structurally guaranteed not to have one.
+            //
+            // The same <= Zero predicate the floor uses is applied per-pin here,
+            // against the frontier already in hand. It is not a proxy for the
+            // floor's verdict but the identical test, which preserves the one
+            // case this arm CAN still prove: a floor-holding pin at <= Zero
+            // whose consumer is present in the live registry, which the floor
+            // skipped before ever evaluating it, is genuinely unusable and stays
+            // CheckpointedUncovered.
+            //
+            // Deliberately narrow. NeverCheckpointed, NoDurableState, Orphaned
+            // and Unreadable are statements about the leaf or about the
+            // measurement and hold whatever the pin is doing, so none of them is
+            // touched. Only CheckpointedUncovered makes a compound claim whose
+            // second conjunct was never read.
+            if (state == WalGcBlockingPinState.CheckpointedUncovered
+                && floorHolders[i].Value > HybridLogicalClock.Zero)
+            {
+                state = WalGcBlockingPinState.CheckpointedCoverageUnknown;
+            }
+
             // Same two-step as the blocked arm: prime this partition's other
             // arms before recording the one that resolved, so a zero on a state
             // reads as measured-and-not-this-state rather than as silence.
@@ -4364,7 +4402,11 @@ internal sealed class LatticeWalGcScheduler(
             // a trim entitlement the leaf never earned. Orphaned has no leaf
             // left to activate and is the bulk sweep's business, NoDurableState
             // has no checkpoint to make a snapshot from, and Unreadable is an
-            // unknown that must fail closed.
+            // unknown that must fail closed. CheckpointedCoverageUnknown is the
+            // one the gate above produces: no coverage hole was established, so
+            // driving it could only spend an activation to be told there was
+            // nothing to repair - which is exactly what it did, over four
+            // thousand times, before issue #3168.
             if (state == WalGcBlockingPinState.CheckpointedUncovered)
             {
                 repairable.Add(consumerId);

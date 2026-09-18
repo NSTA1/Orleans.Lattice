@@ -1,8 +1,19 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Which of the two durable-pin states an <i>absent</i> consumer that blocks a
-/// WAL GC pass is actually in.
+/// Which durable-pin state an <i>absent</i> consumer whose pin the WAL GC has
+/// singled out is actually in.
+/// <para>
+/// <b>Two populations, and the premise that separates them.</b> Members are
+/// recorded from two call sites. The <i>blocked</i> arm classifies a consumer
+/// that <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/> named, so the
+/// pin is known unusable before the read begins. The <i>floor-holder</i> arm
+/// (issue #3158) classifies the oldest pins on a tree whose floor reports
+/// usable, so the pin is <b>not</b> known to be unusable - it may simply be the
+/// oldest healthy one. <see cref="CheckpointedUncovered"/> is sound only under
+/// the first premise, which is why
+/// <see cref="CheckpointedCoverageUnknown"/> exists (issue #3168).
+/// </para>
 /// <para>
 /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/> says a pass was
 /// blocked; it cannot say <i>why</i>, because the leaf publishes
@@ -47,6 +58,19 @@ public enum WalGcBlockingPinState
     /// is the coverage half of <c>min(checkpoint, covered)</c>, which is
     /// per-activation in-memory state populated only on snapshot capture or
     /// load. A remedy that restores coverage would clear this block.
+    /// </para>
+    /// <para>
+    /// <b>The "uncovered" half is inferred, never measured, so it is only as
+    /// sound as its premise.</b> The classifier reads the checkpoint and stops;
+    /// coverage lives in per-activation memory it cannot reach. What licenses
+    /// the second half is knowing independently that the pin is unusable:
+    /// <c>ResolveDurablePinForPartition</c> publishes
+    /// <c>min(checkpoint, covered)</c>, so an unusable pin with a checkpoint
+    /// <c>&gt;= 0</c> entails coverage is absent. That premise holds on the
+    /// blocked arm by construction and <b>fails</b> on the floor-holder arm,
+    /// where a pin is sampled for being oldest rather than for being unusable.
+    /// A usable pin sampled there is <see cref="CheckpointedCoverageUnknown"/>,
+    /// not this state (issue #3168).
     /// </para>
     /// </summary>
     CheckpointedUncovered = 0,
@@ -134,4 +158,52 @@ public enum WalGcBlockingPinState
     /// </para>
     /// </remarks>
     Orphaned = 4,
+
+    /// <summary>
+    /// The leaf has durably checkpointed this partition, but its pin is
+    /// <b>not</b> known to be unusable - so whether that checkpoint is covered
+    /// is not determinable from durable state, and this arm deliberately makes
+    /// no claim either way.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>What it measures.</b> Exactly what
+    /// <see cref="CheckpointedUncovered"/> measures - a persisted per-partition
+    /// projection checkpoint <c>&gt;= 0</c> - and nothing more. The two arms
+    /// read the same byte. They differ only in whether the premise that
+    /// licenses the <i>uncovered</i> conclusion was available, and that premise
+    /// is a property of the call site, not of the leaf.
+    /// </para>
+    /// <para>
+    /// <b>Why it had to exist (issue #3168).</b> The floor-holder sample runs
+    /// only when the cursor floor reports usable, which is true only when no
+    /// dormant pin resolved to the blocking sentinel - so every pin it samples
+    /// is, at that moment, usable. Classifying those as
+    /// <see cref="CheckpointedUncovered"/> asserted a coverage hole in the one
+    /// population structurally guaranteed not to have one. On a live estate
+    /// that read all eight partitions of a healthy, fully-covered, merely idle
+    /// leaf as repairable, and issue #3164 drove it into the reactivation
+    /// remedy every pass; the leaf answered
+    /// <c>no_checkpointed_uncovered_partition</c> over four thousand times,
+    /// which was the leaf being right.
+    /// </para>
+    /// <para>
+    /// <b>Not repairable, and that is the point.</b> This arm is excluded from
+    /// the set #3164 drives. There is no coverage hole to repair, so a
+    /// reactivation can only cost an activation and report that it found
+    /// nothing. A tree sitting on this arm is not defective and is not healed
+    /// by touching its leaves: its WAL floor is held by a pin that is healthy
+    /// and simply old, which is a frontier-advance question rather than a
+    /// coverage one.
+    /// </para>
+    /// <para>
+    /// <b>Why it is honest rather than merely cautious.</b> Naming it
+    /// <c>CheckpointedCovered</c> would be the same error running the other
+    /// way. The durable pin store merges frontiers by monotonic max, so a
+    /// positive stored frontier is a high-water mark and not a live statement
+    /// of usability; coverage still cannot be read without activating the leaf.
+    /// This arm claims only what was measured.
+    /// </para>
+    /// </remarks>
+    CheckpointedCoverageUnknown = 5,
 }

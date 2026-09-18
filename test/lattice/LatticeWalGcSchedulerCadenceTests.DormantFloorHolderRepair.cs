@@ -21,8 +21,9 @@ namespace Orleans.Lattice.Tests;
 /// leaf that has a LIVE activation. A durable pin can only hold the floor when
 /// <c>ApplyDurableMaterialiserFloorAsync</c> consults it, and that happens only
 /// for a consumer MISSING from the live cursor registry - a DORMANT leaf. The
-/// two populations cannot intersect, so the repairer could never reach a single
-/// pin that was actually holding a floor.
+/// two populations therefore could not intersect, so the repairer could never
+/// reach a single pin that was actually holding a floor. This arm is what makes
+/// them intersect; see the #3168 correction below for what that then exposed.
 /// </para>
 /// <para>
 /// <b>Measured on the live repocontext container</b>, tree
@@ -33,6 +34,37 @@ namespace Orleans.Lattice.Tests;
 /// <c>coverage_repairs_total{outcome="repaired"}</c> absent against 2,761
 /// <c>no_checkpointed_uncovered_partition</c> declines - the signature of a
 /// repairer that only ever meets leaves that do not need it.
+/// </para>
+/// <para>
+/// <b>Corrected by issue #3168 - the classification quoted above was wrong.</b>
+/// Making the two populations intersect is what made the next layer legible:
+/// the repairer, now reachable and running inside the activation this arm
+/// creates, declined every one of those leaves with
+/// <c>no_checkpointed_uncovered_partition</c>, 4,424 times. One of the two had
+/// to be wrong, and it was the classifier. <c>ClassifyCheckpoint</c> returns
+/// <c>checkpointed_uncovered</c> from <c>checkpoint &gt;= 0</c> alone; it never
+/// measures coverage and structurally cannot, because coverage lives in a
+/// private per-activation field that is absent from the persisted state. The
+/// "uncovered" half is an INFERENCE from the premise that the pin is unusable -
+/// the published pin is <c>min(checkpoint, covered)</c>, so unusable plus a
+/// checkpoint entails no coverage. The blocked arm holds that premise by
+/// construction. This arm never did: it runs only when NO dormant pin is
+/// unusable, and it samples candidates with no usability filter at all. So it
+/// was applying the blocked arm's inference to exactly the population the
+/// premise excludes. A floor holder whose frontier is above the sentinel now
+/// classifies <c>checkpointed_coverage_unknown</c> and is not driven; the leaves
+/// these fixtures model are the ones that genuinely carry the sentinel.
+/// </para>
+/// <para>
+/// <b>Consequently the pin seeds here are the blocking sentinel, not a
+/// frontier.</b> A genuinely repairable holder necessarily carries
+/// <c>HybridLogicalClock.Zero</c> - there is no other shape, since the pin is a
+/// minimum that includes the missing coverage. Seeding a positive frontier and
+/// then asserting the leaf must be driven, as these fixtures originally did,
+/// modelled a leaf that cannot exist and encoded the #3168 defect as the
+/// expectation. With every frontier now equal, <c>OfferFloorHolderCandidate</c>
+/// falls through to its ordinal consumer-id tiebreak, which is why the ids here
+/// are zero-padded.
 /// </para>
 /// <para>
 /// <b>What these tests assert, and in what proportion.</b> The repair is a
@@ -126,6 +158,57 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     /// <summary>
+    /// The pin a leaf publishes when it cannot resolve a usable offset - the
+    /// blocking sentinel, and the <b>only</b> frontier a genuinely repairable
+    /// floor holder can carry.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These fixtures originally seeded a repairable holder at a positive
+    /// frontier, which modelled a leaf that cannot exist.
+    /// <c>ResolveDurablePinForPartition</c> publishes
+    /// <c>min(checkpoint, covered)</c>, so a leaf whose coverage is absent
+    /// publishes <c>(Zero, -1)</c> and nothing else; a positive frontier is
+    /// therefore proof that coverage was present when the pin was written. The
+    /// classifier now says so (issue #3168), and a fixture that asserts a
+    /// positive-frontier holder must be driven is asserting the defect.
+    /// </para>
+    /// <para>
+    /// Note what this does <i>not</i> say. A floor-holding pin at the sentinel
+    /// is still reachable on a report whose cursor floor is usable, because
+    /// <c>ApplyDurableMaterialiserFloorAsync</c> skips a consumer that is
+    /// present in the live registry before it ever evaluates the pin. That is
+    /// exactly the population these fixtures model, and it is why the arm
+    /// remains live rather than being disabled by the fix.
+    /// </para>
+    /// </remarks>
+    private static readonly HybridLogicalClock UnusablePin = HybridLogicalClock.Zero;
+
+    /// <summary>
+    /// A leaf grain id whose ordinal is zero-padded so that a population seeded
+    /// at a single frontier still has a deterministic selection order.
+    /// </summary>
+    /// <remarks>
+    /// Every repairable holder carries <see cref="UnusablePin"/>, so the
+    /// frontier can no longer separate one candidate from another and
+    /// <c>OfferFloorHolderCandidate</c> falls through to its ordinal consumer-id
+    /// tiebreak. Unpadded ids order <c>10</c> before <c>2</c> under that
+    /// comparison, which would leave "the eight lowest" meaning something other
+    /// than ordinals 0-7 and turn a deterministic assertion into a confusing
+    /// one. Padding makes ordinal order and numeric order the same thing.
+    /// </remarks>
+    private static GrainId RepairLeafGrainId(int ordinal) =>
+        GrainId.Create(
+            "bplusleaf", "leaf-3164-" + ordinal.ToString("D3", System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// The materialiser consumer id <see cref="RepairLeafGrainId"/> publishes
+    /// under, built exactly as <c>ILeafCursorReporter</c> builds it.
+    /// </summary>
+    private static string RepairConsumerId(int ordinal) =>
+        $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{OrphanSweepTree}_{RepairLeafGrainId(ordinal)}";
+
+    /// <summary>
     /// Runs a tree past the minimum block age and returns the leaves the sweep
     /// drove, so each fixture differs only in the population it seeded.
     /// </summary>
@@ -146,10 +229,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static async Task<LeafTouchBook> DriveOneAsync(Action<LeafStateBook, GrainId> seed)
     {
         var storage = new LeafStateBook();
-        seed(storage, OrphanLeafGrainId(0));
+        seed(storage, RepairLeafGrainId(0));
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         return await DriveAsync(pins, storage);
     }
@@ -168,7 +251,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // did nothing with the classification.
         var leaves = await DriveOneAsync((s, leaf) => s.PutLive(leaf, OrphanSweepTree));
 
-        Assert.That(leaves.Touched, Does.Contain(OrphanLeafGrainId(0)),
+        Assert.That(leaves.Touched, Does.Contain(RepairLeafGrainId(0)),
             "a checkpointed-but-uncovered dormant pin is precisely what TryRepairZeroCoverageAsync exists "
                 + "to repair, and the repair can only run inside an activation. An empty set here is the "
                 + "defect: the remedy and its target never meet, and the WAL floor is held forever.");
@@ -184,10 +267,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // happens on a report that says Available, so the fix cannot be
         // satisfied by anything that merely re-routes the blocked arm.
         var storage = new LeafStateBook();
-        storage.PutLive(OrphanLeafGrainId(0), OrphanSweepTree);
+        storage.PutLive(RepairLeafGrainId(0), OrphanSweepTree);
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         var time = new VirtualTimeProvider();
         var (scheduler, leaves) = SchedulerRepairing(pins, storage, time);
@@ -277,7 +360,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // precisely the condition under which a remedy must not start guessing.
         var storage = new LeafStateBook { Throws = new InvalidOperationException("provider down") };
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         var leaves = await DriveAsync(pins, storage);
 
@@ -294,21 +377,21 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // entirely; this one cannot. Both pins hold the floor, both are dormant,
         // both are sampled - and the two must be treated oppositely.
         var storage = new LeafStateBook();
-        storage.PutLive(OrphanLeafGrainId(0), OrphanSweepTree);
-        storage.PutNeverCheckpointed(OrphanLeafGrainId(1), OrphanSweepTree);
+        storage.PutLive(RepairLeafGrainId(0), OrphanSweepTree);
+        storage.PutNeverCheckpointed(RepairLeafGrainId(1), OrphanSweepTree);
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(1), FrontierAt(1));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
+        pins.Seed(OrphanSweepTree, RepairConsumerId(1), UnusablePin);
 
         var leaves = await DriveAsync(pins, storage);
 
         Assert.Multiple(() =>
         {
-            Assert.That(leaves.Touched, Does.Contain(OrphanLeafGrainId(0)),
+            Assert.That(leaves.Touched, Does.Contain(RepairLeafGrainId(0)),
                 "the repairable holder must still be driven, or the safety guard has simply disabled the "
                     + "remedy and the WAL stays pinned.");
-            Assert.That(leaves.Touched, Does.Not.Contain(OrphanLeafGrainId(1)),
+            Assert.That(leaves.Touched, Does.Not.Contain(RepairLeafGrainId(1)),
                 "and the never-checkpointed holder beside it must not be, however much WAL its pin is "
                     + "holding. Reclaiming by trimming past an unproven checkpoint is the one outcome "
                     + "worse than not reclaiming at all.");
@@ -332,8 +415,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var pins = new FakePinStore();
         for (var i = 0; i < Population; i++)
         {
-            storage.PutLive(OrphanLeafGrainId(i), OrphanSweepTree);
-            pins.Seed(OrphanSweepTree, OrphanConsumerId(i), FrontierAt(i));
+            storage.PutLive(RepairLeafGrainId(i), OrphanSweepTree);
+            pins.Seed(OrphanSweepTree, RepairConsumerId(i), UnusablePin);
         }
 
         var time = new VirtualTimeProvider();
@@ -376,13 +459,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var pins = new FakePinStore();
         for (var i = 0; i < Population; i++)
         {
-            storage.PutLive(OrphanLeafGrainId(i), OrphanSweepTree);
-            pins.Seed(OrphanSweepTree, OrphanConsumerId(i), FrontierAt(i));
+            storage.PutLive(RepairLeafGrainId(i), OrphanSweepTree);
+            pins.Seed(OrphanSweepTree, RepairConsumerId(i), UnusablePin);
         }
 
         var leaves = await DriveAsync(pins, storage);
         var distinct = leaves.Touched.Distinct().ToArray();
-        var expected = Enumerable.Range(0, FloorHolderCap).Select(OrphanLeafGrainId).ToArray();
+        var expected = Enumerable.Range(0, FloorHolderCap).Select(RepairLeafGrainId).ToArray();
 
         Assert.Multiple(() =>
         {
@@ -390,9 +473,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "the arm may never drive more leaves than the sample it was handed, whatever the "
                     + "population.");
             Assert.That(distinct, Is.EquivalentTo(expected),
-                "and the leaves it drives must be the lowest-frontier pins - the ones actually holding the "
-                    + "floor. The floor is a minimum over every pin, so driving a pin above the minimum "
-                    + "spends a durable write on something that was never the blocker.");
+                "and the leaves it drives must be the ones OfferFloorHolderCandidate actually selects. "
+                    + "Every repairable holder carries the blocking sentinel, so the frontier cannot "
+                    + "separate them and the selector falls through to its ordinal consumer-id tiebreak - "
+                    + "which the zero-padded ids make the same order as the numeric one. Driving a pin "
+                    + "outside that sample spends a durable write on something that was never sampled.");
         });
     }
 
@@ -419,8 +504,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var pins = new FakePinStore();
         for (var i = 0; i < Population; i++)
         {
-            storage.PutLive(OrphanLeafGrainId(i), OrphanSweepTree);
-            pins.Seed(OrphanSweepTree, OrphanConsumerId(i), FrontierAt(i));
+            storage.PutLive(RepairLeafGrainId(i), OrphanSweepTree);
+            pins.Seed(OrphanSweepTree, RepairConsumerId(i), UnusablePin);
         }
 
         var leaves = await DriveAsync(pins, storage);
@@ -457,10 +542,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // level up, and it presents as a remedy that looks wired in and silently
         // never fires.
         var storage = new LeafStateBook();
-        storage.PutLive(OrphanLeafGrainId(0), OrphanSweepTree);
+        storage.PutLive(RepairLeafGrainId(0), OrphanSweepTree);
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         var time = new VirtualTimeProvider();
         var (scheduler, leaves) = SchedulerRepairing(pins, storage, time);
@@ -487,10 +572,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // must retire the episode exactly as before, or a tree that healed would
         // keep a blocked episode forever and its budgets would never be pruned.
         var storage = new LeafStateBook();
-        storage.PutNeverCheckpointed(OrphanLeafGrainId(0), OrphanSweepTree);
+        storage.PutNeverCheckpointed(RepairLeafGrainId(0), OrphanSweepTree);
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         var time = new VirtualTimeProvider();
         var (scheduler, leaves) = SchedulerRepairing(pins, storage, time);
@@ -526,10 +611,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // consequence to state plainly is that a deployment with no ceiling
         // configured gets no repair from this arm.
         var storage = new LeafStateBook();
-        storage.PutLive(OrphanLeafGrainId(0), OrphanSweepTree);
+        storage.PutLive(RepairLeafGrainId(0), OrphanSweepTree);
 
         var pins = new FakePinStore();
-        pins.Seed(OrphanSweepTree, OrphanConsumerId(0), FrontierAt(0));
+        pins.Seed(OrphanSweepTree, RepairConsumerId(0), UnusablePin);
 
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())

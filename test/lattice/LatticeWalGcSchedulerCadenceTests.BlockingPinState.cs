@@ -37,7 +37,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private const string BlockingPinStatusTag = LatticeMetrics.TagStatus;
 
     private static readonly string[] EveryBlockingPinArm =
-        ["checkpointed_uncovered", "never_checkpointed", "no_durable_state", "unreadable", "orphaned"];
+        [
+            "checkpointed_uncovered", "never_checkpointed", "no_durable_state", "unreadable", "orphaned",
+            "checkpointed_coverage_unknown",
+        ];
 
     /// <summary>
     /// A storage provider that serves one canned leaf state, counting reads so
