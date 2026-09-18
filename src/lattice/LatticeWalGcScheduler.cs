@@ -1867,6 +1867,47 @@ internal sealed class LatticeWalGcScheduler(
             {
                 WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
                 ClearBlockedObservation(treeId, treeTag, tenantTag);
+
+                // Reach the orphan sweep from the breach as well as from the
+                // block (issue #3154). Everything above is keyed to
+                // BlockedByUnusablePin, which is a statement about why the
+                // *consumer cursor* floor cannot move. A tree can equally be
+                // stranded by the durable materialiser offset floor, which
+                // ComputeMaterialiserOffsetFloorAsync takes as a minimum over
+                // the leaves that REPORTED an offset rather than over the
+                // leaves that OWE entries - so one stale pin holds the frontier
+                // indefinitely while CursorFloorState stays Available and the
+                // pass classifies over_ceiling. That tree names no blocking
+                // consumer, so it took this branch and received no remedy at
+                // all: the sweep and the per-consumer retirement were both
+                // gated on the cause, and it does not have that cause.
+                //
+                // This is the third application of the lesson recorded below -
+                // the predicate encodes a cause while a breach is a condition -
+                // and it is the one that reaches the remedy rather than the
+                // cadence. Without it the comment below is right for the wrong
+                // reason: pass frequency was the only lever left only because
+                // this one was unreachable, and a stale pin is not an operator's
+                // ceiling being unreachable, it is a reclaimable backlog that
+                // presents identically.
+                //
+                // Only the sweep is applicable, and it is applicable whole. The
+                // rest of the heal path is driven by the floor's blocking
+                // report - episode budgets, ClassifyBlockingPinsAsync, and the
+                // reactivation machinery all iterate consumer ids this tree has
+                // none of - whereas the sweep deliberately bypasses that report
+                // and reads the pin store directly, so it needs nothing this
+                // arm cannot supply. It is also already safe to call from a
+                // second site: it no-ops without a leaf state provider, shares
+                // the per-tree OrphanSweepInterval rate limiter with the blocked
+                // arm so the two cannot double-sweep, and is fail-closed, so a
+                // pin that might still be live is never retired and no trim is
+                // ever authorised over an unreplayed prefix.
+                if (overCeiling)
+                {
+                    await SweepOrphanedMaterialiserPinsAsync(
+                        treeId, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
+                }
             }
 
             // Hold a blocked tree at the floor instead of relaxing it. The same
