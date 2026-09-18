@@ -1720,6 +1720,75 @@ public static class LatticeMetrics
             description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
 
     /// <summary>
+    /// Counter of WAL GC per-shard trim scans, tagged with <see cref="TagTree"/>
+    /// and with <see cref="TagReason"/> carrying the
+    /// <see cref="WalGcTrimStopReason"/> that stopped the scan (issue #3149).
+    /// <para>
+    /// This is the series that says <b>why</b> a pass reclaimed nothing. Before
+    /// it, a tree could sit permanently over its byte ceiling with a healthy
+    /// consumer-cursor floor, classify every pass as
+    /// <see cref="OutcomeOverCeiling"/>, reclaim zero bytes, and publish no
+    /// statement anywhere as to the cause - because
+    /// <see cref="WalGcBlockingPinState"/> is written only on the
+    /// <see cref="OutcomeBlocked"/> path, which such a tree never takes. The
+    /// breach was observable; the reason for it was not.
+    /// </para>
+    /// <para>
+    /// The distinction the arms draw is the load-bearing part.
+    /// <c>offset_floor</c> means a stale durable leaf checkpoint is holding the
+    /// scan, and because that floor is a minimum over leaves, one lagging leaf
+    /// strands the whole tree. <c>not_eligible</c> means the HLC predicate is
+    /// holding it, which is a consumer-cursor problem and a different
+    /// investigation entirely. <c>exhausted</c> and <c>empty</c> are the healthy
+    /// readings. A sustained run of <c>offset_floor</c> alongside a flat
+    /// <see cref="StoragePolicyBytesReclaimed"/> is the signature of a tree whose
+    /// floor covers none of its retained range.
+    /// </para>
+    /// <para>
+    /// All four arms are zero-primed per tree on every pass, so an absent series
+    /// means this silo is not running WAL GC for the tree rather than that the
+    /// tree never stopped a scan. That priming is what lets a reader treat a flat
+    /// <c>offset_floor</c> zero as a measured absence, which is precisely the
+    /// inference that was unavailable before this instrument existed.
+    /// </para>
+    /// <para>
+    /// Recorded once per shard per pass, so a tree with eight shards contributes
+    /// eight increments per pass and the arms sum to the shard count. It is
+    /// diagnostic only and never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcTrimStops =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
+            description: "WAL GC per-shard trim scans tagged by tree and by the reason the scan stopped: offset_floor, not_eligible, exhausted or empty.");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
+    /// every entry the provider offered without meeting one it had to retain).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimExhausted = new(TagReason, "exhausted");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>empty</c> (a trim scan over a shard that held
+    /// no entries at all).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimEmpty = new(TagReason, "empty");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>offset_floor</c> (a trim scan stopped by the
+    /// durable materialiser offset floor - see
+    /// <see cref="WalGcTrimStopReason.OffsetFloor"/>, the arm that identifies a
+    /// tree stranded by one lagging leaf checkpoint).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimOffsetFloor = new(TagReason, "offset_floor");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>not_eligible</c> (a trim scan stopped by the
+    /// HLC eligibility predicate - the consumer-cursor floor, the TTL ceiling,
+    /// the causally stable frontier, or a Zero-HLC block pin).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimNotEligible = new(TagReason, "not_eligible");
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes for which no retained-byte
     /// backlog could be sampled, tagged with <see cref="TagTree"/> and with
     /// <see cref="TagReason"/> = <c>policy_disabled</c> or
