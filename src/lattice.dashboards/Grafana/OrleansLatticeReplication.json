@@ -1803,6 +1803,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_wal_compaction_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 3149,
+      "title": "WAL GC trim stops by reason (ops/s) - issue #3149",
+      "description": "Rate of WAL garbage-collection shard scans by the reason each scan stopped (orleans.lattice.wal.gc.trim_stop), per tree (issue #3149). THIS IS THE PANEL THAT MAKES A ZERO-RECLAIM PASS ATTRIBUTABLE. The pass-outcome panel classifies a pass over_ceiling whenever the tree is above its byte ceiling, and that classification is decided by the CONSUMER-CURSOR floor alone - so a tree stranded by the DURABLE LEAF-CHECKPOINT OFFSET FLOOR reports an available cursor floor, reclaims zero on every pass, grows without bound, and over_ceiling is also the one outcome on which the blocking-pin diagnostic is never written. Four arms: exhausted (the scan consumed the whole shard - healthy) and empty (the shard holds no entries, which is NOT the same as having just reclaimed everything and must not be averaged into it); against offset_floor (the first entry examined sat above the durable checkpoint floor, so ONE LAGGING LEAF IS HOLDING THE WHOLE TREE, that floor being a minimum over reported checkpoints) and not_eligible (the first entry was above the HLC floor, which indicts a lagging consumer cursor instead). One measurement per shard per pass, so a single stranded partition stays visible rather than being absorbed by its healthy siblings. READ IT WITH THE PASS-OUTCOME PANEL: a sustained offset_floor rate alongside over_ceiling passes is unbounded WAL growth with a named cause. All four arms are zero-primed above every early return, which is why this query omits the or-vector-zero fallback used elsewhere on this dashboard: fabricating a zero would reintroduce the false zero the priming exists to remove, and here an absent series genuinely means WAL GC is not running for that tree on the selected silo.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 316 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_trim_stop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}}/s" }
+      ]
     }
   ]
 }

@@ -188,6 +188,11 @@ public sealed class LatticeWalGc(
         var resolved = optionsMonitor.Get(treeName);
         var partitions = resolved.WalPartitions;
 
+        // Prime the trim-stop arms before any early return below, so a tree whose
+        // pass returns without reaching the trim loop still publishes four
+        // measured zeros rather than nothing at all (issue #3149).
+        PrimeTrimStopSeries(treeName);
+
         // Resolve a provider per partition from the durable WAL placement pin so
         // a partition that was moved to a named storage backend is sampled and
         // trimmed on that backend rather than on the baseline provider. When the
@@ -377,7 +382,9 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
+            totalTrimmed += shardScan.EligibleCount;
+            RecordTrimStop(treeName, shardScan.StopReason);
         }
 
         if (totalTrimmed > 0)
@@ -1207,7 +1214,7 @@ public sealed class LatticeWalGc(
         return anySupported ? (ceiling, retained) : (ceiling, null);
     }
 
-    private static async Task<long> TrimShardAsync(
+    private static async Task<(long EligibleCount, WalGcTrimStopReason StopReason)> TrimShardAsync(
         IWalStorageProvider provider,
         string treeId,
         int shardIndex,
@@ -1221,6 +1228,8 @@ public sealed class LatticeWalGc(
         long lastEligibleOffset = -1;
         long fromOffsetExclusive = -1;
         long eligibleCount = 0;
+        long entriesSeen = 0;
+        var stopReason = WalGcTrimStopReason.Exhausted;
         var stop = false;
 
         while (!stop)
@@ -1234,6 +1243,7 @@ public sealed class LatticeWalGc(
                 .ConfigureAwait(false))
             {
                 pageEntries++;
+                entriesSeen++;
                 lastSeenOffset = walEntry.Offset;
 
                 // Offset-space retention floor: never trim an entry ABOVE the
@@ -1247,6 +1257,13 @@ public sealed class LatticeWalGc(
                 // above the floor stops the pass just like a non-eligible entry.
                 if (offsetFloor is { } floor && walEntry.Offset > floor)
                 {
+                    // Recorded separately from the eligibility stop below
+                    // (issue #3149). The two look identical from outside - both
+                    // are "the scan stopped here" - but they indict different
+                    // subsystems, and this one is the arm on which a tree can be
+                    // stranded indefinitely while every floor-state series it
+                    // publishes reads healthy.
+                    stopReason = WalGcTrimStopReason.OffsetFloor;
                     stop = true;
                     break;
                 }
@@ -1261,6 +1278,7 @@ public sealed class LatticeWalGc(
                     // First non-eligible entry stops the scan: offsets
                     // are dense and the conservative shape forbids
                     // jumping over a pinned entry to trim a later one.
+                    stopReason = WalGcTrimStopReason.NotEligible;
                     stop = true;
                     break;
                 }
@@ -1284,13 +1302,70 @@ public sealed class LatticeWalGc(
             fromOffsetExclusive = lastSeenOffset;
         }
 
+        // A shard that offered no entries at all is reported as empty rather
+        // than exhausted. Both trimmed nothing, but only one of them has a
+        // backlog to account for, and collapsing them would put every idle
+        // shard in the fleet on the same arm as a shard that just reclaimed its
+        // whole log.
+        if (!stop && entriesSeen == 0)
+        {
+            stopReason = WalGcTrimStopReason.Empty;
+        }
+
         if (lastEligibleOffset < 0)
         {
-            return 0;
+            return (0, stopReason);
         }
 
         await provider.TrimAsync(treeId, shardIndex, lastEligibleOffset, cancellationToken).ConfigureAwait(false);
-        return eligibleCount;
+        return (eligibleCount, stopReason);
+    }
+
+    /// <summary>
+    /// Maps a <see cref="WalGcTrimStopReason"/> onto its pre-allocated
+    /// <see cref="LatticeMetrics.TagReason"/> tag. Held exhaustively armed by the
+    /// instrumented-enum gate, so a reason added later cannot be reported under
+    /// another reason's arm or under none.
+    /// </summary>
+    private static KeyValuePair<string, object?> ClassifyTrimStop(WalGcTrimStopReason reason)
+        => reason switch
+        {
+            WalGcTrimStopReason.Exhausted => LatticeMetrics.ReasonTrimExhausted,
+            WalGcTrimStopReason.Empty => LatticeMetrics.ReasonTrimEmpty,
+            WalGcTrimStopReason.OffsetFloor => LatticeMetrics.ReasonTrimOffsetFloor,
+            WalGcTrimStopReason.NotEligible => LatticeMetrics.ReasonTrimNotEligible,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(reason), reason, "Unarmed WAL GC trim stop reason."),
+        };
+
+    /// <summary>
+    /// Records one trim-scan stop for <paramref name="treeName"/>. Called with
+    /// <paramref name="delta"/> zero to prime an arm, and with one to report an
+    /// actual scan.
+    /// </summary>
+    private static void RecordTrimStop(string treeName, WalGcTrimStopReason reason, long delta = 1)
+        => LatticeMetrics.WalGcTrimStops.Add(
+            delta,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+            ClassifyTrimStop(reason),
+            LatticeTenantLabel.ForTree(treeName));
+
+    /// <summary>
+    /// Zero-primes every <see cref="WalGcTrimStopReason"/> arm for
+    /// <paramref name="treeName"/>, so an absent series means WAL GC is not
+    /// running for this tree on this silo rather than that no scan ever stopped.
+    /// <para>
+    /// Called above every early return in <see cref="RunOnceAsync"/>, because the
+    /// pass that reclaims nothing is exactly the pass a reader is investigating
+    /// and it is the one most likely to return before reaching the trim loop.
+    /// </para>
+    /// </summary>
+    private static void PrimeTrimStopSeries(string treeName)
+    {
+        RecordTrimStop(treeName, WalGcTrimStopReason.Exhausted, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.Empty, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.OffsetFloor, 0);
+        RecordTrimStop(treeName, WalGcTrimStopReason.NotEligible, 0);
     }
 
     private static bool IsEligible(
