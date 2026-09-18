@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Globalization;
@@ -222,6 +223,23 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// <summary>The <see cref="CeilingLabelName"/> value for the global backstop.</summary>
     public const string GlobalCeilingLabel = "global";
 
+    /// <summary>
+    /// The pending-text threshold at which <see cref="WriteToAsync"/> flushes to the
+    /// response. It bounds the peak held body: the streaming path never holds more than
+    /// this plus whatever the family being rendered added past it. Small enough that the
+    /// builder's chunks stay well under the 85 KB large-object-heap threshold, which is
+    /// the whole point of issue #3136.
+    /// </summary>
+    private const int FlushThresholdChars = 16 * 1024;
+
+    /// <summary>
+    /// The pooled UTF-8 destination buffer size. It is deliberately independent of
+    /// <see cref="FlushThresholdChars"/>: the flush converts in bounded slices, so this
+    /// buffer never has to be large enough for the worst-case expansion of the pending
+    /// text, and sizing it this way keeps it off the large object heap.
+    /// </summary>
+    private const int FlushBufferBytes = 8 * 1024;
+
     private readonly ConcurrentDictionary<string, MetricFamily> _families = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string Family, string Ceiling), DropCount> _dropsByFamily = new();
 
@@ -355,7 +373,175 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// time rather than the value at its last callback.
     /// </summary>
     /// <returns>The exposition body.</returns>
+    /// <remarks>
+    /// This overload materialises the whole exposition as one <see cref="string"/> and
+    /// is retained for tests and for callers that genuinely want the body in hand. The
+    /// scrape endpoint must not use it: see <see cref="WriteToAsync"/> for why.
+    /// </remarks>
     public string Render()
+    {
+        PollObservableInstruments();
+
+        var builder = new StringBuilder(4096);
+        foreach (var family in OrderedFamilies())
+        {
+            family.Render(builder);
+        }
+
+        AppendTrailer(builder);
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Writes the current state as a Prometheus text exposition payload directly to
+    /// <paramref name="destination"/> as UTF-8, without ever holding the whole body in
+    /// memory. Polls every observable instrument first, so a gauge reports the value at
+    /// scrape time rather than the value at its last callback. The bytes written are
+    /// byte-for-byte identical to <c>Encoding.UTF8.GetBytes(Render())</c>.
+    /// </summary>
+    /// <param name="destination">The response body to write the exposition to. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the exposition has been written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// Issue #3136. <see cref="Render"/> ends in <c>StringBuilder.ToString()</c>, and
+    /// that single call is what failed on the live container: a <see cref="StringBuilder"/>
+    /// holds its content as a linked list of chunks, so building a 4.15 MB exposition
+    /// never needs a contiguous block, but <c>ToString</c> must produce one
+    /// <see cref="string"/> - a contiguous ~8.3 MB UTF-16 buffer, far over the 85 KB
+    /// large-object-heap threshold. The LOH is not compacted by default, so a heap that
+    /// is fragmented and near its ceiling can have several megabytes free in aggregate
+    /// and still be unable to satisfy it. Seventeen scrapes died there with
+    /// <see cref="OutOfMemoryException"/>, which is the worst possible direction to fail
+    /// in: the metrics vanish under exactly the memory pressure they exist to report,
+    /// and the resulting gap in the time series is indistinguishable from nothing having
+    /// happened.
+    /// </para>
+    /// <para>
+    /// This path removes that allocation rather than enlarging a buffer to survive it.
+    /// Families are rendered into one small reusable builder that is flushed and cleared
+    /// whenever it crosses <see cref="FlushThresholdChars"/>, so the peak held body falls
+    /// from the whole exposition to roughly the threshold plus one family. The flush
+    /// encodes straight to UTF-8 through a pooled byte buffer, so the separate encode
+    /// buffer that <c>Results.Text</c> would have allocated goes too.
+    /// </para>
+    /// <para>
+    /// The encoder is created once for the whole response and carries state across
+    /// flushes. That is load-bearing rather than tidy: a flush boundary can fall between
+    /// the two halves of a surrogate pair, and a per-flush
+    /// <c>Encoding.UTF8.GetBytes</c> would emit a replacement character for each half.
+    /// The exposition is ASCII in practice, but nothing in the label or help path
+    /// guarantees it, so correctness here must not rest on that.
+    /// </para>
+    /// </remarks>
+    public async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+
+        PollObservableInstruments();
+
+        var encoder = Encoding.UTF8.GetEncoder();
+        var buffer = ArrayPool<byte>.Shared.Rent(FlushBufferBytes);
+        try
+        {
+            var builder = new StringBuilder(FlushThresholdChars);
+
+            foreach (var family in OrderedFamilies())
+            {
+                family.Render(builder);
+                if (builder.Length >= FlushThresholdChars)
+                {
+                    await FlushAsync(builder, encoder, buffer, destination, false, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
+            AppendTrailer(builder);
+            await FlushAsync(builder, encoder, buffer, destination, true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Encodes everything currently held by <paramref name="builder"/> to UTF-8 and
+    /// writes it to <paramref name="destination"/>, then clears the builder so the next
+    /// families reuse it. Walks the builder's chunks rather than calling
+    /// <c>ToString</c>, so no allocation proportional to the pending text is made.
+    /// </summary>
+    /// <param name="builder">The pending exposition text. Cleared on return.</param>
+    /// <param name="encoder">The response-scoped encoder, which carries surrogate state across flushes.</param>
+    /// <param name="buffer">The pooled destination buffer.</param>
+    /// <param name="destination">The stream to write to.</param>
+    /// <param name="final">Whether this is the last flush, so the encoder should be drained.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    private static async Task FlushAsync(
+        StringBuilder builder,
+        Encoder encoder,
+        byte[] buffer,
+        Stream destination,
+        bool final,
+        CancellationToken cancellationToken)
+    {
+        foreach (var chunk in builder.GetChunks())
+        {
+            var pending = chunk;
+            while (!pending.IsEmpty)
+            {
+                int charsUsed;
+                int bytesUsed;
+                // Convert (rather than GetBytes) lets the byte buffer stay small and
+                // fixed no matter how large the chunk is: it converts as much as fits
+                // and reports how far it got, so the loop drains the chunk in bounded
+                // slices.
+                encoder.Convert(
+                    pending.Span, buffer.AsSpan(), flush: false,
+                    out charsUsed, out bytesUsed, out _);
+
+                if (bytesUsed > 0)
+                {
+                    await destination.WriteAsync(buffer.AsMemory(0, bytesUsed), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (charsUsed == 0 && bytesUsed == 0)
+                {
+                    // Cannot happen with a buffer this size, but a zero-progress convert
+                    // would otherwise spin forever; break rather than hang a scrape.
+                    break;
+                }
+
+                pending = pending[charsUsed..];
+            }
+        }
+
+        if (final)
+        {
+            // Drain any trailing high surrogate the encoder is holding. Without this a
+            // body whose last char is an unpaired surrogate would silently lose its
+            // replacement bytes.
+            encoder.Convert(
+                ReadOnlySpan<char>.Empty, buffer.AsSpan(), flush: true,
+                out _, out var tailBytes, out _);
+            if (tailBytes > 0)
+            {
+                await destination.WriteAsync(buffer.AsMemory(0, tailBytes), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        builder.Clear();
+    }
+
+    /// <summary>
+    /// Polls every observable instrument so a gauge reports its scrape-time value.
+    /// </summary>
+    private void PollObservableInstruments()
     {
         try
         {
@@ -365,13 +551,22 @@ public sealed class RepoContextMetricsCollector : IDisposable
         {
             // The listener was disposed concurrently with a scrape; render what we hold.
         }
+    }
 
-        var builder = new StringBuilder(4096);
-        foreach (var family in _families.Values.OrderBy(f => f.Name, StringComparer.Ordinal))
-        {
-            family.Render(builder);
-        }
+    /// <summary>
+    /// The families in the stable order both render paths emit them in.
+    /// </summary>
+    /// <returns>The families ordered by name.</returns>
+    private IEnumerable<MetricFamily> OrderedFamilies() =>
+        _families.Values.OrderBy(f => f.Name, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Appends the collector's own self-report, which closes every exposition. Shared by
+    /// both render paths so the streamed body cannot drift from the string one.
+    /// </summary>
+    /// <param name="builder">The builder to append to.</param>
+    private void AppendTrailer(StringBuilder builder)
+    {
         AppendMeta(builder, SeriesGaugeName, "gauge",
             "Distinct metric series currently held by the container's collector.",
             Interlocked.Read(ref _seriesCount));
@@ -380,8 +575,6 @@ public sealed class RepoContextMetricsCollector : IDisposable
             Interlocked.Read(ref _dropped));
         AppendDropAttribution(builder);
         AppendSubscribedMeters(builder);
-
-        return builder.ToString();
     }
 
     private void RecordMatchedMeter(string prefix, string meterName)

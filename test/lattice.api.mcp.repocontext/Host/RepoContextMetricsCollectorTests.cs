@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// on a 200 or a non-empty body.
 /// </summary>
 [TestFixture]
-public sealed class RepoContextMetricsCollectorTests
+public sealed partial class RepoContextMetricsCollectorTests
 {
     private const string ProbeCommand = "repocontext_probe_call";
 
