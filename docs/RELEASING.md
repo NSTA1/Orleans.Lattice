@@ -311,6 +311,34 @@ Every release folds the working tree's `## Unreleased` section into a dated `## 
 
 The ship commit that merges the changelog edit is the commit the family anchor tag and the release line branch are cut from, and therefore the commit every per-package tag in the wave points at.
 
+### Entry style
+
+This is the single source of truth for how an individual entry is written, and it applies to every entry under `## Unreleased` however it got there - a feature pull request, an epic coordinator, or a catch-up pass over an integration branch.
+
+1. **Compact, and hard-capped at 300 characters.** The bold heading plus the prose that follows it must total **300 characters or fewer** - the trailing link list and package tag are excluded from the count. The changelog records **what changed for the user**; the reproduction, the mechanism, the rationale, and the measurements live in the issue and the pull request, which is exactly what the links are for. An entry that runs to a paragraph has copied an issue body into a file nobody maintains, and it buries the twenty entries around it.
+   - **The cap is not negotiable, and the remedy is to split, not to compress.** When a grouped entry cannot be stated inside 300 characters, the group is too broad: divide it into two narrower areas, each with its own heading and its own share of the links. Squeezing four unrelated fixes into one 300-character sentence produces an entry nobody can act on.
+2. **Prefixed with a single word.** Every entry opens `**<Prefix> - <Short title>.**`, where `<Prefix>` is one word naming the affected area - `WAL`, `Replay`, `Leaf`, `Shard`, `Scan`, `CRDT`, `Atomic`, `Vector`, `Retrieval`, `Indexing`, `Backlog`, `Container`, `Config`, `Memory`, `Backup`, `Explorer`, `Dashboards`, `Observability`, `Gates`, `CI`, `Docs`, `Storage`, `Serialization`, `Security`, `Auth`, `Schema`, `Core`, `Query`, `Performance`, `Tests`. The prefix is what makes a long `## Unreleased` section scannable and what tells the next contributor which existing entry to extend, so reuse an established prefix rather than minting a synonym.
+3. **Linked.** Every entry ends with the issue or issues it implements, as inline links: `([#2784](https://github.com/NSTA1/Orleans.Lattice/issues/2784))`. Where a change has no tracked issue, link its pull request instead (`/pull/N`). An entry carrying no link is not finished, because it has nowhere to put the detail rule 1 keeps out.
+   - **Link the issue the change actually resolves, not every issue the pull request mentions.** A pull request body routinely cites neighbouring issues under a `## Related` heading, as the defect it deliberately did not fix, or as one it filed on the way past. Mining those in produces an entry that claims work it did not do. Read the surrounding sentence before taking a number.
+4. **Grouped by area, never one per commit.** One entry covers one coherent user-visible area, however many commits, pull requests, or issues fed it: a single "WAL garbage collection now reports why a pass reclaimed nothing" entry carrying fourteen issue links is correct, and fourteen entries are not. Group first by the subsection the change belongs to, then by affected area within it. When the area you are touching **already has an entry** under `## Unreleased`, extend it - add your link to its list and widen the sentence if the scope grew - rather than opening a second entry beside it.
+5. **Tagged with its packages, always.** Close with the packages the change ships in, for example `` (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`) ``, naming each one exactly as its `src/` directory does. The tag is mandatory and never omitted: a change that ships no package at all - CI configuration, a repository-wide test gate, contributor documentation - is tagged `` `repository-wide` ``. Consistency is the point, so a reader can filter the section by package without having to decide whether a missing tag means "none" or "nobody wrote one".
+
+The resulting shape:
+
+```text
+- **<Prefix> - <Short title>.** <Supporting detail; 300 characters including the heading.> ([#1234](https://github.com/NSTA1/Orleans.Lattice/issues/1234), [#1240](https://github.com/NSTA1/Orleans.Lattice/issues/1240)) (`Orleans.Lattice`)
+```
+
+Do not invent subsections: use the Keep a Changelog set (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`), creating one only when it is genuinely absent under `## Unreleased`.
+
+#### Catching up an integration branch
+
+An epic or bucket branch accumulates far more commits than changelog entries, so the two drift, and the catch-up is where the rules above are most often abandoned. Do not replay the branch commit by commit. Classify every member commit into a subsection and an area, write **one** entry per subsection-and-area pair, and attach that group's deduplicated set of issue links to it.
+
+Mining those links is less obvious than it looks. A member pull request targeting a non-default base carries **no** closing keywords - the `Guard - inert closing keywords` CI step forbids them there - so `gh pr view --json closingIssuesReferences` comes back empty for every pull request on the branch, and reads as though no issues exist. Take the issue number from the pull request body prose instead (`Refs #N`, `Addresses #N`, `Implements issue #N`), and use `gh issue list`, which excludes pull requests, to decide whether a given `#N` renders as `/issues/N` or `/pull/N`.
+
+Two further habits keep a catch-up honest. **Bring the whole `## Unreleased` section up to standard, not only the entries the branch added** - a section that mixes twenty capped, prefixed, tagged entries with eighty inherited paragraphs is not readable, and the inherited ones are the reason the rules were written. And **check each mined number against the sentence it sits in**: on a branch this size the `## Related` citations, the deliberately-untouched defects, and the issues a pull request merely filed on its way past are numerous enough that taking every `#N` at face value will attribute work that was never done.
+
 ### Section titles and compare links
 
 The two rolling section titles - `## Unreleased` and `## Released` - are plain, unbracketed headings, and `CHANGELOG.md` carries **no footer link-reference definitions**; each dated section keeps its bracketed `## [YYYY-MM-DD]` form.
