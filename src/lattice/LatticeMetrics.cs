@@ -4148,12 +4148,14 @@ public static class LatticeMetrics
     /// <b>It does not share a population with
     /// <see cref="WalGcBlockingPinState"/>.</b> This repair runs only inside a
     /// live leaf activation, while that classifier only ever examines consumers
-    /// with NO live cursor - <c>LatticeWalGc.ComputeMaterialiserOffsetFloorAsync</c>
-    /// skips a consumer present in the registry before its pin is read. The two
-    /// sets are therefore disjoint by construction, and a large decline count
-    /// alongside a small <c>checkpointed_uncovered</c> count is not a
-    /// contradiction: the declines are other, live, healthy leaves, and this
-    /// repair never examined the blocked ones at all.
+    /// with NO live cursor. The gate is the registry-presence skip in
+    /// <c>LatticeWalGc.ApplyDurableMaterialiserFloorAsync</c>, which is also
+    /// where the blocking-consumer id list the classifier consumes is built -
+    /// so a consumer skipped there is never classified, and the two sets are
+    /// disjoint by construction rather than by coincidence. A large decline
+    /// count alongside a small <c>checkpointed_uncovered</c> count is therefore
+    /// not a contradiction: the declines are other, live, healthy leaves, and
+    /// this repair never examined the blocked ones at all.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairNoUncoveredPartition =
