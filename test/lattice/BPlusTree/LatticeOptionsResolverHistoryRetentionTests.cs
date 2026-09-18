@@ -121,4 +121,53 @@ public sealed class LatticeOptionsResolverHistoryRetentionTests
             "The null guard must stay ahead of the system-tree branch so a null id still throws rather " +
             "than faulting inside StartsWith.");
     }
+
+    /// <summary>
+    /// Pins the deliberate <em>absence</em> of a cache on the user-tree path
+    /// (issue #3181, AC4).
+    /// <para>
+    /// A "no cache" decision is invisible in the source - it looks exactly like
+    /// nobody having got round to adding one - so the only way to stop a future
+    /// reader from "optimising" it back is to make a cache fail a test. The
+    /// decision is deliberate: the resolver is a per-silo <c>AddSingleton</c>
+    /// and <c>SetHistoryRetentionAsync</c> performs no local invalidation, so a
+    /// memo would go stale without bound, and stale retention silently drops or
+    /// retains value bytes against the operator's instruction.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task GetHistoryRetentionAsync_reads_the_registry_afresh_on_every_call()
+    {
+        var (resolver, registry) = Build();
+
+        await resolver.GetHistoryRetentionAsync("ordinary-tree", HybridWindow);
+        await resolver.GetHistoryRetentionAsync("ordinary-tree", HybridWindow);
+        await resolver.GetHistoryRetentionAsync("ordinary-tree", HybridWindow);
+
+        await registry.Received(3).GetEntryAsync("ordinary-tree");
+    }
+
+    /// <summary>
+    /// The history-retention read must stay a <em>pure</em> read. The resolve
+    /// path's fetch lazily calls <c>RegisterAsync</c> when a structural pin is
+    /// missing; routing this read through it would let a view maintainer
+    /// draining an unregistered source tree silently register that tree as a
+    /// side effect of reading its retention policy.
+    /// </summary>
+    [Test]
+    public async Task GetHistoryRetentionAsync_does_not_seed_a_row_for_an_unregistered_tree()
+    {
+        var (resolver, registry) = Build();
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(null));
+
+        var policy = await resolver.GetHistoryRetentionAsync("never-registered", HybridWindow);
+
+        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!, default);
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly),
+                "An unregistered tree falls through to the documented defaults rather than being seeded.");
+            Assert.That(policy.Window, Is.EqualTo(TimeSpan.Zero));
+        });
+    }
 }
