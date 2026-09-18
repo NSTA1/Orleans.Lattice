@@ -567,6 +567,42 @@ internal sealed class LatticeOptionsResolver(
     /// registry read it replaces could only ever have returned <c>null</c> and
     /// fallen through to exactly the same defaults.
     /// </para>
+    /// <para>
+    /// <b>The read is deliberately not cached.</b> The decision is recorded here
+    /// rather than left to the parenthetical above, because that parenthetical
+    /// answers only one of the two axes. The first axis is staleness, and it is
+    /// decisive on its own: this resolver is registered <c>AddSingleton</c>, so
+    /// it is a <em>per-silo</em> instance, while
+    /// <c>ILattice.SetHistoryRetentionAsync</c> writes the registry from the
+    /// source tree's own <c>LatticeGrain</c> activation and performs no local
+    /// invalidation - contrast <c>SetPublishEventsEnabledAsync</c> beside it,
+    /// which invalidates its gate. No channel carries that write to the silo
+    /// hosting a reading view maintainer, so a memo's staleness window would be
+    /// unbounded rather than merely long. Nor is staleness cosmetic here: a
+    /// stale <see cref="HistoryRetentionMode.MetadataOnly"/> silently discards
+    /// values an operator has just asked to retain, and a stale
+    /// <see cref="HistoryRetentionMode.FullValue"/> silently retains values they
+    /// have just asked to stop retaining.
+    /// <see cref="InvalidateWalPartitionsCacheForTests"/> is not a precedent to
+    /// borrow: it is safe as a test-only seam precisely because the pin it
+    /// guards is documented tree-immutable, which this policy is not.
+    /// </para>
+    /// <para>
+    /// The second axis is load, which "never on a write hot path" does not
+    /// address: the accumulative history views call this once per drain pass
+    /// against what was a non-reentrant registry singleton, so concurrent
+    /// readers took a turn each. That axis is now answered at the registry
+    /// rather than here, because
+    /// <see cref="ILatticeRegistry.GetEntryAsync"/> is
+    /// <see cref="AlwaysInterleaveAttribute"/> and so is admitted mid-body
+    /// instead of queueing head-of-line behind another read or an enumeration.
+    /// A cache at this seam would therefore buy back a cost that has already
+    /// been removed at its source, and pay for it with the unbounded staleness
+    /// above. Both directions of that decision are pinned by the fixture:
+    /// sequential reads must each reach the registry afresh, and the read must
+    /// stay pure, never seeding a registry row the way the resolve path's
+    /// fetch does.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The source tree whose history retention is resolved.</param>
     /// <param name="hybridFullValueWindow">The recent-tail window for hybrid mode.</param>
