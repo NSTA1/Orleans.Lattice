@@ -3960,20 +3960,54 @@ internal sealed class LatticeWalGcScheduler(
     /// two states that describe a real leaf.
     /// </summary>
     /// <remarks>
-    /// The per-partition array is the authority when present. When it is absent
-    /// the state predates multi-partition replay, and the scalar slot holds
-    /// partition <c>0</c>'s checkpoint only - so partition <c>0</c> reads the
-    /// scalar and any higher partition has genuinely never been checkpointed
-    /// under that layout. A partition beyond the persisted array's length is the
-    /// same case: the leaf has never written a checkpoint there.
+    /// <para>
+    /// This MIRRORS <c>BPlusLeafGrain.GetPersistedCheckpointForPartition</c>
+    /// slot for slot, and that is the whole contract: the leaf resolves its own
+    /// blocking pin from that accessor, so any other reading of the same
+    /// durable row makes the classifier disagree with the leaf about the very
+    /// condition it exists to name (issue #3157).
+    /// </para>
+    /// <para>
+    /// Partition <c>0</c> therefore reads the SCALAR slot, guarded, and every
+    /// higher partition reads the per-partition array. Partition <c>0</c>'s
+    /// array slot is only ever a mirror the leaf writes alongside the scalar;
+    /// reading it instead looks equivalent and is not, because the array carries
+    /// no counterpart to <see cref="LeafNodeState.ProjectionCheckpointOffsetAssigned"/>
+    /// and so cannot express the born-<c>0</c> ambiguity at all. A partition
+    /// beyond the array's length, or with no array at all, has genuinely never
+    /// been checkpointed under that layout.
+    /// </para>
+    /// <para>
+    /// <b>The guard is load-bearing, not defensive.</b>
+    /// <see cref="LeafNodeState.ProjectionCheckpointOffset"/> has no
+    /// initializer, so it is born <c>0</c> rather than at the <c>-1</c>
+    /// "nothing applied" sentinel every other partition uses, and Orleans omits
+    /// default-valued members - so a leaf that has never checkpointed partition
+    /// <c>0</c> persists nothing and reads back a <c>0</c> indistinguishable
+    /// from a real checkpoint at offset <c>0</c> (issue #2703).
+    /// <see cref="LeafNodeState.ProjectionCheckpointOffsetAssigned"/> is the
+    /// only thing that separates them. Reading the raw scalar reports a
+    /// never-checkpointed partition as <c>checkpointed_uncovered</c>: the arm
+    /// that says "a snapshot repairs this", for the one population that has no
+    /// repair and must keep its block pin. Measured on a live estate, that
+    /// misread had a signature no other mechanism produces - four trees whose
+    /// every partition read <c>never_checkpointed</c> except partition
+    /// <c>0</c>, alone, reading <c>checkpointed_uncovered</c>.
+    /// </para>
+    /// <para>
+    /// <b>The one deliberate divergence.</b> The leaf's
+    /// <c>GetCurrentCheckpointForPartition</c> folds in the in-memory pending
+    /// offsets on top of this accessor. Those are activation-scoped and not
+    /// durable, and this classifier reads durable state precisely because it
+    /// must never activate the leaf, so it cannot and must not see them. That
+    /// costs nothing here: a leaf with pending offsets has a live activation,
+    /// and a live activation reports a cursor, which removes it from the
+    /// blocking set before its pin is ever classified.
+    /// </para>
     /// </remarks>
     internal static WalGcBlockingPinState ClassifyCheckpoint(LeafNodeState state, int partition)
     {
-        var byPartition = state.ProjectionCheckpointOffsetsByPartition;
-
-        var checkpoint = byPartition is not null
-            ? (partition >= 0 && partition < byPartition.Length ? byPartition[partition] : -1L)
-            : (partition == 0 ? state.ProjectionCheckpointOffset : -1L);
+        var checkpoint = ReadPersistedCheckpoint(state, partition);
 
         // >= 0 means the leaf durably applied up to that offset, so there is a
         // WAL offset it could honestly claim and the unusable pin is the
@@ -3983,6 +4017,37 @@ internal sealed class LatticeWalGcScheduler(
         return checkpoint >= 0
             ? WalGcBlockingPinState.CheckpointedUncovered
             : WalGcBlockingPinState.NeverCheckpointed;
+    }
+
+    /// <summary>
+    /// Reads one partition's persisted projection checkpoint from a durable
+    /// leaf row exactly as the leaf's own accessor does, returning the
+    /// <c>-1</c> "nothing applied" sentinel when the partition has never been
+    /// checkpointed.
+    /// </summary>
+    private static long ReadPersistedCheckpoint(LeafNodeState state, int partition)
+    {
+        if (partition == 0)
+        {
+            // An unassigned 0 is the type default, not progress. Resolve it the
+            // conservative way and report the sentinel, exactly as
+            // BPlusLeafGrain.GetPersistedCheckpointForPartition does.
+            if (state.ProjectionCheckpointOffset == 0
+                && state.ProjectionCheckpointOffsetAssigned != true)
+            {
+                return -1L;
+            }
+
+            return state.ProjectionCheckpointOffset;
+        }
+
+        var byPartition = state.ProjectionCheckpointOffsetsByPartition;
+        if (byPartition is null || partition < 0 || partition >= byPartition.Length)
+        {
+            return -1L;
+        }
+
+        return byPartition[partition];
     }
 
     /// <summary>

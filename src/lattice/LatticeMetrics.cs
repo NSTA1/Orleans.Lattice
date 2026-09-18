@@ -4058,7 +4058,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSnapshotCoverageRepairs =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{evaluation}",
-            description: "Zero-coverage leaf snapshot repair evaluations (issues #2692, #2940), tagged by tree and outcome: 'repaired' (capture left every checkpointed partition covered), 'unsatisfied' (capture ran, a checkpointed partition is still uncovered), 'exhausted' (per-activation budget spent, recorded once per activation), 'capture_in_flight' (declined, a capture was already running) and 'no_checkpointed_uncovered_partition' (declined, nothing to repair - the healthy majority). All five arms are zero-primed the first time a tree is seen in this process, so an absent series means the path never ran for that tree and a zero is a measured zero. Every invocation records one arm except a repeat exhaustion within one activation, which is deduplicated on purpose.");
+            description: "Zero-coverage leaf snapshot repair evaluations (issues #2692, #2940), tagged by tree and outcome: 'repaired' (capture left every checkpointed partition covered), 'unsatisfied' (capture ran, a checkpointed partition is still uncovered), 'exhausted' (per-activation budget spent, recorded once per activation), 'capture_in_flight' (declined, a capture was already running) and 'no_checkpointed_uncovered_partition' (declined, nothing to repair - the healthy majority; recorded once per activation and once per checkpoint persist, so its magnitude tracks write volume rather than severity, and it is NOT comparable with 'orleans.lattice.wal.gc.blocking.pin.state', whose population of consumers with no live cursor is disjoint from this one by construction). All five arms are zero-primed the first time a tree is seen in this process, so an absent series means the path never ran for that tree and a zero is a measured zero. Every invocation records one arm except a repeat exhaustion within one activation, which is deduplicated on purpose.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotCoverageRepairs"/>.</summary>
     public const string LeafSnapshotCoverageRepairsName = "orleans.lattice.leaf.snapshot.coverage_repairs";
@@ -4132,6 +4132,28 @@ public static class LatticeMetrics
     /// to the pin/guard seam rather than to the capture seam. Without it, "the
     /// repair guard never passed" and "the repair ran and failed" were the same
     /// silence.
+    /// </para>
+    /// <para>
+    /// <b>Its magnitude is a measure of write volume, not of severity, and it is
+    /// not comparable with the blocking-pin classifier's counts</b> (issue
+    /// #3157). This arm is recorded once per activation and once per checkpoint
+    /// persist, so on a busy tree it scales with leaf writes: measured on a live
+    /// estate, one tree recorded 27683 declines against 27735 leaf writes, a
+    /// 0.19% difference. Because WAL size is likewise downstream of write
+    /// volume, the decline count co-ranks with retained WAL across trees, and
+    /// reading that correlation as evidence that the repair is failing on the
+    /// worst trees is a confound rather than a finding.
+    /// </para>
+    /// <para>
+    /// <b>It does not share a population with
+    /// <see cref="WalGcBlockingPinState"/>.</b> This repair runs only inside a
+    /// live leaf activation, while that classifier only ever examines consumers
+    /// with NO live cursor - <c>LatticeWalGc.ComputeMaterialiserOffsetFloorAsync</c>
+    /// skips a consumer present in the registry before its pin is read. The two
+    /// sets are therefore disjoint by construction, and a large decline count
+    /// alongside a small <c>checkpointed_uncovered</c> count is not a
+    /// contradiction: the declines are other, live, healthy leaves, and this
+    /// repair never examined the blocked ones at all.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairNoUncoveredPartition =
@@ -4286,7 +4308,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockingPinStates =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocking_pin_state", unit: "{consumer}",
-            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. 'orphaned' is the leaf's durable state existing but carrying no bound tree id, so the leaf was reclaimed or purged after publishing the pin (issue #3105); it is the only arm that is actionable without driving anything, and before it existed such a pin classified as 'checkpointed_uncovered' because the checkpoint classifier never read the tree id. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. All five arms are zero-primed once per tree per process under partition 'none', latched on the tree's first collection rather than repeated per pass, and again per classified partition. That priming establishes that the classifier is wired on this silo and nothing more: Add(0) is idempotent on a counter's exported value, so a primed series can never show that the region ran on any particular pass - see 'orleans.lattice.wal.gc.pass.reach' and 'orleans.lattice.wal.gc.tree.reach' for the advancing layer that can. Diagnostic only: it never changes what a pass is allowed to trim.");
+            description: "Durable-pin state of each absent consumer blocking a WAL GC pass (issue #3042), tagged by tree, partition and status. 'checkpointed_uncovered' is repairable: the leaf durably checkpointed the partition but published an unusable pin because snapshot coverage is absent. The checkpoint half is read through the same guarded accessor the leaf resolves its own pin from, so an unassigned born-0 scalar on partition 0 reads as 'never_checkpointed' rather than being misreported as repairable (issues #2703, #3157). 'never_checkpointed' is correct by design and has no repair: the leaf holds live data it has never checkpointed, so there is no WAL offset it could honestly claim. 'no_durable_state' is a fourth thing and not a flavour of either: the provider answered and reported nothing ever persisted for that leaf. 'unreadable' reports a failure of the classifier itself - an unparseable consumer id, no storage provider on this silo, or a read that threw - and is kept separate so a defect in the measurement is never rendered as a finding about the system. 'orphaned' is the leaf's durable state existing but carrying no bound tree id, so the leaf was reclaimed or purged after publishing the pin (issue #3105); it is the only arm that is actionable without driving anything, and before it existed such a pin classified as 'checkpointed_uncovered' because the checkpoint classifier never read the tree id. Classified by a direct storage-provider read that never activates the leaf, once per consumer per blocked episode. Its population is disjoint from 'orleans.lattice.leaf.snapshot.coverage_repairs' by construction: that repair only ever runs inside a live leaf activation, while a consumer holding a live cursor is skipped before its pin is read here, so counts from the two instruments describe different leaves and must not be compared. All five arms are zero-primed once per tree per process under partition 'none', latched on the tree's first collection rather than repeated per pass, and again per classified partition. That priming establishes that the classifier is wired on this silo and nothing more: Add(0) is idempotent on a counter's exported value, so a primed series can never show that the region ran on any particular pass - see 'orleans.lattice.wal.gc.pass.reach' and 'orleans.lattice.wal.gc.tree.reach' for the advancing layer that can. Diagnostic only: it never changes what a pass is allowed to trim.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockingPinStates"/>.</summary>
     public const string WalGcBlockingPinStatesName = "orleans.lattice.wal.gc.blocking_pin_state";
