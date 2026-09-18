@@ -162,6 +162,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <inheritdoc />
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        PrimeAdvanceArms();
         _bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(_options);
         if (_bucketCount <= 1 || _pinStorage is null)
         {
@@ -516,9 +517,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             changed = true;
         }
 
-        // Classify what this merge actually moved, not merely that it dirtied
-        // the shard. Offset advancement is the quantity that lets the GC offset
-        // floor move, and no exported series carried it before issue #2694.
+        // Classify what this merge actually moved, naming both axes rather than
+        // the first one that happened to move. Offset advancement is the
+        // quantity that lets the GC offset floor move, and until issue #3163 an
+        // offset advance masked whatever the frontier did alongside it.
         RecordPinAdvance(offsetAdvanced, frontierAdvanced);
 
         if (changed)
@@ -532,23 +534,72 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
     /// <summary>
     /// Records one merged pin report on
-    /// <see cref="LatticeMetrics.MaterialiserPinAdvances"/>, tagged by what the
-    /// merge moved: the checkpoint offset, the HLC frontier only, or nothing.
-    /// Tag pairs are materialised once per activation, so the hot path adds no
-    /// allocation.
+    /// <see cref="LatticeMetrics.MaterialiserPinAdvances"/>, tagged with the
+    /// <see cref="MaterialiserPinAdvanceOutcome"/> naming <b>both</b> axes -
+    /// never the first one that happened to move. Tag pairs are materialised
+    /// once per activation, so the hot path adds no allocation.
     /// </summary>
     private void RecordPinAdvance(bool offsetAdvanced, bool frontierAdvanced)
+        => RecordPinAdvance(
+            (offsetAdvanced, frontierAdvanced) switch
+            {
+                (true, true) => MaterialiserPinAdvanceOutcome.Both,
+                (true, false) => MaterialiserPinAdvanceOutcome.OffsetOnly,
+                (false, true) => MaterialiserPinAdvanceOutcome.FrontierOnly,
+                (false, false) => MaterialiserPinAdvanceOutcome.None,
+            });
+
+    /// <summary>
+    /// Adds <paramref name="delta"/> to the advance counter under
+    /// <paramref name="outcome"/>. Called with one to report a real merge and
+    /// with zero to prime an arm, so both paths carry an identical tag tuple and
+    /// cannot split the series between them.
+    /// </summary>
+    private void RecordPinAdvance(MaterialiserPinAdvanceOutcome outcome, long delta = 1)
     {
         _ = TreeTag;
         LatticeMetrics.MaterialiserPinAdvances.Add(
-            1,
+            delta,
             _treeTagPair,
-            offsetAdvanced
-                ? LatticeMetrics.OutcomePinOffsetAdvanced
-                : frontierAdvanced
-                    ? LatticeMetrics.OutcomePinFrontierOnly
-                    : LatticeMetrics.OutcomePinNoAdvance,
+            ClassifyPinAdvance(outcome),
             _tenantTagPair);
+    }
+
+    /// <summary>
+    /// Maps a <see cref="MaterialiserPinAdvanceOutcome"/> onto its pre-allocated
+    /// <see cref="LatticeMetrics.TagOutcome"/> tag. Held exhaustively armed by
+    /// the instrumented-enum gate, so an outcome added later cannot be reported
+    /// under another outcome's arm or under none.
+    /// </summary>
+    private static KeyValuePair<string, object?> ClassifyPinAdvance(MaterialiserPinAdvanceOutcome outcome)
+        => outcome switch
+        {
+            MaterialiserPinAdvanceOutcome.None => LatticeMetrics.OutcomePinNoAdvance,
+            MaterialiserPinAdvanceOutcome.FrontierOnly => LatticeMetrics.OutcomePinFrontierOnly,
+            MaterialiserPinAdvanceOutcome.OffsetOnly => LatticeMetrics.OutcomePinOffsetOnly,
+            MaterialiserPinAdvanceOutcome.Both => LatticeMetrics.OutcomePinBothAdvanced,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(outcome), outcome, "Unarmed leaf-materialiser pin advance outcome."),
+        };
+
+    /// <summary>
+    /// Zero-primes every <see cref="MaterialiserPinAdvanceOutcome"/> arm for this
+    /// shard's tree, so an absent series means no pin grain is live for the tree
+    /// on this silo rather than that the arm's condition never occurred.
+    /// <para>
+    /// Without this, the arm a reader most wants is the one least likely to
+    /// exist: a consumer whose frontier never moves emits no <c>frontier_only</c>
+    /// and no <c>both</c> at all, and an absent series is byte-identical at the
+    /// query to a build that was never deployed. Adding zero creates the series
+    /// without perturbing any value.
+    /// </para>
+    /// </summary>
+    private void PrimeAdvanceArms()
+    {
+        foreach (var outcome in Enum.GetValues<MaterialiserPinAdvanceOutcome>())
+        {
+            RecordPinAdvance(outcome, delta: 0);
+        }
     }
 
     /// <summary>

@@ -2047,8 +2047,20 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of leaf-materialiser pin merges classified by what the merge
     /// actually moved, tagged with <see cref="TagTree"/> and
-    /// <see cref="TagOutcome"/> = <c>offset</c>, <c>frontier_only</c>, or
-    /// <c>none</c> (issue #2694).
+    /// <see cref="TagOutcome"/> = <c>both</c>, <c>offset_only</c>,
+    /// <c>frontier_only</c>, or <c>none</c> (issues #2694, #3163).
+    /// <para>
+    /// <b>The four arms are a partition</b> - the complete truth table of the
+    /// two axes a merge advances independently - so exactly one is recorded per
+    /// merged report and each axis's marginal is recoverable by summing:
+    /// offset advanced is <c>both</c> + <c>offset_only</c>, frontier advanced
+    /// is <c>both</c> + <c>frontier_only</c>. They were three first-match arms
+    /// until issue #3163, when <c>offset</c> was found to mean "the offset
+    /// advanced and the frontier is unknown": it absorbed every merge that also
+    /// advanced the frontier, so an absent <c>frontier_only</c> series did not
+    /// show a flat frontier, only one that never advanced alone. See
+    /// <see cref="BPlusTree.MaterialiserPinAdvanceOutcome"/>.
+    /// </para>
     /// <para>
     /// <see cref="MaterialiserPinDurableWrites"/> counts <i>writes</i> and tags
     /// them <c>birth</c>/<c>coalesced</c>, which describes how a write was
@@ -2060,20 +2072,31 @@ public static class LatticeMetrics
     /// <para>
     /// Offset advancement is the quantity that determines whether the WAL GC
     /// <i>offset</i> floor can move (the GC reads
-    /// <c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>), so
-    /// <c>offset</c> is the arm to read when asking "why is retained WAL not
-    /// being reclaimed?". A healthy <c>frontier_only</c> rate with a flat
-    /// <c>offset</c> rate is the specific shape of a floor that cannot move
-    /// while pins are otherwise being maintained; <c>none</c> counts a report
-    /// that was fully coalesced away.
+    /// <c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>), so <c>both</c> +
+    /// <c>offset_only</c> is the sum to read when asking "why is retained WAL
+    /// not being reclaimed?". A healthy <c>frontier_only</c> rate with both
+    /// offset arms flat is the specific shape of a floor that cannot move while
+    /// pins are otherwise being maintained; the converse - a healthy
+    /// <c>offset_only</c> rate with <c>both</c> flat - is a consumer advancing
+    /// in offset space alone, which cannot release a WAL entry either, because
+    /// the offset floor only lowers a trim point that the HLC clauses already
+    /// authorised. <c>none</c> counts a report that was fully coalesced away.
+    /// </para>
+    /// <para>
+    /// Every arm is zero-primed once per pin-shard activation, so all four
+    /// series exist for any tree with a live pin grain and a flat arm is a
+    /// measured zero rather than an absence.
     /// </para>
     /// </summary>
     public static readonly Counter<long> MaterialiserPinAdvances =
         Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.advances", unit: "{report}",
-            description: "Leaf-materialiser pin merges tagged by what advanced: offset, frontier_only, or none.");
+            description: "Leaf-materialiser pin merges partitioned by which axes advanced: both, offset_only, frontier_only, or none.");
 
-    /// <summary><see cref="TagOutcome"/> = <c>offset</c> (a pin merge that advanced the consumer's durable checkpoint offset, which is what lets the WAL GC offset floor move).</summary>
-    public static readonly KeyValuePair<string, object?> OutcomePinOffsetAdvanced = new(TagOutcome, "offset");
+    /// <summary><see cref="TagOutcome"/> = <c>both</c> (a pin merge that advanced the HLC frontier and the durable checkpoint offset together).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinBothAdvanced = new(TagOutcome, "both");
+
+    /// <summary><see cref="TagOutcome"/> = <c>offset_only</c> (a pin merge that advanced the consumer's durable checkpoint offset while leaving the HLC frontier where it was).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomePinOffsetOnly = new(TagOutcome, "offset_only");
 
     /// <summary><see cref="TagOutcome"/> = <c>frontier_only</c> (a pin merge that advanced the HLC frontier while leaving the checkpoint offset where it was).</summary>
     public static readonly KeyValuePair<string, object?> OutcomePinFrontierOnly = new(TagOutcome, "frontier_only");
