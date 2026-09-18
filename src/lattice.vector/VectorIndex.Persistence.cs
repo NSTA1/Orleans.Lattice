@@ -93,10 +93,53 @@ public sealed partial class VectorIndex
 
         if (header.Count > 0)
         {
-            index.EnsureCapacity(header.Count);
+            TryReserve(index, header.Count);
         }
 
         return index;
+    }
+
+    /// <summary>
+    /// Reserves room for a restored index's vectors on a best-effort basis.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="VectorIndex.EnsureCapacity"/> is, by its own contract, a
+    /// RESERVATION - "a hint rather than a guarantee" - and so an optimisation:
+    /// inserts grow the cells incrementally anyway, so a restore that could not
+    /// reserve is slower but produces exactly the same index. An optimisation
+    /// must not be able to fail the operation it optimises.
+    /// </para>
+    /// <para>
+    /// It could. <c>header.Count</c> is read off durable state and is the one
+    /// header field the restore does not validate, so the reservation is
+    /// unbounded; there was no path that continued without it; and the
+    /// computation is deterministic, so the same durable header failed at the
+    /// same line on every attempt. In the local repocontext deployment that made
+    /// an ANN index restore fail identically 44 times in a row, permanently
+    /// wedging the phase machine that drove it.
+    /// </para>
+    /// <para>
+    /// Only the two ways "cannot reserve that much" presents are swallowed, and
+    /// only for this one call. Every other allocation failure in the restore
+    /// still propagates, and the public <see cref="VectorIndex.EnsureCapacity"/>
+    /// still throws for a caller that asked for the reservation directly.
+    /// </para>
+    /// </remarks>
+    private static void TryReserve(VectorIndex index, int count)
+    {
+        try
+        {
+            index.EnsureCapacity(count);
+        }
+        catch (OutOfMemoryException)
+        {
+            // The runtime cannot allocate a block this large right now.
+        }
+        catch (InvalidOperationException)
+        {
+            // The block exceeds the largest array the runtime can allocate.
+        }
     }
 
     /// <summary>
