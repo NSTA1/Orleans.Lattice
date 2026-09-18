@@ -196,9 +196,13 @@ public sealed class IntegrationCategoryGateEnrolmentTests
             + "from it. Either the library genuinely became a test project - in which case it "
             + "needs one - or the reference is accidental.");
 
-        Assert.That(DiscoverTestProjects().Select(p => p.Project), Does.Not.Contain("shared"),
-            "The project enumeration admitted 'test/shared'. It must be excluded because it "
-            + "hosts no runnable test assembly, not by directory depth.");
+        Assert.That(
+            DiscoverTestProjects().Select(p => p.Project),
+            Does.Not.Contain("Orleans.Lattice.Testing"),
+            "The project enumeration admitted the shared testing library. It must be excluded "
+            + "because it hosts no runnable test assembly, not by directory depth. Note the "
+            + "enumeration keys on the project's own directory name, which is "
+            + "'Orleans.Lattice.Testing' and not the 'shared' directory that contains it.");
     }
 
     /// <summary>
