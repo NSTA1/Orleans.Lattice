@@ -76,7 +76,17 @@ public abstract class PerturbationResidueHygieneTestsBase
             "text files",
             HygieneDenominator.Describe(Scope));
 
-        var violations = Scan(repoRoot, files);
+        var violations = Scan(repoRoot, files, out var unreadable);
+
+        // Reported separately from violations, and before them. A file the gate
+        // could not read is not a file the gate found clean, and folding the two
+        // together would let an unreadable file be mistaken for a passing one.
+        Assert.That(unreadable, Is.Empty,
+            "The perturbation-residue gate could not read one or more tracked files, so it cannot "
+            + "claim they are clean. Investigate each rather than treating the empty violation list "
+            + "below as a pass:"
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, unreadable));
 
         Assert.That(violations, Is.Empty,
             $"A perturbation marker ('{Marker}') survived into tracked content. A perturbation arm was "
@@ -116,10 +126,14 @@ public abstract class PerturbationResidueHygieneTestsBase
                 probe,
                 ["// untouched", "var x = 1; // " + Marker + " arm-3", "// untouched"]);
 
-            var violations = Scan(probeRoot, [probe]);
+            var violations = Scan(probeRoot, [probe], out var probeUnreadable);
 
             Assert.Multiple(() =>
             {
+                Assert.That(probeUnreadable, Is.Empty,
+                    "The probe was just written by this test, so an unreadable probe means the read "
+                    + "guard is rejecting readable files - which would turn every scan into a silent "
+                    + "skip and every green below into a vacuous one.");
                 Assert.That(violations, Has.Count.EqualTo(1),
                     "One marked line, one violation. If this is zero the scan matches nothing and every "
                     + "green this fixture reports is vacuous.");
@@ -140,15 +154,17 @@ public abstract class PerturbationResidueHygieneTestsBase
     /// </summary>
     /// <param name="root">The root that paths are reported relative to. Must not be <see langword="null"/>.</param>
     /// <param name="files">The files to scan. Must not be <see langword="null"/>.</param>
+    /// <param name="unreadable">Receives a description of each file that could not be read.</param>
     /// <returns>One entry per marked line, formatted <c>path:line: text</c>.</returns>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
-    private static List<string> Scan(string root, IEnumerable<string> files)
+    private static List<string> Scan(string root, IEnumerable<string> files, out List<string> unreadable)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(files);
 
         var marker = Marker;
         var violations = new List<string>();
+        unreadable = [];
         foreach (var file in files)
         {
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
@@ -162,7 +178,18 @@ public abstract class PerturbationResidueHygieneTestsBase
                 continue;
             }
 
-            var lines = File.ReadAllLines(file);
+            var lines = HygieneFiles.TryReadLines(file, out var failure);
+            if (lines is null)
+            {
+                // Unreadable is not the same as clean. Enumerating from git
+                // already keeps a locked, gitignored artifact out of scope
+                // (#3134); this guard covers the residual case - a tracked file
+                // that is genuinely unreadable at scan time - and reports it
+                // separately, so a silent skip can never read as a pass.
+                unreadable.Add($"{rel}: {failure}");
+                continue;
+            }
+
             for (var i = 0; i < lines.Length; i++)
             {
                 if (lines[i].Contains(marker, StringComparison.Ordinal))

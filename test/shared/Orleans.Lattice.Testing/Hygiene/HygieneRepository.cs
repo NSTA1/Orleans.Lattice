@@ -21,8 +21,15 @@ namespace Orleans.Lattice.Testing.Hygiene;
 /// gitignored file in the worktree in scope, so a gate named
 /// <c>No_em_dashes_in_tracked_files</c> could fail on a file git has been
 /// explicitly told to ignore - in practice the running container sample's
-/// Azurite store under <c>samples/RepoContextContainer/backup-sink/</c>, which
-/// is both gitignored and locked.
+/// Azurite backup sink, which is both gitignored and locked.
+/// </para>
+/// <para>
+/// That sink is deliberately described rather than named by path. The package
+/// selector scans test sources for sample directories named by path and seeds
+/// the packages that read them; a literal sample path in THIS file - the
+/// shared testing library, which every package references - would make a
+/// samples-only change fan out to the whole repository. Its own self-test
+/// caught exactly that.
 /// </para>
 /// <para>
 /// A <c>.gitignore</c> reimplementation is deliberately not attempted: it
