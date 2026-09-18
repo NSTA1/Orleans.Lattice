@@ -115,43 +115,45 @@ These are **scriptable, deterministic checks** that have caused PR-time CI failu
 
 The agent **must invoke each command below verbatim** and **paste the tail of its output into the chat reply** as evidence the gate ran. A claim of "I checked and it's clean" without the corresponding tool transcript is a protocol violation and the work is not complete.
 
+Every gate below is invoked through `tools/Invoke-RepositoryWideGates.ps1`, never through a hand-composed `dotnet test --filter`. A raw filter that matches nothing - a typo, or an invented fixture name - prints `No test matches the given testcase filter` and **exits 0**, so a gate that never ran is byte-identical to a gate that passed. The runner reports the EXECUTED count per fixture and fails any gate that executed zero tests, so following the documented command is sufficient and no extra care is required. See issue #3017.
+
 1. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture TypeAliasesTests -Project test/lattice
    ```
 
 2. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture AuditHygieneRegressionTests -Project test/lattice
    ```
 
 3. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture DocsSnippetCompilationTests -Project test/lattice
    ```
 
 4. **Em-dash hygiene.** Em-dash characters (U+2014) must not appear in any tracked text file - source, tests, docs, build scripts, samples, or configuration. The repo convention is plain ASCII hyphens. Word processors and editors auto-convert `--` to an em-dash on paste, so this leak is recurrent. `EmDashHygieneTests.No_em_dashes_in_tracked_files` enforces it:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture EmDashHygieneTests -Project test/lattice
    ```
 
 6. **Mojibake hygiene.** Byte-level mojibake sequences - UTF-8 bytes decoded as Windows-1252 / CP437 / latin1 and re-encoded as UTF-8 - must not appear in any tracked text file. They sneak in when PR-body text or doc prose is pasted from a terminal or word processor whose code page disagreed with the underlying UTF-8 bytes (this campaign caught arrow and check-mark leaks in doc prose and on a PR-success log line). `MojibakeHygieneTests.No_mojibake_sequences_in_tracked_files` enforces it via a curated trigram set covering smart quotes, smart apostrophes, ellipses, en / em dashes, arrows, and check-marks. `MojibakeHygieneTests.Every_needle_is_actually_detectable_in_an_in_memory_string` is the smoke-detector-battery-test for the gate itself:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MojibakeHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture MojibakeHygieneTests -Project test/lattice
    ```
 
 7. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureStorageEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.replication
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.replication.grpc
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.storage.azuretable
    ```
 
    If a fixture is flagged, either tag it (`[Category("Integration")]` is the default) or, if the detection is a false positive (the fixture stores a `*ClusterFixture`-suffixed type for an unrelated reason), rename the field type so it does not match the detection signal. Do not weaken the detection list to accommodate a single fixture.
