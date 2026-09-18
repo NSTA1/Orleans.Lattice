@@ -227,6 +227,11 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints)} must be greater than or equal to 0 (0 disables the periodic re-classification).");
         }
+        if (options.LeafSnapshotMaxCoverageLagSeconds < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)} must be greater than or equal to 0 (0 disables the coverage-lag bound).");
+        }
 if (options.WalMaxPendingBatches < 1)
 {
     return ValidateOptionsResult.Fail(

@@ -66,6 +66,13 @@ internal sealed partial class BPlusLeafGrain(
         // and no new failure mode to the teardown path.
         var checkpointAtEntry = SumPersistedCheckpointsAcrossPartitions();
 
+        // Stop the coverage-lag bound before any teardown work. The
+        // deactivation capture below supersedes it for this activation, and a
+        // tick landing mid-teardown would race the final capture for the
+        // in-flight latch. Disposal is unconditional and needs no null check.
+        var coverageLagTimer = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
+        coverageLagTimer?.Dispose();
+
         try
         {
             // c2-xxviii: drain any pending coalesced digest publish

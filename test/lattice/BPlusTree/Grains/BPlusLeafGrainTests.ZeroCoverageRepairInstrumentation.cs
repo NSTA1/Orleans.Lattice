@@ -58,7 +58,7 @@ public partial class BPlusLeafGrainTests
         => $"tree-zero-coverage-repair-{discriminator}-{Guid.NewGuid():N}";
 
     /// <summary>
-    /// The five outcome tag values <c>TryRepairZeroCoverageAsync</c> can record,
+    /// The six outcome tag values <c>TryRepairZeroCoverageAsync</c> can record,
     /// spelled out here rather than read back off <c>LatticeMetrics</c> so that a
     /// rename or a silent drop of an arm reddens these fixtures instead of being
     /// carried along by them.
@@ -70,6 +70,7 @@ public partial class BPlusLeafGrainTests
         "exhausted",
         "capture_in_flight",
         "no_checkpointed_uncovered_partition",
+        "rearmed",
     };
 
     /// <summary>
@@ -442,6 +443,159 @@ public partial class BPlusLeafGrainTests
             + "41 evaluations, 10 increments, 31 suppressed by the once-per-activation "
             + "exhaustion dedup. Any claim that every evaluation records exactly one arm is "
             + "false and this number is why");
+    }
+
+    /// <summary>
+    /// Issue #3194: a spent repair budget must be re-armed on a long-lived
+    /// activation, not retired for the life of the process.
+    /// <para>
+    /// The budget is a plain instance field and was documented as a
+    /// "per-activation ceiling", which reads as self-limiting only because
+    /// activations normally turn over. Nothing in <c>src/</c> ever reset it, so
+    /// on an activation that is never replaced - a leaf held continuously
+    /// active by read traffic, which is exactly the population the coverage-lag
+    /// bound added in this change exists to serve - eight failed captures
+    /// retired the repair permanently. The recurring timer would then have
+    /// driven a branch that could no longer do anything, and the whole remedy
+    /// would have been a no-op on its own target after eight ticks.
+    /// </para>
+    /// <para>
+    /// This drives ONE activation past the budget, confirms it is genuinely
+    /// spent (no further capture is attempted), then expires the backoff and
+    /// shows the same activation attempting captures again. Deliberately one
+    /// activation throughout: re-activating would reset the field through the
+    /// pre-existing route and prove nothing about the defect.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Spent_repair_budget_is_rearmed_on_the_same_activation_after_its_backoff()
+    {
+        var treeId = UniqueCoverageRepairTreeId("rearmed");
+        using var recorder = new CoverageRepairArmRecorder(treeId);
+
+        var (grain, _, _, saved) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: new InvalidOperationException("snapshot store is down"),
+            treeId: treeId);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        SeedRow(grain);
+
+        for (var i = 1; i <= 20; i++)
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(i, CancellationToken.None);
+        }
+
+        Assert.That(saved, Has.Count.EqualTo(8),
+            "the budget must be fully spent first, otherwise the re-arm below proves nothing");
+        Assert.That(recorder.Sum("exhausted"), Is.EqualTo(1L), "budget spent and reported");
+        Assert.That(recorder.Sum("rearmed"), Is.Zero,
+            "the backoff has not elapsed, so nothing may be re-armed yet - a re-arm here would "
+            + "mean the budget is not bounding anything");
+
+        // Confirm the budget is genuinely holding, so the increase after the
+        // re-arm below cannot be explained by attempts that were going to
+        // happen anyway.
+        var spentAt = saved.Count;
+        for (var i = 21; i <= 30; i++)
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(i, CancellationToken.None);
+        }
+
+        Assert.That(saved, Has.Count.EqualTo(spentAt),
+            "ten further persists against a spent budget must attempt no capture at all");
+
+        // Bring the re-arm deadline forward rather than waiting it out. The
+        // hook only moves an EXISTING deadline, so it cannot manufacture a
+        // re-arm the production path would not itself have performed.
+        grain.ExpireZeroCoverageRepairRearmForTest();
+
+        for (var i = 31; i <= 40; i++)
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(i, CancellationToken.None);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Sum("rearmed"), Is.EqualTo(1L),
+                "the spent budget must be re-armed exactly once when its backoff elapses");
+            Assert.That(saved.Count, Is.GreaterThan(spentAt),
+                "and the re-armed budget must actually return the repair to service: without "
+                + "this the counter would be reset while nothing ever used it again");
+            Assert.That(saved, Has.Count.EqualTo(spentAt + 8),
+                "a re-arm restores the full budget and no more - the ceiling still binds, so "
+                + "this is a bounded retry on a slow cadence and not an unbounded retry loop");
+        });
+    }
+
+    /// <summary>
+    /// Issue #3194: a coverage-lag timer tick must not advance the
+    /// checkpoint-persist cadence counter.
+    /// <para>
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/> is
+    /// documented as "every N checkpoint persists". The timer shares the same
+    /// method as the persist driver, so an ungated increment would silently
+    /// redefine that option as "every N persists OR ticks" - an operator's
+    /// configured value would then mean something different on a read-held leaf
+    /// than on a written one, with nothing anywhere saying so.
+    /// </para>
+    /// <para>
+    /// There is a second, sharper reason. A tick that advanced the counter
+    /// would reach the cadence on a write-quiet leaf, reach the capture core,
+    /// and decline there on every tick for ever, minting a permanently rising
+    /// decline series carrying a plausible reason label. That is a manufactured
+    /// false signal, and this investigation has already lost days to exactly
+    /// that shape.
+    /// </para>
+    /// <para>
+    /// Asserted on the counter directly because it is otherwise unobservable:
+    /// a leaf with no cadence deficit captures nothing either way, so an
+    /// outcome-only assertion would pass whether or not the gate exists. That
+    /// the timer really does call this method is proved separately and
+    /// end-to-end by <c>CoverageLagBoundIntegrationTests</c>; this fixture
+    /// covers what the parameter means once it is called.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Coverage_lag_tick_does_not_advance_the_checkpoint_persist_cadence()
+    {
+        var treeId = UniqueCoverageRepairTreeId("cadence-gate");
+
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: null,
+            treeId: treeId);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        SeedRow(grain);
+
+        // Two persists. The first is consumed by the zero-coverage repair,
+        // which returns before the cadence block; it also stamps coverage, so
+        // the second reaches the cadence gate. Without that the counter would
+        // sit at zero for a reason that has nothing to do with the gate under
+        // test, and the assertion below would be vacuous.
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(1, CancellationToken.None);
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(2, CancellationToken.None);
+        var afterPersist = grain.CheckpointPersistCountSinceRecheckForTest;
+
+        Assert.That(afterPersist, Is.GreaterThan(0),
+            "positive control: a checkpoint persist MUST advance the cadence counter, otherwise "
+            + "the zero asserted below would be a property of the harness rather than of the gate");
+
+        for (var i = 0; i < 20; i++)
+        {
+            await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+        }
+
+        Assert.That(
+            grain.CheckpointPersistCountSinceRecheckForTest,
+            Is.EqualTo(afterPersist),
+            "twenty coverage-lag ticks must leave the checkpoint-persist cadence exactly where "
+            + "the persists left it. If this rises, LeafSnapshotReClassifyEveryNCheckpoints no "
+            + "longer means what it says and a write-quiet leaf will decline at the capture core "
+            + "on every tick for ever - issue #3194");
     }
 
     /// <summary>

@@ -1991,6 +1991,30 @@ internal sealed partial class BPlusLeafGrain
                 cancellationToken);
         }
 
+        // Step 1.5c - arm the coverage-lag bound for the LIFE OF THIS
+        // ACTIVATION. Step 1.5b above repairs a leaf that comes online with no
+        // coverage, and its own rationale names the reason a repair is needed
+        // at all: the post-persist driver "hangs off CompleteCheckpointFlushTailAsync,
+        // so a leaf that never persists another checkpoint never reaches it".
+        // That reasoning does not stop at activation. A leaf whose writes stop
+        // but whose READS continue never persists another checkpoint AND never
+        // deactivates - reads reset the idle timer - so it reaches neither the
+        // post-persist cadence nor the graceful-deactivation capture, and no
+        // activation-scoped driver, this one included, runs a second time. Its
+        // coverage then lags for as long as the activation lasts, which on a
+        // read-hot leaf is unbounded, and one such leaf holds the whole tree's
+        // materialiser offset floor.
+        //
+        // Registered inside the seeded guard deliberately: GetOptionsAsync() is
+        // provably a cache hit here for exactly the reason Step 1.5b documents
+        // at length, and on an unseeded leaf it would be a registry RPC that can
+        // deadlock the silo. An unseeded leaf has no WAL, no checkpoint and no
+        // coverage, so it forfeits nothing.
+        if (replaySeededAtEntry)
+        {
+            await EnsureCoverageLagTimerAsync();
+        }
+
         // Step 2 - eagerly publish the cursor IFF the materialiser did
         // not already advance the checkpoint. SetCheckpointOffsetAsync
         // routes through FlushPendingCheckpointAsync which already

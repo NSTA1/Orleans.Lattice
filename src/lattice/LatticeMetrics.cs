@@ -4132,6 +4132,23 @@ public static class LatticeMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for a spent repair budget that
+    /// has been re-armed after its backoff, returning the repair to service on
+    /// an activation that is still alive.
+    /// <para>
+    /// Paired with <see cref="CoverageRepairExhausted"/>, and the pair is the
+    /// series to read together: an <c>exhausted</c> count that keeps pace with
+    /// <c>rearmed</c> is a leaf retrying on its backoff, while an
+    /// <c>exhausted</c> count with no matching <c>rearmed</c> is a leaf whose
+    /// activation was replaced before the backoff elapsed. The same shape as
+    /// <c>blocked_leaf_reactivations_total</c>'s abandoned/rearmed pair.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairRearmed =
+        new(TagOutcome, "rearmed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
     /// <see cref="LeafSnapshotCoverageRepairs"/> for a repair capture that RAN
     /// and left a checkpointed partition still uncovered, without yet spending
     /// the per-activation budget (issue #2940).
