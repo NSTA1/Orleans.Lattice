@@ -38,6 +38,7 @@
 	  assert against.
 	-->
 	<ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+	<ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
 </Project>
