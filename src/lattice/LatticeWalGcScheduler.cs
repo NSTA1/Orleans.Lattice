@@ -4884,9 +4884,9 @@ internal sealed class LatticeWalGcScheduler(
                 ? partition.ToString(CultureInfo.InvariantCulture)
                 : LatticeMetrics.PartitionUnknown;
 
-            var state = resolved
-                ? await ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
-                : WalGcBlockingPinState.Unreadable;
+            var (state, durableCheckpoint) = resolved
+                ? await ReadBlockingPinStateWithCheckpointAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
+                : (WalGcBlockingPinState.Unreadable, (long?)null);
 
             // Withdraw the one conclusion this arm has no premise for (issue
             // #3168). ReadBlockingPinStateAsync reports CheckpointedUncovered
@@ -5003,13 +5003,14 @@ internal sealed class LatticeWalGcScheduler(
             }
 
             logger.LogInformation(
-                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. Diagnostic, except that a usable, durably-checkpointed pin sitting exactly on the offset floor is driven for liveness (issue #3178) - it does not change what the pass may trim.",
+                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}, durable checkpoint {DurableCheckpoint}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. The published pin is min(checkpoint, covered): a durable checkpoint EQUAL to the pin offset means the checkpoint is the binding term and is not advancing, while one far ABOVE it means coverage is the binding term and is not restamping - opposite faults with opposite remedies, which the pin offset alone cannot separate. A null checkpoint means none was read (unreadable, absent, or orphaned); coverage is per-activation state no storage read can reach, so it is deliberately not reported here. Diagnostic, except that a usable, durably-checkpointed pin sitting exactly on the offset floor is driven for liveness (issue #3178) - it does not change what the pass may trim.",
                 consumerId,
                 treeId,
                 partitionTag,
                 state,
                 candidate.Offset,
                 offsetFloor,
+                durableCheckpoint,
                 sampled,
                 population);
         }
@@ -5049,13 +5050,44 @@ internal sealed class LatticeWalGcScheduler(
         GrainId leafGrainId,
         int partition,
         CancellationToken stoppingToken)
+        => (await ReadBlockingPinStateWithCheckpointAsync(leafGrainId, partition, stoppingToken)
+            .ConfigureAwait(false)).State;
+
+    /// <summary>
+    /// As <see cref="ReadBlockingPinStateAsync"/>, but also returns the numeric
+    /// persisted checkpoint the classification was derived from, or
+    /// <see langword="null"/> when no checkpoint was read (the state was
+    /// unreadable, absent, or orphaned).
+    /// <para>
+    /// <b>Why the number is surfaced and not just the state.</b> The published
+    /// pin is <c>min(checkpoint, covered)</c>, and observing a minimum bounds
+    /// BOTH of its arguments while identifying NEITHER. A floor-holding pin
+    /// frozen at some offset is therefore consistent with two entirely
+    /// different faults - a checkpoint that cannot advance, or coverage that
+    /// cannot restamp - which call for opposite remedies, and no tree-scoped
+    /// instrument can separate them because the quantity in dispute belongs to
+    /// one partition of one leaf.
+    /// </para>
+    /// <para>
+    /// <see cref="ClassifyCheckpoint"/> already reads exactly that number and
+    /// collapses it to an enum, so the read is free: this overload simply stops
+    /// discarding it. Printed beside the pin offset on the floor-holder census
+    /// line, it discriminates in one sweep - equality means the checkpoint is
+    /// the binding term, and a checkpoint far above the pin means coverage is.
+    /// Diagnostic only; nothing branches on it.
+    /// </para>
+    /// </summary>
+    private async Task<(WalGcBlockingPinState State, long? Checkpoint)> ReadBlockingPinStateWithCheckpointAsync(
+        GrainId leafGrainId,
+        int partition,
+        CancellationToken stoppingToken)
     {
         if (leafStateStorage is null)
         {
             // No storage provider on this silo. That is a property of the
             // measurement, not of the leaf, so it is reported as unreadable
             // rather than as an absence of durable state.
-            return WalGcBlockingPinState.Unreadable;
+            return (WalGcBlockingPinState.Unreadable, null);
         }
 
         try
@@ -5066,7 +5098,7 @@ internal sealed class LatticeWalGcScheduler(
 
             if (!grainState.RecordExists || grainState.State is null)
             {
-                return WalGcBlockingPinState.NoDurableState;
+                return (WalGcBlockingPinState.NoDurableState, null);
             }
 
             // The tree id is read before the checkpoint, and that order is the
@@ -5082,10 +5114,15 @@ internal sealed class LatticeWalGcScheduler(
             // coverage problem.
             if (string.IsNullOrEmpty(grainState.State.TreeId))
             {
-                return WalGcBlockingPinState.Orphaned;
+                return (WalGcBlockingPinState.Orphaned, null);
             }
 
-            return ClassifyCheckpoint(grainState.State, partition);
+            // Both derive from the same durable row, read once. The number is
+            // the one ClassifyCheckpoint itself consumes, so the two can never
+            // disagree about the partition they describe.
+            return (
+                ClassifyCheckpoint(grainState.State, partition),
+                ReadPersistedCheckpoint(grainState.State, partition));
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
@@ -5094,7 +5131,7 @@ internal sealed class LatticeWalGcScheduler(
                 "WAL GC could not read durable state for leaf {Leaf} to classify its blocking pin; counting it as unreadable. The pass is unaffected - this read is diagnostic only.",
                 leafGrainId);
 
-            return WalGcBlockingPinState.Unreadable;
+            return (WalGcBlockingPinState.Unreadable, null);
         }
     }
 
@@ -5167,8 +5204,17 @@ internal sealed class LatticeWalGcScheduler(
     /// leaf row exactly as the leaf's own accessor does, returning the
     /// <c>-1</c> "nothing applied" sentinel when the partition has never been
     /// checkpointed.
+    /// <para>
+    /// <b>Internal rather than private so the floor-holder census number can be
+    /// gated.</b> This is the value reported beside the pin offset by
+    /// <see cref="ReadBlockingPinStateWithCheckpointAsync"/>, and the whole
+    /// worth of that diagnostic is that the number does not lie - in
+    /// particular that partition <c>0</c>'s born-<c>0</c> ambiguity (issue
+    /// #2703) reports the sentinel rather than a phantom checkpoint at
+    /// offset <c>0</c>.
+    /// </para>
     /// </summary>
-    private static long ReadPersistedCheckpoint(LeafNodeState state, int partition)
+    internal static long ReadPersistedCheckpoint(LeafNodeState state, int partition)
     {
         if (partition == 0)
         {
