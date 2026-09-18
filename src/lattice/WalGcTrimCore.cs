@@ -77,6 +77,65 @@ internal static class WalGcTrimCore
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor)
+        => ClassifyEntry(
+            entryTimestamp,
+            entryVectorClock,
+            minCursor,
+            ttlCeiling,
+            causalStable,
+            blockedFloor) == WalGcTrimEligibility.Eligible;
+
+    /// <summary>
+    /// Decides whether a single WAL entry is eligible to be trimmed and, when it
+    /// is not, <em>which</em> of the three independent clauses refused it. This is
+    /// the predicate; <see cref="IsEntryEligible"/> is this method with the
+    /// attribution discarded.
+    /// </summary>
+    /// <remarks>
+    /// The attribution exists because the clauses indict different subsystems and
+    /// demand different investigations (issue #3155). Reporting all three as one
+    /// rejection lets a tree be observed to be stranded without its holder ever
+    /// being nameable, which is the failure mode the stop-reason instrument was
+    /// introduced to remove one level up.
+    /// <para>
+    /// Clause order is evaluation order and is load-bearing for the attribution
+    /// but not for the verdict: an entry refused by more than one clause is
+    /// attributed to the first that refuses it, exactly as the scan's
+    /// short-circuit already behaved.
+    /// </para>
+    /// </remarks>
+    /// <param name="entryTimestamp">The entry's Hybrid Logical Clock stamp.</param>
+    /// <param name="entryVectorClock">
+    /// The entry's per-origin version vector, or <see langword="null"/> for a
+    /// legacy or range-delete entry (treated as the empty, always-dominated VC).
+    /// </param>
+    /// <param name="minCursor">
+    /// The minimum consumer cursor across all reporting consumers, or
+    /// <see langword="null"/> when no consumer has reported one.
+    /// </param>
+    /// <param name="ttlCeiling">
+    /// The retention TTL ceiling, or <see langword="null"/> when retention is
+    /// disabled.
+    /// </param>
+    /// <param name="causalStable">
+    /// The causal-stable frontier across consumers, or <see langword="null"/>
+    /// when none has been reported (degrades to the HLC-only predicate).
+    /// </param>
+    /// <param name="blockedFloor">
+    /// The lowest buffer-pin HLC across consumers, or <see langword="null"/>
+    /// when no consumer is buffering.
+    /// </param>
+    /// <returns>
+    /// <see cref="WalGcTrimEligibility.Eligible"/> when the entry may be trimmed;
+    /// otherwise the clause that refused it.
+    /// </returns>
+    public static WalGcTrimEligibility ClassifyEntry(
+        HybridLogicalClock entryTimestamp,
+        VersionVector? entryVectorClock,
+        HybridLogicalClock? minCursor,
+        HybridLogicalClock? ttlCeiling,
+        VersionVector? causalStable,
+        HybridLogicalClock? blockedFloor)
     {
         // HLC-shaped clause: cursor OR TTL must accept the entry
         // (existing legacy HLC-only behaviour).
@@ -92,7 +151,7 @@ internal static class WalGcTrimCore
 
         if (!hlcAccepted)
         {
-            return false;
+            return WalGcTrimEligibility.CursorFloor;
         }
 
         // Causal-stable clause: when at least one consumer has reported
@@ -106,7 +165,7 @@ internal static class WalGcTrimCore
         {
             if (entryVectorClock is not null && !causalStable.DominatesOrEquals(entryVectorClock))
             {
-                return false;
+                return WalGcTrimEligibility.CausalFrontier;
             }
         }
 
@@ -116,9 +175,9 @@ internal static class WalGcTrimCore
         // state. Strict-less semantics protect the buffered entry itself.
         if (blockedFloor is { } floor && entryTimestamp >= floor)
         {
-            return false;
+            return WalGcTrimEligibility.BlockPin;
         }
 
-        return true;
+        return WalGcTrimEligibility.Eligible;
     }
 }

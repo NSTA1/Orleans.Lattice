@@ -1737,15 +1737,23 @@ public static class LatticeMetrics
     /// The distinction the arms draw is the load-bearing part.
     /// <c>offset_floor</c> means a stale durable leaf checkpoint is holding the
     /// scan, and because that floor is a minimum over leaves, one lagging leaf
-    /// strands the whole tree. <c>not_eligible</c> means the HLC predicate is
-    /// holding it, which is a consumer-cursor problem and a different
-    /// investigation entirely. <c>exhausted</c> and <c>empty</c> are the healthy
-    /// readings. A sustained run of <c>offset_floor</c> alongside a flat
+    /// strands the whole tree. The next three each mean the HLC eligibility
+    /// predicate is holding it, and they name which of its independent clauses
+    /// did (issue #3155): <c>cursor_floor</c> is a consumer cursor or TTL ceiling
+    /// that has not advanced, <c>causal_frontier</c> is a replication origin whose
+    /// stable frontier has not advanced, and <c>block_pin</c> is a buffering
+    /// receiver holding entries back behind a published pin. Those three were one
+    /// <c>not_eligible</c> arm until a tree stopping every scan on it could be
+    /// shown to be stranded with no way to say by what. <c>exhausted</c> and
+    /// <c>empty</c> are the healthy readings. A sustained run of
+    /// <c>offset_floor</c> alongside a flat
     /// <see cref="StoragePolicyBytesReclaimed"/> is the signature of a tree whose
     /// floor covers none of its retained range.
     /// </para>
     /// <para>
-    /// All four arms are zero-primed per tree on every pass, so an absent series
+    /// Every arm - <c>exhausted</c>, <c>empty</c>, <c>offset_floor</c>,
+    /// <c>cursor_floor</c>, <c>causal_frontier</c> and <c>block_pin</c> - is
+    /// zero-primed per tree on every pass, so an absent series
     /// means this silo is not running WAL GC for the tree rather than that the
     /// tree never stopped a scan. That priming is what lets a reader treat a flat
     /// <c>offset_floor</c> zero as a measured absence, which is precisely the
@@ -1759,7 +1767,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
-            description: "WAL GC per-shard trim scans tagged by tree and by the reason the scan stopped: offset_floor, not_eligible, exhausted or empty.");
+            description: "WAL GC per-shard trim scans tagged by tree and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, exhausted or empty.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
@@ -1782,11 +1790,27 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> ReasonTrimOffsetFloor = new(TagReason, "offset_floor");
 
     /// <summary>
-    /// <see cref="TagReason"/> = <c>not_eligible</c> (a trim scan stopped by the
-    /// HLC eligibility predicate - the consumer-cursor floor, the TTL ceiling,
-    /// the causally stable frontier, or a Zero-HLC block pin).
+    /// <see cref="TagReason"/> = <c>cursor_floor</c> (a trim scan stopped by the
+    /// HLC clause of the eligibility predicate - see
+    /// <see cref="WalGcTrimStopReason.CursorFloor"/>, the arm that indicts a
+    /// consumer cursor or a TTL ceiling that has not advanced).
     /// </summary>
-    public static readonly KeyValuePair<string, object?> ReasonTrimNotEligible = new(TagReason, "not_eligible");
+    public static readonly KeyValuePair<string, object?> ReasonTrimCursorFloor = new(TagReason, "cursor_floor");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>causal_frontier</c> (a trim scan stopped by
+    /// the causal-stable clause - see
+    /// <see cref="WalGcTrimStopReason.CausalFrontier"/>, the arm that indicts a
+    /// replication origin whose stable frontier has not advanced).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimCausalFrontier = new(TagReason, "causal_frontier");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>block_pin</c> (a trim scan stopped by a
+    /// consumer's buffer pin - see <see cref="WalGcTrimStopReason.BlockPin"/>,
+    /// the arm that indicts a buffering receiver holding entries back).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimBlockPin = new(TagReason, "block_pin");
 
     /// <summary>
     /// Counter of WAL garbage-collection passes for which no retained-byte
