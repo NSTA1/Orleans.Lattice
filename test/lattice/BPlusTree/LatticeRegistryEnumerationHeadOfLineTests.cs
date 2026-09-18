@@ -36,12 +36,15 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// blocker and both arms would fail regardless of the fix.
 /// </para>
 /// <para>
-/// The two tests isolate the two halves of the fix, and neither subsumes the
-/// other. The reader test is the literal acceptance criterion and holds as long
-/// as <i>either</i> the reader or the enumeration interleaves, so it goes red
-/// only when both attributes are removed. The mutator test pins the
-/// enumeration's own attribute on its own, because a non-interleaving mutator
-/// queues behind any held turn no matter what the reader is marked.
+/// The two tests are complementary and pull in opposite directions, which is
+/// the point. The reader test is the literal acceptance criterion: a point read
+/// must overtake the parked enumeration, which it does because the point reads
+/// carry <c>[AlwaysInterleave]</c>. The mutator test pins the boundary of that
+/// fix: a mutator must <i>not</i> overtake it, because the enumeration is
+/// deliberately left non-interleaving so that no registration can reshape the
+/// backing tree under an in-flight scan cursor. Marking the enumeration too -
+/// the first attempt at this fix - passes the first test and fails the second,
+/// and in production silently drops ids from the scan result.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -137,32 +140,51 @@ public sealed class LatticeRegistryEnumerationHeadOfLineTests
     }
 
     /// <summary>
-    /// Pins the enumeration's own interleave attribute. A mutator carries no
-    /// interleave attribute by design, so it is admitted only when the
-    /// activation holds no turn - which makes it a direct probe of whether the
-    /// parked enumeration is holding one.
+    /// The counterpart property, and the one whose loss regressed the tag-index
+    /// reconcile: a mutator must stay excluded for the length of the
+    /// enumeration. The scan is a multi-hop range traversal of the registry's
+    /// own backing tree, and the system-tree scan path deliberately omits the
+    /// topology re-probes that would otherwise re-enter this grain - so a
+    /// registration admitted mid-scan can reshape the tree under the cursor and
+    /// silently drop an unrelated, already-registered id.
+    /// <para>
+    /// A mutator carries no interleave attribute by design, so it is admitted
+    /// only when the activation holds no turn, which makes it a direct probe of
+    /// whether the parked enumeration is still holding one. Here it must lose
+    /// the race. Marking <c>GetAllTreeIdsAsync</c> <c>[AlwaysInterleave]</c>
+    /// releases the turn and turns this test red, which is the behavioural half
+    /// of the contract guard in
+    /// <c>LatticeRegistryInterleaveContractTests</c>.
+    /// </para>
+    /// <para>
+    /// This does not conflict with the head-of-line fix above: that is about
+    /// option resolution overtaking the scan, and option resolution goes through
+    /// the point reads, which do interleave.
+    /// </para>
     /// </summary>
     [Test]
-    public async Task Registration_completes_while_a_whole_registry_enumeration_is_parked()
+    public async Task Registration_is_excluded_while_a_whole_registry_enumeration_is_parked()
     {
         var registry = Registry();
         RegistryEnumerationGate.Arm();
 
         Task<IReadOnlyList<string>>? blocker = null;
+        Task? register = null;
         try
         {
             blocker = registry.GetAllTreeIdsAsync(null);
             await RegistryEnumerationGate.Entered!.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-            var register = registry.RegisterAsync(LateRegisteredTree);
-            var winner = await Task.WhenAny(register, Task.Delay(TimeSpan.FromSeconds(20)));
+            register = registry.RegisterAsync(LateRegisteredTree);
+            var winner = await Task.WhenAny(register, Task.Delay(TimeSpan.FromSeconds(5)));
 
-            Assert.That(winner, Is.SameAs(register),
-                "RegisterAsync carries no interleave attribute, so it is admitted only when the registry " +
-                "activation holds no turn. It queued here, which means GetAllTreeIdsAsync is still " +
-                "holding the singleton's turn for the length of its fan-out - the exact head-of-line " +
-                "block of issue #3180.");
-            await register;
+            Assert.That(winner, Is.Not.SameAs(register),
+                "RegisterAsync completed while GetAllTreeIdsAsync was parked mid-scan, so the " +
+                "enumeration is no longer holding the registry's turn. A mutator admitted during the " +
+                "scan can reshape the backing tree under the cursor and drop an already-registered id " +
+                "from the result, which is how marking the enumeration [AlwaysInterleave] broke the " +
+                "tag-index reconcile trigger. Mark the point reads instead: those are what option " +
+                "resolution calls, and marking them is what lets it overtake this scan.");
         }
         finally
         {
@@ -171,7 +193,11 @@ public sealed class LatticeRegistryEnumerationHeadOfLineTests
             {
                 await blocker.WaitAsync(TimeSpan.FromSeconds(60));
             }
-            await registry.UnregisterAsync(LateRegisteredTree);
+            if (register is not null)
+            {
+                await register.WaitAsync(TimeSpan.FromSeconds(60));
+                await registry.UnregisterAsync(LateRegisteredTree);
+            }
         }
     }
 

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// WAL GC scheduler that never completed a single registry enumeration.
 /// </para>
 /// <para>
-/// The split is deliberate and is the whole point of the fixture: blanket
+/// The split is deliberate and is the whole point of the fixture. Blanket
 /// <c>[Reentrant]</c> would have fixed the block and silently voided the
 /// read-modify-write atomicity that <c>ReassignSlotsAsync</c>,
 /// <c>AllocateNextShardIndexAsync</c> and both <c>UpdateWalPlacementAsync</c>
@@ -31,9 +31,17 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the one nothing else here would catch.
 /// </para>
 /// <para>
+/// <c>GetAllTreeIdsAsync</c> is the third case and has its own guard below: it
+/// is read-only but is deliberately <em>not</em> marked, because it is a range
+/// traversal of the registry's own backing tree rather than a point lookup and
+/// the system-tree scan path omits the topology re-probes that would keep it
+/// correct under concurrent mutation. Marking it is what regressed
+/// <c>Restore_reconciles_large_tag_membership_under_concurrent_reads</c>.
+/// </para>
+/// <para>
 /// The member lists below are exhaustive and are asserted to be, so adding a
 /// member to <see cref="ILatticeRegistry"/> fails this fixture until it is
-/// classified as a reader or a mutator. That is intentional: the classification
+/// classified. That is intentional: the classification
 /// is a design decision about shared-state safety, not a detail to be inferred.
 /// </para>
 /// </summary>
@@ -41,21 +49,29 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public sealed class LatticeRegistryInterleaveContractTests
 {
     /// <summary>
-    /// Members that only read registry state. Each resolves a single entry (or
-    /// enumerates entries) and mutates nothing, so admitting one mid-turn
-    /// cannot tear any state: an entry is rewritten by exactly one terminal
-    /// <c>SetAsync</c> against the backing tree, so a reader observes it wholly
-    /// before or wholly after.
+    /// Read-only members that resolve a bounded set of <em>named</em> entries
+    /// and mutate nothing, so admitting one mid-turn cannot tear any state: an
+    /// entry is rewritten by exactly one terminal <c>SetAsync</c> against the
+    /// backing tree, so a reader observes it wholly before or wholly after.
     /// </summary>
-    private static readonly string[] ReadOnlyMembers =
+    private static readonly string[] PointReadMembers =
     [
         nameof(ILatticeRegistry.ExistsAsync),
         nameof(ILatticeRegistry.GetEntryAsync),
         nameof(ILatticeRegistry.GetEntriesAsync),
-        nameof(ILatticeRegistry.GetAllTreeIdsAsync),
         nameof(ILatticeRegistry.ResolveAsync),
         nameof(ILatticeRegistry.GetShardMapAsync),
         nameof(ILatticeRegistry.GetWalPlacementAsync),
+    ];
+
+    /// <summary>
+    /// Read-only members that are nonetheless excluded from interleaving because
+    /// they scan a key range of the registry's own backing tree across many
+    /// awaits rather than reading named entries.
+    /// </summary>
+    private static readonly string[] ScanMembers =
+    [
+        nameof(ILatticeRegistry.GetAllTreeIdsAsync),
     ];
 
     /// <summary>
@@ -82,13 +98,12 @@ public sealed class LatticeRegistryInterleaveContractTests
     ];
 
     /// <summary>
-    /// Every read-only member must interleave. Overloads are covered
-    /// individually - <c>GetAllTreeIdsAsync</c> in particular has two, and the
-    /// prefix overload is the one the WAL GC scheduler calls.
+    /// Every point read must interleave: these are what option resolution calls,
+    /// and they are what must be able to overtake a long enumeration.
     /// </summary>
     [Test]
     public void Read_only_registry_members_are_marked_AlwaysInterleave(
-        [ValueSource(nameof(ReadOnlyMembers))] string methodName)
+        [ValueSource(nameof(PointReadMembers))] string methodName)
     {
         var overloads = typeof(ILatticeRegistry)
             .GetMethods()
@@ -137,7 +152,47 @@ public sealed class LatticeRegistryInterleaveContractTests
     }
 
     /// <summary>
-    /// The two lists above must together account for every member, so a new
+    /// The range-scan reads must NOT interleave, despite being read-only. This
+    /// is the guard the original #3180 fix lacked, and its absence cost a real
+    /// regression: marking <c>GetAllTreeIdsAsync</c> let a concurrent
+    /// registration reshape the registry's backing tree under an in-flight
+    /// cursor, so the scan silently dropped an already-registered id. That
+    /// surfaced as a tag-index reconcile that never fired, because
+    /// <c>TagIndexReconcileTrigger</c> discovers index trees through exactly
+    /// this enumeration and a missing id is indistinguishable from no index.
+    /// <para>
+    /// Excluding it does not reintroduce the head-of-line block:
+    /// <c>[AlwaysInterleave]</c> admits the <em>incoming</em> call past whatever
+    /// is already running, so the point reads above overtake a running
+    /// enumeration whether or not the enumeration is itself marked.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Range_scan_registry_members_are_not_marked_AlwaysInterleave(
+        [ValueSource(nameof(ScanMembers))] string methodName)
+    {
+        var overloads = typeof(ILatticeRegistry)
+            .GetMethods()
+            .Where(m => m.Name == methodName)
+            .ToArray();
+
+        Assert.That(overloads, Is.Not.Empty,
+            $"Expected to find method '{methodName}' on ILatticeRegistry.");
+
+        foreach (var overload in overloads)
+        {
+            Assert.That(overload.GetCustomAttribute<AlwaysInterleaveAttribute>(inherit: false), Is.Null,
+                $"ILatticeRegistry.{Describe(overload)} scans a key range of the registry's own backing " +
+                "tree across many awaits, and the system-tree scan path deliberately omits the topology " +
+                "re-probes that would re-enter this grain. Those omissions are sound only while no " +
+                "mutator can run during the scan, so marking this [AlwaysInterleave] lets a concurrent " +
+                "registration drop an unrelated id from the result - a wrong answer, not a slow one. " +
+                "It is also unnecessary: marking the point reads is what lets them overtake this scan.");
+        }
+    }
+
+    /// <summary>
+    /// The three lists above must together account for every member, so a new
     /// member cannot be added without being classified. Without this the guard
     /// would go quietly incomplete rather than red.
     /// </summary>
@@ -154,15 +209,17 @@ public sealed class LatticeRegistryInterleaveContractTests
         Assert.That(declared, Is.Not.Empty,
             "Reflection over ILatticeRegistry found no methods. The scan is broken, not the interface.");
 
-        var classified = ReadOnlyMembers
+        var classified = PointReadMembers
+            .Concat(ScanMembers)
             .Concat(MutatingMembers)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
 
         Assert.That(declared, Is.EquivalentTo(classified),
-            "Every ILatticeRegistry member must be classified as read-only or mutating in this fixture. " +
-            "A new member is neither safe nor unsafe by default: decide whether it can be admitted while " +
-            "another turn is mid-flight, then add it to the matching list.");
+            "Every ILatticeRegistry member must be classified as a point read, a range scan, or a " +
+            "mutator in this fixture. A new member is neither safe nor unsafe by default: decide " +
+            "whether it can be admitted while another turn is mid-flight, then add it to the " +
+            "matching list.");
     }
 
     /// <summary>

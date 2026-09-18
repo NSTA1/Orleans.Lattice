@@ -14,14 +14,17 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// Key format: singleton - use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
 /// <para>
-/// <b>Concurrency contract: reads interleave, writes do not.</b> This grain is a
+/// <b>Concurrency contract: point reads interleave, the enumeration and the
+/// writes do not.</b> This grain is a
 /// process-wide singleton and the serialization point for every tree-option
 /// resolution, so its turn token is the scarcest scheduling resource in the
-/// library. Every <em>read-only</em> member below is marked
-/// <see cref="AlwaysInterleaveAttribute"/>; every member that mutates a registry
-/// entry deliberately is not. The grain type itself is <b>not</b>
+/// library. Every read-only member below that resolves a <em>bounded set of
+/// named entries</em> is marked <see cref="AlwaysInterleaveAttribute"/>; every
+/// member that mutates a registry entry deliberately is not, and neither are the
+/// two <see cref="GetAllTreeIdsAsync(string?)"/> range-scan overloads. The grain
+/// type itself is <b>not</b>
 /// <see cref="ReentrantAttribute"/>, which would be the blanket version of the
-/// same change and is unsafe here - see the two halves below.
+/// same change and is unsafe here - see the three parts below.
 /// </para>
 /// <para>
 /// <b>Why the writes must stay exclusive.</b> Most mutators are
@@ -38,7 +41,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// grain <see cref="ReentrantAttribute"/> would void all of it silently.
 /// </para>
 /// <para>
-/// <b>Why the reads are safe to interleave.</b> A read-only member never mutates
+/// <b>Why the point reads are safe to interleave.</b> A read-only member never mutates
 /// a registry entry, so admitting one mid-way through a mutator's body cannot
 /// tear anything: an entry is rewritten by exactly one terminal
 /// <c>SetAsync</c> against the backing tree, so a reader observes the entry
@@ -50,6 +53,20 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="AllocateNextShardIndexAsync"/> exist as single calls.
 /// </para>
 /// <para>
+/// <b>Why the enumeration is excluded even though it is a read.</b> It is the
+/// one read here that is not a point lookup but a multi-hop range traversal of
+/// the registry's own backing tree, and the system-tree scan path deliberately
+/// omits the topology re-probes that would otherwise re-enter this grain. Those
+/// omissions are sound only while no mutator can run during the scan, so
+/// admitting one would let a concurrent registration reshape the tree under the
+/// cursor and silently drop an unrelated, already-registered id - which is a
+/// wrong answer rather than a slow one. Excluding it costs nothing against the
+/// head-of-line block, because <see cref="AlwaysInterleaveAttribute"/> admits
+/// the <em>incoming</em> call past what is already running: it is marking the
+/// point reads that lets option resolution overtake a long enumeration.
+/// See <see cref="GetAllTreeIdsAsync(string?)"/> for the full derivation.
+/// </para>
+/// <para>
 /// <b>What this fixes.</b> Without it, one whole-registry enumeration
 /// (<see cref="GetAllTreeIdsAsync(string?)"/>, whose fan-out over the backing
 /// system tree descends into shard and leaf activations) holds the singleton's
@@ -59,7 +76,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// timeout fires. That is a head-of-line block across the whole process, and it
 /// wedged WAL reclamation entirely (issue #3180), because the enumeration is the
 /// first call of a GC pass and its timeout abandons the pass for every tree at
-/// once.
+/// once. The enumeration still holds the turn for its whole scan - that is
+/// deliberate, and is what keeps it correct - but the option resolutions no
+/// longer wait behind it.
 /// </para>
 /// </summary>
 [Alias(TypeAliases.ILatticeRegistry)]
@@ -143,11 +162,10 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <summary>
     /// Returns all registered tree IDs in sorted order.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/>: see
-    /// <see cref="GetAllTreeIdsAsync(string?)"/>, which this delegates to.
+    /// Deliberately <b>not</b> marked <see cref="AlwaysInterleaveAttribute"/>:
+    /// see <see cref="GetAllTreeIdsAsync(string?)"/>, which this delegates to.
     /// </para>
     /// </summary>
-    [AlwaysInterleave]
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync();
 
     /// <summary>
@@ -171,19 +189,29 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// already have enumerated.
     /// </para>
     /// <para>
-    /// The enumeration is a <b>weakly consistent scan</b>, not a snapshot. It is
-    /// marked <see cref="AlwaysInterleaveAttribute"/> (see the interface remarks)
-    /// so it cannot head-of-line-block the singleton for the length of the
-    /// fan-out, which means a registration or removal committed while the scan is
-    /// in flight may or may not appear in the result depending on where the scan
-    /// had reached. It was already free of any cross-call atomicity guarantee -
-    /// a caller that enumerates and then acts on an id must tolerate that id
-    /// having been unregistered in the gap regardless - so the only property
-    /// given up is one no caller could observe or depend on.
+    /// The enumeration is deliberately <b>not</b> marked
+    /// <see cref="AlwaysInterleaveAttribute"/>, and this is the one read on this
+    /// interface that must not be. Unlike the point reads it is a multi-hop
+    /// range traversal of the registry's own backing tree that spans many awaits,
+    /// so admitting a mutator part-way through would let the backing tree's shard
+    /// topology change underneath the cursor. The registry is a system tree, and
+    /// the scan path deliberately disables both of its registry re-probes for a
+    /// system tree (the moved-slot reconciliation branch and the final
+    /// topology-stability check) precisely to avoid re-entering this grain. That
+    /// omission is sound only while no registry mutation can run during the scan,
+    /// which is exactly what excluding this method preserves; with a mutator
+    /// admitted, the scan can silently skip an already-registered, unrelated id.
+    /// </para>
+    /// <para>
+    /// Excluding it costs nothing against the head-of-line block this attribute
+    /// set exists to fix. <see cref="AlwaysInterleaveAttribute"/> admits the
+    /// <em>incoming</em> call past whatever is already running, so it is marking
+    /// the point reads that lets option resolution proceed while a long
+    /// enumeration is in flight. The enumeration does not need to interleave for
+    /// others to overtake it.
     /// </para>
     /// </remarks>
     /// <param name="prefix">The tree-id prefix to scope the enumeration to, or <c>null</c> for all ids.</param>
-    [AlwaysInterleave]
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix);
 
     /// <summary>
