@@ -401,8 +401,9 @@ internal sealed class LatticeWalGcScheduler(
     /// is checked against that list rather than against the iteration index, so
     /// a skipped consumer costs nothing. The cooldown is 15 minutes against a
     /// 2-minute sweep interval, so a repaired pin - which now carries a real
-    /// frontier and therefore sorts above the blocking Zero pins - has left the
-    /// ascending-frontier sample several sweeps before its cooldown expires.
+    /// frontier, and a checkpoint offset advanced past the floor it was holding,
+    /// and therefore sorts above the pins still holding it - has left the
+    /// ascending sample several sweeps before its cooldown expires.
     /// </para>
     /// </remarks>
     private readonly Dictionary<string, IReadOnlyList<string>> _repairableFloorHolders =
@@ -2114,7 +2115,7 @@ internal sealed class LatticeWalGcScheduler(
                 if (_repairableFloorHolders.TryGetValue(treeId, out var repairableHolders))
                 {
                     logger.LogInformation(
-                        "WAL GC is driving {Count} repairable dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers; these are the sampled holders whose own pin frontier is nonetheless at or below the blocking sentinel, which the floor skipped because their consumer is present in the live registry. That is what makes checkpointed_uncovered sound for them - a proven durable checkpoint over an unusable pin is a coverage hole - and the repair can only run inside an activation the dormant leaf does not have. Holders whose frontier is usable are classified checkpointed_coverage_unknown and are deliberately not driven (issue #3168).",
+                        "WAL GC is driving {Count} dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers. Two populations qualify. A sampled holder whose own pin frontier is at or below the blocking sentinel - which the floor skipped because its consumer is present in the live registry - is classified checkpointed_uncovered, and a proven durable checkpoint over an unusable pin is a coverage hole whose repair can only run inside an activation the dormant leaf does not have. A sampled holder whose frontier is usable is classified checkpointed_coverage_unknown and asserts no coverage hole; it is driven only when its durable checkpoint offset sits exactly on this tree's offset floor, because a scanned-through checkpoint advances only during replay and so freezes when the leaf deactivates, and that advance likewise needs an activation the dormant leaf does not have (issues #3168, #3178). A coverage_unknown holder above the floor is still not driven.",
                         repairableHolders.Count,
                         treeId);
 
@@ -2786,50 +2787,57 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// <para>
     /// <b>Blast radius.</b> At most
-    /// <see cref="MaxReactivationTouchesPerPass"/> <i>consumers</i> per tree per
-    /// pass, and trees are swept sequentially, so that is also the whole silo's
-    /// concurrent touch ceiling. Live leaves are excluded by construction,
-    /// because a live consumer never reaches the exit that reports it. The
-    /// remedy is self-extinguishing - a healed tree stops reporting blocked and
-    /// this path stops running - so steady-state cost on a healthy tree is zero.
+    /// <see cref="MaxReactivationTouchesPerPass"/> leaves per tree per pass, and
+    /// trees are swept sequentially, so that is also the whole silo's concurrent
+    /// touch ceiling. Live leaves are excluded by construction, because a live
+    /// consumer never reaches the exit that reports it. The remedy is
+    /// self-extinguishing - a healed tree stops reporting blocked and this path
+    /// stops running - so steady-state cost on a healthy tree is zero.
     /// </para>
     /// <para>
-    /// <b>Consumers, not leaves, and the two are not interchangeable here.</b>
-    /// This bound used to be documented as a count of leaves. It is not: a
-    /// consumer id is <c>{tree}_{grain}_{partition}</c>, so one leaf contributes
-    /// one id per WAL partition, and the budget is spent per id. The remedy on
-    /// the other end is per <i>leaf</i> and partition-agnostic -
-    /// <c>DriveStarvedCheckpointAsync</c> resolves the partition count once and
-    /// repairs every partition in a single call - so the second and subsequent
-    /// ids of the same leaf ask for work the first has already started.
+    /// <b>Leaves and consumer ids are not interchangeable here, which is why
+    /// the budget is spent per leaf.</b> A consumer id is
+    /// <c>{tree}_{grain}_{partition}</c>, so one leaf contributes one id per WAL
+    /// partition. The remedy on the other end is per <i>leaf</i> and
+    /// partition-agnostic - <c>DriveStarvedCheckpointAsync</c> resolves the
+    /// partition count once and repairs every partition in a single call - so
+    /// the second and subsequent ids of the same leaf ask for work the first
+    /// has already started.
     /// </para>
     /// <para>
     /// <b>The arithmetic that follows, which is why this is worth stating.</b>
     /// <c>LatticeWalGc.MaxReportedBlockingConsumers</c> and
     /// <see cref="LatticeOptions.DefaultWalPartitions"/> are both 8, an exact
     /// collision, so a single blocked leaf fills the entire blocking report;
-    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> is 8 as well and the
-    /// floor-holder sample is taken by ascending frontier, while all of a leaf's
-    /// partition pins carry a byte-identical frontier, so that sample also
-    /// resolves to one leaf. With
-    /// <see cref="LatticeOptions.WalPartitions"/> at or above
+    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> is 8 as well, and a
+    /// leaf's partition pins carry a byte-identical frontier <i>and</i> the same
+    /// durable offset, so a sample on either axis also resolved to one leaf.
+    /// With <see cref="LatticeOptions.WalPartitions"/> at or above
     /// <see cref="MaxReactivationTouchesPerPass"/>, one blocked leaf therefore
-    /// consumes the whole per-pass touch budget, and a pass that spends four
-    /// touches makes one leaf's worth of progress: the drive's per-activation
-    /// latch rejects the other three as already-driving, each having already
+    /// consumed the whole per-pass touch budget, and a pass that spent four
+    /// touches made one leaf's worth of progress: the drive's per-activation
+    /// latch rejected the other three as already-driving, each having already
     /// charged an attempt against
     /// <see cref="MaxReactivationAttempts"/> that is never refunded, because
     /// already-driving is reported as a completed touch and only faulted and
     /// undelivered touches are refundable. Three such passes exhaust a
     /// three-attempt budget on a leaf that was driven successfully every time,
-    /// and the consumer is abandoned. Measured on a live estate the ratio was
-    /// exact: 52 touches, 13 episodes, 39 already-driving rejections (13 x 3)
-    /// and 13 real outcomes (issues #3175, #3177). Widening the touch budget or
-    /// the sweep's concurrency does not improve this and makes it worse, since
-    /// the additional touches land on the same leaf. The fix is to spend the
-    /// budget per leaf rather than per consumer id; it is deliberately not made
-    /// here, and this paragraph exists so the denominator does not have to be
-    /// re-derived when it is.
+    /// and the consumer is abandoned - which is terminal for crediting, not
+    /// merely slow, because a credit is only ever issued to a consumer that was
+    /// not abandoned. Measured on a live estate the ratio was exact: 52 touches,
+    /// 13 episodes, 39 already-driving rejections (13 x 3) and 13 real outcomes
+    /// (issues #3175, #3177). Widening the touch budget or the sweep's
+    /// concurrency does not improve this and makes it worse, since the
+    /// additional touches land on the same leaf.
+    /// </para>
+    /// <para>
+    /// <b>That fix is now made (issue #3178).</b> The floor-holder sample ranks
+    /// by ascending durable offset and deduplicates on the resolved leaf grain
+    /// id, and the touch loop deduplicates again on that id <i>before</i> it
+    /// stamps a budget - so a suppressed partition costs neither an attempt nor
+    /// a cooldown, and the bound above is per leaf on both axes rather than per
+    /// consumer id. The arithmetic is kept because it is the denominator that
+    /// makes the pre-#3178 field measurements readable.
     /// </para>
     /// <para>
     /// <b>Why the bound is no longer one.</b> It used to be one, and that was
@@ -3010,6 +3018,23 @@ internal sealed class LatticeWalGcScheduler(
 
         List<string>? touching = null;
 
+        // The leaves already being touched on this pass. A leaf publishes one
+        // pin per WAL partition, and BPlusLeafGrain.FlushDurableMaterialiserFrontierAsync
+        // reads its clock once for the whole batch, so all of a leaf's partition
+        // pins carry a byte-identical frontier - structurally, not
+        // probabilistically. Every ranking over pins therefore places them
+        // adjacently, and a budget of N consumer ids on an N-partition tree buys
+        // exactly ONE leaf (issue #3178, AC 4). Deduplicating here is what makes
+        // MaxReactivationTouchesPerPass mean what its name says.
+        //
+        // Sited above the budget stamp on purpose. TryReactivateBlockedLeafAsync
+        // already collapses concurrent touches of one leaf into a single drive
+        // and reports the rest as already-driving, so the calls were never
+        // duplicated - but the BUDGET and the COOLDOWN were, and those are the
+        // scarce things. Skipping before the stamp means a duplicate costs
+        // neither, and the attempted arm counts leaves rather than partitions.
+        HashSet<GrainId>? touchingLeaves = null;
+
         for (var i = 0; i < blockingConsumerIds.Count; i++)
         {
             if (touching is { Count: >= MaxReactivationTouchesPerPass })
@@ -3096,6 +3121,16 @@ internal sealed class LatticeWalGcScheduler(
 
             if (budget.LastAttempt is { } lastAttempt
                 && now - lastAttempt < ReactivationRetryCooldown)
+            {
+                continue;
+            }
+
+            // One touch per leaf per pass. A consumer id that will not resolve
+            // to a leaf is left alone rather than collapsed: it has no leaf
+            // identity to be a duplicate of, and TryReactivateBlockedLeafAsync
+            // is the place that decides what to do with an unresolvable id.
+            if (TryResolveLeafGrainId(treeId, consumerId, out var touchLeafGrainId)
+                && !(touchingLeaves ??= []).Add(touchLeafGrainId))
             {
                 continue;
             }
@@ -3902,12 +3937,24 @@ internal sealed class LatticeWalGcScheduler(
         // and must be removed from all of them.
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
-        // The lowest-frontier pins seen so far, ascending, capped at
+        // The lowest pins seen so far, ascending, each list capped at
         // MaxFloorHolderClassificationsPerSweep. Collected only when this arm
         // owes a classification, and bounded in memory rather than sorted at the
         // end, so a 52,224-pin tree costs a constant-size list either way.
-        var floorHolders = classifyFloorHolders
-            ? new List<KeyValuePair<string, HybridLogicalClock>>(MaxFloorHolderClassificationsPerSweep)
+        //
+        // Two lists, split on whether the pin constrains an offset floor, and
+        // that split is load-bearing (issue #3178). ComputeMaterialiserOffsetFloorAsync
+        // skips every -1, so a -1 pin is the *weakest* pin on that axis, not the
+        // strongest. A tree that has never trimmed carries thousands of them, and
+        // a single ascending list would therefore fill entirely with pins that
+        // hold no offset floor at all and evict every pin that does. Disjoint by
+        // construction, so the classification still reads at most one durable
+        // record per admitted candidate.
+        var unusableHolders = classifyFloorHolders
+            ? new List<WalGcFloorHolderCandidate>(MaxFloorHolderClassificationsPerSweep)
+            : null;
+        var offsetHolders = classifyFloorHolders
+            ? new List<WalGcFloorHolderCandidate>(MaxFloorHolderClassificationsPerSweep)
             : null;
 
         for (var i = 0; i < keys.Count; i++)
@@ -3938,6 +3985,32 @@ internal sealed class LatticeWalGcScheduler(
                 continue;
             }
 
+            // The offset half of the same shard's pins. Read separately because
+            // it is a separate durable projection, and fail-soft to "no offsets
+            // known" for the same reason the frontier read above is fail-soft:
+            // the sweep's retirement work does not depend on it, and a pin whose
+            // offset is unknown is simply ranked as if it constrained no offset
+            // floor - which is what an absent entry already means.
+            IReadOnlyDictionary<string, long>? offsets = null;
+            if (classifyFloorHolders)
+            {
+                try
+                {
+                    offsets = await grainFactory
+                        .GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i])
+                        .GetPinOffsetsAsync()
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    logger.LogDebug(
+                        ex,
+                        "WAL GC orphan sweep could not read durable pin offsets at shard key {GrainKey} on tree {Tree}; the floor-holder sample falls back to the frontier axis for this shard.",
+                        keys[i],
+                        treeId);
+                }
+            }
+
             foreach (var consumerId in pins.Keys)
             {
                 if (!located.TryGetValue(consumerId, out var foundAt))
@@ -3948,11 +4021,22 @@ internal sealed class LatticeWalGcScheduler(
 
                 foundAt.Add(keys[i]);
 
-                if (floorHolders is not null)
+                if (unusableHolders is null || offsetHolders is null)
                 {
-                    OfferFloorHolderCandidate(
-                        floorHolders, MaxFloorHolderClassificationsPerSweep, consumerId, pins[consumerId]);
+                    continue;
                 }
+
+                var offset = offsets is not null && offsets.TryGetValue(consumerId, out var pinOffset)
+                    ? pinOffset
+                    : -1L;
+                var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out _);
+                var candidate = new WalGcFloorHolderCandidate(
+                    consumerId, leafGrainId, resolved, offset, pins[consumerId]);
+
+                OfferFloorHolderCandidate(
+                    offset < 0 ? unusableHolders : offsetHolders,
+                    MaxFloorHolderClassificationsPerSweep,
+                    candidate);
             }
         }
 
@@ -3962,10 +4046,11 @@ internal sealed class LatticeWalGcScheduler(
         // empty-population return so that a tree holding no pins at all still
         // records a measured (0, 0) coverage rather than an absence.
         List<string>? repairable = null;
-        if (floorHolders is not null)
+        if (unusableHolders is not null && offsetHolders is not null)
         {
             repairable = await ClassifyFloorHolderPinsAsync(
-                treeId, floorHolders, located.Count, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
+                treeId, unusableHolders, offsetHolders, located.Count, treeTag, tenantTag, stoppingToken)
+                .ConfigureAwait(false);
         }
 
         if (located.Count == 0)
@@ -4295,17 +4380,44 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
-    /// Offers one durable materialiser pin to a bounded ascending-by-frontier
-    /// sample of the pins holding a tree's offset floor (issue #3158).
+    /// Offers one durable materialiser pin to a bounded ascending sample of the
+    /// pins holding a tree's retention floor (issue #3158), ordered on the axis
+    /// that floor is actually minimised over and deduplicated by leaf
+    /// (issue #3178).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Why the lowest frontier is the right sample.</b> The durable
-    /// materialiser offset floor is a <i>minimum</i> over every pin, so the pins
-    /// carrying the lowest frontier are the ones holding it, and any pin above
-    /// them is by definition not the answer to "what is pinning this tree". A
-    /// sample drawn in enumeration order would be an arbitrary eight of tens of
-    /// thousands and would almost never contain the holder.
+    /// <b>Why the lowest pin is the right sample.</b> A retention floor is a
+    /// <i>minimum</i> over every pin, so the lowest pins are the ones holding it
+    /// and any pin above them is by definition not the answer to "what is
+    /// pinning this tree". A sample drawn in enumeration order would be an
+    /// arbitrary eight of tens of thousands and would almost never contain the
+    /// holder.
+    /// </para>
+    /// <para>
+    /// <b>The axis is the offset, and that is a correction (issue #3178).</b>
+    /// This selector ranked on the frontier alone, while the method it feeds is
+    /// documented - correctly - as classifying the pins holding the
+    /// <i>offset</i> floor. Those are two independent minima over the same pin
+    /// population: <c>ApplyDurableMaterialiserFloorAsync</c> folds the frontier
+    /// half into the HLC cursor floor, and
+    /// <c>ComputeMaterialiserOffsetFloorAsync</c> minimises the offset half,
+    /// skipping every <c>-1</c>. A pin holding one is not in general the pin
+    /// holding the other, so ranking on the frontier selected the wrong pins
+    /// whenever the pass was stopping at <c>offset_floor</c> - which on the tree
+    /// this issue was filed against was every stop reason it had. The frontier
+    /// remains the secondary key, so a population whose offsets all tie (every
+    /// pin at <c>-1</c>, the shape a never-trimmed tree carries) is ordered
+    /// exactly as it was before.
+    /// </para>
+    /// <para>
+    /// <b>Deduplicated by leaf, not by consumer id (issue #3178, AC 4).</b> A
+    /// leaf publishes one pin per WAL partition, so a sample keyed by consumer
+    /// id spends all eight of its places on <i>one</i> leaf of an eight-partition
+    /// tree - and the reactivation touches those places license all resolve to
+    /// that same leaf grain. Keeping only a leaf's lowest pin is what makes the
+    /// cap a bound on leaves, and it costs no information: the lowest pin is the
+    /// one holding the floor, and the drive is per leaf and partition-agnostic.
     /// </para>
     /// <para>
     /// <b>Bounded in memory as well as in reads.</b> <paramref name="candidates"/>
@@ -4325,15 +4437,17 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// <para>
     /// A pin found under more than one read key is one pin to a reader, so a
-    /// repeat offer for a consumer already held is collapsed onto the lower of
-    /// the two frontiers rather than admitted twice.
+    /// repeat offer for a pin already held is collapsed onto the lower of the
+    /// two rather than admitted twice.
     /// </para>
     /// </remarks>
+    /// <param name="candidates">The bounded ascending sample to offer into.</param>
+    /// <param name="cap">The most places the sample may ever hold.</param>
+    /// <param name="candidate">The pin being offered.</param>
     internal static void OfferFloorHolderCandidate(
-        List<KeyValuePair<string, HybridLogicalClock>> candidates,
+        List<WalGcFloorHolderCandidate> candidates,
         int cap,
-        string consumerId,
-        HybridLogicalClock frontier)
+        WalGcFloorHolderCandidate candidate)
     {
         if (cap <= 0)
         {
@@ -4342,19 +4456,19 @@ internal sealed class LatticeWalGcScheduler(
 
         for (var i = 0; i < candidates.Count; i++)
         {
-            if (!string.Equals(candidates[i].Key, consumerId, StringComparison.Ordinal))
+            if (!candidates[i].SameLeafAs(candidate))
             {
                 continue;
             }
 
-            if (frontier.CompareTo(candidates[i].Value) >= 0)
+            if (!candidate.Precedes(candidates[i]))
             {
                 return;
             }
 
-            // Re-insert rather than overwrite in place: the frontier that just
-            // fell is also the sort key, so leaving it where it sits would break
-            // the ascending order every later offer depends on.
+            // Re-insert rather than overwrite in place: the pin that just fell
+            // is also the sort key, so leaving it where it sits would break the
+            // ascending order every later offer depends on.
             candidates.RemoveAt(i);
             break;
         }
@@ -4362,9 +4476,7 @@ internal sealed class LatticeWalGcScheduler(
         var insertAt = candidates.Count;
         for (var i = 0; i < candidates.Count; i++)
         {
-            var comparison = frontier.CompareTo(candidates[i].Value);
-            if (comparison < 0
-                || (comparison == 0 && string.CompareOrdinal(consumerId, candidates[i].Key) < 0))
+            if (candidate.Precedes(candidates[i]))
             {
                 insertAt = i;
                 break;
@@ -4376,7 +4488,7 @@ internal sealed class LatticeWalGcScheduler(
             return;
         }
 
-        candidates.Insert(insertAt, new KeyValuePair<string, HybridLogicalClock>(consumerId, frontier));
+        candidates.Insert(insertAt, candidate);
         if (candidates.Count > cap)
         {
             candidates.RemoveAt(candidates.Count - 1);
@@ -4415,10 +4527,12 @@ internal sealed class LatticeWalGcScheduler(
     /// have.
     /// </para>
     /// <para>
-    /// <b>The read budget.</b> At most
+    /// <b>The read budget.</b> At most twice
     /// <see cref="MaxFloorHolderClassificationsPerSweep"/> durable reads per
-    /// sweep, enforced by <see cref="OfferFloorHolderCandidate"/> when the
-    /// sample was built, independent of how many pins the tree holds. Coverage
+    /// sweep - one cap for the pins holding no offset floor and one for the pins
+    /// holding it, which are disjoint by construction (issue #3178) - enforced
+    /// by <see cref="OfferFloorHolderCandidate"/> when the sample was built, and
+    /// independent of how many pins the tree holds. Coverage
     /// is then reported on
     /// <see cref="LatticeMetrics.WalGcFloorHolderClassification"/> so the small
     /// sample is visible as a small sample: without that denominator a handful
@@ -4432,14 +4546,18 @@ internal sealed class LatticeWalGcScheduler(
     /// by <see cref="ReadBlockingPinStateAsync"/> rather than failing the sweep.
     /// The returned list is the subset classified exactly
     /// <see cref="WalGcBlockingPinState.CheckpointedUncovered"/>, which issue
-    /// #3164 drives into the existing reactivation remedy; see
+    /// #3164 drives into the existing reactivation remedy, plus the subset
+    /// classified <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/>
+    /// whose durable offset equals the tree's offset floor, which issue #3178
+    /// drives into the same remedy for liveness rather than for coverage; see
     /// <see cref="_repairableFloorHolders"/>. It is a filter over what was
     /// already read and measured, not a second pass.
     /// </para>
     /// </remarks>
     private async Task<List<string>> ClassifyFloorHolderPinsAsync(
         string treeId,
-        List<KeyValuePair<string, HybridLogicalClock>> floorHolders,
+        List<WalGcFloorHolderCandidate> unusableHolders,
+        List<WalGcFloorHolderCandidate> offsetHolders,
         int population,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
@@ -4447,15 +4565,33 @@ internal sealed class LatticeWalGcScheduler(
     {
         var classified = 0;
         var repairable = new List<string>();
+        var sampled = unusableHolders.Count + offsetHolders.Count;
 
-        for (var i = 0; i < floorHolders.Count; i++)
+        // The sample's offset list is ascending by offset, so its head IS the
+        // lowest offset this sweep saw. On a tree whose pins were all enumerated
+        // that is the tree's offset floor outright - the same minimum
+        // ComputeMaterialiserOffsetFloorAsync takes, over the same population,
+        // skipping the same -1s, which is why the -1 pins were split off into
+        // their own list rather than ranked alongside.
+        //
+        // Null when no pin constrains an offset floor at all, in which case no
+        // candidate can be admitted on the offset axis and the gate below is
+        // inert. That is the correct reading: if nothing holds an offset floor,
+        // the floor is not what is stopping the trim.
+        long? offsetFloor = offsetHolders.Count > 0 ? offsetHolders[0].Offset : null;
+
+        for (var i = 0; i < sampled; i++)
         {
             if (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
 
-            var consumerId = floorHolders[i].Key;
+            var candidate = i < unusableHolders.Count
+                ? unusableHolders[i]
+                : offsetHolders[i - unusableHolders.Count];
+
+            var consumerId = candidate.ConsumerId;
             var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
             var partitionTag = resolved
                 ? partition.ToString(CultureInfo.InvariantCulture)
@@ -4477,10 +4613,10 @@ internal sealed class LatticeWalGcScheduler(
             // ApplyDurableMaterialiserFloorAsync names a consumer only when its
             // pin is <= Zero. This arm does not: it runs only when the cursor
             // floor reports usable - i.e. precisely when NO dormant pin is
-            // <= Zero - and it samples by lowest frontier, not by usability. So
-            // the pins here are the oldest, which is not the same property at
-            // all, and asserting a coverage hole over them asserted it in the
-            // one population structurally guaranteed not to have one.
+            // <= Zero - and it samples by lowest pin, not by usability. So the
+            // pins here are the lowest, which is not the same property at all,
+            // and asserting a coverage hole over them asserted it in the one
+            // population structurally guaranteed not to have one.
             //
             // The same <= Zero predicate the floor uses is applied per-pin here,
             // against the frontier already in hand. It is not a proxy for the
@@ -4496,7 +4632,7 @@ internal sealed class LatticeWalGcScheduler(
             // touched. Only CheckpointedUncovered makes a compound claim whose
             // second conjunct was never read.
             if (state == WalGcBlockingPinState.CheckpointedUncovered
-                && floorHolders[i].Value > HybridLogicalClock.Zero)
+                && candidate.Frontier > HybridLogicalClock.Zero)
             {
                 state = WalGcBlockingPinState.CheckpointedCoverageUnknown;
             }
@@ -4508,32 +4644,75 @@ internal sealed class LatticeWalGcScheduler(
             RecordBlockingPinState(state, partitionTag, treeTag, tenantTag);
             classified++;
 
-            // Collect the one state a reactivation can repair (issue #3164).
-            // The equality is exact and deliberately not a set: every other
-            // state either has nothing to repair or must not be repaired.
-            // NeverCheckpointed is the dangerous one - its leaf has applied
-            // nothing, so its Zero pin is a correct block rather than a coverage
-            // hole, and driving it toward coverage would convert that block into
-            // a trim entitlement the leaf never earned. Orphaned has no leaf
-            // left to activate and is the bulk sweep's business, NoDurableState
-            // has no checkpoint to make a snapshot from, and Unreadable is an
-            // unknown that must fail closed. CheckpointedCoverageUnknown is the
-            // one the gate above produces: no coverage hole was established, so
-            // driving it could only spend an activation to be told there was
-            // nothing to repair - which is exactly what it did, over four
-            // thousand times, before issue #3168.
+            // Collect the states a reactivation can repair (issue #3164), plus
+            // the one it can advance (issue #3178). Both are exact equalities
+            // and deliberately not a set: every other state either has nothing
+            // to repair or must not be repaired. NeverCheckpointed is the
+            // dangerous one - its leaf has applied nothing, so its Zero pin is a
+            // correct block rather than a coverage hole, and driving it toward
+            // coverage would convert that block into a trim entitlement the leaf
+            // never earned. Orphaned has no leaf left to activate and is the
+            // bulk sweep's business, NoDurableState has no checkpoint to make a
+            // snapshot from, and Unreadable is an unknown that must fail closed.
             if (state == WalGcBlockingPinState.CheckpointedUncovered)
             {
                 repairable.Add(consumerId);
             }
+            else if (state == WalGcBlockingPinState.CheckpointedCoverageUnknown
+                && candidate.Offset >= 0
+                && offsetFloor is { } floor
+                && candidate.Offset == floor)
+            {
+                // Issue #3178. CheckpointedCoverageUnknown is not a coverage
+                // defect and must not be driven as one - that is #3168's finding
+                // and it stands. But the gate above only reaches this state by
+                // way of two facts it did establish: the pin is USABLE (frontier
+                // > Zero) and the leaf HAS durably checkpointed this partition
+                // (ClassifyCheckpoint saw checkpoint >= 0). #3174's own note on
+                // this enum arm names what remains: such a tree's "WAL floor is
+                // held by a pin that is healthy and simply old, which is a
+                // frontier-advance question rather than a coverage one". This is
+                // that question, on the offset axis, and it has an answer.
+                //
+                // Advance requires an activation the leaf does not have. Leaf
+                // projection checkpoints are scanned-through, not applied-through
+                // (issue #2270): replay advances a leaf's checkpoint over entries
+                // it does not own, and taking the MINIMUM over all leaves is what
+                // makes that safe. Scan-through happens only DURING replay, so a
+                // leaf that deactivates freezes its checkpoint at its exit
+                // position. On a converged corpus nothing reactivates it, the
+                // frozen pin is the minimum, and the tree's whole WAL is pinned
+                // by a leaf that has consumed everything addressed to it. That
+                // is a safety argument with no liveness bound, and this is the
+                // bound.
+                //
+                // Narrowed to the floor itself. A pin ABOVE the offset floor is
+                // by definition not what the trim stops at, so driving it spends
+                // an activation to move something that was not in the way - the
+                // exact waste #3168 measured. Equality with the sample's lowest
+                // offset is the discriminator #3168 did not have: its sample had
+                // no usability filter and no floor filter at all.
+                //
+                // Safety is unchanged and is not this gate's to give. The drive
+                // calls DriveStarvedCheckpointAsync, which replays the WAL since
+                // the leaf's own checkpoint and republishes its pin. It cannot
+                // advance a pin past an entry the leaf owns and has not applied,
+                // because the pin is still resolved by ResolveDurablePinForPartition
+                // as min(checkpoint, covered) and that is untouched. No trim
+                // entitlement is granted here; a dormant leaf is merely made to
+                // do the progress it would have made had it been activated.
+                repairable.Add(consumerId);
+            }
 
             logger.LogInformation(
-                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState}, from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. Diagnostic only - it does not change what the pass may trim.",
+                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. Diagnostic, except that a usable, durably-checkpointed pin sitting exactly on the offset floor is driven for liveness (issue #3178) - it does not change what the pass may trim.",
                 consumerId,
                 treeId,
                 partitionTag,
                 state,
-                floorHolders.Count,
+                candidate.Offset,
+                offsetFloor,
+                sampled,
                 population);
         }
 
