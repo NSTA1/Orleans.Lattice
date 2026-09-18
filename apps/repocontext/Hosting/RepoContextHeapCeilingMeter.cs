@@ -37,10 +37,42 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/> is the adherence ratio
 /// directly, and the two are published as separate series rather than as a
 /// pre-divided one so a query can read either alone and neither can drift from the
-/// other. The high-memory-load threshold sits between them: it is the point at which
-/// the collector starts treating the machine as under pressure and changes its own
-/// behaviour, so crossing it explains a change in collection frequency that the
-/// ratio alone does not.
+/// other.
+/// </para>
+/// <para>
+/// <b>The high-load threshold does NOT sit between them, and issue #3133 is what
+/// that mistake cost.</b> This type previously claimed - in these remarks and in the
+/// threshold gauge's own exported description - that the threshold sits below the
+/// limit, as an early-warning point crossed before the ceiling is reached. It is
+/// false by construction, because the runtime computes the two against
+/// <i>different denominators</i>:
+/// <list type="bullet">
+/// <item><description>
+/// <see cref="GCMemoryInfo.HighMemoryLoadThresholdBytes"/> is a fraction (90% by
+/// default) of the <i>total physical or cgroup memory</i> the runtime can see.
+/// </description></item>
+/// <item><description>
+/// <see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/> is the <i>GC hard limit</i>,
+/// which in a container defaults to 75% of that same cgroup limit.
+/// </description></item>
+/// </list>
+/// So the promised ordering holds only where the hard-limit percentage exceeds 90.
+/// At the container default of 75 the threshold sits <i>above</i> the limit - on the
+/// 12 GiB deployment, 10.80 GiB against 9.00 GiB - and the hard limit therefore binds
+/// first. The threshold can never be crossed: the process OOMs with the signal
+/// reading "not under pressure", which is precisely backwards, and any alert written
+/// against the crossing is silently dead rather than merely quiet.
+/// </para>
+/// <para>
+/// <b>The relationship is published, not asserted.</b> Because the ordering depends
+/// on a runtime configuration this type cannot see, stating it in prose can only ever
+/// be a guess that is right on some deployments. <see cref="ReachableGaugeName"/>
+/// derives the comparison at scrape time from the same reading, so an operator reads
+/// whether the signal can fire instead of recomputing two percentages against a
+/// cgroup limit to discover that it cannot. Note this makes the honest claim on a
+/// developer machine too, where no hard limit is configured, the two denominators
+/// coincide, and the threshold genuinely does sit below the limit - which is exactly
+/// why a test asserting the ordering passed locally for as long as it did.
 /// </para>
 /// <para>
 /// <b>Zero semantics, stated because two of these read zero for different reasons.</b>
@@ -87,6 +119,19 @@ public sealed class RepoContextHeapCeilingMeter : IDisposable
     /// </summary>
     public const string HighLoadThresholdBytesGaugeName =
         "lattice_repocontext_heap_high_load_threshold_bytes";
+
+    /// <summary>
+    /// Whether the high-load threshold is reachable before the heap limit binds:
+    /// <c>1</c> when it sits at or below <see cref="LimitBytesGaugeName"/> and can
+    /// therefore fire, <c>0</c> when it sits above and is dead.
+    /// </summary>
+    /// <remarks>
+    /// Published because the ordering is a property of the deployment's GC
+    /// configuration and not of this code, so it can only be measured, never
+    /// asserted. See the remarks on this type and issue #3133.
+    /// </remarks>
+    public const string ReachableGaugeName =
+        "lattice_repocontext_heap_high_load_threshold_reachable";
 
     // Declared above the instruments it constructs, and all three are built from this
     // field, so reordering throws at initialisation rather than publishing an
@@ -137,10 +182,36 @@ public sealed class RepoContextHeapCeilingMeter : IDisposable
             unit: "By",
             description:
                 "Commitment at which the garbage collector begins treating memory as under pressure and "
-                + "changes its own behaviour. It sits below "
+                + "changes its own behaviour. It is NOT an early-warning point below "
                 + LimitBytesGaugeName
-                + " and explains a change in collection frequency that the adherence ratio alone does "
-                + "not. Like the limit, it is populated before any collection has run.");
+                + ": the runtime computes the two against different denominators - this is a fraction "
+                + "(90% by default) of total physical or cgroup memory, while the limit is the GC hard "
+                + "limit, which in a container defaults to 75% of that same figure - so it frequently "
+                + "sits ABOVE the limit, and where it does the limit binds first and this threshold can "
+                + "never be crossed. Read "
+                + ReachableGaugeName
+                + " to learn which case a deployment is in rather than recomputing the percentages. "
+                + "Like the limit, it is populated before any collection has run.");
+        _meter.CreateObservableGauge(
+            ReachableGaugeName,
+            () =>
+            {
+                // One reading for both sides, so the comparison can never be drawn
+                // across two samples taken either side of a collection.
+                var ceiling = _read();
+                return ceiling.HighLoadThresholdBytes <= ceiling.LimitBytes ? 1d : 0d;
+            },
+            description:
+                "Whether the pressure threshold can fire before the heap limit binds: 1 when "
+                + HighLoadThresholdBytesGaugeName
+                + " sits at or below "
+                + LimitBytesGaugeName
+                + ", 0 when it sits above and is therefore unreachable. A 0 means any alert on the "
+                + "threshold crossing is dead - it returns no data rather than erroring - and that the "
+                + "process will reach its hard limit with the pressure signal still reading as uncrossed. "
+                + "Derived at scrape time from a single reading rather than asserted here, because the "
+                + "ordering depends on the deployment's GC hard-limit percentage, which this process "
+                + "cannot know in advance.");
     }
 
     /// <inheritdoc />
