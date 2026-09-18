@@ -476,7 +476,9 @@ Note the last two dashboard entries are **two separate enrolment lists for adjac
 
 ```powershell
 # enrolment (repository-wide) - is my package covered by a doc fixture?
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverageEnrolmentTests"
+# Run through the protected runner: a bare filter that matches nothing exits 0 and
+# reads as a pass (#3017), which is exactly the failure this gate exists to prevent.
+pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture MetricsDocCoverageEnrolmentTests -Project test/lattice
 # substantive (per package) - does my instrument have a doc row?
 dotnet test test/<pkg>/<Project>.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverage"
 ```

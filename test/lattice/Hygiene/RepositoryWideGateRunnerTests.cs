@@ -116,13 +116,15 @@ public sealed class RepositoryWideGateRunnerTests
             RegexOptions.Compiled);
 
     /// <summary>
-    /// Matches a raw <c>dotnet test --filter</c> that selects a fixture by name. Anchored on
-    /// the <c>Tests</c> suffix so an ordinary category filter such as
-    /// <c>--filter "TestCategory!=Chaos"</c> is not swept up: that one cannot be vacuous in
-    /// the way a mistyped fixture name is.
+    /// Matches a raw <c>dotnet test --filter</c> that selects a fixture by name. The captured
+    /// name is checked against the gate table before it is treated as an offence, because the
+    /// documents legitimately show bare filters for ordinary per-package fixtures; only a
+    /// repository-wide gate must carry the runner's protection.
     /// </summary>
     private static readonly Regex BareGateFilter =
-        new(@"dotnet test .*--filter\s+""FullyQualifiedName~[A-Za-z0-9_.]*Tests""", RegexOptions.Compiled);
+        new(
+            @"dotnet test .*--filter\s+""FullyQualifiedName~(?<fixture>[A-Za-z0-9_.]+)""",
+            RegexOptions.Compiled);
 
     private static IReadOnlyList<string> AgentPlaybooks()
     {
@@ -130,6 +132,22 @@ public sealed class RepositoryWideGateRunnerTests
         return Directory.Exists(directory)
             ? Directory.GetFiles(directory, "*.agent.md", SearchOption.TopDirectoryOnly)
             : Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Every document that criterion 2 of #3017 names: the agent playbooks plus the
+    /// instructions file that owns the gate table.
+    /// </summary>
+    private static IReadOnlyList<string> GateDocuments()
+    {
+        var documents = new List<string>(AgentPlaybooks());
+        var instructions = Path.Combine(RepoRoot, InstructionsPath.Replace('/', Path.DirectorySeparatorChar));
+        if (File.Exists(instructions))
+        {
+            documents.Add(instructions);
+        }
+
+        return documents;
     }
 
     private static IReadOnlyList<(string File, string Fixture, string Project)> DocumentedAgentInvocations()
@@ -615,19 +633,44 @@ public sealed class RepositoryWideGateRunnerTests
     }
 
     /// <summary>
-    /// The agent playbooks must not reach a gate fixture through a hand-composed
+    /// No document may reach a <i>repository-wide gate</i> fixture through a hand-composed
     /// <c>dotnet test --filter</c>, which exits 0 when it matches nothing.
     /// </summary>
+    /// <remarks>
+    /// The offence is keyed on the gate table rather than on the shape of the name, because
+    /// these documents legitimately show bare filters for ordinary per-package fixtures - the
+    /// worked example that runs one grain's tests is not a gate and cannot be vacuous in the
+    /// way a mistyped gate name is. Only a fixture the runner would itself schedule has to
+    /// carry the runner's protection.
+    /// </remarks>
     [Test]
-    public void Agent_playbooks_do_not_invoke_gate_fixtures_through_a_bare_filter()
+    public void Gate_documents_do_not_invoke_gate_fixtures_through_a_bare_filter()
     {
+        var gateFixtures = EmitRunList()
+            .Select(entry => entry.Fixture)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.That(
+            gateFixtures,
+            Is.Not.Empty,
+            "The emitted run list named no gate fixtures, so this test would accept any bare "
+                + "filter. That is a broken run list, not a clean set of documents.");
+
         var offenders = new List<string>();
-        foreach (var path in AgentPlaybooks())
+        foreach (var path in GateDocuments())
         {
             foreach (var line in File.ReadAllLines(path))
             {
                 var match = BareGateFilter.Match(line);
-                if (match.Success)
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                // A filter is a substring match, so a qualified name reaches the gate too.
+                var named = match.Groups["fixture"].Value;
+                var simple = named[(named.LastIndexOf('.') + 1)..];
+                if (gateFixtures.Contains(simple))
                 {
                     offenders.Add($"{Path.GetFileName(path)}: {line.Trim()}");
                 }
@@ -637,10 +680,11 @@ public sealed class RepositoryWideGateRunnerTests
         Assert.That(
             offenders,
             Is.Empty,
-            "An agent playbook invokes a gate fixture through a raw 'dotnet test --filter'. "
-                + "That exits 0 when the filter matches nothing (#3017), so a mistyped fixture "
-                + $"name reads as a passing gate. Route it through {RunnerRelativePath}, which "
-                + "reports the executed count and refuses zero:"
+            "A document invokes a repository-wide gate fixture through a raw "
+                + "'dotnet test --filter'. That exits 0 when the filter matches nothing "
+                + "(#3017), so a mistyped fixture name reads as a passing gate. Route it "
+                + $"through {RunnerRelativePath}, which reports the executed count and "
+                + "refuses zero:"
                 + Environment.NewLine
                 + string.Join(Environment.NewLine, offenders));
     }
