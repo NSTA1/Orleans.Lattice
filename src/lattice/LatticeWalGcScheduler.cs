@@ -406,8 +406,77 @@ internal sealed class LatticeWalGcScheduler(
     /// ascending sample several sweeps before its cooldown expires.
     /// </para>
     /// </remarks>
-    private readonly Dictionary<string, IReadOnlyList<string>> _repairableFloorHolders =
+    private readonly Dictionary<string, FloorHolderRepairSet> _repairableFloorHolders =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A classifying sweep's repairable floor holders, carrying with them the
+    /// subset whose admission was granted on the <b>offset</b> axis.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two admission branches feed one list (see
+    /// <see cref="ClassifyFloorHolderPinsAsync"/>), and they differ in what
+    /// would count as the drive having worked. The leaf's own
+    /// <see cref="LeafStarvationDriveOutcome.Lifted"/> means the leaf's pins are
+    /// <i>usable</i>, not that any of them <i>moved</i>. For the issue #3164
+    /// holder those coincide: its pin sits at the sentinel, so making it usable
+    /// is moving it. For the issue #3178 holder the pin was already usable and
+    /// already on the offset floor, so the verdict is near-vacuous on that
+    /// population (issue #3185).
+    /// </para>
+    /// <para>
+    /// Two independent reasons, either sufficient. <b>Scope:</b> all three
+    /// inputs to that verdict are leaf-wide - the advance is any partition's,
+    /// the coverage scan is every partition's, and the empty-WAL release count
+    /// is the leaf's - while the offset floor is held by <i>one</i> partition,
+    /// so a sibling partition advancing satisfies it while the floor holder sits
+    /// bit-identical. <b>Quantity:</b> the published pin is
+    /// <c>min(checkpoint, covered)</c>, so even within one partition a genuine
+    /// checkpoint advance does not entail that the pin the floor is computed
+    /// from moved at all.
+    /// </para>
+    /// <para>
+    /// Both are observed together, and <b>Scope</b> is the one that was
+    /// confirmed. On the tree that produced issue #3185 three consecutive drives
+    /// each reported the leaf-wide success verdict while the floor-holding
+    /// partition's pin stayed not merely close but byte-identical, and that
+    /// partition's own classification reported no coverage deficit. Settling
+    /// which partition had moved took three drives, a per-partition telemetry
+    /// scrape and a source audit of the teardown capture gate, and established
+    /// only what a per-partition verdict would have reported in a single pass:
+    /// the floor holder's checkpoint did not advance, and the leaf-wide flag was
+    /// carried by a sibling. That cost, not any claim about trimming, is the
+    /// argument for grading the admission on its own axis.
+    /// </para>
+    /// <para>
+    /// <b>This does not make the floor advance, and must not be read as doing
+    /// so.</b> Why the floor holder's checkpoint stays put is a separate defect
+    /// on a separate axis, deliberately not absorbed here. What changes is that
+    /// the remedy stops recording a repair it did not make, so the population
+    /// stays eligible and terminates at a loud <c>abandoned</c> report instead
+    /// of a silent <c>healed</c> one.
+    /// </para>
+    /// <para>
+    /// Carrying the reason with the list is what keeps the two separable at the
+    /// drive. Deriving it there from the pin's offset would be one field and no
+    /// plumbing, and would be wrong: it would silently re-verdict a
+    /// <c>CheckpointedUncovered</c> holder that happens to carry a non-negative
+    /// offset, which is a shape
+    /// <c>FlushDurableMaterialiserFrontierAsync</c> documents as reachable, and
+    /// the branch whose success predicate is already sound is precisely the one
+    /// that must not move.
+    /// </para>
+    /// </remarks>
+    /// <param name="ConsumerIds">Every consumer the classification admitted, in sample order.</param>
+    /// <param name="RequireOffsetAdvance">
+    /// The subset admitted on the offset axis, for which only a durable
+    /// checkpoint offset that actually advanced counts as the drive having
+    /// worked.
+    /// </param>
+    private readonly record struct FloorHolderRepairSet(
+        IReadOnlyList<string> ConsumerIds,
+        IReadOnlySet<string> RequireOffsetAdvance);
 
     /// <summary>
     /// How long a consumer's budget survives after the floor stops reporting it
@@ -662,6 +731,18 @@ internal sealed class LatticeWalGcScheduler(
     /// credit and the retirement are no longer the same event and the counter
     /// needs its own idempotence (issue #3175).
     /// </param>
+    /// <param name="OffsetAdvanceOwed">
+    /// Whether this consumer's most recent drive was graded on the offset axis
+    /// and failed to move its durable pin offset (issue #3185). Set only for a
+    /// consumer whose caller asked for that grading, and it withholds the heal
+    /// credit rather than accelerating anything: the retry cooldown, the attempt
+    /// ceiling and the re-arm backoff are all untouched, so the consumer merely
+    /// rejoins the ordinary eligible pool and walks its budget down to
+    /// <c>abandoned</c> with its loud report. Withholding is strictly the
+    /// slower path, because crediting a heal also advances
+    /// <see cref="_reactivationHealEpoch"/>, which collapses every abandoned
+    /// consumer's backoff estate-wide.
+    /// </param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -673,7 +754,8 @@ internal sealed class LatticeWalGcScheduler(
         int Refunds = 0,
         long HealEpochAtAbandonment = 0,
         bool PinStateClassified = false,
-        bool HealCredited = false);
+        bool HealCredited = false,
+        bool OffsetAdvanceOwed = false);
 
     /// <summary>
     /// What a single reactivation touch established about the blocking leaf.
@@ -2064,13 +2146,13 @@ internal sealed class LatticeWalGcScheduler(
                     // and retires it.
                     if (swept is not null)
                     {
-                        if (swept.Count == 0)
+                        if (swept.Value.ConsumerIds.Count == 0)
                         {
                             _repairableFloorHolders.Remove(treeId);
                         }
                         else
                         {
-                            _repairableFloorHolders[treeId] = swept;
+                            _repairableFloorHolders[treeId] = swept.Value;
                         }
                     }
                 }
@@ -2116,11 +2198,17 @@ internal sealed class LatticeWalGcScheduler(
                 {
                     logger.LogInformation(
                         "WAL GC is driving {Count} dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers. Two populations qualify. A sampled holder whose own pin frontier is at or below the blocking sentinel - which the floor skipped because its consumer is present in the live registry - is classified checkpointed_uncovered, and a proven durable checkpoint over an unusable pin is a coverage hole whose repair can only run inside an activation the dormant leaf does not have. A sampled holder whose frontier is usable is classified checkpointed_coverage_unknown and asserts no coverage hole; it is driven only when its durable checkpoint offset sits exactly on this tree's offset floor, because a scanned-through checkpoint advances only during replay and so freezes when the leaf deactivates, and that advance likewise needs an activation the dormant leaf does not have (issues #3168, #3178). A coverage_unknown holder above the floor is still not driven.",
-                        repairableHolders.Count,
+                        repairableHolders.ConsumerIds.Count,
                         treeId);
 
                     await ObserveAndHealBlockedTreeAsync(
-                        treeId, repairableHolders, treeTag, tenantTag, stoppingToken, preClassified: true)
+                        treeId,
+                        repairableHolders.ConsumerIds,
+                        treeTag,
+                        tenantTag,
+                        stoppingToken,
+                        preClassified: true,
+                        requireOffsetAdvance: repairableHolders.RequireOffsetAdvance)
                         .ConfigureAwait(false);
                 }
                 else
@@ -2872,13 +2960,23 @@ internal sealed class LatticeWalGcScheduler(
     /// any amount of touching can reach.
     /// </para>
     /// </remarks>
+    /// <param name="requireOffsetAdvance">
+    /// The subset of <paramref name="blockingConsumerIds"/> whose drive is
+    /// graded on its own durable pin offset advancing rather than on the leaf's
+    /// verdict, because the leaf's verdict is leaf-wide and reports its pins
+    /// usable rather than moved, while these consumers were admitted precisely
+    /// for holding a usable pin on the offset floor (issue #3185). Null - the
+    /// floor-blocked arm's caller - grades every drive on the leaf's verdict, as
+    /// before.
+    /// </param>
     private async Task ObserveAndHealBlockedTreeAsync(
         string treeId,
         IReadOnlyList<string> blockingConsumerIds,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
         CancellationToken stoppingToken,
-        bool preClassified = false)
+        bool preClassified = false,
+        IReadOnlySet<string>? requireOffsetAdvance = null)
     {
         var now = _time.GetUtcNow();
 
@@ -3159,11 +3257,16 @@ internal sealed class LatticeWalGcScheduler(
         observation = observation with { LastAnyAttempt = now };
         _blockedConsumers[treeId] = observation;
 
-        var touches = new Task<ReactivationOutcome>[touching.Count];
+        var touches = new Task<ReactivationTouchResult>[touching.Count];
         for (var i = 0; i < touching.Count; i++)
         {
             touches[i] = TryReactivateBlockedLeafAsync(
-                treeId, touching[i], treeTag, tenantTag, stoppingToken);
+                treeId,
+                touching[i],
+                treeTag,
+                tenantTag,
+                requireOffsetAdvance?.Contains(touching[i]) == true,
+                stoppingToken);
         }
 
         var outcomes = await Task.WhenAll(touches).ConfigureAwait(false);
@@ -3193,22 +3296,34 @@ internal sealed class LatticeWalGcScheduler(
             // was counted, and the other three reported a structural zero that
             // read as a measured one.
             RecordBlockedLeafReactivation(
-                ReactivationOutcomeTag(outcomes[i]), treeTag, tenantTag);
-
-            if (!IsRefundableReactivationOutcome(outcomes[i]))
-            {
-                continue;
-            }
+                ReactivationOutcomeTag(outcomes[i].Outcome), treeTag, tenantTag);
 
             var current = budgets[touching[i]];
-            if (current.Refunds < MaxReactivationRefunds)
+
+            // Carry the drive's own verdict on the offset axis into the budget,
+            // where the heal credit reads it (issue #3185). Only ever written
+            // for a consumer the caller graded on that axis, so the
+            // floor-blocked arm's budgets are untouched. This deliberately
+            // records the LATEST touch rather than latching: a drive that does
+            // advance the floor holder's pin clears the debt and re-admits the
+            // tree to the heal credit, which is what makes the arm a measurement
+            // rather than a one-way trapdoor.
+            if (requireOffsetAdvance is not null)
             {
-                budgets[touching[i]] = current with
+                current = current with { OffsetAdvanceOwed = outcomes[i].OffsetAdvanceOwed };
+            }
+
+            if (IsRefundableReactivationOutcome(outcomes[i].Outcome)
+                && current.Refunds < MaxReactivationRefunds)
+            {
+                current = current with
                 {
                     Attempts = current.Attempts - 1,
                     Refunds = current.Refunds + 1,
                 };
             }
+
+            budgets[touching[i]] = current;
         }
     }
 
@@ -3360,6 +3475,18 @@ internal sealed class LatticeWalGcScheduler(
     /// idempotence the shared event used to provide, so a consumer is still
     /// credited at most once per episode however many times this runs.
     /// </para>
+    /// <para>
+    /// <b>A consumer that owes an offset advance is not credited.</b> The heal
+    /// this counts is "the leaf stopped blocking", inferred from the floor
+    /// becoming usable. For a consumer admitted on the offset axis that
+    /// inference does not hold: it was admitted <i>because</i> its pin was
+    /// usable and on the floor, so the floor reporting usable is the condition
+    /// it was admitted under rather than evidence it left. Its drive answers the
+    /// question directly by reading the pin either side, and while that answer
+    /// is "it did not move" the credit is withheld (issue #3185) - which returns
+    /// it to the ordinary eligible pool under the unchanged cooldown, never to
+    /// an immediate retry.
+    /// </para>
     /// </remarks>
     private void CreditHealedConsumers(
         BlockedConsumerObservation observation,
@@ -3370,7 +3497,8 @@ internal sealed class LatticeWalGcScheduler(
 
         foreach (var (consumerId, budget) in observation.Budgets)
         {
-            if (budget.Attempts > 0 && !budget.Abandoned && !budget.HealCredited)
+            if (budget.Attempts > 0 && !budget.Abandoned && !budget.HealCredited
+                && !budget.OffsetAdvanceOwed)
             {
                 // Advance the heal epoch before recording. A credited heal is
                 // direct evidence that a blocked leaf managed to activate,
@@ -3662,11 +3790,17 @@ internal sealed class LatticeWalGcScheduler(
     /// and the leaf was re-selected on every cooldown forever.
     /// </para>
     /// </remarks>
-    private async Task<ReactivationOutcome> TryReactivateBlockedLeafAsync(
+    /// <param name="requireOffsetAdvance">
+    /// When true, grade this drive on <paramref name="blockingConsumerId"/>'s
+    /// own durable pin offset advancing rather than on the leaf's verdict
+    /// (issue #3185).
+    /// </param>
+    private async Task<ReactivationTouchResult> TryReactivateBlockedLeafAsync(
         string treeId,
         string blockingConsumerId,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
+        bool requireOffsetAdvance,
         CancellationToken stoppingToken)
     {
         var factory = grainFactory;
@@ -3676,11 +3810,20 @@ internal sealed class LatticeWalGcScheduler(
             // property of the id, so it would resolve to nothing again on every
             // retry - refunding it would produce an unbounded attempted counter
             // with no touches behind it.
-            return ReactivationOutcome.Unresolvable;
+            return new ReactivationTouchResult(ReactivationOutcome.Unresolvable, OffsetAdvanceOwed: false);
         }
 
         try
         {
+            // Read the pin the admission was granted against, before the drive
+            // moves anything (issue #3185). Deliberately this consumer's own
+            // durable offset and not the leaf's: the consumer id carries the
+            // partition, and it is one partition's pin that holds the floor,
+            // whereas every input to the leaf's own verdict is leaf-wide.
+            var preOffset = requireOffsetAdvance
+                ? await TryReadDurablePinOffsetAsync(treeId, blockingConsumerId).ConfigureAwait(false)
+                : null;
+
             // Drive the leaf's replay rather than merely touching it. A
             // read-only call is enough ONLY for a dormant leaf; a resident one
             // answers it immediately and replays nothing, which is the whole of
@@ -3691,19 +3834,87 @@ internal sealed class LatticeWalGcScheduler(
             var leaf = factory.GetGrain<IBPlusLeafGrain>(leafGrainId);
             var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
 
+            // Grade the drive on the axis its admission was granted on (issue
+            // #3185). The leaf's own verdict is not wrong, it is answering a
+            // different question: Lifted means the leaf's pins are USABLE, and
+            // all three of its inputs are leaf-wide - any partition's advance,
+            // every partition's coverage, the leaf's empty-WAL releases. A
+            // consumer admitted by the #3178 clause was admitted precisely for
+            // holding a usable pin, on one partition, sitting on the floor, so
+            // that verdict can be honestly true of the leaf while this pin has
+            // not moved a byte. The published pin is min(checkpoint, covered),
+            // so even a genuine advance of this partition's checkpoint does not
+            // entail that the quantity the floor is computed from moved.
+            //
+            // This grades the drive; it does not explain it. A pin that does not
+            // advance under a drive reporting leaf-wide success may have nothing
+            // left to replay, may not be reached before the leaf tears down, or
+            // may advance without persisting - and telling those apart is what
+            // this arm makes possible rather than what it asserts. Read
+            // no_advance as "driving did not move this floor holder", and a
+            // consumer that reaches abandoned on this arm as one driving is
+            // provably unable to help.
+            //
+            // Fail-closed on an unreadable offset either side: not being able to
+            // prove the pin moved is treated as it not having moved, because the
+            // cost of the wrong answer is asymmetric. A false 'did not advance'
+            // costs a retry under an unchanged cooldown; a false 'advanced' is
+            // the bug being fixed, and it is permanent.
+            //
+            // Cost: two extra pin reads per graded drive, and they are the
+            // measurement - there is no cheaper source for a durable pin offset
+            // than the grain that owns it. Bounded on both axes: at most
+            // MaxReactivationTouchesPerPass drives per pass, and each consumer
+            // is re-driven no sooner than ReactivationRetryCooldown. Against a
+            // drive that replays the WAL forward and stamps snapshot coverage,
+            // two key reads do not register.
+            var recorded = drive;
+            var offsetAdvanceOwed = false;
+            if (requireOffsetAdvance)
+            {
+                var postOffset = await TryReadDurablePinOffsetAsync(treeId, blockingConsumerId)
+                    .ConfigureAwait(false);
+                var advanced = preOffset is { } before && postOffset is { } after && after > before;
+                offsetAdvanceOwed = !advanced;
+
+                // Only ever downgrades the success arm. NotDriven, TimedOut,
+                // MemoryRefused and AlreadyDriving each report something the
+                // leaf knows and this read does not, and folding them into
+                // no_advance would destroy exactly the distinctions the arms
+                // exist to draw - NotDriven in particular gates orphan
+                // retirement below.
+                if (!advanced && drive == LeafStarvationDriveOutcome.Lifted)
+                {
+                    recorded = LeafStarvationDriveOutcome.NoAdvance;
+                }
+
+                logger.LogInformation(
+                    "WAL GC drove leaf {Leaf} on tree {Tree} for floor-holding pin {Consumer} and graded it on the offset axis: the leaf reported {Drive}, and this consumer's own durable pin offset went from {PinOffsetBefore} to {PinOffsetAfter}, recorded as {Recorded}. The leaf's verdict is leaf-wide and reports its pins usable rather than moved, so only this pin advancing is evidence the tree's offset floor can move. A drive that does not advance it withholds the heal credit and stays eligible under the unchanged retry cooldown until its budget is spent and it is reported abandoned (issue #3185).",
+                    leafGrainId,
+                    treeId,
+                    blockingConsumerId,
+                    drive,
+                    preOffset,
+                    postOffset,
+                    recorded);
+            }
+
             // Record what the drive actually achieved, per leaf. 'attempted' is
             // the cost series and says only that a call was issued; these five
             // arms partition what came of it. Without them a sweep that repairs
             // nothing is indistinguishable from one that repairs every leaf it
             // reaches while the tree stays blocked for an unrelated reason.
-            RecordBlockedLeafReactivation(DriveOutcomeTag(drive), treeTag, tenantTag);
+            RecordBlockedLeafReactivation(DriveOutcomeTag(recorded), treeTag, tenantTag);
 
-            logger.LogInformation(
-                "WAL GC drove leaf {Leaf} on tree {Tree} to clear a blocking durable materialiser pin ({Consumer}); the drive replays the WAL forward and stamps snapshot coverage, and reported {Drive}. Only 'Lifted' means the pin now resolves to a real offset.",
-                leafGrainId,
-                treeId,
-                blockingConsumerId,
-                drive);
+            if (!requireOffsetAdvance)
+            {
+                logger.LogInformation(
+                    "WAL GC drove leaf {Leaf} on tree {Tree} to clear a blocking durable materialiser pin ({Consumer}); the drive replays the WAL forward and stamps snapshot coverage, and reported {Drive}. Only 'Lifted' means the leaf's pins are now usable - on this arm the pin was at the blocking sentinel, so becoming usable is the objective.",
+                    leafGrainId,
+                    treeId,
+                    blockingConsumerId,
+                    drive);
+            }
 
             // NotDriven means the leaf has no tree id bound, which proves its
             // durable state was cleared after the pin was registered - a
@@ -3717,10 +3928,10 @@ internal sealed class LatticeWalGcScheduler(
             if (drive == LeafStarvationDriveOutcome.NotDriven)
             {
                 await RetireOrphanedPinAsync(treeId, blockingConsumerId).ConfigureAwait(false);
-                return ReactivationOutcome.Orphaned;
+                return new ReactivationTouchResult(ReactivationOutcome.Orphaned, offsetAdvanceOwed);
             }
 
-            return ReactivationOutcome.Completed;
+            return new ReactivationTouchResult(ReactivationOutcome.Completed, offsetAdvanceOwed);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -3748,7 +3959,7 @@ internal sealed class LatticeWalGcScheduler(
                 treeId,
                 blockingConsumerId);
 
-            return ReactivationOutcome.Undelivered;
+            return new ReactivationTouchResult(ReactivationOutcome.Undelivered, requireOffsetAdvance);
         }
         catch (Exception ex)
         {
@@ -3759,7 +3970,75 @@ internal sealed class LatticeWalGcScheduler(
                 treeId,
                 blockingConsumerId);
 
-            return ReactivationOutcome.Faulted;
+            return new ReactivationTouchResult(ReactivationOutcome.Faulted, requireOffsetAdvance);
+        }
+    }
+
+    /// <summary>
+    /// One reactivation touch's outcome, together with whether it left the
+    /// consumer owing an offset advance (issue #3185).
+    /// </summary>
+    /// <param name="Outcome">What became of the touch, on the axis the counters partition.</param>
+    /// <param name="OffsetAdvanceOwed">
+    /// Whether the touch was graded on the offset axis and failed to move the
+    /// consumer's own durable pin offset. Always false for a caller that did not
+    /// ask for that grading, and true on a faulted or undelivered touch that did
+    /// - the advance was not observed, and not observing it is treated as it not
+    /// having happened.
+    /// </param>
+    private readonly record struct ReactivationTouchResult(
+        ReactivationOutcome Outcome,
+        bool OffsetAdvanceOwed);
+
+    /// <summary>
+    /// Reads one materialiser consumer's durable pin offset, on the same axis
+    /// the tree's offset floor is computed from.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reads the consumer's authoritative shard key only. That is not an
+    /// approximation of the floor's own read: <c>ReadDurablePinOffsetsAsync</c>
+    /// resolves a consumer's offset as the value at its authoritative key
+    /// whenever one is published there, falling back to the minimum across the
+    /// other keys only when it is not - and a consumer that reached this path
+    /// was classified from a pin read at that key, so it is published there by
+    /// construction.
+    /// </para>
+    /// <para>
+    /// Best-effort and fail-closed. Any fault, a missing grain factory, or an
+    /// absent entry returns null, which the caller reads as "the advance was not
+    /// proved" and therefore as not having happened. That direction is the safe
+    /// one: it costs a retry under the unchanged cooldown, where the opposite
+    /// error is the permanent false success this exists to remove.
+    /// </para>
+    /// </remarks>
+    private async Task<long?> TryReadDurablePinOffsetAsync(string treeId, string consumerId)
+    {
+        var factory = grainFactory;
+        if (factory is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var shardCount = BPlusTree.Grains.WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+            var key = BPlusTree.Grains.WalMaterialiserPinRouting.ShardKey(treeId, consumerId, shardCount);
+            var offsets = await factory.GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(key)
+                .GetPinOffsetsAsync()
+                .ConfigureAwait(false);
+
+            return offsets is not null && offsets.TryGetValue(consumerId, out var offset) ? offset : null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read the durable pin offset for consumer {Consumer} on tree {Tree} while grading a reactivation drive; the drive is graded as not having advanced it.",
+                consumerId,
+                treeId);
+
+            return null;
         }
     }
 
@@ -3905,7 +4184,7 @@ internal sealed class LatticeWalGcScheduler(
     /// issue #2772 rebuilt one level up. Do not collapse this to a list.
     /// </para>
     /// </remarks>
-    private async Task<IReadOnlyList<string>?> SweepOrphanedMaterialiserPinsAsync(
+    private async Task<FloorHolderRepairSet?> SweepOrphanedMaterialiserPinsAsync(
         string treeId,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
@@ -4045,7 +4324,7 @@ internal sealed class LatticeWalGcScheduler(
         // than the floor this sweep is about to leave behind. Sited above the
         // empty-population return so that a tree holding no pins at all still
         // records a measured (0, 0) coverage rather than an absence.
-        List<string>? repairable = null;
+        FloorHolderRepairSet? repairable = null;
         if (unusableHolders is not null && offsetHolders is not null)
         {
             repairable = await ClassifyFloorHolderPinsAsync(
@@ -4554,7 +4833,7 @@ internal sealed class LatticeWalGcScheduler(
     /// already read and measured, not a second pass.
     /// </para>
     /// </remarks>
-    private async Task<List<string>> ClassifyFloorHolderPinsAsync(
+    private async Task<FloorHolderRepairSet> ClassifyFloorHolderPinsAsync(
         string treeId,
         List<WalGcFloorHolderCandidate> unusableHolders,
         List<WalGcFloorHolderCandidate> offsetHolders,
@@ -4565,6 +4844,14 @@ internal sealed class LatticeWalGcScheduler(
     {
         var classified = 0;
         var repairable = new List<string>();
+
+        // Lazily allocated. The offset-axis branch below admits nothing on the
+        // overwhelming majority of sweeps - most classified holders are either
+        // unusable or not on the floor - and this method runs per tree per
+        // classifying sweep, so an unconditional set would be a per-sweep
+        // allocation to hold nothing. The empty case is served by a shared
+        // singleton instead.
+        HashSet<string>? requireOffsetAdvance = null;
         var sampled = unusableHolders.Count + offsetHolders.Count;
 
         // The sample's offset list is ascending by offset, so its head IS the
@@ -4701,7 +4988,18 @@ internal sealed class LatticeWalGcScheduler(
                 // as min(checkpoint, covered) and that is untouched. No trim
                 // entitlement is granted here; a dormant leaf is merely made to
                 // do the progress it would have made had it been activated.
+                //
+                // Admitted on the offset axis, and recorded as such (issue
+                // #3185). The leaf's own verdict cannot grade this admission.
+                // It is leaf-wide on all three of its inputs while the floor is
+                // held by this one partition, and it reports the leaf's pins
+                // usable rather than moved - which this candidate's pin already
+                // was, by the gate directly above. Only this consumer's own
+                // durable pin offset moving is evidence that anything happened,
+                // so the drive is told to read it either side.
                 repairable.Add(consumerId);
+                requireOffsetAdvance ??= new HashSet<string>(StringComparer.Ordinal);
+                requireOffsetAdvance.Add(consumerId);
             }
 
             logger.LogInformation(
@@ -4721,8 +5019,15 @@ internal sealed class LatticeWalGcScheduler(
         RecordFloorHolderClassification(
             LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, Math.Max(0, population - classified));
 
-        return repairable;
+        return new FloorHolderRepairSet(repairable, requireOffsetAdvance ?? NoOffsetAdvanceRequired);
     }
+
+    /// <summary>
+    /// The shared empty admission set handed to every sweep that admitted no
+    /// offset-axis holder, so the common case costs no allocation.
+    /// </summary>
+    private static readonly IReadOnlySet<string> NoOffsetAdvanceRequired =
+        new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Records one <see cref="LatticeMetrics.WalGcFloorHolderClassification"/>
