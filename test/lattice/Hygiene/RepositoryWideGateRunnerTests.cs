@@ -650,6 +650,17 @@ public sealed class RepositoryWideGateRunnerTests
             .Select(entry => entry.Fixture)
             .ToHashSet(StringComparer.Ordinal);
 
+        // The runner's default run list is the metric-gate table only. The six standard
+        // content gates (em-dash, mojibake, docs-snippet, and so on) are repository-wide
+        // gates too, and the documents reach them through the runner's -Fixture mode, so
+        // the protected set is the union. This also ratchets: once a document routes a
+        // gate through the runner, that gate's name joins the set and cannot be reverted
+        // to a bare filter without failing here.
+        foreach (var (_, fixture, _) in DocumentedAgentInvocations())
+        {
+            gateFixtures.Add(fixture);
+        }
+
         Assert.That(
             gateFixtures,
             Is.Not.Empty,
