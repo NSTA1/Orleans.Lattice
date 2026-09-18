@@ -223,25 +223,7 @@ public sealed class LatticeWalGc(
         }
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
-        // Floor the trim point under the durable leaf-materialiser pins for
-        // any leaf MISSING from the in-memory registry. This survives a full
-        // silo/cluster restart that wiped the registry: a forward consumer
-        // (e.g. the replication shipper) re-reports its durably-advanced
-        // cursor eagerly, but dormant leaves re-register only lazily, so
-        // without this floor the GC would trim past a leaf's durable
-        // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
-        var floorResult = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, partitions, cancellationToken).ConfigureAwait(false);
-        var cursorBlocked = floorResult.Blocked;
-        var blockingConsumerId = floorResult.BlockingConsumerId;
-        var blockingConsumerIds = floorResult.BlockingConsumerIds;
-        // The report keeps the pre-#2849 shape: a tree with ANY blocked
-        // partition reports a null cursor and BlockedByUnusablePin, so the
-        // scheduler's blocked-leaf remedy and its cadence floor are driven by
-        // exactly the condition they were driven by before. Only what the pass
-        // is allowed to TRIM is decomposed, and only for partitions no unusable
-        // pin covers.
-        minCursor = cursorBlocked ? null : floorResult.Floor;
-        // Offset-space retention floor. The HLC floor above cannot protect a
+        // Offset-space retention floor. The HLC floor below cannot protect a
         // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
         // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
         // offset): such an entry is HLC-eligible under any positive cursor yet
@@ -259,7 +241,33 @@ public sealed class LatticeWalGc(
         // entry is retained. See BPlusLeafGrain.RebuildProjectionFromWalAsync,
         // which names this floor as the reason scanned-through advance is
         // load-bearing rather than an oversight.
-        var offsetFloor = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
+        //
+        // Read BEFORE the durable HLC floor because the set of consumers this
+        // floor speaks for is an input to it (issue #3172): the HLC floor has to
+        // publish a second minimum taken over the consumers this one does NOT
+        // cover, which is what makes the offset axis safe to grant entitlement
+        // with rather than only to subtract it with.
+        var offsetCoverage = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
+        var offsetFloor = offsetCoverage.Floor;
+        // Floor the trim point under the durable leaf-materialiser pins for
+        // any leaf MISSING from the in-memory registry. This survives a full
+        // silo/cluster restart that wiped the registry: a forward consumer
+        // (e.g. the replication shipper) re-reports its durably-advanced
+        // cursor eagerly, but dormant leaves re-register only lazily, so
+        // without this floor the GC would trim past a leaf's durable
+        // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
+        var floorResult = await ApplyDurableMaterialiserFloorAsync(
+            treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds, cancellationToken).ConfigureAwait(false);
+        var cursorBlocked = floorResult.Blocked;
+        var blockingConsumerId = floorResult.BlockingConsumerId;
+        var blockingConsumerIds = floorResult.BlockingConsumerIds;
+        // The report keeps the pre-#2849 shape: a tree with ANY blocked
+        // partition reports a null cursor and BlockedByUnusablePin, so the
+        // scheduler's blocked-leaf remedy and its cadence floor are driven by
+        // exactly the condition they were driven by before. Only what the pass
+        // is allowed to TRIM is decomposed, and only for partitions no unusable
+        // pin covers.
+        minCursor = cursorBlocked ? null : floorResult.Floor;
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
@@ -311,6 +319,41 @@ public sealed class LatticeWalGc(
         // Unattributable pins fail closed - see ApplyDurableMaterialiserFloorAsync.
         HybridLogicalClock? PartitionCursor(int partition) =>
             floorResult.IsPartitionBlocked(partition) ? null : floorResult.Floor;
+
+        // The offset-space entitlement a given WAL partition trims against
+        // (issue #3172), or null where the offset axis may not grant anything.
+        //
+        // Three independent conditions must all hold, and each is a fail-closed
+        // gate rather than a refinement:
+        //
+        //   1. A durable offset floor was actually computed this pass. A null
+        //      floor - an unreachable pin store, a host that reports no offsets,
+        //      an all-"-1" pin set - admits NOTHING, leaving the predicate
+        //      byte-identical to its pre-#3172 behaviour.
+        //   2. The uncovered-consumer cursor was computed over both retention
+        //      populations. Where ApplyDurableMaterialiserFloorAsync took an
+        //      early exit it has not established who the floor fails to speak
+        //      for, and an unknown uncovered population must never be read as an
+        //      empty one.
+        //   3. The partition is not blocked by an unusable pin. A blocked
+        //      partition has a leaf that never reached a durable checkpoint;
+        //      that leaf reports offset -1, which is excluded from the floor, so
+        //      the floor demonstrably does not speak for it. The cursor branch is
+        //      already disabled there and the offset branch must be too.
+        //
+        // The Floor carried here is the same tree-wide value the offset-floor
+        // STOP below compares against, and the comparisons are exact
+        // complements (stop on `> floor`, admit on `<= floor`), so admission can
+        // never reach an entry the stop would not already have walked past. That
+        // is what keeps the cross-partition conservatism of the single global
+        // minimum intact: it is not re-derived, merely read in the other
+        // direction.
+        WalGcOffsetAdmission? PartitionOffsetAdmission(int partition)
+            => offsetFloor is { } floor
+                && floorResult.UncoveredCursorComputed
+                && !floorResult.IsPartitionBlocked(partition)
+                    ? new WalGcOffsetAdmission(floor, floorResult.UncoveredCursor)
+                    : null;
 
         var anyPartitionHasCursorPredicate = false;
         for (var partition = 0; partition < partitions; partition++)
@@ -382,7 +425,7 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             RecordTrimStop(treeName, shardScan.StopReason);
         }
@@ -470,11 +513,26 @@ public sealed class LatticeWalGc(
     /// because the id embeds the owning leaf's grain id. Like <c>Blocked</c> it
     /// is diagnostic only and never widens what a pass is allowed to trim.
     /// </para>
+    /// <para>
+    /// <c>UncoveredCursor</c> is the second minimum this method publishes for
+    /// issue #3172: the lowest cursor held by any consumer the durable
+    /// <em>offset</em> floor does NOT speak for. The offset floor is a minimum
+    /// over leaf materialisers that reported a real offset; a view maintainer,
+    /// a log subscriber, the backup capture service and the replication shipper
+    /// all report cursors and never offsets, so the offset axis is only safe to
+    /// grant trim entitlement with when those consumers are separately checked.
+    /// It is folded over exactly the two populations the HLC floor itself is -
+    /// the in-memory registry and the registry-absent durable pins - minus the
+    /// covered ids, so it cannot miss a retention holder the HLC floor can see.
+    /// <c>UncoveredCursorComputed</c> distinguishes "nothing left uncovered"
+    /// from "never established", because only the first may admit anything.
+    /// </para>
     /// </summary>
     private async Task<DurableMaterialiserFloor> ApplyDurableMaterialiserFloorAsync(
         string treeName,
         HybridLogicalClock? registryMin,
         int partitions,
+        IReadOnlySet<string>? coveredConsumerIds,
         CancellationToken cancellationToken)
     {
         var factory = GrainFactory;
@@ -504,9 +562,31 @@ public sealed class LatticeWalGc(
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
         var present = new HashSet<string>(snapshot.Count, StringComparer.Ordinal);
+        // The lowest cursor held by a registry consumer the offset floor does
+        // not speak for (issue #3172). Zero-cursor consumers are skipped for
+        // exactly the reason GetMinCursorAsync skips them: a Zero cursor is a
+        // block-pin-only registration, which the block-pin clause guards
+        // independently and which would otherwise pin this minimum at Zero and
+        // refuse every entry.
+        HybridLogicalClock? uncovered = null;
         for (var i = 0; i < snapshot.Count; i++)
         {
-            present.Add(snapshot[i].ConsumerId);
+            var entry = snapshot[i];
+            present.Add(entry.ConsumerId);
+            if (coveredConsumerIds is not null && coveredConsumerIds.Contains(entry.ConsumerId))
+            {
+                continue;
+            }
+
+            if (entry.Cursor <= HybridLogicalClock.Zero)
+            {
+                continue;
+            }
+
+            if (uncovered is not { } lowest || entry.Cursor < lowest)
+            {
+                uncovered = entry.Cursor;
+            }
         }
 
         var floor = registryMin;
@@ -604,8 +684,13 @@ public sealed class LatticeWalGc(
                 if (blockedCount >= partitions
                     && blockingConsumerIds.Count >= MaxReportedBlockingConsumers)
                 {
+                    // The uncovered-cursor fold is abandoned unfinished here, so
+                    // it is reported as NOT computed (issue #3172). Every
+                    // partition is blocked, so no offset admission is granted on
+                    // this path regardless; saying "not computed" keeps that
+                    // true by construction rather than by coincidence.
                     return new DurableMaterialiserFloor(
-                        null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds);
+                        null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false);
                 }
 
                 // A blocking pin contributes no usable frontier, so it is not
@@ -618,6 +703,16 @@ public sealed class LatticeWalGc(
             floor = floor is { } current
                 ? (pin < current ? pin : current)
                 : pin;
+
+            // A registry-absent durable pin is a retention holder the HLC floor
+            // sees, so it must also constrain the uncovered minimum unless the
+            // offset floor already speaks for it (issue #3172).
+            if (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId))
+            {
+                uncovered = uncovered is { } lowestUncovered
+                    ? (pin < lowestUncovered ? pin : lowestUncovered)
+                    : pin;
+            }
         }
 
         return new DurableMaterialiserFloor(
@@ -625,7 +720,9 @@ public sealed class LatticeWalGc(
             blockedPartitions,
             blockedPartitions is not null,
             blockingConsumerId,
-            blockingConsumerIds);
+            blockingConsumerIds,
+            uncovered,
+            true);
     }
 
     /// <summary>
@@ -721,19 +818,38 @@ public sealed class LatticeWalGc(
     /// than complete: the blocked-leaf population is unbounded, and the consumer
     /// of this list acts on a bounded number of them per pass anyway.
     /// </param>
+    /// <param name="UncoveredCursor">
+    /// The lowest cursor held by a retention holder the durable <em>offset</em>
+    /// floor does not speak for, or <see langword="null"/> when every holder is
+    /// covered by it (issue #3172). This is what the offset axis is checked
+    /// against before it may grant trim entitlement, and it is <em>only</em>
+    /// meaningful when <see cref="UncoveredCursorComputed"/> is
+    /// <see langword="true"/>.
+    /// </param>
+    /// <param name="UncoveredCursorComputed">
+    /// Whether <see cref="UncoveredCursor"/> was folded over both retention
+    /// populations on this pass. A <see langword="false"/> value means the
+    /// uncovered population is UNKNOWN, not empty, and the offset axis must
+    /// grant nothing. Every early exit takes that value, so the tri-state is
+    /// what stops "we did not look" being read as "there is nobody there".
+    /// </param>
     private readonly record struct DurableMaterialiserFloor(
         HybridLogicalClock? Floor,
         bool[]? BlockedPartitions,
         bool Blocked,
         string? BlockingConsumerId,
-        IReadOnlyList<string>? BlockingConsumerIds = null)
+        IReadOnlyList<string>? BlockingConsumerIds = null,
+        HybridLogicalClock? UncoveredCursor = null,
+        bool UncoveredCursorComputed = false)
     {
         /// <summary>
         /// A floor with nothing blocked: every partition trims against
-        /// <paramref name="floor"/>.
+        /// <paramref name="floor"/>. The uncovered-consumer cursor is reported
+        /// as not computed, because every caller of this factory took an early
+        /// exit before establishing one.
         /// </summary>
         public static DurableMaterialiserFloor Unblocked(HybridLogicalClock? floor)
-            => new(floor, null, false, null, null);
+            => new(floor, null, false, null, null, null, false);
 
         /// <summary>
         /// Whether an unusable durable pin has disabled the cursor branch for
@@ -862,13 +978,24 @@ public sealed class LatticeWalGc(
     /// behaviour. A single global minimum is applied to every WAL partition:
     /// exact for the common single-partition layout and conservatively safe
     /// (over-retains) across partitions, whose offsets are otherwise incomparable.
+    /// <para>
+    /// The <b>set of consumers the floor speaks for</b> is returned alongside it
+    /// (issue #3172), because the floor is only half of an offset-space
+    /// entitlement. It is a minimum over the leaf materialisers that reported a
+    /// real offset - and over nothing else. Every other WAL consumer (a view
+    /// maintainer, a log subscriber, the backup capture service, the replication
+    /// shipper) reports an HLC cursor and never an offset, so a rule that read
+    /// the floor alone as "every consumer has applied through here" would trim
+    /// straight past them. The caller pairs this set with a second cursor
+    /// minimum taken over its complement.
+    /// </para>
     /// </summary>
-    private async Task<long?> ComputeMaterialiserOffsetFloorAsync(string treeName)
+    private async Task<MaterialiserOffsetCoverage> ComputeMaterialiserOffsetFloorAsync(string treeName)
     {
         var factory = GrainFactory;
         if (factory is null)
         {
-            return null;
+            return MaterialiserOffsetCoverage.None;
         }
 
         try
@@ -876,11 +1003,12 @@ public sealed class LatticeWalGc(
             var offsets = await ReadDurablePinOffsetsAsync(factory, treeName).ConfigureAwait(false);
             if (offsets is null)
             {
-                return null;
+                return MaterialiserOffsetCoverage.None;
             }
 
             long? floor = null;
-            foreach (var offset in offsets.Values)
+            HashSet<string>? covered = null;
+            foreach (var (consumerId, offset) in offsets)
             {
                 // Skip the "-1" sentinel: a consumer reports -1 when it has no
                 // WAL-replay dependency at all. Three ways to get there, and
@@ -901,13 +1029,21 @@ public sealed class LatticeWalGc(
                     continue;
                 }
 
+                // This consumer HAS told us it durably applied through `offset`,
+                // so the floor genuinely speaks for it (issue #3172). A "-1"
+                // reporter is skipped above and is therefore deliberately NOT
+                // covered: it is protected by its cursor or its block pin, not
+                // by this floor.
+                covered ??= new HashSet<string>(offsets.Count, StringComparer.Ordinal);
+                covered.Add(consumerId);
+
                 if (floor is not { } current || offset < current)
                 {
                     floor = offset;
                 }
             }
 
-            return floor;
+            return new MaterialiserOffsetCoverage(floor, covered);
         }
         catch
         {
@@ -947,8 +1083,36 @@ public sealed class LatticeWalGc(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
                 LatticeTenantLabel.ForTree(treeName));
-            return null;
+            return MaterialiserOffsetCoverage.None;
         }
+    }
+
+    /// <summary>
+    /// The durable materialiser offset floor for a pass, paired with the set of
+    /// consumer ids that floor was minimised over.
+    /// </summary>
+    /// <param name="Floor">
+    /// The lowest real (non-"-1") reported checkpoint offset, or
+    /// <see langword="null"/> when no offset floor could be established on this
+    /// pass. A <see langword="null"/> floor grants no offset-space entitlement at
+    /// all, which is what makes an unreachable pin store byte-identical to
+    /// pre-#3172 behaviour rather than merely close to it.
+    /// </param>
+    /// <param name="CoveredConsumerIds">
+    /// The consumers whose reported offset was folded into <paramref name="Floor"/>,
+    /// or <see langword="null"/> when none was. These, and only these, are the
+    /// consumers the floor is evidence about; every other WAL consumer must still
+    /// be protected by its HLC cursor.
+    /// </param>
+    private readonly record struct MaterialiserOffsetCoverage(
+        long? Floor,
+        IReadOnlySet<string>? CoveredConsumerIds)
+    {
+        /// <summary>
+        /// No offset floor on this pass, and therefore no consumer covered by
+        /// one. The fail-closed value.
+        /// </summary>
+        public static MaterialiserOffsetCoverage None => new(null, null);
     }
 
     /// <summary>
@@ -1223,6 +1387,7 @@ public sealed class LatticeWalGc(
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor,
         long? offsetFloor,
+        WalGcOffsetAdmission? offsetAdmission,
         CancellationToken cancellationToken)
     {
         long lastEligibleOffset = -1;
@@ -1269,7 +1434,7 @@ public sealed class LatticeWalGc(
                 }
 
                 var eligibility = ClassifyEligibility(
-                    walEntry.Mutation, minCursor, ttlCeiling, causalStable, blockedFloor);
+                    walEntry.Mutation, walEntry.Offset, minCursor, ttlCeiling, causalStable, blockedFloor, offsetAdmission);
                 if (eligibility == WalGcTrimEligibility.Eligible)
                 {
                     lastEligibleOffset = walEntry.Offset;
@@ -1399,16 +1564,20 @@ public sealed class LatticeWalGc(
 
     private static WalGcTrimEligibility ClassifyEligibility(
         LatticeMutation entry,
+        long entryOffset,
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
-        HybridLogicalClock? blockedFloor)
+        HybridLogicalClock? blockedFloor,
+        WalGcOffsetAdmission? offsetAdmission)
         => WalGcTrimCore.ClassifyEntry(
             entry.Timestamp,
             entry.VectorClock,
+            entryOffset,
             minCursor,
             ttlCeiling,
             causalStable,
-            blockedFloor);
+            blockedFloor,
+            offsetAdmission);
 }
 
