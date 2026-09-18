@@ -86,14 +86,49 @@ internal interface ILeafSnapshotStorageGrain : IGrainWithGuidKey
     /// Staged frames are written into a generation no live manifest references,
     /// so the current snapshot stays authoritative and intact until
     /// <see cref="CommitStagedSnapshotAsync"/> writes the new manifest. A
-    /// capture abandoned part-way - by a fault, a cancellation, or a lost
-    /// activation - leaves only unreferenced frames, which are inert.
+    /// capture abandoned part-way leaves unreferenced frames behind; they are
+    /// made inert by the next capture's
+    /// <see cref="BeginStagedSnapshotAsync"/>, which retires them and restarts
+    /// the run at index zero.
+    /// </para>
+    /// <para>
+    /// A caller must open every staged run with
+    /// <see cref="BeginStagedSnapshotAsync"/>. Staging without it appends to
+    /// whatever run is already open, which is how a partially staged capture
+    /// leaks into the next one's manifest.
     /// </para>
     /// </summary>
     /// <param name="frame">Encoded segment frame. Must be non-empty.</param>
     /// <param name="rowCount">Number of rows encoded in <paramref name="frame"/>.</param>
     /// <param name="cancellationToken">Cancellation token observed before the write.</param>
     Task<int> StageSnapshotSegmentAsync(byte[] frame, int rowCount, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a staged capture, discarding any run a previous capture abandoned
+    /// part-way so this one starts at segment index zero.
+    /// <para>
+    /// This exists because the staging cursor is activation-scoped, and an
+    /// abandoned run is only self-clearing when the abandonment takes the
+    /// activation with it. A capture that merely <b>fails</b> - the storage
+    /// fault or timeout that
+    /// <c>orleans.lattice.leaf.snapshot.captures{outcome="failed"}</c> counts -
+    /// leaves the grain activated with its cursor mid-run. Without this call
+    /// the next capture resumes at that cursor, so its commit publishes a
+    /// manifest whose leading segments belong to the abandoned capture. Those
+    /// frames are stale rows, and because hydration folds segments in index
+    /// order with later-wins-per-key, a key deleted between the two captures
+    /// has nothing to overwrite it and comes back.
+    /// </para>
+    /// <para>
+    /// Idempotent, and safe to call when no run is open. The retirement of an
+    /// abandoned run is best-effort for the same reason
+    /// <see cref="CommitStagedSnapshotAsync"/>'s is: an orphaned frame wastes a
+    /// row but is unreachable once the cursor has been reset, so a failure to
+    /// delete it must not fail the capture that is about to start.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed before the reset.</param>
+    Task BeginStagedSnapshotAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Commits the frames staged by <see cref="StageSnapshotSegmentAsync"/> as

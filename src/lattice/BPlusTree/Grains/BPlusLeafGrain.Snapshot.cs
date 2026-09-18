@@ -1138,6 +1138,15 @@ internal sealed partial class BPlusLeafGrain
 
                     if (written > 0 && plannedCost > window)
                     {
+                        // Open the run explicitly. The staging cursor lives on
+                        // the storage grain's activation and is only cleared by
+                        // a commit, so a capture that failed part-way (the
+                        // storage fault or timeout counted as outcome="failed")
+                        // leaves it mid-run. Staging straight into that would
+                        // append this snapshot to the abandoned one and commit a
+                        // manifest whose leading segments are stale rows.
+                        await snapshotGrain.BeginStagedSnapshotAsync(cancellationToken);
+
                         var budget = LeafSnapshotSegmentPlan.Budget(window);
                         var start = 0;
                         var runLength = 0;
