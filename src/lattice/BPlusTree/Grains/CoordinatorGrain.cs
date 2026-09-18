@@ -138,8 +138,45 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// Exceptions are logged by the base class, counted on
     /// <see cref="LatticeMetrics.CoordinatorPhaseTickFailures"/>, and do not
     /// stop the timer.
+    /// <para>
+    /// An implementation whose step can run long should pass
+    /// <see cref="PhaseTickToken"/> to the work it awaits, so the step can be
+    /// abandoned when the coordinator is torn down. A step that hands
+    /// <see cref="CancellationToken.None"/> downwards instead cannot be abandoned
+    /// at all, and blocks deactivation for as long as it runs.
+    /// </para>
     /// </summary>
     protected internal abstract Task ProcessNextPhaseAsync();
+
+    /// <summary>
+    /// The cancellation token of the phase tick currently executing, or
+    /// <see cref="CancellationToken.None"/> when no tick is in flight.
+    /// <para>
+    /// This is the coordinator's own lifecycle token: Orleans supplies it to the
+    /// grain-timer callback and cancels it when the phase timer is disposed or the
+    /// grain is deactivated. It is therefore the only token that can abandon a step
+    /// that is already running. A token a derived class manufactures itself and
+    /// cancels from <c>OnDeactivateCoreAsync</c> cannot: a grain activation is
+    /// single-threaded, so the deactivation hook does not run until the in-flight
+    /// tick has already returned, and by then there is nothing left to cancel.
+    /// </para>
+    /// <para>
+    /// <b>Read it inside the tick; do not store it.</b> It is reset to
+    /// <see cref="CancellationToken.None"/> when the tick returns, so a field that
+    /// captured it holds a token that is stale and - after a teardown - permanently
+    /// cancelled. A later reminder-driven call reading such a field would abort
+    /// immediately for a teardown that is long over. Exactly one tick is in flight
+    /// per activation, so reading it during the tick is unambiguous.
+    /// </para>
+    /// <para>
+    /// It reads <see cref="CancellationToken.None"/> on the paths that are not
+    /// timer ticks - a reminder handler calling
+    /// <see cref="ProcessNextPhaseAsync"/> directly, or a test driving it - and
+    /// that is correct rather than a gap: those calls have no grain timer behind
+    /// them, so there is no teardown signal to offer.
+    /// </para>
+    /// </summary>
+    protected CancellationToken PhaseTickToken { get; private set; }
 
     /// <summary>Period of the phase-processing grain timer. Defaults to 2 seconds.</summary>
     protected virtual TimeSpan PhaseTimerPeriod => TimeSpan.FromSeconds(2);
@@ -269,11 +306,43 @@ internal abstract class CoordinatorGrain<TSelf>(
 
     private async Task OnPhaseTimerTickAsync(CancellationToken ct)
     {
+        // Published for the duration of the tick and withdrawn in the finally. A
+        // CancellationToken is a struct, so this is a field write and costs no
+        // allocation.
+        PhaseTickToken = ct;
         try
         {
             await ProcessNextPhaseAsync();
             _consecutiveTickFailures = 0;
             RecordPhaseTickRun();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A TEARDOWN IS NOT A FAILURE, AND COUNTING IT AS ONE WOULD BE A FALSE
+            // SIGNAL ON EVERY ORDERLY SHUTDOWN.
+            //
+            // This token is cancelled precisely when the phase timer is disposed or
+            // the grain deactivates, so an OperationCanceledException raised while
+            // it is cancelled is the pump doing exactly what it was asked to do.
+            // Before a real token reached the step there was no such case and the
+            // unfiltered catch below was complete; now that one does, every silo
+            // shutdown would otherwise add to CoordinatorPhaseTickFailures and -
+            // across three coordinators' worth of ticks - escalate to an error
+            // claiming "the phase machine has stopped advancing". That reads as the
+            // very wedge this counter exists to detect, manufactured by the shutdown
+            // that was supposed to be clean.
+            //
+            // THE FILTER IS WHAT KEEPS THIS HONEST. A cancellation raised while the
+            // token is NOT cancelled did not come from the teardown - it is a
+            // genuine fault wearing a cancellation's clothes, most often an inner
+            // deadline that expired - so it falls through to the counting catch
+            // below. The same discrimination the vector layer makes between a spent
+            // slice deadline and a real cancellation, made here for the same reason.
+            //
+            // Neither arm of the bookkeeping is touched: the tick did not succeed,
+            // so the failure run is not reset, and it did not fail, so nothing is
+            // counted. The census keeps whatever run it already had.
+            return;
         }
         catch (Exception ex)
         {
@@ -303,6 +372,14 @@ internal abstract class CoordinatorGrain<TSelf>(
                     + "and the pump will retry on the next tick.",
                     KeepaliveReminderName, LogContext);
             }
+        }
+        finally
+        {
+            // Withdrawn on EVERY exit. Leaving a cancelled token published would
+            // hand the next non-timer caller - a reminder handler, or a test - a
+            // token that is already cancelled, so it would abandon its work
+            // instantly for a teardown that finished long before.
+            PhaseTickToken = default;
         }
     }
 
