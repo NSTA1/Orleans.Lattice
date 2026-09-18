@@ -655,6 +655,13 @@ internal sealed class LatticeWalGcScheduler(
     /// which collapses this consumer's backoff to
     /// <see cref="ReactivationRearmMinBackoff"/>.
     /// </param>
+    /// <param name="HealCredited">
+    /// Whether this consumer has already been credited a heal in the current
+    /// episode. The credit fires when the cursor floor becomes usable, which can
+    /// happen while the observation is still retained for rate limiting, so the
+    /// credit and the retirement are no longer the same event and the counter
+    /// needs its own idempotence (issue #3175).
+    /// </param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -665,7 +672,8 @@ internal sealed class LatticeWalGcScheduler(
         int Cycles = 0,
         int Refunds = 0,
         long HealEpochAtAbandonment = 0,
-        bool PinStateClassified = false);
+        bool PinStateClassified = false,
+        bool HealCredited = false);
 
     /// <summary>
     /// What a single reactivation touch established about the blocking leaf.
@@ -1950,6 +1958,46 @@ internal sealed class LatticeWalGcScheduler(
             {
                 WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
 
+                // Credit the heal here, on the floor-state transition, and not
+                // at the retirement below (issue #3175). Reaching this arm is
+                // the whole of the claim the counter makes: the cursor floor is
+                // usable, so every consumer the sweep touched during the episode
+                // has in fact stopped blocking. Nothing else is needed to make
+                // that sound, and requiring anything else makes it unreachable.
+                //
+                // It used to be credited only inside ClearBlockedObservation at
+                // the foot of this arm, which runs only when the byte-ceiling
+                // sampler holds no repairable floor holder for the tree. That is
+                // a different axis entirely - it arrived with the dormant
+                // floor-holder repair (issues #3154 / #3158) and was retrofitted
+                // through this same observation map, silently taking the blocked
+                // episode's lifecycle hostage. The two conditions were AND-ed,
+                // and the second one fails exactly when a tree is over its byte
+                // ceiling with repairable holders, which is the definition of a
+                // tree with a WAL retention problem. So the instrument went
+                // silent precisely on the population it exists to measure: on a
+                // live estate one tree read healed=0 against a real episode
+                // while its sibling, which drops under ceiling and empties the
+                // holder set, credited heals normally with the same code. A
+                // zero that is produced by construction is worse than no
+                // instrument, because it was read as evidence of non-convergence
+                // and sent an epic after a throughput defect it does not measure.
+                //
+                // The observation itself is deliberately NOT retired here. The
+                // repairable-holder drive below uses its budgets as its rate
+                // limiter, so dropping it at this point would let that drive
+                // re-touch every pass with no cooldown. Crediting without
+                // retiring keeps every rate-limiting guarantee intact, and
+                // HealCredited keeps the retirement below idempotent so a
+                // consumer is still credited at most once per episode - the
+                // inflation CreditHealedConsumers documents as the reason the
+                // credit was deferred to the end of the episode in the first
+                // place cannot return through this door.
+                if (_blockedConsumers.TryGetValue(treeId, out var clearedObservation))
+                {
+                    CreditHealedConsumers(clearedObservation, treeTag, tenantTag);
+                }
+
                 // Reach the orphan sweep from the breach as well as from the
                 // block (issue #3154). Everything above is keyed to
                 // BlockedByUnusablePin, which is a statement about why the
@@ -2741,17 +2789,55 @@ internal sealed class LatticeWalGcScheduler(
     /// <b>Blast radius.</b> At most
     /// <see cref="MaxReactivationTouchesPerPass"/> leaves per tree per pass, and
     /// trees are swept sequentially, so that is also the whole silo's concurrent
-    /// touch ceiling. <i>Leaves</i> is now literal rather than approximate: the
-    /// budget is spent over a set of consumer ids, of which a leaf publishes one
-    /// per WAL partition, all carrying a byte-identical frontier - so until
-    /// issue #3178 a budget of four on an eight-partition tree bought one leaf,
-    /// not four, and three of every four stamps were spent on partitions of a
-    /// leaf already being driven. The loop deduplicates on the resolved leaf
-    /// grain id before it stamps a budget, so the bound is now per leaf on both
-    /// axes. Live leaves are excluded by construction, because a live
+    /// touch ceiling. Live leaves are excluded by construction, because a live
     /// consumer never reaches the exit that reports it. The remedy is
     /// self-extinguishing - a healed tree stops reporting blocked and this path
     /// stops running - so steady-state cost on a healthy tree is zero.
+    /// </para>
+    /// <para>
+    /// <b>Leaves and consumer ids are not interchangeable here, which is why
+    /// the budget is spent per leaf.</b> A consumer id is
+    /// <c>{tree}_{grain}_{partition}</c>, so one leaf contributes one id per WAL
+    /// partition. The remedy on the other end is per <i>leaf</i> and
+    /// partition-agnostic - <c>DriveStarvedCheckpointAsync</c> resolves the
+    /// partition count once and repairs every partition in a single call - so
+    /// the second and subsequent ids of the same leaf ask for work the first
+    /// has already started.
+    /// </para>
+    /// <para>
+    /// <b>The arithmetic that follows, which is why this is worth stating.</b>
+    /// <c>LatticeWalGc.MaxReportedBlockingConsumers</c> and
+    /// <see cref="LatticeOptions.DefaultWalPartitions"/> are both 8, an exact
+    /// collision, so a single blocked leaf fills the entire blocking report;
+    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> is 8 as well, and a
+    /// leaf's partition pins carry a byte-identical frontier <i>and</i> the same
+    /// durable offset, so a sample on either axis also resolved to one leaf.
+    /// With <see cref="LatticeOptions.WalPartitions"/> at or above
+    /// <see cref="MaxReactivationTouchesPerPass"/>, one blocked leaf therefore
+    /// consumed the whole per-pass touch budget, and a pass that spent four
+    /// touches made one leaf's worth of progress: the drive's per-activation
+    /// latch rejected the other three as already-driving, each having already
+    /// charged an attempt against
+    /// <see cref="MaxReactivationAttempts"/> that is never refunded, because
+    /// already-driving is reported as a completed touch and only faulted and
+    /// undelivered touches are refundable. Three such passes exhaust a
+    /// three-attempt budget on a leaf that was driven successfully every time,
+    /// and the consumer is abandoned - which is terminal for crediting, not
+    /// merely slow, because a credit is only ever issued to a consumer that was
+    /// not abandoned. Measured on a live estate the ratio was exact: 52 touches,
+    /// 13 episodes, 39 already-driving rejections (13 x 3) and 13 real outcomes
+    /// (issues #3175, #3177). Widening the touch budget or the sweep's
+    /// concurrency does not improve this and makes it worse, since the
+    /// additional touches land on the same leaf.
+    /// </para>
+    /// <para>
+    /// <b>That fix is now made (issue #3178).</b> The floor-holder sample ranks
+    /// by ascending durable offset and deduplicates on the resolved leaf grain
+    /// id, and the touch loop deduplicates again on that id <i>before</i> it
+    /// stamps a budget - so a suppressed partition costs neither an attempt nor
+    /// a cooldown, and the bound above is per leaf on both axes rather than per
+    /// consumer id. The arithmetic is kept because it is the denominator that
+    /// makes the pre-#3178 field measurements readable.
     /// </para>
     /// <para>
     /// <b>Why the bound is no longer one.</b> It used to be one, and that was
@@ -3250,18 +3336,29 @@ internal sealed class LatticeWalGcScheduler(
     /// meaningful.
     /// </para>
     /// <para>
-    /// <b>Why this waits for the episode to end.</b> It used to credit the
+    /// <b>Why this waits for the floor to clear.</b> It used to credit the
     /// outgoing consumer each time the reported blocker changed, which read as
     /// "that one stopped blocking". It does not mean that: the floor skips
     /// consumers present in the live registry, so a leaf the sweep has just
     /// touched drops off the head of the queue precisely because it activated,
     /// and it returns when it deactivates still blocked. Crediting there counted
     /// one leaf many times and counted leaves that never healed at all. Deferred
-    /// to the end of the episode the claim is sound, because the floor is no
-    /// longer blocked by anything, so every consumer swept during it has in fact
-    /// stopped blocking. The ratio this feeds is documented as the measure of
-    /// whether the sweep works, so an inflated numerator is worse than a missing
-    /// one.
+    /// to the moment the cursor floor reports usable the claim is sound, because
+    /// the floor is no longer blocked by anything, so every consumer swept
+    /// during the episode has in fact stopped blocking. The ratio this feeds is
+    /// documented as the measure of whether the sweep works, so an inflated
+    /// numerator is worse than a missing one.
+    /// </para>
+    /// <para>
+    /// <b>That moment is the floor clearing, not the observation retiring.</b>
+    /// Those were the same event until the dormant floor-holder repair began
+    /// retaining the observation past the clear as its own rate limiter, at
+    /// which point crediting at the retirement made the counter unreachable for
+    /// any tree over its byte ceiling - the population it exists to measure
+    /// (issue #3175). The credit now fires on the floor-state transition and
+    /// <see cref="ConsumerReactivationBudget.HealCredited"/> carries the
+    /// idempotence the shared event used to provide, so a consumer is still
+    /// credited at most once per episode however many times this runs.
     /// </para>
     /// </remarks>
     private void CreditHealedConsumers(
@@ -3269,9 +3366,11 @@ internal sealed class LatticeWalGcScheduler(
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
     {
-        foreach (var budget in observation.Budgets.Values)
+        List<string>? credited = null;
+
+        foreach (var (consumerId, budget) in observation.Budgets)
         {
-            if (budget.Attempts > 0 && !budget.Abandoned)
+            if (budget.Attempts > 0 && !budget.Abandoned && !budget.HealCredited)
             {
                 // Advance the heal epoch before recording. A credited heal is
                 // direct evidence that a blocked leaf managed to activate,
@@ -3288,7 +3387,23 @@ internal sealed class LatticeWalGcScheduler(
                 _reactivationHealEpoch++;
                 RecordBlockedLeafReactivation(
                     LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag);
+                (credited ??= []).Add(consumerId);
             }
+        }
+
+        if (credited is null)
+        {
+            return;
+        }
+
+        // Written back after the walk rather than during it, because the budget
+        // is a record struct and the enumerator would be invalidated by an
+        // in-place assignment. The dictionary instance is the one the
+        // observation in _blockedConsumers holds, so this marks the live state.
+        foreach (var consumerId in credited)
+        {
+            observation.Budgets[consumerId] =
+                observation.Budgets[consumerId] with { HealCredited = true };
         }
     }
 
