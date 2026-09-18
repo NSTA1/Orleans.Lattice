@@ -367,6 +367,48 @@ internal sealed class LatticeWalGcScheduler(
     private readonly HashSet<string> _primedOrphanSweepTrees = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Per tree, the repairable dormant pins the most recent classifying sweep
+    /// found holding its WAL floor (issue #3164).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this is cached at all, rather than read per pass.</b> The
+    /// classification is produced by
+    /// <see cref="SweepOrphanedMaterialiserPinsAsync"/>, which is rate limited
+    /// per tree to <see cref="OrphanSweepInterval"/> because it enumerates the
+    /// whole durable pin store. Passes on a tree under byte pressure run at the
+    /// cadence floor, an order of magnitude more often - measured as 4 sweeps
+    /// across 15 passes. So most passes have no fresh classification, and the
+    /// alternative to caching is to drive the arm only on sweep passes and
+    /// clear the episode on the rest. That is issue #2772 rebuilt: the episode
+    /// carries the attempt budget, the abandoned flag and the backoff cycle, so
+    /// clearing it on 11 of every 15 passes would destroy the give-up budget
+    /// before it could ever be spent.
+    /// </para>
+    /// <para>
+    /// <b>It cannot outlive the condition that justified it.</b> The entry is
+    /// replaced by every classifying sweep, dropped when the tree stops
+    /// breaching its byte ceiling, and dropped when the tree becomes genuinely
+    /// floor-blocked - at which point the blocked arm's own report is a better
+    /// answer to the same question than a sample of it.
+    /// </para>
+    /// <para>
+    /// <b>A stale id cannot starve a live one.</b> A consumer repaired on the
+    /// pass after a sweep stays cached until the next one, but it cannot absorb
+    /// a touch slot: <see cref="ReactivationRetryCooldown"/> skips it by
+    /// <c>continue</c> in <see cref="ObserveAndHealBlockedTreeAsync"/> before it
+    /// reaches the touch list, and <see cref="MaxReactivationTouchesPerPass"/>
+    /// is checked against that list rather than against the iteration index, so
+    /// a skipped consumer costs nothing. The cooldown is 15 minutes against a
+    /// 2-minute sweep interval, so a repaired pin - which now carries a real
+    /// frontier and therefore sorts above the blocking Zero pins - has left the
+    /// ascending-frontier sample several sweeps before its cooldown expires.
+    /// </para>
+    /// </remarks>
+    private readonly Dictionary<string, IReadOnlyList<string>> _repairableFloorHolders =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
     /// How long a consumer's budget survives after the floor stops reporting it
     /// as blocking, before it is pruned from the episode's map.
     /// </summary>
@@ -1892,6 +1934,13 @@ internal sealed class LatticeWalGcScheduler(
                         : [blockingConsumerId];
 
                     WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
+
+                    // A genuinely blocked tree names its own blockers, which is
+                    // a strictly better answer than the sampled floor-holder
+                    // set below, so the repairable cache cannot outlive the
+                    // transition into this arm (issue #3164).
+                    _repairableFloorHolders.Remove(treeId);
+
                     await ObserveAndHealBlockedTreeAsync(
                         treeId, blockingConsumerIds, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
                 }
@@ -1899,7 +1948,6 @@ internal sealed class LatticeWalGcScheduler(
             else
             {
                 WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
-                ClearBlockedObservation(treeId, treeTag, tenantTag);
 
                 // Reach the orphan sweep from the breach as well as from the
                 // block (issue #3154). Everything above is keyed to
@@ -1954,9 +2002,81 @@ internal sealed class LatticeWalGcScheduler(
                 // classification is untouched.
                 if (overCeiling)
                 {
-                    await SweepOrphanedMaterialiserPinsAsync(
+                    var swept = await SweepOrphanedMaterialiserPinsAsync(
                         treeId, treeTag, tenantTag, stoppingToken, classifyFloorHolders: true)
                         .ConfigureAwait(false);
+
+                    // Three-valued by design (issue #3164). null means no
+                    // classification ran on this pass - the sweep is rate
+                    // limited to OrphanSweepInterval while a pressured tree
+                    // passes at the cadence floor, so this is the common case -
+                    // and it must leave the previous verdict standing. An empty
+                    // list is a measured "nothing repairable holds this floor"
+                    // and retires it.
+                    if (swept is not null)
+                    {
+                        if (swept.Count == 0)
+                        {
+                            _repairableFloorHolders.Remove(treeId);
+                        }
+                        else
+                        {
+                            _repairableFloorHolders[treeId] = swept;
+                        }
+                    }
+                }
+                else
+                {
+                    // No breach, so the condition that licensed the sample is
+                    // gone and it will not be refreshed. Drop it rather than
+                    // drive an ever-staler set.
+                    _repairableFloorHolders.Remove(treeId);
+                }
+
+                // The gate this issue exists to widen. A floor that reports
+                // Available but is pinned at the oldest entry by a dormant
+                // repairable pin is indistinguishable, to WalGcCursorFloorState,
+                // from a healthy floor - the enum has no member for it, and
+                // adding one would change the cadence policy for every tree that
+                // entered it. So the signal is carried here instead, beside the
+                // state rather than inside it, and OR-ed into the same remedy.
+                //
+                // Why the remedy applies unchanged: TryRepairZeroCoverageAsync
+                // already repairs exactly this state, and already works - it is
+                // measured healing the floor-blocked sibling tree in the same
+                // process. It has simply never been able to reach this
+                // population, because it runs from the leaf's activation and
+                // post-persist hooks and so only ever sees leaves that have a
+                // LIVE activation, while a durable pin can only hold the floor
+                // when ApplyDurableMaterialiserFloorAsync consults it - which it
+                // does only for a consumer MISSING from the live registry, i.e.
+                // a DORMANT leaf. The two populations are disjoint by
+                // construction, so the remedy and its target could never meet.
+                // Touching the leaf from here is what makes them meet.
+                //
+                // No bound is added at this site, deliberately. The set is a
+                // subset of the classification sample, already capped at
+                // MaxFloorHolderClassificationsPerSweep where the candidates are
+                // selected, and the touches it licenses are already capped at
+                // MaxReactivationTouchesPerPass inside the remedy. Both bounds
+                // exist, each at exactly one point. A third here would be the
+                // redundant compensating guard this file argues against
+                // elsewhere: it would mask a regression in either of the other
+                // two and leave all three untestable by perturbation.
+                if (_repairableFloorHolders.TryGetValue(treeId, out var repairableHolders))
+                {
+                    logger.LogInformation(
+                        "WAL GC is driving {Count} repairable dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers, but every one of them classified as checkpointed_uncovered - a leaf with a proven durable checkpoint whose pin is not covered by it. That pin resolves to the blocking sentinel and holds the WAL floor, and the repair can only run inside an activation the dormant leaf does not have.",
+                        repairableHolders.Count,
+                        treeId);
+
+                    await ObserveAndHealBlockedTreeAsync(
+                        treeId, repairableHolders, treeTag, tenantTag, stoppingToken, preClassified: true)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    ClearBlockedObservation(treeId, treeTag, tenantTag);
                 }
             }
 
@@ -2663,7 +2783,8 @@ internal sealed class LatticeWalGcScheduler(
         IReadOnlyList<string> blockingConsumerIds,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
-        CancellationToken stoppingToken)
+        CancellationToken stoppingToken,
+        bool preClassified = false)
     {
         var now = _time.GetUtcNow();
 
@@ -2746,8 +2867,21 @@ internal sealed class LatticeWalGcScheduler(
         // minimum block age and are therefore never touched - that population is
         // invisible to every attempt-derived signal, and it is the one a reader
         // most needs classified.
-        await ClassifyBlockingPinsAsync(treeId, blockingConsumerIds, budgets, treeTag, tenantTag, stoppingToken)
-            .ConfigureAwait(false);
+        //
+        // Skipped when the caller has already classified these consumers
+        // (issue #3164). The repairable arm derives its ids FROM a floor-holder
+        // classification - being classified checkpointed_uncovered is the only
+        // way onto that list - so re-reading them here would spend a second
+        // durable read per consumer and record a second measurement on
+        // blocking_pin_state under identical tags, doubling the very diagnostic
+        // issue #3158 added to make this population visible. The flag defaults
+        // to false, so the floor-blocked arm below is byte-for-byte unchanged:
+        // its ids come from the floor's report, which carries no classification.
+        if (!preClassified)
+        {
+            await ClassifyBlockingPinsAsync(treeId, blockingConsumerIds, budgets, treeTag, tenantTag, stoppingToken)
+                .ConfigureAwait(false);
+        }
 
         // Drain orphaned pins in bulk before any reactivation machinery runs
         // (issue #3105). Placed here because the machinery below is the wrong
@@ -3604,8 +3738,22 @@ internal sealed class LatticeWalGcScheduler(
     /// consulted only for consumers absent from the in-memory cursor registry,
     /// which is what makes them eligible to be examined here.
     /// </para>
+    /// <para>
+    /// <b>The return value is three-valued, and the distinction is
+    /// load-bearing (issue #3164).</b> <see langword="null"/> means no
+    /// classification ran on this call - no storage provider, rate limited by
+    /// <see cref="OrphanSweepInterval"/>, cancelled, or
+    /// <paramref name="classifyFloorHolders"/> was false. An empty list means
+    /// the floor holders were classified and none of them is repairable. Those
+    /// are opposite instructions to the caller, because the sweep is rate
+    /// limited to once per <see cref="OrphanSweepInterval"/> while passes run at
+    /// the cadence floor: most passes return <see langword="null"/>, and a
+    /// caller that read that as "nothing to repair" would end the blocked
+    /// episode on most passes and destroy the attempt budget with it, which is
+    /// issue #2772 rebuilt one level up. Do not collapse this to a list.
+    /// </para>
     /// </remarks>
-    private async Task SweepOrphanedMaterialiserPinsAsync(
+    private async Task<IReadOnlyList<string>?> SweepOrphanedMaterialiserPinsAsync(
         string treeId,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
@@ -3616,13 +3764,13 @@ internal sealed class LatticeWalGcScheduler(
         // and the sweep's whole authority to delete rests on that distinction.
         if (leafStateStorage is null)
         {
-            return;
+            return null;
         }
 
         var now = _time.GetUtcNow();
         if (_lastOrphanSweep.TryGetValue(treeId, out var last) && now - last < OrphanSweepInterval)
         {
-            return;
+            return null;
         }
 
         _lastOrphanSweep[treeId] = now;
@@ -3649,7 +3797,7 @@ internal sealed class LatticeWalGcScheduler(
         {
             if (stoppingToken.IsCancellationRequested)
             {
-                return;
+                return null;
             }
 
             IReadOnlyDictionary<string, HybridLogicalClock> pins;
@@ -3696,15 +3844,16 @@ internal sealed class LatticeWalGcScheduler(
         // than the floor this sweep is about to leave behind. Sited above the
         // empty-population return so that a tree holding no pins at all still
         // records a measured (0, 0) coverage rather than an absence.
+        List<string>? repairable = null;
         if (floorHolders is not null)
         {
-            await ClassifyFloorHolderPinsAsync(
+            repairable = await ClassifyFloorHolderPinsAsync(
                 treeId, floorHolders, located.Count, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
         }
 
         if (located.Count == 0)
         {
-            return;
+            return repairable;
         }
 
         var retired = 0;
@@ -3811,6 +3960,8 @@ internal sealed class LatticeWalGcScheduler(
 
             batch.Clear();
         }
+
+        return repairable;
     }
 
     /// <summary>
@@ -4159,12 +4310,17 @@ internal sealed class LatticeWalGcScheduler(
     /// measured one - that made this defect invisible.
     /// </para>
     /// <para>
-    /// <b>Diagnostic only.</b> Nothing here feeds the trim predicate, and a
-    /// failed read is swallowed into the <c>unreadable</c> arm by
-    /// <see cref="ReadBlockingPinStateAsync"/> rather than failing the sweep.
+    /// <b>Diagnostic, plus one action.</b> Nothing here feeds the trim
+    /// predicate, and a failed read is swallowed into the <c>unreadable</c> arm
+    /// by <see cref="ReadBlockingPinStateAsync"/> rather than failing the sweep.
+    /// The returned list is the subset classified exactly
+    /// <see cref="WalGcBlockingPinState.CheckpointedUncovered"/>, which issue
+    /// #3164 drives into the existing reactivation remedy; see
+    /// <see cref="_repairableFloorHolders"/>. It is a filter over what was
+    /// already read and measured, not a second pass.
     /// </para>
     /// </remarks>
-    private async Task ClassifyFloorHolderPinsAsync(
+    private async Task<List<string>> ClassifyFloorHolderPinsAsync(
         string treeId,
         List<KeyValuePair<string, HybridLogicalClock>> floorHolders,
         int population,
@@ -4173,6 +4329,7 @@ internal sealed class LatticeWalGcScheduler(
         CancellationToken stoppingToken)
     {
         var classified = 0;
+        var repairable = new List<string>();
 
         for (var i = 0; i < floorHolders.Count; i++)
         {
@@ -4198,6 +4355,21 @@ internal sealed class LatticeWalGcScheduler(
             RecordBlockingPinState(state, partitionTag, treeTag, tenantTag);
             classified++;
 
+            // Collect the one state a reactivation can repair (issue #3164).
+            // The equality is exact and deliberately not a set: every other
+            // state either has nothing to repair or must not be repaired.
+            // NeverCheckpointed is the dangerous one - its leaf has applied
+            // nothing, so its Zero pin is a correct block rather than a coverage
+            // hole, and driving it toward coverage would convert that block into
+            // a trim entitlement the leaf never earned. Orphaned has no leaf
+            // left to activate and is the bulk sweep's business, NoDurableState
+            // has no checkpoint to make a snapshot from, and Unreadable is an
+            // unknown that must fail closed.
+            if (state == WalGcBlockingPinState.CheckpointedUncovered)
+            {
+                repairable.Add(consumerId);
+            }
+
             logger.LogInformation(
                 "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState}, from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. Diagnostic only - it does not change what the pass may trim.",
                 consumerId,
@@ -4212,6 +4384,8 @@ internal sealed class LatticeWalGcScheduler(
             LatticeMetrics.FloorHolderClassified, treeTag, tenantTag, classified);
         RecordFloorHolderClassification(
             LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, Math.Max(0, population - classified));
+
+        return repairable;
     }
 
     /// <summary>
