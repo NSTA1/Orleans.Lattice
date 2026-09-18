@@ -1781,6 +1781,36 @@
       ]
     },
     {
+      "id": 3158,
+      "title": "WAL GC floor-holder classification coverage over range - issue #3158",
+      "description": "Totals (not a rate) of orleans.lattice.wal.gc.floor_holder_classification over the selected range, per tree and status (issue #3158). THE QUESTION THIS ANSWERS: of this tree's durable materialiser pins, how many did the floor-holder classification actually look at? READ IT WITH THE BLOCKING-PIN-STATE PANEL ABOVE, ALWAYS - it is the denominator that instrument has never carried, and without it that panel cannot distinguish two opposite conditions. Five zero status arms on a tree NOTHING EVER CLASSIFIED are byte-identical to five measured zeroes on a tree that WAS classified and found nothing in a notable state. On the live estate that ambiguity went unread for the entire life of a tree carrying 1.07 GiB of WAL that reclaimed nothing: its five blocking_pin_state arms sat at zero under the reserved partition value none - the signature of priming at registration and not one measurement since - and were taken to mean no pin was in a notable state, when they meant NO PIN WAS EVER LOOKED AT. The cause was structural rather than operational: the classifier had exactly one call site, on the floor-blocked heal path, and its input was derived from the floor-blocked report. A tree classified over_ceiling produces no such report, so the classifier was never called for it AND would have iterated an empty list if it had been - which is why hoisting the call alone would have changed nothing while looking entirely correct. The candidates now come from the sweep's own enumeration of the durable pin store, which owes the report nothing. THE TWO ARMS PARTITION THE ENUMERATED POPULATION, so sum by (tree) over one sweep is the tree's whole durable pin count and classified / sum is the coverage fraction outright. classified = a pin whose leaf state was read and whose result was recorded on blocking_pin_state. unclassified = a pin the sample did not reach. A TINY CLASSIFIED FRACTION IS THE DESIGNED BEHAVIOUR AND NOT AN ALARM: every classification is a durable storage read, one live tree was measured at 52,224 pins on a single sweep, and classifying a population would turn a diagnostic into a storage-read storm on a tree that is already unhealthy - so the sample is capped per sweep by a constant independent of how many pins the tree holds. THE SAMPLE IS NOT ARBITRARY: the durable materialiser offset floor is a MIN over every pin, so the pins carrying the lowest frontier are the ones actually holding it, and those are the ones sampled, in ascending frontier order with ties broken on the consumer id so the reported holders are stable across scrapes rather than churning with dictionary order on a tree whose pins all sit at HybridLogicalClock.Zero. Both arms are zero-primed per tree above every early return, so a flat zero is a measured zero and an absent tree means the classification is not wired on this silo.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 323
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, status) (increase(orleans_lattice_wal_gc_floor_holder_classification_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "legendFormat": "{{tree}} {{status}}"
+        }
+      ]
+    },
+    {
       "id": 3107,
       "title": "WAL compactions by trigger over range - issue #3107",
       "description": "Totals (not a rate) of orleans.lattice.wal.compactions over the selected range, per tree and trigger (issue #3107). THE QUESTION THIS ANSWERS: is the WAL actually RETURNING the space its garbage collector trims? TRIMMING DOES NOT FREE DISK ON A LOG-STRUCTURED PROVIDER. A trim marks entries dead and appends a trim marker; only a COMPACTION - a rewrite of the surviving entries into a fresh file - returns the bytes, and until issue #3107 no series anywhere said whether that rewrite was happening. MEASURED ON A LIVE CONTAINER: a tree trimmed 113,675 entries over 55 minutes while its WAL GREW by 1.1 MB, and orleans.lattice.wal.entries_trimmed charted that as healthy progress because it counts ENTRIES, never BYTES. READ IT AGAINST orleans.lattice.wal.entries_trimmed: sustained trimming with this panel flat means dead bytes are accumulating and the configured thresholds are not being reached. THE TRIGGER ARMS ARE THE COMPLETE SET OF PATHS THAT CAN REWRITE A SHARD. ratio = dead bytes reached CompactionThreshold as a FRACTION of the file (the historical and only pre-#3107 trigger), which is well amortised - at the 0.5 default it writes about one live byte per dead byte reclaimed - but is UNBOUNDED IN ABSOLUTE TERMS: a tree that stalls at a dead fraction of 0.49 strands that space indefinitely however many gigabytes it is, which is exactly what the measurement above caught at a dead fraction of 0.08 on 11.7 GB. ceiling = dead bytes reached the ABSOLUTE CompactionMaximumDeadBytes cap added by #3107. reconcile = an unconditional compaction at shard activation, which never fires for an actively-written tree because its WAL grain does not deactivate. A FLAT ceiling ARM IS CORRECT, NOT A FAULT: CompactionMaximumDeadBytes defaults to 0 (disabled), because compaction rewrites every LIVE byte to reclaim the DEAD ones, so cost per byte reclaimed is live/dead and an absolute cap far below the live size raises write amplification without bound. Enabling it by default would be a silent I/O regression on every existing deployment, so it is opt-in and this arm stays at a measured zero until an operator sets the cap. EVERY ARM IS ZERO-PRIMED PER TREE when a shard first loads, so a flat zero is a MEASURED zero rather than an unpublished series - the distinction that mattered in #3107, where 'this WAL has never reclaimed a byte' and 'this deployment does not run the file provider' both rendered as no-data. SCOPE: emitted by the FILE WAL provider only. A deployment on a backend whose trim deletes rows outright carries no dead bytes and needs no compaction, so an absent series there is correct.",

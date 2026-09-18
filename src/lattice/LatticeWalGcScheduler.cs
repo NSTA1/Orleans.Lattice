@@ -320,6 +320,39 @@ internal sealed class LatticeWalGcScheduler(
     private static readonly TimeSpan OrphanSweepInterval = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How many durable materialiser pins one sweep may classify onto
+    /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/> when no floor-blocked
+    /// report named a blocker (issue #3158).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is a read budget, and it is the whole safety argument.</b> Each
+    /// classification is a durable leaf-state read, and the population it is
+    /// drawn from is unbounded: the tree this diagnostic exists for was measured
+    /// holding 52,224 pins on a single sweep. Classifying a population is the
+    /// same defect as the one the latch in
+    /// <see cref="ClassifyBlockingPinsAsync"/> already guards against - turning
+    /// a diagnostic into an unbounded stream of storage calls on a tree that is,
+    /// by construction, already unhealthy - four orders of magnitude larger.
+    /// The bound is therefore applied where the candidates are <i>selected</i>,
+    /// so it caps the sample in memory as well as the reads it licenses, and it
+    /// is a constant rather than a fraction so that it cannot grow with the
+    /// population it is protecting against.
+    /// </para>
+    /// <para>
+    /// <b>Why so few are enough.</b> A reader needs to know which state the
+    /// floor's holder is in, not a census. The durable materialiser offset floor
+    /// is a minimum over every pin, so the pins carrying the lowest frontier are
+    /// the ones holding it and every other pin is, by definition, not the
+    /// answer. Eight matches <c>LatticeWalGc.MaxReportedBlockingConsumers</c>,
+    /// which is the width the floor's own blocking report settled on for the
+    /// same question on the blocked arm, so the two arms report a comparable
+    /// number of holders rather than one being arbitrarily richer.
+    /// </para>
+    /// </remarks>
+    private const int MaxFloorHolderClassificationsPerSweep = 8;
+
+    /// <summary>
     /// UTC instant of the last bulk orphan sweep per tree, so the sweep honours
     /// <see cref="OrphanSweepInterval"/> rather than the blocked tree's pass
     /// cadence.
@@ -1903,10 +1936,27 @@ internal sealed class LatticeWalGcScheduler(
                 // arm so the two cannot double-sweep, and is fail-closed, so a
                 // pin that might still be live is never retired and no trim is
                 // ever authorised over an unreplayed prefix.
+                //
+                // classifyFloorHolders closes the second half of the same
+                // reachability gap (issue #3158). The paragraph above is right
+                // that ClassifyBlockingPinsAsync cannot be hoisted here - it
+                // iterates a report this tree does not produce - but that was
+                // read for years as "this tree cannot be classified", which does
+                // not follow. The sweep enumerates the true pin population, and
+                // ReadBlockingPinStateAsync depends on nothing from the report,
+                // so the classification is derivable from what this arm already
+                // holds. Without it blocking_pin_state was reachable only from
+                // the blocked branch, leaving the byte-ceiling tree - the one
+                // tree whose WAL demonstrably will not shrink - as the single
+                // tree the diagnostic could not describe. It is bounded to
+                // MaxFloorHolderClassificationsPerSweep reads and passed only
+                // here, so the blocked arm's once-per-consumer-per-episode
+                // classification is untouched.
                 if (overCeiling)
                 {
                     await SweepOrphanedMaterialiserPinsAsync(
-                        treeId, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
+                        treeId, treeTag, tenantTag, stoppingToken, classifyFloorHolders: true)
+                        .ConfigureAwait(false);
                 }
             }
 
@@ -2262,6 +2312,18 @@ internal sealed class LatticeWalGcScheduler(
         // this tree; a real classification always carries its numeric
         // partition, so the two can never be confused in a query.
         PrimeBlockingPinStates(LatticeMetrics.PartitionNone, treeTag, tenantTag);
+
+        // Zero-prime the floor-holder coverage denominator on the same footing
+        // (issue #3158). This instrument exists precisely so that a zero on
+        // blocking_pin_state can be told apart from a silence, so an absence
+        // here would reintroduce one level up the ambiguity it was added to
+        // remove: a reader could not distinguish "this silo does not classify
+        // floor holders" from "it classified none this window". Minted at the
+        // top of CollectTreeAsync above every early return, so the series exists
+        // for a tree that never breaches its ceiling and never reaches the
+        // sweep at all.
+        RecordFloorHolderClassification(LatticeMetrics.FloorHolderClassified, treeTag, tenantTag, 0);
+        RecordFloorHolderClassification(LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, 0);
 
         // Issue #2692 Half B. The drive verdicts are primed on the same footing
         // and for the same reason: 'drove_lifted' is the series a reader will
@@ -3547,7 +3609,8 @@ internal sealed class LatticeWalGcScheduler(
         string treeId,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
-        CancellationToken stoppingToken)
+        CancellationToken stoppingToken,
+        bool classifyFloorHolders = false)
     {
         // No provider means no way to distinguish an orphan from a live leaf,
         // and the sweep's whole authority to delete rests on that distinction.
@@ -3573,6 +3636,14 @@ internal sealed class LatticeWalGcScheduler(
         // duplicated across keys by an earlier routing is one pin to a reader
         // and must be removed from all of them.
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        // The lowest-frontier pins seen so far, ascending, capped at
+        // MaxFloorHolderClassificationsPerSweep. Collected only when this arm
+        // owes a classification, and bounded in memory rather than sorted at the
+        // end, so a 52,224-pin tree costs a constant-size list either way.
+        var floorHolders = classifyFloorHolders
+            ? new List<KeyValuePair<string, HybridLogicalClock>>(MaxFloorHolderClassificationsPerSweep)
+            : null;
 
         for (var i = 0; i < keys.Count; i++)
         {
@@ -3611,7 +3682,24 @@ internal sealed class LatticeWalGcScheduler(
                 }
 
                 foundAt.Add(keys[i]);
+
+                if (floorHolders is not null)
+                {
+                    OfferFloorHolderCandidate(
+                        floorHolders, MaxFloorHolderClassificationsPerSweep, consumerId, pins[consumerId]);
+                }
             }
+        }
+
+        // Classify the floor's holders before anything is retired, so the states
+        // recorded describe the floor as it stood when it was enumerated rather
+        // than the floor this sweep is about to leave behind. Sited above the
+        // empty-population return so that a tree holding no pins at all still
+        // records a measured (0, 0) coverage rather than an absence.
+        if (floorHolders is not null)
+        {
+            await ClassifyFloorHolderPinsAsync(
+                treeId, floorHolders, located.Count, treeTag, tenantTag, stoppingToken).ConfigureAwait(false);
         }
 
         if (located.Count == 0)
@@ -3937,6 +4025,205 @@ internal sealed class LatticeWalGcScheduler(
                 state);
         }
     }
+
+    /// <summary>
+    /// Offers one durable materialiser pin to a bounded ascending-by-frontier
+    /// sample of the pins holding a tree's offset floor (issue #3158).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the lowest frontier is the right sample.</b> The durable
+    /// materialiser offset floor is a <i>minimum</i> over every pin, so the pins
+    /// carrying the lowest frontier are the ones holding it, and any pin above
+    /// them is by definition not the answer to "what is pinning this tree". A
+    /// sample drawn in enumeration order would be an arbitrary eight of tens of
+    /// thousands and would almost never contain the holder.
+    /// </para>
+    /// <para>
+    /// <b>Bounded in memory as well as in reads.</b> <paramref name="candidates"/>
+    /// never exceeds <paramref name="cap"/>, so enumerating a 52,224-pin tree
+    /// costs a constant-size list and <c>O(population * cap)</c> comparisons
+    /// rather than a sort over the population. This is the single point at which
+    /// the read budget is enforced: the classification reads exactly the
+    /// candidates this method admitted.
+    /// </para>
+    /// <para>
+    /// <b>Ties break on the consumer id</b> so the sample is stable across
+    /// sweeps. A tree whose pins are all <see cref="HybridLogicalClock.Zero"/> -
+    /// the birth-seeded block pin, and the common shape on a tree that has never
+    /// trimmed - would otherwise report a different eight holders every sweep
+    /// purely from dictionary ordering, and a reader comparing two scrapes could
+    /// not tell that from the population actually changing.
+    /// </para>
+    /// <para>
+    /// A pin found under more than one read key is one pin to a reader, so a
+    /// repeat offer for a consumer already held is collapsed onto the lower of
+    /// the two frontiers rather than admitted twice.
+    /// </para>
+    /// </remarks>
+    internal static void OfferFloorHolderCandidate(
+        List<KeyValuePair<string, HybridLogicalClock>> candidates,
+        int cap,
+        string consumerId,
+        HybridLogicalClock frontier)
+    {
+        if (cap <= 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            if (!string.Equals(candidates[i].Key, consumerId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (frontier.CompareTo(candidates[i].Value) >= 0)
+            {
+                return;
+            }
+
+            // Re-insert rather than overwrite in place: the frontier that just
+            // fell is also the sort key, so leaving it where it sits would break
+            // the ascending order every later offer depends on.
+            candidates.RemoveAt(i);
+            break;
+        }
+
+        var insertAt = candidates.Count;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var comparison = frontier.CompareTo(candidates[i].Value);
+            if (comparison < 0
+                || (comparison == 0 && string.CompareOrdinal(consumerId, candidates[i].Key) < 0))
+            {
+                insertAt = i;
+                break;
+            }
+        }
+
+        if (insertAt >= cap)
+        {
+            return;
+        }
+
+        candidates.Insert(insertAt, new KeyValuePair<string, HybridLogicalClock>(consumerId, frontier));
+        if (candidates.Count > cap)
+        {
+            candidates.RemoveAt(candidates.Count - 1);
+        }
+    }
+
+    /// <summary>
+    /// Classifies the durable-pin state of the pins holding a tree's
+    /// materialiser offset floor, for a tree that reached the sweep without a
+    /// floor-blocked report to name a blocker (issue #3158).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The gap this closes.</b>
+    /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/> is the only signal
+    /// that names <i>which</i> durable pin holds a tree's WAL floor, and until
+    /// this method existed it was reachable from exactly one place: the
+    /// floor-blocked heal path. A tree classified <c>over_ceiling</c> produces
+    /// no blocking report, so <see cref="ClassifyBlockingPinsAsync"/> was never
+    /// called for it - and its driving argument being derived from that same
+    /// report, calling it anyway would have iterated an empty list and recorded
+    /// nothing. The diagnostic was therefore structurally unavailable on exactly
+    /// the population it was built for: a tree earns <c>over_ceiling</c> by
+    /// having a WAL that will not shrink. Measured on a live deployment as five
+    /// arms, all zero, all under the reserved partition value
+    /// <see cref="LatticeMetrics.PartitionNone"/>, against 1.07 GiB of retained
+    /// WAL - the signature of priming and nothing since.
+    /// </para>
+    /// <para>
+    /// <b>Both halves are addressed here, which is why this is not simply the
+    /// other method called from a second site.</b> Reachability comes from the
+    /// sweep, which issue #3154 already brought to the breach arm. The
+    /// <i>input</i> comes from the sweep's own enumeration of the durable pin
+    /// store - the only view of the true population, the floor's report being
+    /// capped - so the candidates owe nothing to a report this tree does not
+    /// have.
+    /// </para>
+    /// <para>
+    /// <b>The read budget.</b> At most
+    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> durable reads per
+    /// sweep, enforced by <see cref="OfferFloorHolderCandidate"/> when the
+    /// sample was built, independent of how many pins the tree holds. Coverage
+    /// is then reported on
+    /// <see cref="LatticeMetrics.WalGcFloorHolderClassification"/> so the small
+    /// sample is visible as a small sample: without that denominator a handful
+    /// of classifications on a 52,224-pin tree would read as a complete census,
+    /// which is the same class of misreading - a primed zero taken for a
+    /// measured one - that made this defect invisible.
+    /// </para>
+    /// <para>
+    /// <b>Diagnostic only.</b> Nothing here feeds the trim predicate, and a
+    /// failed read is swallowed into the <c>unreadable</c> arm by
+    /// <see cref="ReadBlockingPinStateAsync"/> rather than failing the sweep.
+    /// </para>
+    /// </remarks>
+    private async Task ClassifyFloorHolderPinsAsync(
+        string treeId,
+        List<KeyValuePair<string, HybridLogicalClock>> floorHolders,
+        int population,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        CancellationToken stoppingToken)
+    {
+        var classified = 0;
+
+        for (var i = 0; i < floorHolders.Count; i++)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var consumerId = floorHolders[i].Key;
+            var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
+            var partitionTag = resolved
+                ? partition.ToString(CultureInfo.InvariantCulture)
+                : LatticeMetrics.PartitionUnknown;
+
+            var state = resolved
+                ? await ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
+                : WalGcBlockingPinState.Unreadable;
+
+            // Same two-step as the blocked arm: prime this partition's other
+            // arms before recording the one that resolved, so a zero on a state
+            // reads as measured-and-not-this-state rather than as silence.
+            PrimeBlockingPinStates(partitionTag, treeTag, tenantTag);
+            RecordBlockingPinState(state, partitionTag, treeTag, tenantTag);
+            classified++;
+
+            logger.LogInformation(
+                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState}, from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. Diagnostic only - it does not change what the pass may trim.",
+                consumerId,
+                treeId,
+                partitionTag,
+                state,
+                floorHolders.Count,
+                population);
+        }
+
+        RecordFloorHolderClassification(
+            LatticeMetrics.FloorHolderClassified, treeTag, tenantTag, classified);
+        RecordFloorHolderClassification(
+            LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, Math.Max(0, population - classified));
+    }
+
+    /// <summary>
+    /// Records one <see cref="LatticeMetrics.WalGcFloorHolderClassification"/>
+    /// arm.
+    /// </summary>
+    private static void RecordFloorHolderClassification(
+        KeyValuePair<string, object?> status,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        long delta) =>
+        LatticeMetrics.WalGcFloorHolderClassification.Add(delta, treeTag, status, tenantTag);
 
     /// <summary>
     /// Reads one leaf's persisted projection checkpoint for a partition

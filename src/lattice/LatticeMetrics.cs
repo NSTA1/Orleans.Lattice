@@ -4494,6 +4494,72 @@ public static class LatticeMetrics
         new(TagStatus, "unreadable");
 
     /// <summary>
+    /// How much of a tree's durable materialiser pin population the WAL GC
+    /// floor-holder classification actually looked at on a sweep, tagged by
+    /// tree and status (issue #3158).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The denominator <see cref="WalGcBlockingPinStates"/> never carried.</b>
+    /// That instrument reports a pin's state but says nothing about how many
+    /// pins were examined to produce it, so a tree showing five zeroes is
+    /// indistinguishable from a tree whose classifier was never reached - which
+    /// is exactly how issue #3158 stayed invisible: the byte-ceiling tree's arms
+    /// existed, at zero, under the reserved partition value
+    /// <see cref="PartitionNone"/>, and were read as "no pin is in a notable
+    /// state" when they meant "nothing ever looked". The two arms here are that
+    /// missing denominator, and they make the difference a measurement rather
+    /// than an inference.
+    /// </para>
+    /// <para>
+    /// <b>The arms partition the enumerated population</b>, so
+    /// <c>sum by (tree)</c> over one sweep is the tree's whole durable pin count
+    /// and <c>classified / sum</c> is the coverage fraction directly. A
+    /// deliberately tiny fraction is the expected reading, not an alarm: each
+    /// classification is a durable storage read, so the sample is capped per
+    /// sweep at a constant that is independent of the population. A tree holding
+    /// 52,224 pins is therefore expected to report a handful classified against
+    /// tens of thousands unclassified, and <c>unclassified</c> is the series
+    /// that says so rather than leaving a reader to assume the sample was
+    /// complete.
+    /// </para>
+    /// <para>
+    /// <b>Which pins are sampled is not arbitrary.</b> The durable materialiser
+    /// offset floor is a minimum over every pin, so the pins carrying the lowest
+    /// frontier are the ones actually holding it. The sample is those pins, in
+    /// ascending frontier order, which is why a handful of them answers the
+    /// operational question - <i>which</i> pin holds this tree's WAL floor, and
+    /// what state is its leaf in - that a census of the other 52,216 would not.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> WalGcFloorHolderClassification =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.floor_holder_classification", unit: "{pin}",
+            description: "How much of a tree's durable materialiser pin population the WAL GC floor-holder classification examined on a sweep (issue #3158), tagged by tree and status. The two arms partition the enumerated population, so sum by (tree) over one sweep is the tree's whole durable pin count and classified / sum is the coverage fraction. 'classified' is a pin whose leaf state was read and whose result was recorded on 'orleans.lattice.wal.gc.blocking_pin_state'. 'unclassified' is a pin the sample did not reach. This is the denominator that instrument never carried: without it, five zero arms on a tree that was never classified are byte-identical to five measured zeroes on a tree that was, which is how issue #3158 stayed invisible on the one tree - the byte-ceiling tree - the classifier exists to diagnose. A very small classified fraction is the designed behaviour, not an alarm: each classification is a durable storage read, so the sample is capped per sweep by a constant independent of the population, and a tree holding tens of thousands of pins is expected to report a handful classified against the rest unclassified. The sample is not arbitrary - the durable materialiser offset floor is a minimum over every pin, so the pins carrying the lowest frontier are the ones holding it, and those are the ones sampled, in ascending frontier order. Both arms are zero-primed per tree at the top of the tree's collection, above every early return, so an absent series means the classification is not wired on this silo rather than that it found nothing. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcFloorHolderClassification"/>.</summary>
+    public const string WalGcFloorHolderClassificationName =
+        "orleans.lattice.wal.gc.floor_holder_classification";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcFloorHolderClassification"/> for a pin whose leaf state
+    /// was read and whose result was recorded on
+    /// <see cref="WalGcBlockingPinStates"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> FloorHolderClassified =
+        new(TagStatus, "classified");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcFloorHolderClassification"/> for a pin the bounded sample
+    /// did not reach. The complement of <see cref="FloorHolderClassified"/> over
+    /// the enumerated population, and the arm that stops a small sample being
+    /// mistaken for a complete one.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> FloorHolderUnclassified =
+        new(TagStatus, "unclassified");
+
+    /// <summary>
     /// How far each WAL GC scheduling pass actually got: the reachability layer
     /// for every instrument sited inside the region that stops executing when
     /// the scheduler degrades (issue #3075).

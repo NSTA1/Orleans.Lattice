@@ -66,6 +66,23 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             grain.Pins[consumerId] = HybridLogicalClock.Zero;
         }
 
+        /// <summary>
+        /// Seeds a pin at an explicit frontier. The durable materialiser offset
+        /// floor is a minimum over every pin, so the frontier is what decides
+        /// which pins are actually holding it - and therefore which ones the
+        /// bounded floor-holder sample of issue #3158 must pick.
+        /// </summary>
+        public void Seed(string key, string consumerId, HybridLogicalClock frontier)
+        {
+            if (!_grains.TryGetValue(key, out var grain))
+            {
+                grain = new FakePinGrain(this, key);
+                _grains[key] = grain;
+            }
+
+            grain.Pins[consumerId] = frontier;
+        }
+
         public IWalMaterialiserPinGrain For(string key)
         {
             if (!_grains.TryGetValue(key, out var grain))
