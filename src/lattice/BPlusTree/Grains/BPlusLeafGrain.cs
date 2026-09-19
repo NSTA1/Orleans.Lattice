@@ -2502,7 +2502,7 @@ internal sealed partial class BPlusLeafGrain(
         // no-op rather than seeding against an empty consumer id.
         if (state.State.TreeId is not null)
         {
-            await SeedDurableMaterialiserBlockPinAsync();
+            await SeedDurableMaterialiserBlockPinAsync(init.WalHeadsAtBirth);
         }
     }
 

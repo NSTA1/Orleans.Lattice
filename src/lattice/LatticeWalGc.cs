@@ -671,6 +671,53 @@ public sealed class LatticeWalGc(
 
             if (pin <= HybridLogicalClock.Zero)
             {
+                // The durable OFFSET floor already speaks for this consumer, so
+                // its Zero frontier is not evidence of an unprotected prefix
+                // (issue #3094). A consumer lands in the coverage set only by
+                // reporting a real checkpoint offset (>= 0);
+                // ComputeMaterialiserOffsetFloorAsync folds exactly those into
+                // the offset floor and deliberately excludes "-1" reporters.
+                // TrimShardAsync then refuses to trim any entry ABOVE that
+                // offset floor EVEN WHEN IT IS HLC-ELIGIBLE, so everything this
+                // pin exists to retain is retained on the offset axis without
+                // the frontier branch having to act.
+                //
+                // Why this is a removal of redundancy and not a relaxation: the
+                // block-pin branch does not gate one partition, it disables the
+                // cursor trim for the entire tree. A newborn leaf's keys hash
+                // across every WAL partition, and splits admit newborns
+                // continuously, so under the old "-1" seed a growing tree always
+                // held at least one Zero-frontier pin and therefore never
+                // scanned a single shard. The pins that genuinely have no offset
+                // cover - a never-checkpointed leaf that reported "-1", the case
+                // this branch was written for - are absent from the coverage set
+                // and still block below, unchanged.
+                //
+                // THIS CLAUSE IS DELIBERATELY INSIDE THE ZERO BRANCH, and must
+                // stay here. Hoisting it above the branch would also skip the
+                // `floor` fold at the bottom of the loop, silently dropping a
+                // covered consumer that publishes a REAL non-Zero frontier out
+                // of the HLC cursor floor - a no-loss regression, because that
+                // floor is what keeps a reactivated leaf's live tail readable.
+                // The offset-axis safety argument above does NOT transfer to
+                // that value: `floor` is the HLC cursor floor, a separate field
+                // of DurableMaterialiserFloor from the offset floor
+                // TrimShardAsync vetoes on. Inside this branch the exemption is
+                // inert with respect to the fold by construction - the branch
+                // condition makes `pin` a no-usable-frontier sentinel, and every
+                // pre-existing path out of it already `continue`s without
+                // folding ("a blocking pin contributes no usable frontier").
+                // So this clause can only change whether the consumer is
+                // RECORDED AS BLOCKING; it cannot change what is folded.
+                //
+                // It is the narrow sibling of the entitlement #3172 established
+                // at the foot of this loop, which exempts covered consumers from
+                // the `uncovered` fold and deliberately leaves `floor` alone.
+                if (coveredConsumerIds is not null && coveredConsumerIds.Contains(consumerId))
+                {
+                    continue;
+                }
+
                 // Pin carries no usable offset: block the cursor branch for the
                 // partition this pin belongs to, so nothing in that partition is
                 // trimmed by cursor. Both a never-checkpointed leaf and a
