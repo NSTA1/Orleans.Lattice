@@ -1092,6 +1092,45 @@
         { "refId": "B", "expr": "sum(orleans_lattice_wal_replay_permits_available{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "permits available" },
         { "refId": "C", "expr": "sum(orleans_lattice_wal_replay_permits_queued{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "activations queued for a permit" }
       ]
+    },
+    {
+      "id": 160,
+      "title": "Leaf snapshot capture-DRIVER declines (rate) by reason - issue #3185 (minting rate of frozen floor holders)",
+      "description": "Capture DRIVERS that declined to drive a leaf-snapshot capture at all (orleans.lattice.leaf.snapshot.driver.declines), split by reason - issue #3185. THIS IS NOT THE CAPTURE-DECLINES PANEL ABOVE AND THE TWO MUST NEVER BE SUMMED. orleans.lattice.leaf.snapshot.capture.declines counts declines raised INSIDE CaptureSnapshotCoreAsync, so its declines and the attempt counter partition that method's invocations exactly; these are raised in a CALLER THAT NEVER REACHED IT, so folding them together counts a strict superset and corrupts the decline-versus-attempt ratio that counter exists to report. THE TARGETS ARE ORDERED DELIBERATELY AND THE PANEL IS NOT A SIX-ARM BREAKDOWN. Target A isolates reason=deactivate_unproven_coverage_stale, which is the MINTING RATE of the frozen floor-holder population that blocks WAL reclamation estate-wide; the remaining arms are collapsed into target B behind a reason!= matcher so that deactivate_unproven_coverage_current - which dominates on a healthy estate, because it is the harmless decline through the same gate by the same predicate - cannot bury the one arm that carries signal. That burial is the exact failure the arms were split to prevent, and a panel plotting all six together would reintroduce it at the presentation layer. A leaf deactivating on the stale arm carries a projection checkpoint above its durable snapshot coverage and neither advanced a checkpoint over cache-resident applies nor cold-rebuilt its cache from the WAL start, so it cannot honestly stamp coverage: THE DECLINE IS CORRECT BEHAVIOUR AND NOT A FAULT, and what is charted is a rate rather than an error. Target C overlays the WAL GC drive's completion rate on the same axis so the crossing is visible without arithmetic; the ratio panel below states the same comparison as a single number. reason=deactivate_unproven_unclassified means the classifier itself threw and should be zero outside a test harness - it is a sink kept separate so neither informative arm can silently absorb an unknown. The three recheck_* arms are periodic-recheck gates that were previously silent and are charted for completeness, not as a health signal. FALSIFIABLE CONSEQUENCE, worth checking before acting on this series: the frozen population is believed to consist of leaves that died WITHOUT running their deactivate hook, because the stale shape is by construction unreachable from inside the activation that observes it - every internal route that advances a checkpoint also latches the no-loss signal that OPENS this gate and heals the leaf. If the stale arm instead tracks ordinary deactivation volume, that model is wrong and the remedy moves to the activation path. ABSENT IS NOT A MEASURED ZERO HERE, WHICH IS AN EXCEPTION TO MOST PANELS ON THIS DASHBOARD: this instrument is NOT zero-primed, matching its capture.declines sibling, so a series appears only on the first decline and a missing line is consistent BOTH with a build that lacks the instrument AND with one that carries it and has declined nothing. Confirm deployment from the image digest, never from the presence of this series.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 363 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason=\"deactivate_unproven_coverage_stale\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} MINTING frozen holders/s" },
+        { "refId": "B", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason!=\"deactivate_unproven_coverage_stale\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}}/s (benign)" },
+        { "refId": "C", "expr": "sum(rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "WAL GC drive completions/s (must exceed minting)" }
+      ]
+    },
+    {
+      "id": 161,
+      "title": "Frozen floor-holder minting vs WAL GC drive completion (ratio; ABOVE 1 = divergent) - issue #3185",
+      "description": "The single number that decides whether WAL reclamation converges: rate(orleans.lattice.leaf.snapshot.driver.declines{reason=deactivate_unproven_coverage_stale}) divided by rate(orleans.lattice.wal.gc.blocked_leaf_reactivations) - issue #3185. THE THRESHOLD IS 1 AND IT IS NOT A TUNING KNOB. Above 1 the frozen floor-holder population is minted faster than the WAL GC reactivation drive discharges it, so the population grows without bound and NO drive-side tuning converges - the mismatch is asymptotic rather than a matter of constants, because the drive is bounded per sweep behind a per-consumer cooldown while minting is bounded only by collection rate. Raising a per-sweep cap multiplies a bounded term and leaves an unbounded one unbounded; it buys a slower divergence, which is worse than no change because a halved growth rate reads as progress. Below 1 the drive is merely slow and tuning genuinely applies. THIS PANEL EXISTS BECAUSE THE COMPARISON WAS PREVIOUSLY DONE BY HAND, and a quotient computed by eye from two rate panels is exactly the reading that goes wrong: both terms are rates over a window, so eyeballing two lines on different scales silently substitutes a visual impression of slope for a division. READ IT AS A LEVEL AND NOT AS A TREND - it is already a ratio of two rates, so a second differentiation is meaningless. The denominator is clamped so a drive that has completed nothing in the window cannot produce a division by zero; a numerator above zero against a clamped denominator therefore renders as a large finite value rather than as a gap, which is the correct reading - minting with no discharge at all is the most divergent state available, not an absent one. NEITHER SERIES IS ZERO-PRIMED on the numerator side, so an absent line here does NOT establish that the build lacks the instruments; confirm deployment from the image digest. Do not compare this ratio against WAL BYTE totals to corroborate it: compaction reclaims DEAD bytes on a sawtooth whose envelope can fall while this ratio sits above 1, because the floor stall holds RETAINED bytes, which no compaction arm may discard. The two quantities move independently and a falling WAL is not evidence that this ratio is healthy.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 370 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "spanNulls": false },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(orleans_lattice_leaf_snapshot_driver_declines_total{reason=\"deactivate_unproven_coverage_stale\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum(rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 0.0001)", "legendFormat": "minting / drive completion (above 1 = divergent)" }
+      ]
     }
   ]
 }

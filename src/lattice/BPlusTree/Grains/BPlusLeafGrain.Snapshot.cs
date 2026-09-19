@@ -1676,6 +1676,92 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Records a capture DRIVER declining to drive a capture, on
+    /// <see cref="LatticeMetrics.LeafSnapshotDriverDeclines"/> (issue #3185).
+    /// Mirrors <see cref="ObserveSnapshotCaptureDecline"/>, including its
+    /// null-tree normalisation, but writes to the driver instrument so the
+    /// capture-decline counter stays exactly co-populated with the capture
+    /// attempt and duration instruments.
+    /// </summary>
+    private void ObserveDriverDecline(KeyValuePair<string, object?> reason)
+    {
+        var treeId = state.State.TreeId is { Length: > 0 } id ? id : null;
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+
+        if (treeId is null)
+        {
+            LatticeMetrics.LeafSnapshotDriverDeclines.Add(1, reason, tenantTag);
+            return;
+        }
+
+        LatticeMetrics.LeafSnapshotDriverDeclines.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            reason,
+            tenantTag);
+    }
+
+    /// <summary>
+    /// Classifies a graceful-deactivation capture declined by the #1535 no-loss
+    /// gate, splitting the harmless case from the one that mints a frozen
+    /// floor-holding pin (issue #3185).
+    /// <para>
+    /// The three arms partition every decline exhaustively:
+    /// <see cref="LatticeMetrics.DriverDeclineDeactivateCoverageStale"/> when
+    /// some partition's checkpoint has outrun its durable coverage (the pin this
+    /// leaf leaves behind is frozen below that checkpoint),
+    /// <see cref="LatticeMetrics.DriverDeclineDeactivateCoverageCurrent"/> when
+    /// coverage is already current everywhere and the decline costs nothing, and
+    /// <see cref="LatticeMetrics.DriverDeclineDeactivateUnclassified"/> when the
+    /// classification itself failed. The third arm is why a zero on the stale arm
+    /// is readable as "nothing was minted" rather than "nothing was looked at".
+    /// </para>
+    /// <para>
+    /// The coverage width is <see cref="ResolveCoveragePartitionCount"/> rather
+    /// than the configured partition count, matching
+    /// <see cref="CaptureSnapshotCoreAsync"/>, so a partition the WAL GC's pin
+    /// detector can see is one this classification can see too (issue #3157).
+    /// Measuring over a narrower range than the detector would under-report
+    /// exactly the partitions most likely to hold a floor.
+    /// </para>
+    /// <para>
+    /// Never throws. The decline path previously did no work at all, so any fault
+    /// introduced here would be a NEW way for deactivation to fail; an instrument
+    /// must not buy a measurement with a liveness risk it did not previously
+    /// carry.
+    /// </para>
+    /// </summary>
+    private async Task ObserveDeactivateCaptureDeclineAsync()
+    {
+        try
+        {
+            var resolved = await GetOptionsAsync();
+            var coverageWidth = ResolveCoveragePartitionCount(Math.Max(1, resolved.WalPartitions));
+            for (var p = 0; p < coverageWidth; p++)
+            {
+                if (GetCurrentCheckpointForPartition(p) > DurableSnapshotCoverageForPartition(p))
+                {
+                    ObserveDriverDecline(LatticeMetrics.DriverDeclineDeactivateCoverageStale);
+                    return;
+                }
+            }
+
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineDeactivateCoverageCurrent);
+        }
+        catch (Exception)
+        {
+            try
+            {
+                ObserveDriverDecline(LatticeMetrics.DriverDeclineDeactivateUnclassified);
+            }
+            catch (Exception)
+            {
+                // Observability must never fail a deactivation.
+            }
+        }
+    }
+
+    /// <summary>
     /// Activation-side advisory handler. Wraps
     /// <see cref="CaptureSnapshotAsync"/> in a best-effort try/catch so
     /// a transient snapshot-storage failure does not block the leaf
@@ -1883,6 +1969,7 @@ internal sealed partial class BPlusLeafGrain
             _checkpointPersistCountSinceRecheck++;
             if (_checkpointPersistCountSinceRecheck < threshold)
             {
+                ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCadenceNotReached);
                 return;
             }
             _checkpointPersistCountSinceRecheck = 0;
@@ -1892,6 +1979,7 @@ internal sealed partial class BPlusLeafGrain
         {
             // A previous capture has not yet completed; skip this
             // recheck. The next post-threshold persist will retry.
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCaptureInFlight);
             return;
         }
 
@@ -1919,6 +2007,7 @@ internal sealed partial class BPlusLeafGrain
         }
         if (!anyPartitionNeedsCapture)
         {
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCoverageCurrent);
             return;
         }
 
@@ -2025,6 +2114,16 @@ internal sealed partial class BPlusLeafGrain
         // fall-off guard) before signal (b) is ever latched.
         if (!_checkpointAdvancedThisActivation && !_cacheRebuiltFromWalStartThisActivation)
         {
+            // Instrument the decline (issue #3185). This gate is the minting site
+            // of the frozen floor-holder population: a leaf declining here while
+            // its coverage is stale leaves a pin frozen below its own checkpoint,
+            // dischargeable only by the WAL GC reactivation drive. The decline
+            // itself is CORRECT - such a leaf cannot honestly stamp coverage - so
+            // what needs measuring is the RATE, against the rate the drive can
+            // discharge. Until this arm existed the minting was entirely silent,
+            // which is why the frozen population reads as a static population
+            // rather than as the flow it is.
+            await ObserveDeactivateCaptureDeclineAsync();
             return;
         }
 
