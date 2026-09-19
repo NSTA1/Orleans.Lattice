@@ -1,0 +1,53 @@
+# Sidecar image for the registry fan-in driver.
+#
+# COPY-ONLY, deliberately. The driver is published on the HOST
+# (scripts/build-driver.ps1 runs `dotnet publish -r linux-x64`) and this file
+# only lays the output onto a runtime base. Nothing is restored or compiled
+# here, so the image builds behind a private NuGet feed with no secret plumbing
+# and no network access at build time - which matters because this rig's whole
+# purpose is to be startable on demand, many times, while a measurement window
+# is open.
+#
+# The driver joins the silo's cluster as an Orleans CLIENT, and the silo binds
+# its gateway to IPAddress.Loopback INSIDE its own container
+# (apps/repocontext/Hosting/DurabilitySelector.cs uses UseLocalhostClustering).
+# A published host port maps to the container's eth0, not to its loopback, so
+# no amount of port publishing makes the gateway reachable from outside. The
+# driver must therefore run in the silo's own network namespace:
+#
+#     docker run --rm --network container:<silo-container-id> \
+#         repocontext-fanin-driver:rig create --trees 40
+#
+# That is what "sidecar" means here - it is a constraint of the deployment, not
+# a stylistic choice.
+#
+# Build (from the repository root, after scripts/build-driver.ps1):
+#
+#     docker build -f benchmark/registry-fanin/Driver/Dockerfile \
+#         -t repocontext-fanin-driver:rig benchmark/registry-fanin/Driver/publish
+#
+# This file is named exactly `Dockerfile` and sits in the project directory,
+# which is the convention every other Dockerfile in this repository follows
+# (benchmark/host/Bench.Silo/Dockerfile sits beside its own csproj the same
+# way). It is not a style preference: HygieneFiles.Classify consults the
+# known-text-filenames list only for a file with NO extension, so a
+# `Dockerfile.<suffix>` name classifies as neither text nor binary and the
+# hygiene gates fail the build rather than silently skipping it - which is the
+# correct behaviour, since an unscanned tracked file would be exempt from the
+# em-dash and mojibake scans forever. Do not reintroduce a suffixed name.
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS runtime
+WORKDIR /app
+
+# The build context IS the publish directory, so this copies the published
+# closure and nothing else. Keeping the context that narrow means an accidental
+# `docker build .` from the repository root cannot silently bake the whole
+# working tree - including a NuGet.Config - into a layer.
+COPY . ./
+
+# Reports are written here when --out is passed. Declared so an operator can
+# bind-mount a host directory onto it without the mount creating a root-owned
+# path the chiseled image's non-root user cannot write.
+VOLUME ["/reports"]
+
+ENTRYPOINT ["dotnet", "Orleans.Lattice.Benchmark.RegistryFanIn.dll"]

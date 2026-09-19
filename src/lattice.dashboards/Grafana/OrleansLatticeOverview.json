@@ -1674,6 +1674,20 @@
       ]
     },
     {
+      "id": 75,
+      "title": "Tree-registry singleton - service time and fan-in width",
+      "description": "The tree registry is one activation for the whole cluster, addressed by every per-tree background service, so a cold start fans the whole estate onto it. When it saturates, callers see only a 30s response-deadline TimeoutException - and that same observation is produced both by a call served slowly and by a call never served at all, which have opposite remedies. registry.call.duration records only calls the grain actually ADMITTED, so read its tail together with its rate against the caller-side timeout count: a short tail whose rate is far below the offered load means the calls never reached the body at all (blocked in activation, or behind a turn that never yielded - neither of which an [AlwaysInterleave] attribute admits past), while a tail approaching the caller deadline at a matching rate means they were admitted and the time went on the awaited hop to the backing _lattice_trees tree. registry.call.in_flight is the fan-in WIDTH at the moment each call is admitted, excluding the arriving call: a long tail over a flat-zero width is a slow backing hop, whereas a width that climbs with estate size is the (trees x per-tree background services) scaling law saturating one activation. Both are platform-tenant series - the registry spans every tenant, so there is no per-tree breakdown to filter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1035 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "D", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{operation}} mean service time (ms)" },
+        { "refId": "R", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{operation}} admitted calls/s (secondary)" },
+        { "refId": "F", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_in_flight_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (operation) (rate(orleans_lattice_registry_call_in_flight_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{operation}} mean fan-in width (secondary)" }
+      ]
+    },
+    {
       "id": 74,
       "title": "Deployed build (version / commit)",
       "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",

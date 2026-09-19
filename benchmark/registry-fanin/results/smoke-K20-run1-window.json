@@ -1,0 +1,169 @@
+{
+  "Label": "smoke-K20-run1",
+  "ContainerId": "b657add57cd6a12705f5a5039a26b0c98e77b58f67964ff16b28aac09b43d94e",
+  "ContainerName": "lattice-registry-fanin-repocontext-1",
+  "Image": "repocontext-mcp:fanin-rig",
+  "StartedAtUtc": "2026-09-19T14:28:36.8047231Z",
+  "ReadyAtUtc": "2026-09-19T14:28:42.0000000Z",
+  "ReadingAtUtc": "2026-09-19T14:30:43.4118925Z",
+  "RestartCount": 0,
+  "WindowSeconds": 120,
+  "BucketSeconds": 30,
+  "ReadingSpansRestart": {
+    "SpansRestart": false,
+    "StartedAfterBaseline": false,
+    "RestartCount": 0,
+    "BaselineTimeUtc": "2026-09-19T14:28:42Z",
+    "StartedAtUtc": "2026-09-19T14:28:36.8047231Z",
+    "Reason": ""
+  },
+  "TimeoutCensus": {
+    "ReadyAtUtc": "2026-09-19T14:28:42Z",
+    "BucketSeconds": 30,
+    "WindowSeconds": 120,
+    "Total": 0,
+    "TotalOutsideWindow": 0,
+    "NeverServed": 0,
+    "ServedSlowly": 0,
+    "FirstOffsetSeconds": null,
+    "LastOffsetSeconds": null,
+    "Buckets": [],
+    "ByGrain": [],
+    "ByMember": [],
+    "ByCaller": [],
+    "Events": []
+  },
+  "RegistryArms": [
+    {
+      "Operation": "get_all_tree_ids",
+      "Interleaved": false,
+      "AdmittedCalls": 30,
+      "MeanServiceMs": 83.1453,
+      "MeanGlobalFanInWidth": 0.0,
+      "ConcurrencyObserved": false,
+      "AttributionValid": false,
+      "AttributionNote": "NOT ATTRIBUTABLE: member is not [AlwaysInterleave], so callers serialise behind the singleton turn token and a short service time cannot be distinguished from a call that was never admitted. The global width does not rescue this, because it does not measure THIS member concurrency.",
+      "TotalServiceMs": 2494.36
+    },
+    {
+      "Operation": "get_entry",
+      "Interleaved": true,
+      "AdmittedCalls": 320,
+      "MeanServiceMs": 0.3327,
+      "MeanGlobalFanInWidth": 1.0625,
+      "ConcurrencyObserved": true,
+      "AttributionValid": true,
+      "AttributionNote": "interleaved member, and registry concurrency was observed, so the duration arm carries admission information",
+      "TotalServiceMs": 106.46
+    },
+    {
+      "Operation": "get_shard_map",
+      "Interleaved": true,
+      "AdmittedCalls": 267,
+      "MeanServiceMs": 0.9408,
+      "MeanGlobalFanInWidth": 1.4232,
+      "ConcurrencyObserved": true,
+      "AttributionValid": true,
+      "AttributionNote": "interleaved member, and registry concurrency was observed, so the duration arm carries admission information",
+      "TotalServiceMs": 251.2
+    },
+    {
+      "Operation": "register",
+      "Interleaved": false,
+      "AdmittedCalls": 34,
+      "MeanServiceMs": 0.8733,
+      "MeanGlobalFanInWidth": 0.1471,
+      "ConcurrencyObserved": true,
+      "AttributionValid": false,
+      "AttributionNote": "NOT ATTRIBUTABLE: member is not [AlwaysInterleave], so callers serialise behind the singleton turn token and a short service time cannot be distinguished from a call that was never admitted. The global width does not rescue this, because it does not measure THIS member concurrency.",
+      "TotalServiceMs": 29.69
+    },
+    {
+      "Operation": "resolve",
+      "Interleaved": true,
+      "AdmittedCalls": 44,
+      "MeanServiceMs": 24.4875,
+      "MeanGlobalFanInWidth": 0.4318,
+      "ConcurrencyObserved": true,
+      "AttributionValid": true,
+      "AttributionNote": "interleaved member, and registry concurrency was observed, so the duration arm carries admission information",
+      "TotalServiceMs": 1077.45
+    }
+  ],
+  "StorageSeries": {
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"wal-materialiser-pins\",state_type=\"WalMaterialiserPinState\"}": 16.5629,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-resize\",state_type=\"TreeResizeState\"}": 5.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-resize\",state_type=\"TreeResizeState\"}": 2.483,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shardroot\",state_type=\"ShardRootState\"}": 387.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-checkpoint\",state_type=\"ViewCheckpointState\"}": 5.0309,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf\",state_type=\"LeafNodeState\"}": 579.2094999999998,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shardroot\",state_type=\"ShardRootState\"}": 377.7802000000001,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tombstone-compaction\",state_type=\"TombstoneCompactionState\"}": 3.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-reshard\",state_type=\"TreeReshardState\"}": 2.2653000000000003,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shard-healing\",state_type=\"ShardHealingOrchestratorState\"}": 5.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tombstone-compaction\",state_type=\"TombstoneCompactionState\"}": 1.8428,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-snapshot\",state_type=\"TreeSnapshotState\"}": 2.7189,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-registry\",state_type=\"ViewRegistryState\"}": 1.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-registry\",state_type=\"ViewRegistryState\"}": 83.3179,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf-snapshot\",state_type=\"LeafSnapshotBlob\"}": 40.442299999999975,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-checkpoint\",state_type=\"ViewCheckpointState\"}": 1.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-merge\",state_type=\"TreeMergeState\"}": 2.9579999999999997,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"hot-shard-monitor\",state_type=\"HotShardMonitorState\"}": 146.39700000000002,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-snapshot\",state_type=\"TreeSnapshotState\"}": 5.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"hot-shard-monitor\",state_type=\"HotShardMonitorState\"}": 5.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf-snapshot\",state_type=\"LeafSnapshotBlob\"}": 261.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-merge\",state_type=\"TreeMergeState\"}": 5.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tx-registry\",state_type=\"TxRegistryState\"}": 3.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-reshard\",state_type=\"TreeReshardState\"}": 5.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf\",state_type=\"LeafNodeState\"}": 264.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tx-registry\",state_type=\"TxRegistryState\"}": 1.7896999999999998,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"wal-materialiser-pins\",state_type=\"WalMaterialiserPinState\"}": 85.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shard-healing\",state_type=\"ShardHealingOrchestratorState\"}": 1.8888
+  },
+  "HostLoadAtEnd": [
+    {
+      "Name": "lattice-registry-fanin-repocontext-1",
+      "CpuPercent": 12.63,
+      "Cores": 0.126,
+      "Memory": "233.7MiB / 27.24GiB",
+      "BlockIO": "184kB / 2.5MB"
+    },
+    {
+      "Name": "lattice-registry-fanin-embedder-1",
+      "CpuPercent": 0.01,
+      "Cores": 0.0,
+      "Memory": "881.9MiB / 27.24GiB",
+      "BlockIO": "0B / 0B"
+    },
+    {
+      "Name": "repocontextcontainer-repocontext-1",
+      "CpuPercent": 88.3,
+      "Cores": 0.883,
+      "Memory": "11.5GiB / 12GiB",
+      "BlockIO": "746MB / 17.9GB"
+    },
+    {
+      "Name": "repocontextcontainer-embedder-1",
+      "CpuPercent": 0.13,
+      "Cores": 0.001,
+      "Memory": "1.047GiB / 5GiB",
+      "BlockIO": "13.4MB / 0B"
+    },
+    {
+      "Name": "repocontextcontainer-azurite-backup-sink-1",
+      "CpuPercent": 0.0,
+      "Cores": 0.0,
+      "Memory": "91.2MiB / 27.24GiB",
+      "BlockIO": "37.7MB / 12.4MB"
+    },
+    {
+      "Name": "lattice-test-azurite",
+      "CpuPercent": 0.0,
+      "Cores": 0.0,
+      "Memory": "71.98MiB / 27.24GiB",
+      "BlockIO": "50.6MB / 18.8MB"
+    }
+  ],
+  "CoTenancyNote": "Windows are timestamped so a co-tenant compaction burst can be excluded afterwards. Treat an anomalous window against a materially different load profile as suspect until cleared, rather than averaging it in.",
+  "Method": "Timeouts bucketed by log timestamp, never by counter scrape. A single scrape of a cumulative counter reads as an active fault and a short delta of the same counter reads as healthy; both are wrong, in opposite directions."
+}

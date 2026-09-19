@@ -1,0 +1,105 @@
+# Isolated registry fan-in rig.
+#
+# THIS FILE NEVER TOUCHES THE PROTECTED DEPLOYMENT, BY CONSTRUCTION:
+#
+#   * There is no `build:` section. The silo image is built separately by
+#     scripts/rig.ps1 build, under a rig-only tag, so a run can never rebuild
+#     an image or move a live tag.
+#   * Every volume is `external: true` with an explicit rig-prefixed name, so
+#     compose neither creates nor adopts a live volume.
+#   * The published host port comes from FANIN_HOST_PORT and is never 8080
+#     (the live deployment) or 18080 (the cold-start rig).
+#   * The compose project name comes from FANIN_PROJECT and is never
+#     `repocontextcontainer`.
+#
+# None of that is taken on trust: scripts/_fanin-helpers.ps1 re-derives the
+# same requirements and REFUSES to start when any of them is violated. The
+# sidecar's container target passes a second guard
+# (Assert-FanInContainerTarget) before any id reaches `--network container:`,
+# because that flag is the one place a wrong id would attach a load generator
+# to the protected deployment's network namespace rather than failing.
+#
+# Always drive this file through scripts/rig.ps1, never with a bare
+# `docker compose -f`, because the guards live in the scripts.
+
+services:
+  # The embedding companion. The fan-in rig does not index anything, but the
+  # host's startup gate waits on this service's health, so it is present to
+  # let the silo reach ready rather than to do any work.
+  embedder:
+    image: ${FANIN_EMBEDDER_IMAGE:?FANIN_EMBEDDER_IMAGE must be set by the rig scripts}
+    volumes:
+      - hf-cache:/app/.cache/huggingface
+    expose:
+      - "9000"
+    # `no` (not unless-stopped): a rig container must never come back on its
+    # own after a Docker daemon restart. An unattended restart would both write
+    # to the working volume outside a measured run AND reset every counter,
+    # which is the failure the re-baselining rule exists to catch - better not
+    # to create the opportunity.
+    restart: "no"
+    init: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  repocontext:
+    image: ${FANIN_MCP_IMAGE:?FANIN_MCP_IMAGE must be set by the rig scripts}
+    depends_on:
+      embedder:
+        condition: service_healthy
+    environment:
+      LATTICE_DURABILITY: local
+      LATTICE_DATA_ROOT: /data
+      LATTICE_MCP_PORT: "8080"
+      LATTICE_WORKSPACE_ROOT: /workspace
+      LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000
+      # Background self-indexing is QUIESCED. The measurement is what the
+      # REGISTRY does at cold start under a given estate size; a continuous
+      # background reconcile adds its own registry traffic and its own CPU
+      # competition, which would confound the independent variable with an
+      # uncontrolled one. Set FANIN_SELFINDEX_TICK_SECONDS=5 to reproduce the
+      # live cadence when that is deliberately the thing under test.
+      LATTICE_SELFINDEX_TICK_SECONDS: "${FANIN_SELFINDEX_TICK_SECONDS:-86400}"
+      LATTICE_RECONCILE_INTERVAL_SECONDS: "${FANIN_RECONCILE_INTERVAL_SECONDS:-86400}"
+      LATTICE_RECONCILE_JITTER_SECONDS: "0"
+      LATTICE_FULL_WALK_INTERVAL_SECONDS: "${FANIN_FULL_WALK_INTERVAL_SECONDS:-86400}"
+      # The container's shutdown grant, declared to the process. The host
+      # cannot read its own stop_grace_period, so it derives its shutdown
+      # budget from this declaration - which means the two MUST be kept equal.
+      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
+    ports:
+      # NEVER 8080 (live) and never 18080 (cold-start rig). The container-side
+      # port stays 8080 because that is the application's own listener.
+      - "${FANIN_HOST_PORT:?FANIN_HOST_PORT must be set by the rig scripts}:8080"
+    volumes:
+      - work:/data
+      # Read-only. The rig creates its trees through ILatticeRegistry, not by
+      # indexing, so nothing here is ever written.
+      - ${FANIN_WORKSPACE:?FANIN_WORKSPACE must be set by the rig scripts}:/workspace:ro
+    restart: "no"
+    init: true
+    # Must exceed the host's own shutdown budget or that budget is dead
+    # configuration and every teardown is a crash teardown - which matters
+    # here for a reason specific to this rig: a crash teardown leaves an
+    # unflushed WAL, so the NEXT cold start replays unbanked state and spends
+    # activation time that belongs to the previous run. That contaminates the
+    # replicate rather than the run that caused it, which is exactly the shape
+    # of error n>=3 replication cannot average away.
+    stop_grace_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  work:
+    external: true
+    name: ${FANIN_WORK_VOLUME:?FANIN_WORK_VOLUME must be set by the rig scripts}
+  hf-cache:
+    external: true
+    name: ${FANIN_HF_VOLUME:?FANIN_HF_VOLUME must be set by the rig scripts}
