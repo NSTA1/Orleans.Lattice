@@ -1798,8 +1798,18 @@ internal sealed partial class BPlusLeafGrain
                 // persist this activation; the ordinary cadence path below, the
                 // graceful-deactivation hook and the next reactivation remain
                 // backstops, and monotone progress guarantees convergence.
+                //
+                // The caller's deadline is honoured here for the same reason
+                // TryRepairZeroCoverageAsync honours it: this escape is now
+                // reachable from the WAL GC reactivation drive, which passes
+                // the activation token and holds a bounded starvation budget,
+                // so a capture taken on this path must not outlive the drive
+                // that started it. This is a no-op for the checkpoint-persist
+                // caller, which passes no token, and it aligns the escape with
+                // the two other captures this method can reach - previously it
+                // was the only one that ignored a deadline.
                 _snapshotCoverageDeficitAtActivation = false;
-                await TryCaptureSnapshotForAdvisoryAsync();
+                await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
                 return;
             }
 
