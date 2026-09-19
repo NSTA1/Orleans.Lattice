@@ -236,14 +236,25 @@ public sealed class FileWalPhysicalByteAccountingTests
     [Test]
     public async Task Absolute_ceiling_does_not_override_the_minimum_dead_byte_floor()
     {
-        // Scope this precisely, because the obvious generalisation of it is
-        // false. What is pinned here is only that a shard holding LESS dead
-        // space than the floor is not compacted, whatever the ceiling says:
-        // 4 KB of dead payload against a 1 MB floor. It does NOT establish
-        // that a sub-floor ceiling is harmless in general, and it cannot,
-        // because it never reaches the ceiling comparison at all. The case
-        // where the shard HAS cleared the floor is the opposite result and is
-        // pinned by the test below.
+        // This is an ORDERING guard: it pins that the floor is consulted
+        // before the ceiling. With 4 KB of dead payload against a 1 MB floor
+        // the shard returns early at the floor, so were the two checks
+        // transposed a ceiling of 1 would fire on this very fixture.
+        //
+        // Scope it precisely, because the obvious generalisation is false.
+        // It does NOT establish that a sub-floor ceiling is harmless in
+        // general, and it cannot, because it never reaches the ceiling
+        // comparison at all. The case where the shard HAS cleared the floor
+        // is the opposite result and is pinned by the test below.
+        //
+        // Note the pair below is rejected at startup by
+        // FileWalStorageOptionsValidator and cannot exist in a configured
+        // host. It is constructible here only because CreateProvider uses
+        // Options.Create, which wraps the value in OptionsWrapper<T> and
+        // never runs IValidateOptions<T>. The fixture is kept deliberately:
+        // it pins the ordering semantics against the validator ever being
+        // relaxed, and must not be read as evidence that the configuration
+        // is supported.
         using var sut = CreateProvider(
             compactionMinimumDeadBytes: 1024 * 1024,
             compactionMaximumDeadBytes: 1);
@@ -274,6 +285,12 @@ public sealed class FileWalPhysicalByteAccountingTests
         // default, so the ratio arm provably declines and a rewrite can only
         // have come from the ceiling. That isolation is the point: it is what
         // separates "the clamp fired" from "the ratio happened to fire".
+        //
+        // As above, this pair is rejected at startup by the validator and is
+        // constructible here only because Options.Create bypasses
+        // IValidateOptions<T>. It pins the clamp semantics against the
+        // validator ever being relaxed; it is not a statement that the
+        // configuration is reachable.
         const int Floor = 2 * PayloadBytes;
         using var sut = CreateProvider(
             compactionMinimumDeadBytes: Floor,
