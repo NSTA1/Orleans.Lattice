@@ -4701,6 +4701,98 @@ public static class LatticeMetrics
         new(TagStatus, "unclassified");
 
     /// <summary>
+    /// Whether a floor-holding pin classified
+    /// <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/> carried a
+    /// usable durable offset, tagged by tree, partition and status (issue
+    /// #3199).
+    /// <para>
+    /// <b>The question it answers, and why no existing instrument can.</b>
+    /// <see cref="WalGcBlockingPinStates"/> records the classifier's verdict and
+    /// nothing about the candidate that produced it. Both floor-holder sample
+    /// lists - the offset-bearing one and the one holding pins that reported no
+    /// offset - are recorded through the same call, so a
+    /// <c>checkpointed_coverage_unknown</c> raised by a pin carrying an offset
+    /// and one raised by a pin carrying none are indistinguishable in the
+    /// metric. That distinction is the whole of issue #3199, because the two
+    /// have different remedies: the first is still driven for liveness when its
+    /// offset equals the tree offset floor (issue #3178), and the second can
+    /// never satisfy that gate at all.
+    /// </para>
+    /// <para>
+    /// <b>The information was already computed and then discarded.</b> The sweep
+    /// routes a candidate by <c>offset &lt; 0</c> when it builds the two sample
+    /// lists, so the classifying loop already knows which list it is walking.
+    /// This instrument records that bit rather than deriving anything new, which
+    /// is why it can be added without touching the gate, the routing, or either
+    /// drive set.
+    /// </para>
+    /// <para>
+    /// <b>The arms partition this instrument's own population exactly</b>, since
+    /// a candidate's offset is either negative or it is not. The population is
+    /// every floor-holder classification that resolved to
+    /// <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/> - which
+    /// is <i>every</i> observation of that arm anywhere, because the promotion
+    /// that mints it exists only on the floor-holder path and the blocked arm
+    /// records the classifier's verdict unpromoted. So <c>sum by (tree)</c> here
+    /// equals <c>blocking_pin_state{status="checkpointed_coverage_unknown"}</c>
+    /// on the same tree, and a divergence is a defect in one of the two.
+    /// </para>
+    /// <para>
+    /// Both arms are zero-primed per classified <c>(tree, partition)</c>,
+    /// alongside the <see cref="WalGcBlockingPinStates"/> priming and
+    /// independently of which state resolved, so <c>offset_absent</c> reading
+    /// zero against a large <c>offset_usable</c> is a measured absence rather
+    /// than silence. That discrimination is the entire value of the instrument:
+    /// issue #3199 turns on whether the <c>offset_absent</c> slice is empty, and
+    /// an unprimed zero could not answer it in either direction.
+    /// </para>
+    /// <para>
+    /// It carries no per-tree reachability priming of its own. Whether the
+    /// floor-holder classifier is wired and running on this silo is already
+    /// answered by <see cref="WalGcFloorHolderClassification"/>, so duplicating
+    /// that latch here would add a second thing to keep true without adding a
+    /// discrimination.
+    /// </para>
+    /// <para>
+    /// Diagnostic only - it never changes what a pass is allowed to trim.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcCoverageUnknownPinOffset =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.coverage_unknown_pin_offset", unit: "{pin}",
+            description: "Whether a floor-holding pin classified 'checkpointed_coverage_unknown' carried a usable durable offset (issue #3199), tagged by tree, partition and status. 'offset_usable' is a candidate whose durable offset is >= 0, which is the pin population the offset floor is a minimum over and the only population issue #3178's liveness drive can admit - it is driven when its offset equals the tree offset floor. 'offset_absent' is a candidate that reported no usable offset, which constrains no offset floor and can never satisfy that gate. The distinction is issue #3199: such a pin is excluded from the blocked arm because its frontier is above Zero, from the issue #3164 coverage repair because the frontier gate promoted its state away, and from the issue #3178 liveness drive because it carries no offset - and the pin store merges monotonic-max on both axes, so neither exclusion can be cleared by anything the leaf subsequently does. blocking_pin_state records the verdict and nothing about the candidate, and both floor-holder sample lists are recorded through the same call, so the two cases are indistinguishable there; this instrument records the routing bit the sweep already computed. The arms partition this instrument's population exactly, since an offset is either negative or it is not, and the population is every observation of the 'checkpointed_coverage_unknown' arm anywhere, because the promotion that mints that state exists only on the floor-holder path while the blocked arm records the classifier's verdict unpromoted - so sum by (tree) here equals blocking_pin_state{status='checkpointed_coverage_unknown'} on the same tree and a divergence is a defect in one of the two. Both arms are zero-primed per classified (tree, partition) alongside the blocking_pin_state priming and independently of which state resolved, so 'offset_absent' reading zero against a large 'offset_usable' is a measured absence rather than silence - which is the entire value of the instrument, because issue #3199 turns on whether that slice is empty and an unprimed zero could not answer it in either direction. It carries no per-tree reachability priming of its own: whether the floor-holder classifier is wired on this silo is already answered by 'orleans.lattice.wal.gc.floor_holder_classification'. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcCoverageUnknownPinOffset"/>.</summary>
+    public const string WalGcCoverageUnknownPinOffsetName =
+        "orleans.lattice.wal.gc.coverage_unknown_pin_offset";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcCoverageUnknownPinOffset"/> for a candidate whose durable
+    /// offset is <c>&gt;= 0</c>.
+    /// <para>
+    /// This is the pin population the durable offset floor is a minimum over, so
+    /// it is the only one issue #3178's liveness drive can admit - and it is
+    /// admitted when its offset equals that floor.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageUnknownOffsetUsable =
+        new(TagStatus, "offset_usable");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on
+    /// <see cref="WalGcCoverageUnknownPinOffset"/> for a candidate that reported
+    /// no usable durable offset.
+    /// <para>
+    /// Such a pin constrains no offset floor, so it can never satisfy issue
+    /// #3178's equality gate, and its state was promoted out of the issue #3164
+    /// coverage repair by the frontier gate. Issue #3199 is the question of
+    /// whether this arm is ever non-zero on a live estate.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageUnknownOffsetAbsent =
+        new(TagStatus, "offset_absent");
+
+    /// <summary>
     /// How far each WAL GC scheduling pass actually got: the reachability layer
     /// for every instrument sited inside the region that stops executing when
     /// the scheduler degrades (issue #3075).
