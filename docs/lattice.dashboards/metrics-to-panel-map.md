@@ -14,6 +14,47 @@ The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Re
 
 The add-on `orleans.lattice.tenancy` meter is charted by the bundled Per-Tenant Observability dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Tenancy.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
 
+### How an instrument name becomes a PromQL series name
+
+**The Prometheus exporter appends no unit suffix.** This is measured, not inferred
+from the OpenTelemetry specification, which does describe unit suffixing: the
+OpenTelemetry *Collector* prometheus exporter suffixes, and the in-process .NET
+exporter this repository uses (`AddPrometheusExporter()`) does not. It records
+the unit in the HELP text and leaves the family name bare:
+
+```
+# HELP orleans_lattice_storage_policy_bytes_reclaimed_total WAL bytes freed by byte-pressure-triggered trim passes, tagged by tree. (unit: By)
+# TYPE orleans_lattice_storage_policy_bytes_reclaimed_total counter
+```
+
+That instrument is `orleans.lattice.storage.policy.bytes_reclaimed` with unit
+`By`, and there is no `_bytes` segment in the family name. A scrape of 440
+families carried zero appended unit suffixes and zero `# UNIT` lines.
+
+So the series name for an instrument is exactly:
+
+| instrument kind | PromQL family name |
+|---|---|
+| counter | dotted name with `.` replaced by `_`, plus `_total` |
+| gauge / observable gauge | dotted name with `.` replaced by `_` |
+| histogram | dotted name with `.` replaced by `_`, plus `_bucket` / `_count` / `_sum` |
+
+An instrument whose **name already ends in** `bytes` (such as
+`orleans.lattice.storage.wal.stored_bytes`) therefore yields
+`orleans_lattice_storage_wal_stored_bytes_total` - the `bytes` comes from the
+name, not from the unit. Writing `..._stored_bytes_bytes_total` queries a series
+that cannot exist, and a panel querying a non-existent series renders as an empty
+graph, which is visually identical to a real zero.
+
+> **The drift guard covers this for the `By` unit only.** `AddInstrumentForms`
+> in `DashboardJsonTests` and `MeterDashboardCoverageTestsBase` no longer
+> synthesizes `_bytes` / `_bytes_total`, so a byte-unit misspelling now fails
+> the build (issue #3259). It still synthesizes `_milliseconds_*` and
+> `_seconds_*`, which the exporter likewise never emits, so 60 millisecond and
+> second tokens in the bundled dashboards are dead and uncaught. That is issue
+> #3260, blocked on issue #3261 (histograms export as Prometheus `summary` with
+> no `_bucket` series at all, so those panels are dead however they are named).
+
 ### How to read the Tags column
 
 Each table's **Tags** column lists only the dimensions specific to that instrument. The derived `tenant` label is **not** repeated on every row: it is present on every instrument on every meter, and is described once in [The derived `tenant` label](#the-derived-tenant-label) below. A row that names no tag therefore still carries `tenant`.

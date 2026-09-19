@@ -218,17 +218,46 @@ public abstract class MeterDashboardCoverageTestsBase
 
         forms.Add(underscored);
         forms.Add(underscored + "_total");
+
+        // KNOWN-INCOMPLETE RETENTION - see issue #3260.
+        //
+        // The exporter appends no unit segment for "ms" or "s" any more than it
+        // does for "By": it records the unit in HELP text and leaves the family
+        // name bare. Measured on a live scrape (440 families):
+        //
+        //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
+        //   # TYPE orleans_lattice_atomic_write_duration summary
+        //
+        // The six forms below are therefore forms the exporter never emits, and
+        // are retained DELIBERATELY rather than because they are believed
+        // correct. Removing them today turns this gate red on 60 already-dead
+        // dashboard tokens (57 `_milliseconds_bucket`, 2 bare `_milliseconds`,
+        // 1 `_seconds_bucket`), whose correct target spelling is undetermined
+        // until the histogram-as-summary shape question (issue #3261) is
+        // answered - the same scrape shows zero `_bucket` lines, so a `_bucket`
+        // panel is dead however it is named.
+        //
+        // So: this guard's green is PARTIAL. It covers the byte-unit class
+        // completely (issue #3259) and the ms/s class not at all. Closing #3260
+        // means deleting the six lines below.
         forms.Add(underscored + "_milliseconds_bucket");
         forms.Add(underscored + "_milliseconds_count");
         forms.Add(underscored + "_milliseconds_sum");
         forms.Add(underscored + "_seconds_bucket");
         forms.Add(underscored + "_seconds_count");
         forms.Add(underscored + "_seconds_sum");
+
         forms.Add(underscored + "_bucket");
         forms.Add(underscored + "_count");
         forms.Add(underscored + "_sum");
-        forms.Add(underscored + "_bytes");
-        forms.Add(underscored + "_bytes_total");
+
+        // NO byte-unit synthesis. Synthesizing "_bytes" / "_bytes_total" here
+        // previously made both spellings of a "By"-unit instrument resolve, so
+        // this guard certified queries naming series that cannot exist. Those
+        // panels render empty, which is indistinguishable from a real zero.
+        // Six dead queries hid behind it (issue #3259). Do not reinstate them:
+        // an instrument whose name already ends in "bytes" is covered by the
+        // bare name plus "_total" above.
     }
 
     private static void WalkForExpr(JsonElement element, HashSet<string> tokens)

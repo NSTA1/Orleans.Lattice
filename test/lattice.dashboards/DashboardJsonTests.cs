@@ -99,12 +99,35 @@ public sealed class DashboardJsonTests
         // Counter: name + "_total"
         map[underscored + "_total"] = meterName;
 
-        // Histogram (ms unit): name + "_milliseconds_{bucket|count|sum}"
+        // KNOWN-INCOMPLETE RETENTION - see issue #3260.
+        //
+        // The exporter does NOT append a unit segment for "ms" or "s" either: it
+        // records the unit in HELP text, exactly as it does for "By". Measured on
+        // a live scrape (440 families):
+        //
+        //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
+        //   # TYPE orleans_lattice_atomic_write_duration summary
+        //
+        // so the instrument `orleans.lattice.atomic.write.duration` produces a
+        // BARE family name, and there are zero `_duration_milliseconds` families
+        // anywhere in that scrape.
+        //
+        // The six synthesized forms below are therefore forms the exporter never
+        // emits, and they are retained DELIBERATELY rather than because they are
+        // believed correct. Removing them today turns this gate red on 60
+        // dashboard tokens that are already dead (57 `_milliseconds_bucket`, 2
+        // bare `_milliseconds`, 1 `_seconds_bucket`). Those 60 are not repaired
+        // here because their correct target spelling is not yet determined: the
+        // same scrape shows these instruments exporting as Prometheus `summary`
+        // with ZERO `_bucket` lines, so a `_bucket` panel is dead however it is
+        // named. That shape question is issue #3261 and blocks #3260.
+        //
+        // So: this gate's green is PARTIAL. It covers the byte-unit class
+        // completely (issue #3259) and does not cover the ms/s class at all.
+        // Closing #3260 means deleting the six lines below.
         map[underscored + "_milliseconds_bucket"] = meterName;
         map[underscored + "_milliseconds_count"] = meterName;
         map[underscored + "_milliseconds_sum"] = meterName;
-
-        // Histogram (s unit): name + "_seconds_{bucket|count|sum}"
         map[underscored + "_seconds_bucket"] = meterName;
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
@@ -116,10 +139,19 @@ public sealed class DashboardJsonTests
         map[underscored + "_count"] = meterName;
         map[underscored + "_sum"] = meterName;
 
-        // Counter / observable gauge with bytes unit ("By"): the exporter
-        // appends "_bytes" (and "_bytes_total" for monotonic counters).
-        map[underscored + "_bytes"] = meterName;
-        map[underscored + "_bytes_total"] = meterName;
+        // NO byte-unit synthesis. The exporter does not append "_bytes" for a
+        // "By"-unit instrument; it records the unit in HELP text and leaves the
+        // family name bare. Measured on a live scrape:
+        //
+        //   # HELP orleans_lattice_storage_policy_bytes_reclaimed_total ... (unit: By)
+        //   # TYPE orleans_lattice_storage_policy_bytes_reclaimed_total counter
+        //
+        // Synthesizing "_bytes" / "_bytes_total" here previously made BOTH
+        // spellings resolve, so the gate certified a query naming a series that
+        // cannot exist - which renders as an empty graph, indistinguishable from
+        // a real zero. That hole hid six dead panel queries (issue #3259).
+        // Do not reinstate these two forms; an instrument whose name already ends
+        // in "bytes" is covered by the bare name plus "_total" above.
 
         // Gauge / observable / un-suffixed reference (some queries use the bare name)
         map[underscored] = meterName;

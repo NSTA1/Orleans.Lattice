@@ -1064,7 +1064,7 @@
         },
         {
           "refId": "RECLAIM",
-          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_bytes_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
+          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_bytes_reclaimed_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} reclaimed bytes/s"
         }
       ]
@@ -1080,7 +1080,7 @@
       "targets": [
         {
           "refId": "RATIO",
-          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
+          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} savings"
         }
       ]
@@ -1368,7 +1368,7 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 145 },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
       "targets": [
-        { "refId": "RATIO", "expr": "sum (rate(orleans_lattice_compress_dictionary_trained_bytes_out_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum (rate(orleans_lattice_compress_dictionary_trained_bytes_in_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "trained / baseline" }
+        { "refId": "RATIO", "expr": "sum (rate(orleans_lattice_compress_dictionary_trained_bytes_out_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum (rate(orleans_lattice_compress_dictionary_trained_bytes_in_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "trained / baseline" }
       ]
     },
     {
