@@ -1692,14 +1692,75 @@ public class LatticeOptions
     /// entirely; only the activation-scoped captures (the
     /// once-per-activation capture driven by the activation-time
     /// advisory, and the one-shot snapshot-coverage-deficit escape that
-    /// breaks the frozen-leaf rehydrate livelock) will fire. Those
-    /// activation-scoped captures are not affected by this option.
+    /// breaks the frozen-leaf rehydrate livelock) and the coverage-lag
+    /// bound of
+    /// <see cref="LeafSnapshotMaxCoverageLagSeconds"/> will fire. Those
+    /// are not affected by this option.
+    /// </para>
+    /// <para>
+    /// The count is advanced by checkpoint PERSISTS only. A coverage-lag
+    /// tick drives the same recheck but never feeds this counter, so this
+    /// cadence keeps meaning what it says rather than becoming "every N
+    /// persists or ticks".
     /// </para>
     /// </summary>
     public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;
 
     /// <summary>Default value for <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/> (<c>64</c>).</summary>
     public const int DefaultLeafSnapshotReClassifyEveryNCheckpoints = 64;
+
+    /// <summary>
+    /// Upper bound, in seconds, on how long an active leaf may leave its
+    /// durable snapshot coverage lagging behind its projection checkpoint.
+    /// A leaf that has been active for this long with some partition's
+    /// checkpoint ahead of the coverage a durable snapshot records drives a
+    /// capture, closing the gap. Set to <c>0</c> to disable.
+    /// <para>
+    /// This exists because every other capture driver is either
+    /// activation-scoped or write-driven, which leaves a live leaf serving
+    /// only READS with no driver at all.
+    /// <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/> is a cadence in
+    /// successful checkpoint PERSISTS, and a persist requires a checkpoint
+    /// advance, which requires a write; so a leaf whose writes have stopped
+    /// never reaches the cadence however long it stays active. Reads
+    /// meanwhile keep resetting Orleans' idle timer, so the grain never
+    /// collects and the graceful-deactivation capture never runs either.
+    /// Coverage then lags without bound.
+    /// </para>
+    /// <para>
+    /// That matters beyond snapshot freshness, because the WAL GC gates on
+    /// coverage: the materialiser's offset floor is a minimum over every
+    /// partition of every leaf, so one leaf whose coverage is frozen holds
+    /// the floor for its whole tree and the WAL cannot be trimmed by a byte
+    /// while no leaf reports blocked and no GC pass fails. It is a liveness
+    /// failure, not a safety one - the floor is released as soon as any
+    /// driver fires - but the latency to that release is what this bound
+    /// exists to cap.
+    /// </para>
+    /// <para>
+    /// The timer that enforces this cannot keep a leaf alive:
+    /// <c>GrainTimerCreationOptions.KeepAlive</c> defaults to
+    /// <see langword="false"/>, so it fires only while the grain is already
+    /// active, which is precisely the case the deactivation hook cannot
+    /// reach. The two drivers are complementary, and together they bound
+    /// coverage lag by the lesser of this interval and the collection age.
+    /// </para>
+    /// </summary>
+    public int LeafSnapshotMaxCoverageLagSeconds { get; set; } = DefaultLeafSnapshotMaxCoverageLagSeconds;
+
+    /// <summary>Default value for <see cref="LeafSnapshotMaxCoverageLagSeconds"/> (<c>300</c>, five minutes).</summary>
+    public const int DefaultLeafSnapshotMaxCoverageLagSeconds = 300;
+
+    /// <summary>
+    /// Maximum accepted value for <see cref="LeafSnapshotMaxCoverageLagSeconds"/>
+    /// (<c>86400</c>, one day). A coverage lag longer than a day is not a bound
+    /// in any useful sense: the whole point of the setting is that a read-held
+    /// leaf cannot hold its tree's WAL trim floor indefinitely, and a ceiling
+    /// measured in days concedes that. The ceiling also keeps the per-leaf
+    /// first-tick jitter comfortably inside the range its arithmetic is defined
+    /// over.
+    /// </summary>
+    public const int MaxLeafSnapshotCoverageLagSeconds = 86_400;
 
     /// <summary>
     /// When <c>true</c> (the default), a leaf snapshot capture encodes its

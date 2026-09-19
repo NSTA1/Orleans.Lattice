@@ -65,6 +65,14 @@ internal sealed partial class BPlusLeafGrain
     private int _checkpointPersistCountSinceRecheck;
 
     /// <summary>
+    /// Test accessor for <see cref="_checkpointPersistCountSinceRecheck"/>.
+    /// Exists so a fixture can assert that a coverage-lag timer tick does not
+    /// advance the checkpoint-persist cadence, which is otherwise unobservable
+    /// on a leaf that has no cadence deficit to capture.
+    /// </summary>
+    internal int CheckpointPersistCountSinceRecheckForTest => _checkpointPersistCountSinceRecheck;
+
+    /// <summary>
     /// Set once this activation genuinely advances a per-partition projection
     /// checkpoint over cache-resident applies - i.e. the pending-advance branch
     /// of <see cref="FlushPendingCheckpointAsync"/> runs, which only happens
@@ -154,13 +162,114 @@ internal sealed partial class BPlusLeafGrain
     private const int MaxZeroCoverageRepairAttempts = 8;
 
     /// <summary>
-    /// Number of zero-coverage repair captures attempted on this activation.
-    /// Reset implicitly on every activation because it is a plain instance
-    /// field, never persisted - which is correct, since a fresh activation
-    /// re-reads the durable snapshot and so re-derives the coverage the budget
-    /// is spent chasing.
+    /// Number of zero-coverage repair captures attempted since the budget was
+    /// last armed. Reset on every activation because it is a plain instance
+    /// field, never persisted - and, since issue #3194, also re-armed in place
+    /// after <see cref="ZeroCoverageRepairRearmDelay"/> so that an activation
+    /// which is never replaced still recovers the repair.
+    /// <para>
+    /// That second reset is load-bearing, not a refinement. Reset-on-activation
+    /// alone reads as a per-activation ceiling only while activations turn
+    /// over; on a leaf held continuously active by read traffic - the exact
+    /// population the coverage-lag bound exists to serve - "per activation"
+    /// and "per process" are the same bound, so eight failed captures would
+    /// retire the repair for the life of the silo on precisely the leaves that
+    /// need it. The recurring timer added in #3194 would otherwise have spent
+    /// the budget within eight ticks and then driven a dead branch for ever.
+    /// </para>
     /// </summary>
     private int _zeroCoverageRepairAttempts;
+
+    /// <summary>
+    /// When the spent repair budget becomes eligible to be re-armed, or
+    /// <c>null</c> when the budget is not currently spent.
+    /// <para>
+    /// The delay is the rate limiter for the whole repair path, which is why
+    /// the budget is re-armed rather than removed. A capture against a failing
+    /// snapshot store has been measured on the live estate at tens of seconds
+    /// per attempt, so an unbudgeted retry would re-enter continuously; a
+    /// budget that never re-arms instead retires the repair permanently. The
+    /// re-arm keeps both bounds: at most
+    /// <see cref="MaxZeroCoverageRepairAttempts"/> attempts per
+    /// <see cref="ZeroCoverageRepairRearmDelay"/>, for ever.
+    /// </para>
+    /// </summary>
+    private DateTimeOffset? _zeroCoverageRepairRearmAtUtc;
+
+    /// <summary>
+    /// How long a spent zero-coverage repair budget stays abandoned before it
+    /// is re-armed, DOUBLING on each successive abandonment to
+    /// <see cref="ZeroCoverageRepairRearmMaxBackoff"/>.
+    /// <para>
+    /// The decay is the point, and it is taken from the same #2783 precedent
+    /// the abandoned/rearmed pairing comes from. A flat delay is right only
+    /// where the fault being paused for is transient. It is not, on the
+    /// population this serves: the captures measured failing on the live estate
+    /// are TIMEOUTS, tens of seconds each, and this change does not fix them.
+    /// With a flat delay such a leaf settles into a permanent cycle - spend
+    /// eight attempts, pause, spend eight more - paying a timing-out capture
+    /// on every one of them, for ever, at constant cost. Doubling keeps a
+    /// transient fault recovering quickly, in a single short pause, while a
+    /// hopeless leaf backs off to the ceiling and stops paying.
+    /// </para>
+    /// <para>
+    /// The first delay is deliberately far longer than the coverage-lag bound's
+    /// default period so that even the shortest re-arm cannot turn into a retry
+    /// loop driven by the timer.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan ZeroCoverageRepairRearmMinBackoff = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Ceiling for the doubling re-arm backoff. A leaf that reaches it is still
+    /// retrying - the repair is never retired permanently, which is the whole
+    /// defect this replaces - but at a cost per day that no longer scales with
+    /// how long the underlying capture fault persists.
+    /// </summary>
+    private static readonly TimeSpan ZeroCoverageRepairRearmMaxBackoff = TimeSpan.FromHours(8);
+
+    /// <summary>
+    /// How many times this activation's repair budget has been abandoned. Drives
+    /// the doubling in <see cref="NextZeroCoverageRepairRearmBackoff"/>, and is
+    /// never reset by a re-arm: a leaf whose captures keep failing must keep
+    /// backing off rather than restarting the decay each cycle.
+    /// </summary>
+    private int _zeroCoverageRepairAbandonments;
+
+    /// <summary>
+    /// The backoff to serve for the next abandonment, doubling from
+    /// <see cref="ZeroCoverageRepairRearmMinBackoff"/> and clamped to
+    /// <see cref="ZeroCoverageRepairRearmMaxBackoff"/>. The shift is capped
+    /// before it is applied, so a long-lived activation cannot overflow it into
+    /// a negative or wrapped delay.
+    /// </summary>
+    private TimeSpan NextZeroCoverageRepairRearmBackoff()
+    {
+        var doublings = Math.Min(_zeroCoverageRepairAbandonments, 16);
+        var ticks = ZeroCoverageRepairRearmMinBackoff.Ticks * (1L << doublings);
+        return ticks >= ZeroCoverageRepairRearmMaxBackoff.Ticks || ticks <= 0
+            ? ZeroCoverageRepairRearmMaxBackoff
+            : TimeSpan.FromTicks(ticks);
+    }
+
+    /// <summary>
+    /// Test hook that brings a pending zero-coverage repair re-arm forward to
+    /// now, so a fixture can prove the budget recovers without waiting out
+    /// <see cref="ZeroCoverageRepairRearmDelay"/>.
+    /// <para>
+    /// Deliberately only brings the existing deadline forward and does nothing
+    /// when no budget is spent, so it cannot be used to manufacture a re-arm
+    /// that the production path would not have performed. The equivalent hook
+    /// for the replay gate is <c>ResetReplayConcurrencyGateForTest</c>.
+    /// </para>
+    /// </summary>
+    internal void ExpireZeroCoverageRepairRearmForTest()
+    {
+        if (_zeroCoverageRepairRearmAtUtc is not null)
+        {
+            _zeroCoverageRepairRearmAtUtc = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1);
+        }
+    }
 
     /// <summary>
     /// Whether this activation has already reported budget exhaustion on
@@ -600,8 +709,39 @@ internal sealed partial class BPlusLeafGrain
 
         if (_zeroCoverageRepairAttempts >= MaxZeroCoverageRepairAttempts)
         {
-            ReportZeroCoverageRepairExhaustion();
-            return false;
+            // Abandon on budget, re-arm on a slow cadence (issue #3194). The
+            // branch this replaces returned false unconditionally, and because
+            // nothing anywhere in src/ ever reset the counter, that was a
+            // permanent retirement on any activation that is not replaced.
+            //
+            // Do not shorten this to "the field is per-activation so it
+            // recovers": that is true only where activations turn over, and the
+            // leaves this repair matters most for are the ones held active
+            // indefinitely by read traffic. The recurring coverage-lag timer
+            // makes that population reachable on a cadence, so without the
+            // re-arm the timer would simply spend the budget eight times and
+            // then drive a branch that can no longer do anything.
+            var now = DateTimeOffset.UtcNow;
+            if (_zeroCoverageRepairRearmAtUtc is not { } rearmAt)
+            {
+                _zeroCoverageRepairRearmAtUtc = now + NextZeroCoverageRepairRearmBackoff();
+                _zeroCoverageRepairAbandonments++;
+                ReportZeroCoverageRepairExhaustion();
+                return false;
+            }
+
+            if (now < rearmAt)
+            {
+                return false;
+            }
+
+            // Backoff elapsed. Re-arm the budget and clear the report latch so
+            // a second exhaustion is reported as its own event rather than
+            // being swallowed by the first one's deduplication.
+            _zeroCoverageRepairAttempts = 0;
+            _zeroCoverageRepairRearmAtUtc = null;
+            _zeroCoverageRepairExhaustionReported = false;
+            RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairRearmed);
         }
 
         _zeroCoverageRepairAttempts++;
@@ -713,16 +853,14 @@ internal sealed partial class BPlusLeafGrain
 
         if (PrimedCoverageRepairTrees.TryAdd(treeId, 0))
         {
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairRepaired, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairUnsatisfied, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairExhausted, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairCaptureInFlight, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairNoUncoveredPartition, tenantTag);
+            // Walks the single declared arm set rather than a hand-written run
+            // of Add(0, ...) calls, so an arm cannot ship unarmed and be read as
+            // "the path never ran" on the tree under diagnosis. A reflection
+            // test pins the array to the declared arms (issue #3194).
+            foreach (var arm in LatticeMetrics.CoverageRepairArms)
+            {
+                LatticeMetrics.LeafSnapshotCoverageRepairs.Add(0, treeTag, arm, tenantTag);
+            }
         }
 
         LatticeMetrics.LeafSnapshotCoverageRepairs.Add(1, treeTag, outcome, tenantTag);
@@ -1477,7 +1615,9 @@ internal sealed partial class BPlusLeafGrain
     /// documented to govern periodic capture only.
     /// </para>
     /// </summary>
-    private async Task MaybeRunPeriodicSnapshotRecheckAsync()
+    private async Task MaybeRunPeriodicSnapshotRecheckAsync(
+        bool fromCheckpointPersist,
+        CancellationToken cancellationToken = default)
     {
         if (state.State.TreeId is null)
         {
@@ -1588,26 +1728,42 @@ internal sealed partial class BPlusLeafGrain
         // for this leaf. The attempt budget therefore bounds only repeated
         // FAILURE, and its exhaustion is reported as its own state rather than
         // being absorbed silently.
-        if (await TryRepairZeroCoverageAsync(Math.Max(1, resolved.WalPartitions)))
+        if (await TryRepairZeroCoverageAsync(Math.Max(1, resolved.WalPartitions), cancellationToken))
         {
             return;
         }
 
         var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
-        if (threshold <= 0)
-        {
-            // Periodic recheck disabled. The activation-scoped drivers - the
-            // activation-time advisory and the coverage-deficit escape above -
-            // remain the only proactive-capture drivers.
-            return;
-        }
 
-        _checkpointPersistCountSinceRecheck++;
-        if (_checkpointPersistCountSinceRecheck < threshold)
+        // The cadence gate is the PERSIST-DRIVEN driver, and only a persist may
+        // advance it. A coverage-lag tick reaching this point is its own
+        // cadence, so it neither reads the threshold nor touches the counter and
+        // falls through to the debounce below.
+        //
+        // Gating the increment is not tidiness. _checkpointPersistCountSinceRecheck
+        // is what gives LeafSnapshotReClassifyEveryNCheckpoints its documented
+        // meaning - "every N checkpoint persists". Letting a timer tick feed it
+        // would silently redefine the option as "every N persists OR ticks", so a
+        // deployment that changed nothing would see its re-classification cadence
+        // move. Same reasoning as the escapes above: a liveness bound must not
+        // quietly rewrite a documented tuning contract.
+        if (fromCheckpointPersist)
         {
-            return;
+            if (threshold <= 0)
+            {
+                // Periodic recheck disabled. The activation-scoped drivers - the
+                // activation-time advisory and the coverage-deficit escape above -
+                // plus the coverage-lag bound remain the proactive-capture drivers.
+                return;
+            }
+
+            _checkpointPersistCountSinceRecheck++;
+            if (_checkpointPersistCountSinceRecheck < threshold)
+            {
+                return;
+            }
+            _checkpointPersistCountSinceRecheck = 0;
         }
-        _checkpointPersistCountSinceRecheck = 0;
 
         if (_snapshotCaptureInFlight)
         {
@@ -1758,6 +1914,189 @@ internal sealed partial class BPlusLeafGrain
         }
 
         await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bounds how long this activation may leave durable snapshot coverage
+    /// lagging its projection checkpoint, by driving a capture on a fixed
+    /// cadence while the leaf is active. Disposed on deactivation.
+    /// <para>
+    /// This closes the last gap in the capture-driver set. Every other driver
+    /// is activation-scoped (the activation-time advisory, the #2220 deficit
+    /// escape, the #2692 zero-coverage repair) or write-driven
+    /// (<see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>, whose cadence is
+    /// counted in successful checkpoint PERSISTS and so requires writes). A
+    /// leaf serving only READS therefore has no driver at all: reads keep
+    /// resetting Orleans' idle timer so it never collects and the
+    /// graceful-deactivation capture never runs, while producing no persist so
+    /// the cadence never ticks. Coverage then lags without bound, and because
+    /// the materialiser's offset floor is a minimum over every partition of
+    /// every leaf, one such leaf holds the floor for its whole tree.
+    /// </para>
+    /// <para>
+    /// The same hazard is recorded independently at
+    /// <c>ShardRootGrain.cs</c>: "a shard root held active by inbound traffic
+    /// would stay stuck until it was collected". Step 1.5b of the activation
+    /// replay states the write-driven half of it directly - "a leaf that never
+    /// persists another checkpoint never reaches it" - and repairs it only at
+    /// activation, which is exactly the case a permanently active leaf never
+    /// reaches.
+    /// </para>
+    /// <para>
+    /// A grain timer cannot extend an activation
+    /// (<c>GrainTimerCreationOptions.KeepAlive</c> defaults to
+    /// <see langword="false"/>), so this never keeps a leaf alive and never
+    /// resets the idle timer. It fires only while the grain is already active,
+    /// which is precisely the case the deactivation hook cannot reach; the two
+    /// are complementary, and together they bound coverage lag by the lesser of
+    /// the configured interval and the collection age.
+    /// </para>
+    /// </summary>
+    private IDisposable? _coverageLagTimer;
+
+    /// <summary>
+    /// Registers <see cref="_coverageLagTimer"/> for this activation when
+    /// <see cref="LatticeOptions.LeafSnapshotMaxCoverageLagSeconds"/> is
+    /// positive. Idempotent, and silently declines in a test harness with no
+    /// grain runtime (where <c>RegisterGrainTimer</c> throws), because the
+    /// bound is a liveness improvement and must never fail an activation.
+    /// <para>
+    /// THE FIRST TICK IS JITTERED ACROSS THE WHOLE PERIOD, PER LEAF, and that
+    /// is load-bearing rather than tidy. Leaves activate in bursts - a silo
+    /// start, a rebalance, a reactivation storm - so a fixed due time would
+    /// leave every leaf in the burst ticking together, for ever, turning a
+    /// per-leaf repair into a synchronised blob-write stampede against the
+    /// storage account every interval on a tree with thousands of leaves. The
+    /// jitter is derived from the grain id rather than drawn at random so a
+    /// given leaf's phase is stable for as long as the process lives and is
+    /// reproducible in a test. Whether it is also stable across processes
+    /// depends on how Orleans seeds its id hash, which this does not rely on:
+    /// the jitter's purpose is to spread a burst, and any stable per-leaf
+    /// phase achieves that.
+    /// </para>
+    /// </summary>
+    private async Task EnsureCoverageLagTimerAsync()
+    {
+        if (_coverageLagTimer is not null || state.State.TreeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var resolved = await GetOptionsAsync();
+        var lagSeconds = resolved.LeafSnapshotMaxCoverageLagSeconds;
+        if (lagSeconds <= 0)
+        {
+            return;
+        }
+
+        var period = TimeSpan.FromSeconds(lagSeconds);
+        var dueTime = ComputeCoverageLagJitter(context.GrainId.GetHashCode(), period);
+
+        try
+        {
+            _coverageLagTimer = this.RegisterGrainTimer(
+                OnCoverageLagTimerTickAsync,
+                new GrainTimerCreationOptions(dueTime: dueTime, period: period));
+        }
+        catch
+        {
+            // No grain runtime (unit-test harness). The activation-scoped and
+            // deactivation drivers remain, exactly as before this bound existed.
+            _coverageLagTimer = null;
+        }
+    }
+
+    /// <summary>
+    /// Deterministic per-leaf first-tick phase in <c>[0, period)</c>, derived
+    /// from <paramref name="grainIdHash"/>. Non-negative regardless of the
+    /// hash's sign, which a plain modulus of a hash code is not.
+    /// <para>
+    /// BOTH OPERANDS ARE WIDENED TO 64 BITS BEFORE THE MODULUS, and that is the
+    /// substance of this helper rather than defensive typing. A tick is 100ns,
+    /// so one second is 10^7 ticks and <see cref="uint.MaxValue"/> is reached at
+    /// 429.5 seconds: a 32-bit denominator wraps at any configured lag of 430
+    /// seconds or more, collapsing the spread to a fraction of a second and
+    /// reinstating in silence exactly the synchronised stampede the jitter
+    /// exists to prevent. Widening the denominator ALONE is not enough either,
+    /// because a raw 32-bit hash caps the numerator at that same 429.5 seconds,
+    /// so the modulus becomes a no-op beyond it and the spread stays capped
+    /// however long the period is. The multiply by the 64-bit golden-ratio
+    /// constant diffuses the 32-bit hash across the full 64-bit range first, so
+    /// the phase spans the whole period at every supported lag.
+    /// </para>
+    /// <para>
+    /// The denominator is clamped in <see cref="long"/> BEFORE any narrowing,
+    /// so it can never be zero and this can never throw on the activation path.
+    /// The earlier form clamped the same way but then narrowed to
+    /// <see cref="uint"/>, which let a period whose tick count is an exact
+    /// multiple of 2^32 narrow back to zero - the clamp was not doing the job
+    /// its placement implied.
+    /// </para>
+    /// </summary>
+    internal static TimeSpan ComputeCoverageLagJitter(int grainIdHash, TimeSpan period)
+    {
+        var mixed = (ulong)(uint)grainIdHash * 0x9E3779B97F4A7C15UL;
+        var phase = (long)(mixed % (ulong)Math.Max(1L, period.Ticks));
+        return TimeSpan.FromTicks(phase);
+    }
+
+    /// <summary>
+    /// Drives the full proactive-capture recheck on the coverage-lag cadence.
+    /// <para>
+    /// This deliberately calls <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>
+    /// rather than re-deriving a deficit check of its own, and that choice is
+    /// the substance of the fix rather than a convenience. That method holds
+    /// THREE drivers - the #2220 coverage-deficit escape, the #2692
+    /// zero-coverage repair, and the ordinary per-partition capture - and it has
+    /// exactly ONE invocation in the whole of <c>src/</c>:
+    /// <c>BPlusLeafGrain.Projection.cs:392</c>, inside the checkpoint-persist
+    /// tail. Both escapes were deliberately placed ABOVE the cadence gate so
+    /// that no tuning knob could disable them, and both sit BELOW that single
+    /// call site, so on a leaf with no write traffic neither is reachable at
+    /// all. Re-deriving only the deficit check here would have repaired the
+    /// stale-coverage case and left the zero-coverage case - the one #2692
+    /// exists for, and the one the stuck partitions are actually in - as
+    /// unreachable as it is today.
+    /// </para>
+    /// <para>
+    /// The cadence counter is NOT advanced from here: the recheck is told this
+    /// call is not a checkpoint persist, so
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// keeps meaning exactly what it is documented to mean.
+    /// </para>
+    /// <para>
+    /// Every no-loss precondition is therefore the existing one, evaluated by
+    /// the existing code. This adds no relaxation of the #1535 gate and no new
+    /// path to stamping coverage; it only makes paths that already exist
+    /// reachable on a leaf that is never collected.
+    /// </para>
+    /// </summary>
+    internal async Task OnCoverageLagTimerTickAsync(CancellationToken cancellationToken)
+    {
+        if (state.State.TreeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var resolved = await GetOptionsAsync();
+        if (resolved.LeafSnapshotMaxCoverageLagSeconds <= 0)
+        {
+            // Reconfigured to off under a live activation. Stop rather than
+            // keep ticking against a bound the operator has withdrawn.
+            var disabled = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
+            disabled?.Dispose();
+            return;
+        }
+
+        // Thread the timer's token. Orleans cancels it on deactivation, so this
+        // driver is cancellable where the post-persist driver is not: that path
+        // has no token anywhere on it, which is the residual issue #1965 names.
+        // The capture this reaches is therefore strictly better contained than
+        // the one the existing driver reaches, not an additional uncancellable
+        // capture.
+        await MaybeRunPeriodicSnapshotRecheckAsync(
+            fromCheckpointPersist: false,
+            cancellationToken);
     }
 
     /// <summary>

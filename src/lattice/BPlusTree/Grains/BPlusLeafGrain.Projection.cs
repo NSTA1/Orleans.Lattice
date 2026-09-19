@@ -389,7 +389,16 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await MaybeRunPeriodicSnapshotRecheckAsync();
+            // Arm the coverage-lag bound here as well as at activation. A leaf
+            // BORN in this activation has no tree id when the replay samples it
+            // (the birth seam seeds it afterwards), so the activation site
+            // declines - correctly, since arming there would resolve options for
+            // an empty id and can deadlock the silo. This site runs on a leaf
+            // that has provably been seeded and has provably persisted a
+            // checkpoint, which is exactly the population the bound is for, and
+            // the call is idempotent so it costs one field read thereafter.
+            await EnsureCoverageLagTimerAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync(fromCheckpointPersist: true);
         }
         catch (Exception ex)
         {

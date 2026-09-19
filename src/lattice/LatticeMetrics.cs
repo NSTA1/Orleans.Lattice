@@ -4132,6 +4132,23 @@ public static class LatticeMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for a spent repair budget that
+    /// has been re-armed after its backoff, returning the repair to service on
+    /// an activation that is still alive.
+    /// <para>
+    /// Paired with <see cref="CoverageRepairExhausted"/>, and the pair is the
+    /// series to read together: an <c>exhausted</c> count that keeps pace with
+    /// <c>rearmed</c> is a leaf retrying on its backoff, while an
+    /// <c>exhausted</c> count with no matching <c>rearmed</c> is a leaf whose
+    /// activation was replaced before the backoff elapsed. The same shape as
+    /// <c>blocked_leaf_reactivations_total</c>'s abandoned/rearmed pair.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairRearmed =
+        new(TagOutcome, "rearmed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
     /// <see cref="LeafSnapshotCoverageRepairs"/> for a repair capture that RAN
     /// and left a checkpointed partition still uncovered, without yet spending
     /// the per-activation budget (issue #2940).
@@ -4227,6 +4244,40 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairNoUncoveredPartition =
         new(TagOutcome, "no_checkpointed_uncovered_partition");
+
+    /// <summary>
+    /// Every <c>outcome</c> arm of <see cref="LeafSnapshotCoverageRepairs"/>, and
+    /// the single source the zero-priming walk iterates.
+    /// <para>
+    /// This exists so that the instrument's "a zero is a MEASURED zero" claim is
+    /// earned rather than asserted. Priming used to be a hand-written run of
+    /// <c>Add(0, ...)</c> calls, one per arm, with nothing relating it to the
+    /// arms that actually exist: an arm added later and omitted from that run
+    /// would publish no zero, and its absence would read as "the path never ran"
+    /// on precisely the tree under diagnosis. Issue #3194 is the proof that the
+    /// hazard is real rather than theoretical - adding <c>rearmed</c> required a
+    /// sixth priming line written by hand, and nothing in the build would have
+    /// noticed had it been left out.
+    /// </para>
+    /// <para>
+    /// The sibling <c>blocked_leaf_reactivations_total</c> earns the same claim
+    /// by walking an enum through a switch that throws on an unmapped member.
+    /// These arms are <see cref="KeyValuePair{TKey,TValue}"/> statics rather than
+    /// an enum, so the equivalent guarantee is supplied by a reflection test that
+    /// asserts this array holds every <c>CoverageRepair*</c> arm declared on this
+    /// class. Add an arm and forget this array, and that test fails; there is no
+    /// shape in which an unarmed arm ships.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?>[] CoverageRepairArms =
+    [
+        CoverageRepairRepaired,
+        CoverageRepairUnsatisfied,
+        CoverageRepairExhausted,
+        CoverageRepairCaptureInFlight,
+        CoverageRepairNoUncoveredPartition,
+        CoverageRepairRearmed,
+    ];
 
     /// <summary>
     /// Reactivations of a dormant leaf whose unusable durable materialiser pin
