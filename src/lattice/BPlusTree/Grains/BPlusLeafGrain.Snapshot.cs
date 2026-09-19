@@ -391,12 +391,18 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Builds the ordinary per-partition coverage claim for a capture: each
     /// partition's current checkpoint, with slot 0 mirroring the scalar.
+    /// <para>
+    /// The array is sized by <see cref="ResolveCoveragePartitionCount"/>, not by
+    /// the caller's configured count, so the stamp covers every partition the
+    /// detector walks (issue #3157). See that method for why the two ranges have
+    /// to be the same one.
+    /// </para>
     /// </summary>
     private long[] BuildCheckpointCoverage(int partitionCount, long checkpoint)
     {
-        var offsets = new long[partitionCount];
+        var offsets = new long[ResolveCoveragePartitionCount(partitionCount)];
         offsets[0] = checkpoint;
-        for (var p = 1; p < partitionCount; p++)
+        for (var p = 1; p < offsets.Length; p++)
             offsets[p] = GetCurrentCheckpointForPartition(p);
         return offsets;
     }
@@ -480,6 +486,67 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Widens a configured partition count to cover every partition this leaf
+    /// holds durable evidence for (issue #3157).
+    /// <para>
+    /// <b>The asymmetry this closes.</b> The WAL GC's blocking-pin classifier
+    /// does not bound itself by <see cref="LatticeOptions.WalPartitions"/>: it
+    /// parses the partition ordinal out of the durable pin's consumer id and
+    /// reads <c>LeafNodeState.ProjectionCheckpointOffsetsByPartition</c>
+    /// directly, so any slot the persisted array carries is classifiable. The
+    /// repairer bounded itself by the CONFIGURED count. Because
+    /// <c>SetPersistedCheckpointForPartition</c> only ever grows that array and
+    /// never shrinks it, its length is the widest partition count this leaf has
+    /// ever observed - so after the configured width is narrowed, the tail slots
+    /// keep their durable checkpoints, the classifier keeps reporting them
+    /// <c>checkpointed_uncovered</c>, and the repairer walked a range that
+    /// structurally excluded them. That is a pin the repairer cannot SEE: the
+    /// condition is real, correctly detected on the GC side, and invisible on
+    /// the remedy side, so the leaf declines with
+    /// <c>no_checkpointed_uncovered_partition</c> and the tree-wide offset floor
+    /// never lifts.
+    /// </para>
+    /// <para>
+    /// <b>Why the coverage array is folded in too.</b> Coverage is monotone-max
+    /// and grows from whatever blob was loaded, so it can also be wider than the
+    /// configured count. Including it keeps the walked range a superset of both
+    /// durable sources, which is the property that makes "classifiable implies
+    /// visible" hold rather than merely usually hold.
+    /// </para>
+    /// <para>
+    /// <b>This widening must be applied to detection and stamping ALIKE.</b>
+    /// <see cref="HasCheckpointedPartitionWithoutCoverage"/> uses it to decide
+    /// whether to capture, and <see cref="BuildCheckpointCoverage"/> uses it to
+    /// decide how many slots the capture claims. Widening only the first would
+    /// make the repair non-terminating: it would fire on a tail partition whose
+    /// coverage the resulting capture never stamps, and re-fire on every
+    /// subsequent persist for ever. They are two halves of one range and a later
+    /// reader must not narrow either alone.
+    /// </para>
+    /// <para>
+    /// Widening can never fabricate a claim. Both the predicate and the stamp
+    /// still read each partition through
+    /// <c>GetCurrentCheckpointForPartition</c>, so a tail slot that never
+    /// checkpointed reads <c>-1</c>, fails <see cref="IsPartitionProvenCheckpointed"/>,
+    /// is stamped <c>-1</c>, and keeps its Zero block pin exactly as before.
+    /// </para>
+    /// </summary>
+    private int ResolveCoveragePartitionCount(int partitionCount)
+    {
+        var width = Math.Max(1, partitionCount);
+
+        var checkpoints = state.State.ProjectionCheckpointOffsetsByPartition;
+        if (checkpoints is not null && checkpoints.Length > width)
+            width = checkpoints.Length;
+
+        var covered = _durableSnapshotOffsetsByPartition;
+        if (covered is not null && covered.Length > width)
+            width = covered.Length;
+
+        return width;
+    }
+
+    /// <summary>
     /// Reports whether any partition holds a durable projection checkpoint that
     /// no durable snapshot covers - the leaf-local form of the tree-wide WAL
     /// retention stall of issue #2692.
@@ -521,7 +588,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal bool HasCheckpointedPartitionWithoutCoverage(int partitionCount)
     {
-        for (var p = 0; p < partitionCount; p++)
+        var width = ResolveCoveragePartitionCount(partitionCount);
+        for (var p = 0; p < width; p++)
         {
             if (IsPartitionProvenCheckpointed(p)
                 && DurableSnapshotCoverageForPartition(p) < 0)
@@ -1031,8 +1099,12 @@ internal sealed partial class BPlusLeafGrain
         // GetPersistedCheckpointForPartition, partition 0 now reports the
         // sentinel exactly when it has nothing applied, and the widening becomes
         // reachable for the population it was written for.
+        // The range is ResolveCoveragePartitionCount, not the configured count,
+        // so a partition the detector can see is one this guard can see too
+        // (issue #3157).
         var anyPartitionCheckpointed = false;
-        for (var p = 0; p < partitionCount && !anyPartitionCheckpointed; p++)
+        var coverageWidth = ResolveCoveragePartitionCount(partitionCount);
+        for (var p = 0; p < coverageWidth && !anyPartitionCheckpointed; p++)
         {
             if (IsPartitionProvenCheckpointed(p))
                 anyPartitionCheckpointed = true;
