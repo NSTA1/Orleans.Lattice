@@ -1874,6 +1874,88 @@ public static class LatticeMetrics
             description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
 
     /// <summary>
+    /// Counter of WAL garbage-collection passes that found the tree's configured
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> to be <b>arithmetically
+    /// unreachable</b> against the working set the pass just measured - that is,
+    /// below
+    /// <see cref="LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple"/> times
+    /// the tree's logical retained payload. Tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// <b>This is a statement about configuration, not about lag, and that is why
+    /// it is a separate instrument rather than an eighth arm of
+    /// <see cref="WalGcPasses"/>.</b> Those arms partition invocations - exactly
+    /// one is recorded per pass, so their sum can never over-count - and an
+    /// unsatisfiable ceiling is not a pass outcome at all. It co-occurs with
+    /// <see cref="OutcomeReclaimed"/>, <see cref="OutcomeOverCeiling"/> and
+    /// <see cref="OutcomeStranded"/> alike, so an arm would have had to take
+    /// invocations away from whichever arm names them today: an operator alerting
+    /// on <see cref="OutcomeStranded"/> would have watched it fall silent at the
+    /// exact moment the condition it describes got worse. Recording the condition
+    /// on its own counter leaves every existing arm meaning what it meant.
+    /// </para>
+    /// <para>
+    /// <b>The two conditions demand opposite responses.</b>
+    /// <see cref="OutcomeStranded"/> and <see cref="OutcomeOverCeiling"/> both say
+    /// "bytes could not be reclaimed", which an operator reads as a lagging
+    /// consumer or a pinned floor and acts on by unblocking the consumer. This
+    /// counter says the ceiling itself cannot be met by a healthy tree of this
+    /// size, whose remedy is to raise the ceiling (or shrink the tree) and for
+    /// which chasing consumers is wasted effort. Before it existed the two
+    /// rendered identically.
+    /// </para>
+    /// <para>
+    /// <b>Why the multiple.</b> A log-structured provider reclaims space only by
+    /// rewriting a segment, so dead bytes are a designed-in component of
+    /// occupancy up to its compaction policy's share of the file, and the ceiling
+    /// has been compared against physical occupancy since issue #3107. Designed
+    /// steady-state occupancy is therefore a multiple of the live set, and a
+    /// ceiling below that multiple is breached by a perfectly healthy tree. With
+    /// <see cref="LatticeOptions.WalBytePressureReclaimTarget"/> at its default
+    /// the disarm point sits below the natural floor of the compaction cycle too,
+    /// so such a tree arms the advisory byte-pressure alarm permanently and can
+    /// never clear it (issue #3242).
+    /// </para>
+    /// <para>
+    /// <b>Why it reads the logical working set and not the occupancy figure the
+    /// ceiling is actually compared against.</b> Compaction fires on a long
+    /// period - one shard at a time, once its dead bytes reach the configured
+    /// fraction - so physical occupancy is not a level but a sawtooth
+    /// oscillating between the live set and that multiple of it. A check against
+    /// occupancy would therefore read whatever phase of the cycle the pass
+    /// happened to land in: at the peak it condemns a ceiling that is in fact
+    /// reachable, and at the trough it reports a comfortable ceiling for a tree
+    /// that will breach again at its next peak. Both readings are of the same
+    /// tree under the same unchanged configuration, which is what makes
+    /// occupancy the wrong quantity to decide a <i>sizing</i> question against -
+    /// the gap between the two is routinely a large fraction of the live set on
+    /// a real deployment, not a rounding difference. <b>The ceiling must clear
+    /// the peak of the sawtooth, and only the logical total predicts where that
+    /// peak is.</b>
+    /// </para>
+    /// <para>
+    /// <b>This instrument is justified by the condition's silence, not by any
+    /// particular deployment exhibiting it.</b> An unsatisfiable ceiling is
+    /// indistinguishable, in every series that existed before this one, from a
+    /// tree whose consumers are merely lagging - so it can persist indefinitely
+    /// while looking exactly like a transient. That is true whether or not any
+    /// tree is in the condition today, which is the point: a guard argued from a
+    /// live incident stops being justified the moment the incident clears, and
+    /// this one does not.
+    /// </para>
+    /// <para>
+    /// Zero-primed per tree beside the pass-outcome arms, so a flat zero is a
+    /// measured "this tree's ceiling is satisfiable" rather than silence. It is
+    /// emitted only for a tree that has a ceiling configured <i>and</i> whose
+    /// provider accounts logical bytes; on any other tree it reads the primed
+    /// zero, exactly as <see cref="OutcomeOverCeiling"/> does. Pair the rate
+    /// against <see cref="WalGcPasses"/> to see whether every pass agrees.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcCeilingUnsatisfiable =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.ceiling_unsatisfiable", unit: "{pass}",
+            description: "WAL garbage-collection passes that found the configured WalMaxRetainedBytes unreachable against the tree's measured logical working set, tagged by tree.");
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes for which the durable
     /// leaf-materialiser <em>offset</em> floor could not be computed because the
     /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from

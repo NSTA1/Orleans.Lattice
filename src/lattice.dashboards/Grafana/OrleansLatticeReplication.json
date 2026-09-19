@@ -1882,6 +1882,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_trim_stop_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}}/s" }
       ]
+    },
+    {
+      "id": 3242,
+      "title": "WAL GC ceiling unsatisfiable (ops/s) - issue #3242",
+      "description": "Rate of WAL garbage-collection passes that found the tree's configured WalMaxRetainedBytes ARITHMETICALLY UNREACHABLE against the live set the pass just measured - below LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple (2) times the logical retained payload (orleans.lattice.wal.gc.ceiling_unsatisfiable, issue #3242). THIS PANEL NAMES A CONFIGURATION FAULT, NOT A LAG, AND THAT DISTINCTION IS THE WHOLE POINT. The pass-outcome panel's stranded and over_ceiling arms both say bytes could not be reclaimed, which an operator reads as a lagging consumer or a pinned floor and acts on by chasing the consumer. A tree on this panel is telling you the opposite: nothing is lagging, the tree is simply larger than its own ceiling permits a healthy tree to be, and no amount of reclamation can bring it inside - so the remedy is to raise the ceiling or shrink the tree, and chasing consumers is wasted effort. Before this series the two rendered identically. WHY TWO TIMES: a log-structured provider reclaims dead bytes only by rewriting a segment, and rewrites once dead bytes reach a configured fraction t of total payload, so designed steady-state occupancy peaks at live/(1-t) - twice the live set at the file provider's default 0.5 ratio - and the ceiling has been compared against PHYSICAL occupancy since issue #3107. A ceiling below that multiple is breached by a tree doing nothing wrong, and because WalBytePressureReclaimTarget (0.8) puts the disarm point below the natural floor of the same compaction cycle, it is breached PERMANENTLY: the advisory byte-pressure alarm arms and can never clear, which destroys its ability to distinguish pathological growth from normal size. DELIBERATELY NOT AN ARM OF THE PASS-OUTCOME COUNTER: those arms partition invocations, whereas this condition co-occurs with reclaimed, over_ceiling and stranded alike, so an arm would have stolen invocations from whichever arm names them today and an operator alerting on stranded would have watched it fall silent as the condition worsened. READ IT AGAINST THE PASS-OUTCOME PANEL: every pass on an affected tree agrees, because this is a standing property of the configuration rather than an event, so the rate here tracks that tree's pass rate. Zero-primed per tree beside the pass-outcome arms, which is why this query omits the or-vector-zero fallback used elsewhere on this dashboard - fabricating a zero would reintroduce the false zero the priming exists to remove, and an absent series here genuinely means WAL GC is not running for that tree on the selected silo. A measured zero means NOT PROVABLY UNSATISFIABLE rather than comfortably sized: it also reads zero when no ceiling is configured, when the provider cannot account logical bytes, and on an empty tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 344 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_ceiling_unsatisfiable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}/s" }
+      ]
     }
   ]
 }

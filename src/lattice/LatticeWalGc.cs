@@ -381,7 +381,7 @@ public sealed class LatticeWalGc(
         // Sample retained bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
-        var (ceiling, retainedBefore) = await SampleRetainedBytesAsync(
+        var (ceiling, retainedBefore, logicalBefore) = await SampleRetainedBytesAsync(
             ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
         if (triggered)
@@ -443,7 +443,8 @@ public sealed class LatticeWalGc(
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
                 ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId,
-                blockingConsumerIds);
+                blockingConsumerIds, false, logicalBefore,
+                EvaluateCeilingSatisfiability(ceiling, logicalBefore));
         }
 
         long totalTrimmed = 0;
@@ -467,14 +468,15 @@ public sealed class LatticeWalGc(
             RecordEntriesTrimmed(treeTag, tenantTag, partition, shardScan.EligibleCount);
         }
 
-        var (_, retainedAfter) = await SampleRetainedBytesAsync(
+        var (_, retainedAfter, logicalAfter) = await SampleRetainedBytesAsync(
             ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
             ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
-            blockingConsumerIds, retainedBacklog);
+            blockingConsumerIds, retainedBacklog, logicalAfter,
+            EvaluateCeilingSatisfiability(ceiling, logicalAfter));
     }
 
     /// <summary>
@@ -1413,14 +1415,14 @@ public sealed class LatticeWalGc(
 
     /// <summary>
     /// Samples the advisory WAL byte-pressure inputs: the configured ceiling
-    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and the occupancy
-    /// total summed across every partition. Returns <c>(null, null)</c> when
-    /// the policy is disabled and <c>(ceiling, null)</c> when the provider does
-    /// not support byte accounting (every partition returned the <c>-1</c>
-    /// sentinel). The policy never trims past the safe frontier; the sampled
-    /// total only feeds the advisory report and metrics.
+    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>), the occupancy total
+    /// summed across every partition, and the <i>logical</i> retained payload
+    /// summed across every partition. Returns all-null when the policy is
+    /// disabled, and a null component when no partition's provider supports that
+    /// form of accounting. The policy never trims past the safe frontier; the
+    /// sampled totals only feed the advisory report and metrics.
     /// <para>
-    /// Each partition is sampled with
+    /// Occupancy is sampled with
     /// <see cref="IWalStorageProvider.GetPhysicalByteSizeAsync"/> in
     /// preference to <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>,
     /// falling back per-partition when a provider does not support physical
@@ -1433,8 +1435,23 @@ public sealed class LatticeWalGc(
     /// take it: a provider whose trim deletes rows outright carries no dead
     /// bytes, so its retained total already is its occupancy.
     /// </para>
+    /// <para>
+    /// The logical total is sampled <i>as well as</i>, not instead of, the
+    /// occupancy total, and that is the whole point of taking both (issue
+    /// #3242). Occupancy is the quantity the ceiling <b>bounds</b>; the live set
+    /// is the quantity the ceiling has to be <b>sized against</b>, because
+    /// designed steady-state occupancy is a multiple of it
+    /// (<see cref="LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple"/>).
+    /// Deriving the second from the first is not possible: occupancy oscillates
+    /// between one and that multiple of the live set over a compaction cycle, so
+    /// a satisfiability verdict read off occupancy alone would be a function of
+    /// where in the sawtooth the pass happened to land. The extra probe is
+    /// contractually O(1) - a provider must answer it from a running counter or
+    /// a bounded metadata read and must never scan the log - and it is paid only
+    /// by a deployment that configured a ceiling.
+    /// </para>
     /// </summary>
-    private static async Task<(long? Ceiling, long? Retained)> SampleRetainedBytesAsync(
+    private static async Task<(long? Ceiling, long? Retained, long? Logical)> SampleRetainedBytesAsync(
         Func<int, IWalStorageProvider?> resolveProvider,
         LatticeOptions resolved,
         string treeName,
@@ -1444,11 +1461,13 @@ public sealed class LatticeWalGc(
         if (resolved.WalMaxRetainedBytes is not { } ceiling || ceiling <= 0)
         {
             // Policy disabled - zero hot-path cost.
-            return (null, null);
+            return (null, null, null);
         }
 
         long retained = 0;
+        long logical = 0;
         var anySupported = false;
+        var anyLogicalSupported = false;
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1461,6 +1480,20 @@ public sealed class LatticeWalGc(
                 continue;
             }
 
+            // The live-payload sample, taken unconditionally so the
+            // satisfiability verdict is decided on the same population the
+            // occupancy total covers. It doubles as the occupancy fallback
+            // below, so a provider without physical accounting is still probed
+            // exactly once.
+            var live = await provider
+                .GetRetainedByteSizeAsync(treeName, partition, cancellationToken)
+                .ConfigureAwait(false);
+            if (live >= 0)
+            {
+                anyLogicalSupported = true;
+                logical += live;
+            }
+
             var bytes = await provider
                 .GetPhysicalByteSizeAsync(treeName, partition, cancellationToken)
                 .ConfigureAwait(false);
@@ -1469,9 +1502,7 @@ public sealed class LatticeWalGc(
                 // -1 sentinel: no physical accounting. Fall back to the
                 // logical retained total, which is this backend's occupancy
                 // when its trim deletes rather than marks dead.
-                bytes = await provider
-                    .GetRetainedByteSizeAsync(treeName, partition, cancellationToken)
-                    .ConfigureAwait(false);
+                bytes = live;
             }
 
             if (bytes < 0)
@@ -1486,8 +1517,52 @@ public sealed class LatticeWalGc(
             retained += bytes;
         }
 
-        return anySupported ? (ceiling, retained) : (ceiling, null);
+        return (
+            ceiling,
+            anySupported ? retained : null,
+            anyLogicalSupported ? logical : null);
     }
+
+    /// <summary>
+    /// Whether the configured ceiling is <b>arithmetically unreachable</b> by a
+    /// healthy tree holding the live set this pass measured (issue #3242).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A log-structured provider reclaims dead bytes only by rewriting a
+    /// segment, and it rewrites once dead bytes reach a configured fraction of
+    /// total payload, so designed steady-state occupancy is
+    /// <see cref="LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple"/> times
+    /// the live set. A ceiling below that is breached by a tree doing nothing
+    /// wrong, and - because
+    /// <see cref="LatticeOptions.WalBytePressureReclaimTarget"/> puts the disarm
+    /// point below the natural floor of the same compaction cycle - it is
+    /// breached permanently.
+    /// </para>
+    /// <para>
+    /// Deliberately <b>false</b>, not "unknown", in all three of the shapes it
+    /// cannot decide: policy disabled, no logical accounting, and an empty tree
+    /// (<c>0</c> live bytes makes every positive ceiling satisfiable, which is
+    /// true rather than merely undecided). The instrument this feeds is
+    /// zero-primed, so those shapes read a measured zero; a false positive on a
+    /// tree the library cannot measure would be strictly worse, because the
+    /// remedy it names - raise the ceiling - is one an operator would act on.
+    /// </para>
+    /// <para>
+    /// The comparison is made in <see cref="double"/> rather than by integer
+    /// multiplication so that the multiple stays expressible as a ratio, and
+    /// because the alternative overflows a <see cref="long"/> for live sets
+    /// above 4 EiB while <see cref="double"/> is exact on byte counts below
+    /// 8 PiB. It is a non-strict floor: a ceiling of exactly the multiple is
+    /// satisfiable and does not report.
+    /// </para>
+    /// </remarks>
+    private static bool EvaluateCeilingSatisfiability(long? ceiling, long? logicalRetained)
+        => ceiling is { } cap
+            && cap > 0
+            && logicalRetained is { } live
+            && live > 0
+            && cap < live * LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple;
 
     private static async Task<(long EligibleCount, WalGcTrimStopReason StopReason)> TrimShardAsync(
         IWalStorageProvider provider,
