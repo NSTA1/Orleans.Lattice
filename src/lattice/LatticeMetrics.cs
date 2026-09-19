@@ -4224,6 +4224,158 @@ public static class LatticeMetrics
         new(TagReason, "no_coverage_claim");
 
     /// <summary>
+    /// <see cref="TagReason"/> value for a graceful-deactivation capture declined
+    /// by the #1535 no-loss gate while the leaf still holds STALE coverage, so
+    /// the pin it leaves behind is frozen below its own checkpoint.
+    /// <para>
+    /// This is the MINTING RATE of the frozen floor-holder population, and it is
+    /// the arm to read. <c>BPlusLeafGrain.TryCaptureSnapshotOnDeactivateAsync</c>
+    /// captures only when this activation either advanced a checkpoint over
+    /// cache-resident applies or cold-rebuilt its cache from the WAL start;
+    /// a leaf satisfying neither cannot honestly stamp coverage, so declining is
+    /// CORRECT and the frozen pin it leaves is an honest one. The decline is not
+    /// the defect - the defect, if any, is the rate.
+    /// </para>
+    /// <para>
+    /// Each such decline creates an obligation dischargeable only by the WAL GC
+    /// reactivation drive, which replays the leaf and restamps it. That drive is
+    /// bounded per sweep (<c>MaxReactivationTouchesPerPass</c>) and per consumer
+    /// (<c>ReactivationRetryCooldown</c>), whereas this rate is bounded by
+    /// nothing the collector controls. Read it AGAINST the drive's completion
+    /// rate: sustained above it, the frozen population grows without bound and no
+    /// drive-side tuning can converge, because the mismatch is asymptotic rather
+    /// than a matter of constants (issue #3185).
+    /// </para>
+    /// <para>
+    /// Distinguish from <see cref="DriverDeclineDeactivateCoverageCurrent"/>,
+    /// which is the same gate declining harmlessly. Only THIS arm mints a frozen
+    /// pin; counting both together overstates the refill.
+    /// </para>
+    /// <para>
+    /// NOTE: unlike most arms in this file, the declines counter is NOT
+    /// zero-primed, so this series is absent until it first fires. Absence here
+    /// therefore does NOT establish that a build lacks the instrument - the usual
+    /// "presence of a series is the deployment fact" reading does not apply.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineDeactivateCoverageStale =
+        new(TagReason, "deactivate_unproven_coverage_stale");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a graceful-deactivation capture declined
+    /// by the #1535 no-loss gate when the leaf's durable coverage ALREADY matches
+    /// its checkpoint on every partition, so the decline costs nothing.
+    /// <para>
+    /// The benign majority, and the control for
+    /// <see cref="DriverDeclineDeactivateCoverageStale"/>: it proves the gate is
+    /// being reached and evaluated, so a zero on the stale arm means "no leaf
+    /// minted a frozen pin" rather than "the gate never ran". Without this arm the
+    /// two are indistinguishable.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineDeactivateCoverageCurrent =
+        new(TagReason, "deactivate_unproven_coverage_current");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a graceful-deactivation capture declined
+    /// by the #1535 no-loss gate whose coverage state could not be classified,
+    /// because resolving the leaf's options or partition coverage threw.
+    /// <para>
+    /// Exists so the two informative arms stay honest rather than absorbing an
+    /// unknown. Folding this case into
+    /// <see cref="DriverDeclineDeactivateCoverageStale"/> would inflate the
+    /// measured refill rate and send a reader after a phantom; folding it into
+    /// <see cref="DriverDeclineDeactivateCoverageCurrent"/> would hide a real
+    /// one. Expected to be zero outside a test harness with no grain runtime, so
+    /// a sustained rate here is a bug in the classification, not a workload
+    /// characteristic.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineDeactivateUnclassified =
+        new(TagReason, "deactivate_unproven_unclassified");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the periodic recheck declining because a
+    /// capture was already in flight on this leaf. A contention signal, not an
+    /// error: the in-flight capture will land and the next cadence tick
+    /// re-evaluates.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckCaptureInFlight =
+        new(TagReason, "recheck_capture_in_flight");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the periodic recheck declining because
+    /// every partition's durable coverage already matches its checkpoint. The
+    /// healthy majority, and the control that makes a zero on the other arms
+    /// readable as "nothing needed doing" rather than "the recheck never ran".
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckCoverageCurrent =
+        new(TagReason, "recheck_coverage_current");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the periodic recheck declining because
+    /// the persist-driven cadence has not yet reached
+    /// <c>LeafSnapshotReClassifyEveryNCheckpoints</c>.
+    /// <para>
+    /// The expected steady-state arm on a write-serving leaf, and the one that
+    /// distinguishes a recheck path that is ticking normally from one that is not
+    /// being reached at all. A leaf serving only READS never advances this
+    /// cadence, so a leaf whose only driver-decline arm is this one, at a rate
+    /// that does not track its write volume, is the read-only population the
+    /// coverage-lag timer exists to cover.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckCadenceNotReached =
+        new(TagReason, "recheck_cadence_not_reached");
+
+    /// <summary>
+    /// Counter of leaf snapshot capture DRIVERS that declined to drive a capture,
+    /// tagged <see cref="TagTree"/> and <see cref="TagReason"/> (issue #3185).
+    /// <para>
+    /// Deliberately a SEPARATE instrument from
+    /// <see cref="LeafSnapshotCaptureDeclines"/>, and the separation is
+    /// load-bearing in the same way that counter's own separation from
+    /// <c>leaf.snapshot.captures</c> is. Those declines are raised INSIDE
+    /// <c>CaptureSnapshotCoreAsync</c>, so declines and attempts together
+    /// partition its invocations exactly and stay co-populated with
+    /// <c>leaf.snapshot.capture.duration</c>. The declines counted HERE happen in
+    /// a caller that never reached that method, so folding them in would count a
+    /// strict superset and silently corrupt the decline-versus-attempt ratio the
+    /// other counter exists to report.
+    /// </para>
+    /// <para>
+    /// It exists because the capture drivers were the last unlit segment of the
+    /// snapshot-coverage path: the zero-coverage repair reports six outcomes and
+    /// <c>CaptureSnapshotCoreAsync</c> reports four declines, but the
+    /// graceful-deactivation hook and the periodic recheck returned in complete
+    /// silence on every gate. That silence is why the frozen floor-holder
+    /// population reads as a STATIC POPULATION rather than as the FLOW it is:
+    /// only its accumulated consequence was ever observable, never its rate.
+    /// </para>
+    /// <para>
+    /// <b>Reading it.</b> The arm that matters is
+    /// <see cref="DriverDeclineDeactivateCoverageStale"/>, the minting rate of
+    /// frozen floor-holding pins. Read it against the WAL GC reactivation drive's
+    /// completion rate: sustained above it, the frozen population grows without
+    /// bound and no drive-side tuning can converge, because the mismatch is
+    /// asymptotic rather than a matter of constants. Below it, the drive is merely
+    /// slow and tuning is applicable.
+    /// </para>
+    /// <para>
+    /// NOT zero-primed, matching <see cref="LeafSnapshotCaptureDeclines"/>: a
+    /// series appears on first decline. Absence therefore does NOT establish that
+    /// a build lacks the instrument, so the usual "presence of a series is the
+    /// deployment fact" reading does not apply to this family.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSnapshotDriverDeclines =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.driver.declines", unit: "{decline}",
+            description: "Leaf snapshot capture DRIVERS that declined to drive a capture, tagged by tree and reason. Separate from leaf.snapshot.capture.declines, which counts declines inside CaptureSnapshotCoreAsync and must stay exactly co-populated with the capture attempt and duration instruments.");
+
+    /// <summary>Canonical name of <see cref="LeafSnapshotDriverDeclines"/>.</summary>
+    public const string LeafSnapshotDriverDeclinesName = "orleans.lattice.leaf.snapshot.driver.declines";
+
+    /// <summary>
     /// Counter of zero-coverage leaf snapshot repair EVALUATIONS (issues #2692,
     /// #2940), tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
     /// Six arms partition every invocation of
