@@ -148,6 +148,27 @@ public sealed class DashboardPanelTagDomainTests
             ["Replication|70|orleans.lattice.wal.gc.passes|outcome"] =
                 ["failed", "idle", "no_consumer", "over_ceiling", "reclaimed", "stranded", "unclassified"],
 
+            // Panel 161 is the minting-versus-drive RATIO panel, whose single
+            // target is by construction a one-arm selection: the quotient it
+            // computes is only defined against the stale arm, because that is
+            // the arm the WAL GC reactivation drive discharges. Charting any
+            // other arm in the numerator would change what the number means
+            // rather than add information to it - deactivate_unproven_coverage_
+            // current in particular is the HARMLESS decline through the same
+            // gate, and adding it would inflate the numerator with deactivation
+            // traffic the drive never has to discharge, pushing the ratio above
+            // 1 on a perfectly healthy estate. The five omitted arms are all
+            // charted on panel 160 on this same dashboard, which is the by-arm
+            // breakdown this panel deliberately is not.
+            ["CommitPath|161|orleans.lattice.leaf.snapshot.driver.declines|reason"] =
+            [
+                "deactivate_unproven_coverage_current",
+                "deactivate_unproven_unclassified",
+                "recheck_cadence_not_reached",
+                "recheck_capture_in_flight",
+                "recheck_coverage_current",
+            ],
+
             // Panel 143 charts both arms on its unfiltered target, and adds a
             // second target narrowed to outcome="withheld" so the withheld arm
             // can be split by trigger (issue #2883). Only the narrowed target
