@@ -1639,6 +1639,13 @@ public static class LatticeMetrics
     ///     frontier is pinned below bytes the policy wants back (issue #3119).
     ///   </description></item>
     ///   <item><description>
+    ///     <see cref="OutcomeStranded"/> - it evaluated a usable cursor floor,
+    ///     trimmed nothing, and its scan stopped on WAL it had to retain, with no
+    ///     configured byte ceiling complaining about it. The <i>"could not"</i>
+    ///     case that <see cref="OutcomeIdle"/> absorbed on every deployment that
+    ///     set no ceiling (issue #3213).
+    ///   </description></item>
+    ///   <item><description>
     ///     <see cref="OutcomeUnclassified"/> - the floor state was one this
     ///     build does not name. Structurally unreachable today and expected to
     ///     read a permanent measured zero; it exists so that a floor state added
@@ -2002,6 +2009,15 @@ public static class LatticeMetrics
     /// opposite of quiet. Only with that arm split out is <c>idle</c> the
     /// healthy case rather than merely the unexplained one.
     /// </para>
+    /// <para>
+    /// <see cref="OutcomeStranded"/> is the fourth (issue #3213), and it is what
+    /// makes the previous sentence true on a silo that configured no ceiling.
+    /// <c>over_ceiling</c> can only fire where
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is set, and that option
+    /// has no default, so until this arm existed a stranded tree on a stock
+    /// deployment still reported <c>idle</c> - the arm that asserts health - for
+    /// as long as it stayed stranded.
+    /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
 
@@ -2039,6 +2055,38 @@ public static class LatticeMetrics
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeOverCeiling = new(TagOutcome, "over_ceiling");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>stranded</c> (a WAL GC pass that evaluated a
+    /// usable cursor floor, trimmed nothing, and left WAL behind that it could
+    /// not reclaim - see <see cref="LatticeWalGcReport.RetainedBacklog"/>).
+    /// <para>
+    /// The fourth split out of <see cref="OutcomeIdle"/> (issue #3213), and the
+    /// one that closes it for a deployment that configured nothing. <c>idle</c>
+    /// conflated <i>"nothing to do"</i> with <i>"could not do anything"</i>: a
+    /// quiet tree and a tree whose whole retained range sits behind a pinned trim
+    /// frontier both report a usable floor and trim nothing. <c>over_ceiling</c>
+    /// separates the second case only where an operator set
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/>, and that option has no
+    /// default, so on every other deployment the conflation survived intact.
+    /// </para>
+    /// <para>
+    /// This arm asks a question the byte policy cannot: the trim scan already
+    /// records <i>where it stopped</i>, and a scan that stopped at an entry it had
+    /// to retain is a direct observation of backlog needing no byte accounting and
+    /// no configuration. So a tree stranded behind an offset floor is nameable on
+    /// a stock silo, which is what it was not before.
+    /// </para>
+    /// <para>
+    /// It sits below <see cref="OutcomeOverCeiling"/> in precedence, so the arms
+    /// stay mutually exclusive and a breaching tree keeps its more specific
+    /// diagnosis; a tree reaching this arm is one whose backlog no configured
+    /// ceiling is complaining about. Like the other arms it is primed at zero per
+    /// collected tree, so an absent series means this silo is not reporting rather
+    /// than that no tree was ever stranded.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeStranded = new(TagOutcome, "stranded");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>no_consumer</c> (a WAL GC pass that
@@ -2097,8 +2145,9 @@ public static class LatticeMetrics
     /// No pass can reach this arm today: <see cref="WalGcCursorFloorState"/> has
     /// three members and all three are named -
     /// <see cref="WalGcCursorFloorState.Available"/> by
-    /// <see cref="OutcomeIdle"/> and <see cref="OutcomeOverCeiling"/> between
-    /// them, and the other two by <see cref="OutcomeNoConsumer"/> and
+    /// <see cref="OutcomeIdle"/>, <see cref="OutcomeOverCeiling"/> and
+    /// <see cref="OutcomeStranded"/> between them, and the other two by
+    /// <see cref="OutcomeNoConsumer"/> and
     /// <see cref="OutcomeBlocked"/>. A permanent measured zero here is therefore
     /// the expected reading and is exactly the point: the arm exists so that a
     /// floor state added later falls somewhere it can be seen, instead of being

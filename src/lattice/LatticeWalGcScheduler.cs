@@ -1995,9 +1995,29 @@ internal sealed class LatticeWalGcScheduler(
             // untouched by everything this flag drives.
             var overCeiling = report.BytePressureOverThreshold;
 
+            // The backlog evidence that needs no configuration (issue #3213).
+            // `overCeiling` above is the same statement measured through the
+            // byte policy, and it is false outright on every deployment that set
+            // no WalMaxRetainedBytes - which has no default - so on a stock silo
+            // the three floor conditions were permanently false on a stranded
+            // tree and it relaxed to the terminal interval for the life of the
+            // process, with no corrective signal anywhere.
+            //
+            // This one is decided by the trim scan itself: it stops at the first
+            // entry it may not trim, so a stop on anything but "exhausted the
+            // log" or "the log was empty" means the shard still holds that entry
+            // and everything above it. Guarded on `!reclaimed` because a pass
+            // that trimmed something is already held at the floor by the first
+            // disjunct and because a healthy scan legitimately stops on the
+            // offset floor after reclaiming everything that floor entitles it
+            // to - it is a stop reason of a working tree as well as a stranded
+            // one, and only the pair (trimmed nothing, stopped on retention)
+            // isolates the stranding.
+            var stranded = !reclaimed && report.RetainedBacklog;
+
             RecordPass(
                 1,
-                ClassifyPass(reclaimed, overCeiling, report.CursorFloorState),
+                ClassifyPass(reclaimed, overCeiling, stranded, report.CursorFloorState),
                 treeTag,
                 tenantTag);
 
@@ -2301,9 +2321,42 @@ internal sealed class LatticeWalGcScheduler(
             // ceiling and cannot reclaim, polling at the floor for as long as
             // that holds - the same deliberate residual as above, and the cost of
             // an operator's ceiling being unreachable rather than of this rule.
+            //
+            // The fourth arm is a *ceiling on the ladder* rather than a fourth
+            // way of reaching the floor (issue #3213), and the difference is the
+            // whole design. A tree that trimmed nothing and left WAL behind is
+            // stranded in exactly the sense the blocked arm names, but the cause
+            // is not one the scheduler can act on and the population is not one
+            // it can afford to poll: `stranded` fires on any retention stop,
+            // which on a large estate is many more trees than `blocked` or
+            // `over_ceiling` ever are. Pinning all of them to minInterval would
+            // reintroduce the poll storm the adaptive cadence exists to prevent
+            // (issue #1030) - so this arm keeps the geometric backoff and only
+            // denies it its terminal interval.
+            //
+            // That is the property the defect needed. The backoff itself was
+            // never wrong; what was wrong was that its *terminus* is
+            // WalGcInterval, a value chosen for a tree with nothing to do, being
+            // applied to a tree with a growing backlog. At stock defaults a
+            // stranded tree went to one-hour sweeps; it now tops out an order of
+            // magnitude below that, so time-to-reclaim after whatever unblocks it
+            // is bounded by minutes rather than by the quiet-tree interval.
+            //
+            // The clamp bites immediately rather than on the next rung: Relax
+            // returns its ceiling for any current interval at or above half of
+            // it, so a tree that relaxed while quiet and then strands is pulled
+            // straight down to the capped ceiling on the very first stranded
+            // pass instead of waiting out the interval it had already earned.
+            //
+            // Genuinely quiet trees are untouched: a scan that exhausted the log
+            // or found it empty sets no backlog, so the `empty` case keeps
+            // relaxing to the configured ceiling exactly as before.
             next = reclaimed || blocked || overCeiling
                 ? minInterval
-                : Relax(currentInterval, minInterval, interval);
+                : Relax(
+                    currentInterval,
+                    minInterval,
+                    stranded ? StrandedRelaxCeiling(minInterval, interval) : interval);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -2513,6 +2566,16 @@ internal sealed class LatticeWalGcScheduler(
         // remedy is reading for a series that stopped rather than one that was
         // never there.
         RecordPass(0, LatticeMetrics.OutcomeOverCeiling, treeTag, tenantTag);
+
+        // The fourth arm split out of `idle` (issue #3213), and the one where an
+        // unprimed series would be worst. `over_ceiling` at least implies a
+        // configured ceiling, so a reader seeing no series can ask whether one is
+        // set; `stranded` is reachable on every deployment, so silence there is
+        // consistent with "no tree has ever been stranded", with "this silo is
+        // not reporting", and with "the build predates the arm" at once - and the
+        // first of those is the reading an operator most wants to be able to
+        // trust, because it is the one the whole defect made unavailable.
+        RecordPass(0, LatticeMetrics.OutcomeStranded, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
@@ -2741,16 +2804,74 @@ internal sealed class LatticeWalGcScheduler(
     /// cannot name, which a breach says nothing about. Only <c>idle</c> asserts
     /// the tree is fine, and only that assertion was false.
     /// </para>
+    /// <para>
+    /// <paramref name="stranded"/> refines the same arm and sits <i>below</i>
+    /// <paramref name="overCeiling"/> (issue #3213). The ordering keeps the arms
+    /// mutually exclusive, which the instrument's contract depends on - exactly
+    /// one arm is recorded per invocation, so the arms partition invocations and
+    /// their sum can never over-count. It also leaves the more specific diagnosis
+    /// in place: a breaching tree is stranded too, and naming the operator's own
+    /// ceiling says more than naming the generic condition. What reaches
+    /// <c>stranded</c> is therefore a tree holding WAL it could not reclaim that
+    /// no configured ceiling is complaining about - on a stock silo, which
+    /// configures none, that is every such tree.
+    /// </para>
+    /// <para>
+    /// Like <paramref name="overCeiling"/> it refines <c>idle</c> and nothing
+    /// else, on the same reasoning: <c>blocked</c> and <c>no_consumer</c> already
+    /// name a cause and neither claims health, so folding a backlog into them
+    /// would trade a specific diagnosis for a general one. Only <c>idle</c>
+    /// asserts the tree is fine, and only that assertion was false. The
+    /// <i>cadence</i> rule is deliberately wider than this label and reads the
+    /// report's backlog flag whatever the floor state, exactly as the byte-ceiling
+    /// arm already does.
+    /// </para>
     /// </remarks>
     private static KeyValuePair<string, object?> ClassifyPass(
         bool reclaimed,
         bool overCeiling,
+        bool stranded,
         WalGcCursorFloorState floorState)
         => reclaimed
             ? LatticeMetrics.OutcomeReclaimed
-            : overCeiling && floorState == WalGcCursorFloorState.Available
-                ? LatticeMetrics.OutcomeOverCeiling
-                : ClassifyUnreclaimed(floorState);
+            : floorState != WalGcCursorFloorState.Available
+                ? ClassifyUnreclaimed(floorState)
+                : overCeiling
+                    ? LatticeMetrics.OutcomeOverCeiling
+                    : stranded
+                        ? LatticeMetrics.OutcomeStranded
+                        : ClassifyUnreclaimed(floorState);
+
+    /// <summary>
+    /// The ceiling the adaptive ladder may relax to while a tree is still holding
+    /// WAL it could not reclaim (issue #3213), clamped into the operator's own
+    /// band.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Derived from <see cref="ReactivationMinBlockAge"/> for the same reason
+    /// <see cref="FaultRetryCeiling"/> is, and the derivation is again the
+    /// argument for the value: that constant is this scheduler's standing answer
+    /// to "how long may a stuck condition sit before we act on it", and a tree
+    /// whose scan keeps stopping on WAL it may not trim is that question asked of
+    /// a tree. Sharing the constant means a later tuning of one is a tuning of
+    /// both; pinning a third independent literal here would let them drift apart
+    /// silently.
+    /// </para>
+    /// <para>
+    /// Clamped <b>up</b> to <paramref name="minInterval"/> so it can never sit
+    /// below the floor, and <b>down</b> to <paramref name="interval"/> so an
+    /// operator who configured a band tighter than five minutes is not overridden
+    /// upward. This can only ever shorten the ladder, never lengthen it, so it
+    /// cannot make a stranded tree collect less often than the configuration
+    /// already asked for.
+    /// </para>
+    /// </remarks>
+    /// <param name="minInterval">The configured adaptive floor.</param>
+    /// <param name="interval">The configured adaptive ceiling.</param>
+    /// <returns>The stranded ladder's ceiling.</returns>
+    private static TimeSpan StrandedRelaxCeiling(TimeSpan minInterval, TimeSpan interval)
+        => FaultRetryCeiling(minInterval, interval);
 
     /// <summary>
     /// Adds <paramref name="addTicks"/> to <paramref name="nowTicks"/>,
