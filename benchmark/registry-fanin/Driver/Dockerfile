@@ -23,8 +23,18 @@
 #
 # Build (from the repository root, after scripts/build-driver.ps1):
 #
-#     docker build -f benchmark/registry-fanin/Dockerfile.driver \
+#     docker build -f benchmark/registry-fanin/Driver/Dockerfile \
 #         -t repocontext-fanin-driver:rig benchmark/registry-fanin/Driver/publish
+#
+# This file is named exactly `Dockerfile` and sits in the project directory,
+# which is the convention every other Dockerfile in this repository follows
+# (benchmark/host/Bench.Silo/Dockerfile sits beside its own csproj the same
+# way). It is not a style preference: HygieneFiles.Classify consults the
+# known-text-filenames list only for a file with NO extension, so a
+# `Dockerfile.<suffix>` name classifies as neither text nor binary and the
+# hygiene gates fail the build rather than silently skipping it - which is the
+# correct behaviour, since an unscanned tracked file would be exempt from the
+# em-dash and mojibake scans forever. Do not reintroduce a suffixed name.
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS runtime
 WORKDIR /app

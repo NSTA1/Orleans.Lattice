@@ -50,7 +50,7 @@ if ($SkipImage) {
 # accidental wide context cannot bake the working tree - including a
 # NuGet.Config carrying a private feed - into an image layer.
 Write-Host "Building $($config.DriverImage)" -ForegroundColor Cyan
-& docker build -f (Join-Path $RigRoot 'Dockerfile.driver') -t $config.DriverImage $publish
+& docker build -f (Join-Path $RigRoot 'Driver/Dockerfile') -t $config.DriverImage $publish
 if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE." }
 
 Write-Host "Built $($config.DriverImage)." -ForegroundColor Green
