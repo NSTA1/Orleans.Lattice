@@ -156,6 +156,11 @@ public sealed class TenantMetricDimensionHygieneTests
         "ProjectionDuration",
         "ProviderRetryAttempts",
         "ProviderRetryShortCircuited",
+        // Caller-side admission wait on the registry fan-in gate. Sentinel for
+        // the same reason as the two RegistryCall* instruments it sits beside:
+        // the registry is cluster infrastructure addressed by every tree, so a
+        // wait measured at the gate belongs to no single tenant's work.
+        "RegistryAdmissionWait",
         "RegistryCallDuration",
         "RegistryCallInFlight",
         "ResolutionCacheHits",

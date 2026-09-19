@@ -1014,8 +1014,11 @@ internal sealed partial class ViewMaintainerGrain(
             return Task.FromResult(logicalSourceId);
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        return registry.ResolveAsync(logicalSourceId);
+        // Through the silo's bounded registry path rather than straight at the
+        // registry singleton: a maintainer is birthed per view and re-resolves on
+        // every drain, so an un-gated read here is one of the caller classes that
+        // made cold-start registry fan-in scale with tree count.
+        return optionsResolver.RegistryReads.ResolveAsync(logicalSourceId);
     }
 
     /// <summary>

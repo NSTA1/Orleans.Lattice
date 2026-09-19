@@ -54,7 +54,8 @@ internal sealed class LatticeOptionsResolver(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<LatticeOptionsResolver>? logger = null,
     IWalStorageProviderCatalog? walProviderCatalog = null,
-    IOptions<SiloMessagingOptions>? siloMessagingOptions = null)
+    IOptions<SiloMessagingOptions>? siloMessagingOptions = null,
+    ISiloStatusOracle? siloStatusOracle = null)
 {
     private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
 
@@ -133,6 +134,41 @@ internal sealed class LatticeOptionsResolver(
         new(StringComparer.Ordinal);
 
     /// <summary>
+    /// The silo's bound on how many registry round trips may be in flight at
+    /// once, and the batching that falls out of it.
+    /// <para>
+    /// <b>Why this is a second mechanism and not a duplicate of
+    /// <see cref="_inFlightRegistryReads"/>.</b> That coalescer collapses the
+    /// concurrent readers of <em>one</em> tree into one round trip, which removes
+    /// the <c>x (per-tree background services)</c> factor from the cold-start
+    /// cost. It does nothing to the other factor: K trees resolving at once still
+    /// start K flights, so the peak fan-in onto the singleton registry activation
+    /// remained proportional to the tree count. The gate bounds that second
+    /// factor, and the two compose - per-tree coalescing first, then a
+    /// tree-count-independent bound on whatever distinct reads survive it.
+    /// </para>
+    /// <para>
+    /// Per-resolver-instance, matching the caches above, so each silo owns its
+    /// own bound.
+    /// </para>
+    /// </summary>
+    private readonly RegistryFanInGate _registryReads = new(grainFactory, siloStatusOracle);
+
+    /// <summary>
+    /// The silo's bounded registry read path, for the per-tree background
+    /// services that read the registry directly rather than through resolved
+    /// options.
+    /// <para>
+    /// Exposed here because this resolver is already the front door every such
+    /// service holds, and because the bound is only a bound if every cold-start
+    /// reader passes through the same one. A service that kept its own
+    /// <see cref="ILatticeRegistry"/> reference for a point read would reopen
+    /// exactly the unbounded fan-in the gate exists to close.
+    /// </para>
+    /// </summary>
+    internal RegistryFanInGate RegistryReads => _registryReads;
+
+    /// <summary>
     /// Reads <paramref name="treeId"/>'s registry entry, joining the read
     /// already in flight for that tree when there is one. Seeding a missing
     /// structural pin happens inside the shared flight, so a cold start seeds
@@ -187,7 +223,7 @@ internal sealed class LatticeOptionsResolver(
     private async Task<State.TreeRegistryEntry?> FetchRegistryEntryAsync(string treeId)
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
 #if LATTICE_DIAG
         // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
         // Note this now emits once per FLIGHT rather than once per caller, because
@@ -209,7 +245,7 @@ internal sealed class LatticeOptionsResolver(
             // explicitly for simple scenarios. RegisterAsync is
             // idempotent and fills nulls with LatticeConstants defaults.
             await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
-            entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
+            entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
 #if LATTICE_DIAG
             try
             {
@@ -334,8 +370,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<int> LoadWalPartitionsSlowAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var baseOptions = optionsMonitor.Get(treeId);
         var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
         // First writer wins the cache slot; if a racing ResolveAsync
@@ -387,8 +422,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<long?> LoadMaxCacheValueBytesSlowAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var baseOptions = optionsMonitor.Get(treeId);
         return entry?.MaxCacheValueBytes ?? baseOptions.MaxCacheValueBytes;
     }
@@ -620,8 +654,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<Views.HistoryRetentionPolicy> LoadHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var mode = entry?.HistoryRetentionMode ?? HistoryRetentionMode.MetadataOnly;
         var window = entry?.HistoryRetentionWindowTicks is { } ticks
             ? TimeSpan.FromTicks(ticks)

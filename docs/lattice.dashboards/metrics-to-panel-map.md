@@ -235,6 +235,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, `tenant` | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
 | `orleans.lattice.registry.call.duration` | histogram (`ms`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
 | `orleans.lattice.registry.call.in_flight` | histogram (`{call}`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
+| `orleans.lattice.registry.admission.wait` | histogram (`ms`) | `tenant` | Overview | Tree-registry fan-in gate - caller-side admission wait (the only signal that sees a stall relocated out of the registry) |
 | `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree`, `tenant` | CommitPath | Leaf commit concurrency (in-flight) p95 |
 | `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path`, `tenant` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
 | `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2`, `tenant` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |

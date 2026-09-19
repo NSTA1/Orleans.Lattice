@@ -950,6 +950,33 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.registry.call.in_flight", unit: "{call}",
             description: "Concurrent ILatticeRegistry reads in flight on the registry singleton at the moment a new read is admitted.");
 
+    /// <summary>
+    /// Histogram of how long a registry read waited for admission through the
+    /// caller-side fan-in bound before its round trip was dispatched, in
+    /// milliseconds.
+    /// <para>
+    /// <b>Why this instrument has to exist.</b> Bounding concurrent fan-in does
+    /// not remove the work, it queues it, so the stall can relocate from the
+    /// registry activation to the caller waiting for admission. Every
+    /// registry-side signal - including
+    /// <c>orleans_app_requests_timedout_total{grain_type="latticeregistry"}</c>
+    /// and <see cref="RegistryCallInFlight"/> - is scoped to the registry grain,
+    /// so a stall that moved to caller-side admission would drive all of them to
+    /// zero and read as a clean recovery rather than as a relocated fault. This
+    /// histogram is the only series that observes the relocated wait, so a
+    /// registry-side improvement is interpretable only when read alongside it.
+    /// </para>
+    /// <para>
+    /// A healthy silo records values at or near zero: admission dispatches
+    /// immediately whenever the bound has room, so a non-trivial tail here means
+    /// real queueing, and a tail that grows with estate size means the bound is
+    /// converting a registry-side saturation into a caller-side one.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> RegistryAdmissionWait =
+        Meter.CreateHistogram<double>("orleans.lattice.registry.admission.wait", unit: "ms",
+            description: "Time a registry read waited for the caller-side fan-in bound before its round trip was dispatched.");
+
     // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
 
     /// <summary>

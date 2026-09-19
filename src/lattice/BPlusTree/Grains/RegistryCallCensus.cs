@@ -89,6 +89,20 @@ internal static class RegistryCallCensus
     /// <summary><see cref="ILatticeRegistry.GetEntryAsync"/>.</summary>
     internal const string GetEntry = "get_entry";
 
+    /// <summary>
+    /// <see cref="ILatticeRegistry.GetEntriesAsync"/>.
+    /// <para>
+    /// Recorded as its own arm rather than folded into <see cref="GetEntry"/>
+    /// because the two answer different questions about the same load. One batched
+    /// call carries a whole page of ids, so counting it as one <c>get_entry</c>
+    /// would under-report the entries served, and counting it as N would
+    /// over-report the fan-in width - which is the reading this census exists to
+    /// support. Kept separate, <c>get_entries</c> counts round trips and
+    /// <c>get_entry</c> keeps meaning one entry per call.
+    /// </para>
+    /// </summary>
+    internal const string GetEntries = "get_entries";
+
     /// <summary><see cref="ILatticeRegistry.ResolveAsync"/>.</summary>
     internal const string Resolve = "resolve";
 
@@ -158,7 +172,7 @@ internal static class RegistryCallCensus
     /// single attribution rule.
     /// </remarks>
     internal static readonly IReadOnlyList<string> Operations =
-        [Exists, GetEntry, Resolve, GetShardMap, GetAllTreeIds, Register, Unregister];
+        [Exists, GetEntry, GetEntries, Resolve, GetShardMap, GetAllTreeIds, Register, Unregister];
 
     private static int _inFlight;
 

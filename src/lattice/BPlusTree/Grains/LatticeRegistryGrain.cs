@@ -315,17 +315,25 @@ internal sealed class LatticeRegistryGrain(
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
 
-    public async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
+    public Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
     {
         ArgumentNullException.ThrowIfNull(treeIds);
         if (treeIds.Count == 0)
         {
             // No registry hop at all for an empty page: there is nothing to read,
-            // so the fan-out below would be pure overhead.
-            return new Dictionary<string, TreeRegistryEntry>(0, StringComparer.Ordinal);
+            // so the fan-out below would be pure overhead. Not censused either -
+            // a call that reaches no backing read is not fan-in, and recording it
+            // would put a zero-cost sample in a histogram read for saturation.
+            return Task.FromResult(new Dictionary<string, TreeRegistryEntry>(0, StringComparer.Ordinal));
         }
 
-        // One concurrent wave of the same single-key read GetEntryAsync issues,
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetEntries,
+            () => GetEntriesCoreAsync(treeIds));
+    }
+
+    private async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesCoreAsync(IReadOnlyList<string> treeIds)
+    {        // One concurrent wave of the same single-key read GetEntryAsync issues,
         // rather than ISystemLattice.GetManyAsync. That looks like the obvious
         // primitive but it was unsafe from here: LatticeGrain.GetManyAsyncCore
         // ends every attempt with an unconditional topology-stability re-probe

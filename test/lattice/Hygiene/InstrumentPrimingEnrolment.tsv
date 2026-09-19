@@ -8,8 +8,8 @@ src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseC
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
-src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_annSweeps	anchored	dimension=cause; total=faulted; assertedBy=The_cause_partition_sums_to_the_faulted_arm
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_armingAttempts	primed	
@@ -282,6 +282,7 @@ src/lattice/LatticeMetrics.cs#ProviderPhaseOneTransientRetries	unresolved	reason
 src/lattice/LatticeMetrics.cs#ProviderRetryAttempts	unresolved	reason=unrecognised value expression: status.ToString(CultureInfo.InvariantCulture)
 src/lattice/LatticeMetrics.cs#ProviderRetryExhausted	unresolved	reason=unrecognised value expression: ResolveProviderStatusTag(rfe)
 src/lattice/LatticeMetrics.cs#ProviderRetryShortCircuited	unresolved	reason=unrecognised value expression: SaturatedResponse.SyntheticStatus.ToString(CultureInfo.Invar...
+src/lattice/LatticeMetrics.cs#RegistryAdmissionWait	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#RegistryCallDuration	unresolved	reason=dimension operation, (unread-tag-argument:LatticeTenantLabel.Platform): no declaration found for operation; tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#RegistryCallInFlight	unresolved	reason=dimension operation, (unread-tag-argument:LatticeTenantLabel.Platform): no declaration found for operation; tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaBroadcastDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
