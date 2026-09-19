@@ -83,4 +83,33 @@ internal readonly record struct SiblingInitialization
     /// meaning under its own count, so the two always travel together.
     /// </summary>
     [Id(7)] public int? MovedAwayVirtualShardCount { get; init; }
+
+    /// <summary>
+    /// The per-partition WAL head offsets the donor captured at split time, or
+    /// <see langword="null"/> when the donor could not capture them (no tree id
+    /// bound). Indexed by WAL partition, in the same offset space as
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> - these are the very
+    /// values the donor goes on to stamp through
+    /// <c>SetCheckpointOffsetHintsAsync</c>.
+    /// <para>
+    /// <b>Why the birth pin needs them (issue #3094).</b> The sibling seeds a
+    /// durable materialiser pin before the donor's <c>MergeEntriesAsync</c>
+    /// makes its rows reachable in the WAL. That pin used to carry the "-1"
+    /// no-offset sentinel, which leaves the pin outside the WAL GC's offset
+    /// coverage set and so protected <i>only</i> by the Zero-HLC block-pin
+    /// branch - and that branch disables the cursor trim for the entire tree.
+    /// Because leaf keys hash across every partition, a single newborn leaf
+    /// blocked all of them, and splits admit newborns continuously, so a
+    /// growing tree could never reclaim. Carrying the captured heads lets the
+    /// seed publish a real offset instead, which is both an accurate retention
+    /// floor (the sibling's rows are appended at or above the head) and enough
+    /// to bring the pin inside the offset coverage set.
+    /// </para>
+    /// <para>
+    /// A head of <c>0</c> (or a negative) is not a usable checkpoint offset and
+    /// is left as the sentinel, mirroring the <c>donorHead &gt; 0</c> guard the
+    /// donor's own checkpoint advance applies to the same array.
+    /// </para>
+    /// </summary>
+    [Id(8)] public long[]? WalHeadsAtBirth { get; init; }
 }

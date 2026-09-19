@@ -786,6 +786,13 @@ internal sealed partial class BPlusLeafGrain
                 ? sealedSlots
                 : null,
             MovedAwayVirtualShardCount = state.State.MovedAwayVirtualShardCount,
+
+            // The heads captured above ride this same round-trip so the
+            // sibling's birth pin can publish a real offset rather than the
+            // "-1" sentinel (issue #3094). They are the identical values
+            // SetCheckpointOffsetHintsAsync stamps below, so the pin and the
+            // sibling's projection checkpoint start life in agreement.
+            WalHeadsAtBirth = resolvedHeads,
         });
 
         // Join the back-pointer fixup before mutating the donor's own
