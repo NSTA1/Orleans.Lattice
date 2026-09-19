@@ -211,6 +211,131 @@ public sealed class FileWalCompactionTelemetryTests
             "An unprimed arm makes 'this WAL never compacted' indistinguishable from 'this provider is not deployed'.");
     }
 
+    /// <summary>
+    /// The priming guarantee is per shard, not per tree (issue #3206).
+    /// <para>
+    /// Compaction is decided per shard, so the arm set has to be primed once
+    /// for every shard that loads. Priming only the tree would leave "this
+    /// shard has never compacted" indistinguishable from "this shard is not
+    /// reporting", which is the exact ambiguity the shard tag exists to
+    /// remove: a dashboard that groups by shard would simply show no series
+    /// for the stranded shard, and an absent series reads as an
+    /// un-deployed provider rather than as a fault.
+    /// </para>
+    /// <para>
+    /// Two shards are loaded and the full cross product of shard and trigger
+    /// arm is required, so a regression that primes once per tree (or once per
+    /// process) fails on the missing second shard rather than passing on the
+    /// first.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Loading_two_shards_primes_every_trigger_arm_at_zero_once_per_shard()
+    {
+        var armed = new HashSet<(int Shard, string Trigger)>();
+
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactions,
+            l => l.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (measurement == 0
+                    && MatchesTree(tags)
+                    && TriggerOf(tags) is { } trigger
+                    && ShardOf(tags) is { } shard)
+                {
+                    lock (armed)
+                    {
+                        armed.Add((shard, trigger));
+                    }
+                }
+            }));
+
+        using (var sut = CreateProvider())
+        {
+            await AppendAsync(sut, count: 1, shard: 0);
+            await AppendAsync(sut, count: 1, shard: 1);
+        }
+
+        listener.Dispose();
+
+        Assert.That(
+            armed,
+            Is.EquivalentTo(new[]
+            {
+                (0, "ratio"), (0, "ceiling"), (0, "reconcile"),
+                (1, "ratio"), (1, "ceiling"), (1, "reconcile"),
+            }),
+            "Every loaded shard must publish a measured zero on every arm, or a stranded shard is invisible rather than flat.");
+    }
+
+    /// <summary>
+    /// Both compaction instruments must carry the storage shard the rewrite
+    /// actually ran on (issue #3206), and it must be
+    /// <see cref="LatticeMetrics.TagShard"/> rather than
+    /// <see cref="LatticeMetrics.TagPartition"/>: the latter names the
+    /// producer-side writer partition and is reserved for the writer-layer
+    /// instruments, so overloading it here would make the two unjoinable.
+    /// </summary>
+    [Test]
+    public async Task Compaction_reports_the_shard_the_rewrite_ran_on()
+    {
+        var compactionShards = new HashSet<int>();
+        var reclaimedShards = new HashSet<int>();
+        var partitionTagSeen = false;
+
+        void Observe(HashSet<int> sink, ReadOnlySpan<KeyValuePair<string, object?>> tags, long measurement)
+        {
+            if (measurement == 0 || !MatchesTree(tags))
+            {
+                return;
+            }
+
+            foreach (var tag in tags)
+            {
+                if (string.Equals(tag.Key, LatticeMetrics.TagPartition, StringComparison.Ordinal))
+                {
+                    partitionTagSeen = true;
+                }
+            }
+
+            if (ShardOf(tags) is { } shard)
+            {
+                lock (sink)
+                {
+                    sink.Add(shard);
+                }
+            }
+        }
+
+        using var compactions = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactions,
+            l => l.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+                Observe(compactionShards, tags, measurement)));
+
+        using var reclaimed = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionReclaimedBytes,
+            l => l.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+                Observe(reclaimedShards, tags, measurement)));
+
+        using (var sut = CreateProvider(
+            compactionMinimumDeadBytes: 1024,
+            compactionMaximumDeadBytes: 4 * PayloadBytes))
+        {
+            await AppendAsync(sut, count: 50, shard: 3);
+            await sut.TrimAsync(TreeId, 3, throughOffsetInclusive: 4, CancellationToken.None);
+        }
+
+        compactions.Dispose();
+        reclaimed.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compactionShards, Is.EquivalentTo(new[] { 3 }), "The compaction counter must name the shard it rewrote.");
+            Assert.That(reclaimedShards, Is.EquivalentTo(new[] { 3 }), "The reclaimed-bytes counter must name the shard it rewrote.");
+            Assert.That(partitionTagSeen, Is.False, "The storage shard is tagged 'shard'; 'partition' names the writer partition and must not be overloaded.");
+        });
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private readonly record struct TriggerCounts(long Ratio, long Ceiling, long Reconcile);
@@ -251,6 +376,194 @@ public sealed class FileWalCompactionTelemetryTests
         return new TriggerCounts(ratio, ceiling, reconcile);
     }
 
+    /// <summary>
+    /// The gate's inputs are published for a shard that is evaluated and
+    /// <b>declines</b>, not only for one that rewrites (issue #3206).
+    /// <para>
+    /// This is the distinction the outcome counters cannot draw. A shard whose
+    /// <c>wal.compactions</c> series is flat may be evaluated every sweep and
+    /// correctly declining, or may never be reaching the evaluation at all,
+    /// and those have opposite remedies. The minimum-dead floor here is set
+    /// far above anything the trim can produce, so nothing compacts and the
+    /// only evidence the evaluation ran is the sample itself.
+    /// </para>
+    /// <para>
+    /// The dead figures are also asserted against each other. The entry counts
+    /// are exact, and the byte totals are required to divide into a plausible
+    /// mean payload - which is precisely what the pair promises and what the
+    /// per-record framing correction needs, since a physical-minus-retained
+    /// subtraction otherwise folds that framing invisibly into a derived dead
+    /// ratio.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Declining_to_compact_still_samples_the_gate_inputs_for_that_shard()
+    {
+        var samples = new Dictionary<string, List<(int Shard, long Value)>>(StringComparer.Ordinal);
+
+        void Capture(Instrument instrument, long measurement, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            if (!MatchesTree(tags) || ShardOf(tags) is not { } shard)
+            {
+                return;
+            }
+
+            lock (samples)
+            {
+                if (!samples.TryGetValue(instrument.Name, out var list))
+                {
+                    list = [];
+                    samples[instrument.Name] = list;
+                }
+
+                list.Add((shard, measurement));
+            }
+        }
+
+        using var retainedBytes = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalRetainedBytes,
+            l => l.SetMeasurementEventCallback<long>((i, m, t, _) => Capture(i, m, t)));
+        using var deadBytes = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalDeadBytes,
+            l => l.SetMeasurementEventCallback<long>((i, m, t, _) => Capture(i, m, t)));
+        using var retainedEntries = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalRetainedEntries,
+            l => l.SetMeasurementEventCallback<long>((i, m, t, _) => Capture(i, m, t)));
+        using var deadEntries = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalDeadEntries,
+            l => l.SetMeasurementEventCallback<long>((i, m, t, _) => Capture(i, m, t)));
+
+        const int Appended = 20;
+        const int TrimThrough = 4;
+        const int Trimmed = TrimThrough + 1;
+
+        using (var sut = CreateProvider(compactionMinimumDeadBytes: int.MaxValue))
+        {
+            await AppendAsync(sut, count: Appended, shard: 2);
+            await sut.TrimAsync(TreeId, 2, throughOffsetInclusive: TrimThrough, CancellationToken.None);
+
+            // Nothing may have compacted, or the sample would be evidence of a
+            // rewrite rather than of a declined evaluation.
+            Assert.That(
+                await sut.GetPhysicalByteSizeAsync(TreeId, 2, CancellationToken.None),
+                Is.GreaterThan(0));
+        }
+
+        retainedBytes.Dispose();
+        deadBytes.Dispose();
+        retainedEntries.Dispose();
+        deadEntries.Dispose();
+
+        // The last sample of each series is the state at the evaluation that
+        // followed the trim; earlier ones are the arming sample taken at load.
+        long Last(string name)
+        {
+            Assert.That(samples, Does.ContainKey(name), $"'{name}' reported no measurement at all.");
+            var list = samples[name];
+            Assert.That(list.Select(s => s.Shard), Is.All.EqualTo(2), $"'{name}' reported the wrong shard.");
+            return list[^1].Value;
+        }
+
+        Assert.Multiple(() =>
+        {
+            var deadEntryCount = Last(LatticeMetrics.WalCompactionEvalDeadEntriesName);
+            var deadByteCount = Last(LatticeMetrics.WalCompactionEvalDeadBytesName);
+            var retainedEntryCount = Last(LatticeMetrics.WalCompactionEvalRetainedEntriesName);
+            var retainedByteCount = Last(LatticeMetrics.WalCompactionEvalRetainedBytesName);
+
+            Assert.That(
+                deadEntryCount,
+                Is.EqualTo(Trimmed),
+                "A declined evaluation must still report the dead backlog it declined on.");
+            Assert.That(
+                retainedEntryCount,
+                Is.EqualTo(Appended - Trimmed),
+                "A declined evaluation must still report the live payload it weighed the backlog against.");
+
+            // The recorded bytes are serialized-record payloads, so they exceed
+            // the raw value by a mutation envelope of a few hundred bytes and
+            // vary slightly with key length. Bounding the derived mean rather
+            // than asserting an exact product is what the pair actually
+            // promises: that dividing bytes by entries yields a real mean
+            // payload, which is the quantity the framing correction needs.
+            Assert.That(
+                (double)deadByteCount / deadEntryCount,
+                Is.InRange(PayloadBytes, PayloadBytes + 1024),
+                "Mean dead payload must be recoverable from the pair.");
+            Assert.That(
+                (double)retainedByteCount / retainedEntryCount,
+                Is.InRange(PayloadBytes, PayloadBytes + 1024),
+                "Mean live payload must be recoverable from the pair.");
+        });
+    }
+
+    /// <summary>
+    /// Every loaded shard arms all four gate-input samples, once each, from its
+    /// own post-recovery state (issue #3206).
+    /// <para>
+    /// This is the counterpart to the trigger-arm priming assertion above and
+    /// carries the same weight: an unsampled shard leaves "this shard holds no
+    /// dead bytes" indistinguishable from "this shard is not reporting", and a
+    /// dashboard grouped by shard renders both as an absent series.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Loading_two_shards_arms_every_gate_input_once_per_shard()
+    {
+        var armed = new HashSet<(string Instrument, int Shard)>();
+
+        void Capture(Instrument instrument, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            if (MatchesTree(tags) && ShardOf(tags) is { } shard)
+            {
+                lock (armed)
+                {
+                    armed.Add((instrument.Name, shard));
+                }
+            }
+        }
+
+        using var retainedBytes = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalRetainedBytes,
+            l => l.SetMeasurementEventCallback<long>((i, _, t, _) => Capture(i, t)));
+        using var deadBytes = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalDeadBytes,
+            l => l.SetMeasurementEventCallback<long>((i, _, t, _) => Capture(i, t)));
+        using var retainedEntries = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalRetainedEntries,
+            l => l.SetMeasurementEventCallback<long>((i, _, t, _) => Capture(i, t)));
+        using var deadEntries = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalDeadEntries,
+            l => l.SetMeasurementEventCallback<long>((i, _, t, _) => Capture(i, t)));
+
+        using (var sut = CreateProvider())
+        {
+            await AppendAsync(sut, count: 1, shard: 0);
+            await AppendAsync(sut, count: 1, shard: 1);
+        }
+
+        retainedBytes.Dispose();
+        deadBytes.Dispose();
+        retainedEntries.Dispose();
+        deadEntries.Dispose();
+
+        var expected =
+            from name in new[]
+            {
+                LatticeMetrics.WalCompactionEvalRetainedBytesName,
+                LatticeMetrics.WalCompactionEvalDeadBytesName,
+                LatticeMetrics.WalCompactionEvalRetainedEntriesName,
+                LatticeMetrics.WalCompactionEvalDeadEntriesName,
+            }
+            from shard in new[] { 0, 1 }
+            select (name, shard);
+
+        Assert.That(
+            armed,
+            Is.EquivalentTo(expected),
+            "Every gate input must be armed for every shard that loads, or an absent series is ambiguous.");
+    }
+
     private static bool MatchesTree(ReadOnlySpan<KeyValuePair<string, object?>> tags)
     {
         foreach (var tag in tags)
@@ -277,11 +590,27 @@ public sealed class FileWalCompactionTelemetryTests
         return null;
     }
 
+    private static int? ShardOf(ReadOnlySpan<KeyValuePair<string, object?>> tags)
+    {
+        foreach (var tag in tags)
+        {
+            if (string.Equals(tag.Key, LatticeMetrics.TagShard, StringComparison.Ordinal))
+            {
+                return tag.Value as int?;
+            }
+        }
+
+        return null;
+    }
+
     private static async Task AppendAsync(FileWalStorageProvider sut, int count)
+        => await AppendAsync(sut, count, shard: 0);
+
+    private static async Task AppendAsync(FileWalStorageProvider sut, int count, int shard)
     {
         for (var i = 0; i < count; i++)
         {
-            await sut.AppendBatchAsync(TreeId, 0, new[] { Entry(i) }, CancellationToken.None);
+            await sut.AppendBatchAsync(TreeId, shard, new[] { Entry(i) }, CancellationToken.None);
         }
     }
 

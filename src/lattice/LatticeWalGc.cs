@@ -415,6 +415,8 @@ public sealed class LatticeWalGc(
         }
 
         long totalTrimmed = 0;
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName);
+        var tenantTag = LatticeTenantLabel.ForTree(treeName);
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -428,14 +430,7 @@ public sealed class LatticeWalGc(
             var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             RecordTrimStop(treeName, shardScan.StopReason);
-        }
-
-        if (totalTrimmed > 0)
-        {
-            LatticeMetrics.WalEntriesTrimmed.Add(
-                totalTrimmed,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
-                LatticeTenantLabel.ForTree(treeName));
+            RecordEntriesTrimmed(treeTag, tenantTag, partition, shardScan.EligibleCount);
         }
 
         var (_, retainedAfter) = await SampleRetainedBytesAsync(
@@ -1514,6 +1509,38 @@ public sealed class LatticeWalGc(
             _ => throw new ArgumentOutOfRangeException(
                 nameof(reason), reason, "Unarmed WAL GC trim stop reason."),
         };
+
+    /// <summary>
+    /// Records the entries one shard scan trimmed, tagged with that shard's
+    /// index.
+    /// <para>
+    /// Trimming is decided and performed per shard, so a tree-scoped total -
+    /// which is what this instrument carried before issue #3206 - is the sum
+    /// of one per-shard result and cannot say which shard produced it. Read
+    /// against the equally shard-tagged <c>orleans.lattice.wal.compactions</c>,
+    /// the pair is the discriminator that separates "this shard trims and
+    /// compacts" from "this shard trims and strands the bytes"; summed to the
+    /// tree, an active minority of shards masks a stranded majority, which is
+    /// the state #3206 measured on a live estate.
+    /// </para>
+    /// <para>
+    /// <paramref name="count"/> is emitted even when it is zero, so every
+    /// shard the pass actually scanned publishes a series. That is the same
+    /// priming guarantee the trim-stop arms and the compaction counters carry:
+    /// an absent series then means the shard was not scanned on this silo,
+    /// rather than that it was scanned and reclaimed nothing.
+    /// </para>
+    /// </summary>
+    private static void RecordEntriesTrimmed(
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        int shardIndex,
+        long count)
+        => LatticeMetrics.WalEntriesTrimmed.Add(
+            count,
+            treeTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex),
+            tenantTag);
 
     /// <summary>
     /// Records one trim-scan stop for <paramref name="treeName"/>. Called with

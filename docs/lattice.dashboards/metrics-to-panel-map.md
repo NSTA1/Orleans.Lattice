@@ -289,9 +289,13 @@ The `orleans.lattice.tag_index.reconcile.*` family is emitted by the background 
 | `orleans.lattice.replication.apply.lag` | histogram (ms) | `tree`, `tenant` | Apply lag p50/p95/p99 |
 | `orleans.lattice.replication.apply.dependency_wait` | histogram (ms) | `tree`, `tenant` | Dependency wait p95 |
 | `orleans.lattice.replication.wal.entries_shipped` | counter | `tree`, `tenant` | WAL throughput |
-| `orleans.lattice.wal.entries_trimmed` | counter | `tree`, `tenant` | WAL throughput |
-| `orleans.lattice.wal.compactions` | counter | `tree`, `trigger`, `tenant` | WAL compaction |
-| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter | `tree`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.entries_trimmed` | counter | `tree`, `shard`, `tenant` | WAL throughput |
+| `orleans.lattice.wal.compactions` | counter | `tree`, `shard`, `trigger`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.compaction.eval.retained_bytes` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.compaction.eval.dead_bytes` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.compaction.eval.retained_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.compaction.eval.dead_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter | `tree`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.dead_letter.removed` | counter | `tree`, `reason`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter | `tree`, `tenant` | Apply correctness violations |

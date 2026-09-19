@@ -816,7 +816,7 @@ The GC publishes one counter on the `orleans.lattice` meter:
 
 | Instrument | Tags | Description |
 |---|---|---|
-| `orleans.lattice.wal.entries_trimmed` | `tree` | Total WAL entries removed by a GC pass. Incremented only when the pass trimmed at least one entry. |
+| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
 
 ## Relationship to replication
 
