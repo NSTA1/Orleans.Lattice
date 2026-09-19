@@ -3734,6 +3734,60 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Records one floor-holder candidate classified
+    /// <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/> against
+    /// <see cref="LatticeMetrics.WalGcCoverageUnknownPinOffset"/>, under the arm
+    /// naming whether it carried a usable durable offset (issue #3199).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="offsetUsable"/> is the same <c>offset &lt; 0</c> test the
+    /// sweep already applied when it routed this candidate into one of the two
+    /// sample lists. Nothing is re-derived and no storage is read; the bit was
+    /// computed and then discarded, and this records it.
+    /// </para>
+    /// </remarks>
+    private static void RecordCoverageUnknownPinOffset(
+        bool offsetUsable,
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag,
+        long delta = 1) =>
+        LatticeMetrics.WalGcCoverageUnknownPinOffset.Add(
+            delta,
+            treeTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+            offsetUsable
+                ? LatticeMetrics.CoverageUnknownOffsetUsable
+                : LatticeMetrics.CoverageUnknownOffsetAbsent,
+            tenantTag);
+
+    /// <summary>
+    /// Zero-primes both
+    /// <see cref="LatticeMetrics.WalGcCoverageUnknownPinOffset"/> arms for one
+    /// <c>(tree, partition)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called on every floor-holder classification, not only the ones that
+    /// resolve to <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/>.
+    /// The instrument exists to answer whether the <c>offset_absent</c> slice is
+    /// empty (issue #3199), and an unprimed zero cannot distinguish "no
+    /// candidate lacked an offset" from "nothing was ever classified here" - the
+    /// precise ambiguity that let issue #3158 hide on the one tree its
+    /// classifier existed to diagnose.
+    /// </para>
+    /// </remarks>
+    private static void PrimeCoverageUnknownPinOffsets(
+        string partition,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        RecordCoverageUnknownPinOffset(true, partition, treeTag, tenantTag, 0);
+        RecordCoverageUnknownPinOffset(false, partition, treeTag, tenantTag, 0);
+    }
+
+    /// <summary>
     /// Maps a leaf's starvation-drive verdict onto the
     /// <see cref="LatticeMetrics.WalGcBlockedLeafReactivations"/> outcome arm
     /// that names it (issue #2692 Half B).
@@ -4959,6 +5013,24 @@ internal sealed class LatticeWalGcScheduler(
             // reads as measured-and-not-this-state rather than as silence.
             PrimeBlockingPinStates(partitionTag, treeTag, tenantTag);
             RecordBlockingPinState(state, partitionTag, treeTag, tenantTag);
+
+            // Issue #3199. Split the arm above by whether this candidate carried
+            // a usable durable offset - the bit the sweep computed when it
+            // routed the candidate into one of the two sample lists and then
+            // discarded. The two cases have different remedies: an offset-
+            // bearing pin is still driven for liveness when its offset equals
+            // the tree offset floor (the branch below), while a pin reporting no
+            // offset can never satisfy that equality, and the frontier gate
+            // above has already promoted it out of the coverage repair. Primed
+            // on every classification rather than only on the recorded arm, so
+            // an empty offset_absent slice is a measured absence.
+            PrimeCoverageUnknownPinOffsets(partitionTag, treeTag, tenantTag);
+            if (state == WalGcBlockingPinState.CheckpointedCoverageUnknown)
+            {
+                RecordCoverageUnknownPinOffset(
+                    candidate.Offset >= 0, partitionTag, treeTag, tenantTag);
+            }
+
             classified++;
 
             // Collect the states a reactivation can repair (issue #3164), plus
