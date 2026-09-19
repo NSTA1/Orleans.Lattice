@@ -227,10 +227,15 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints)} must be greater than or equal to 0 (0 disables the periodic re-classification).");
         }
-        if (options.LeafSnapshotMaxCoverageLagSeconds < 0)
+        if (options.LeafSnapshotMaxCoverageLagSeconds < 0
+            || options.LeafSnapshotMaxCoverageLagSeconds > LatticeOptions.MaxLeafSnapshotCoverageLagSeconds)
         {
             return ValidateOptionsResult.Fail(
-                $"{nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)} must be greater than or equal to 0 (0 disables the coverage-lag bound).");
+                $"{nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)} must be between 0 and {LatticeOptions.MaxLeafSnapshotCoverageLagSeconds} "
+                + "(0 disables the coverage-lag bound). The bound exists to keep a read-held leaf's durable snapshot "
+                + "coverage advancing so it cannot hold its tree's WAL trim floor; a lag longer than a day is not a "
+                + "bound in any useful sense, and the ceiling also keeps the per-leaf first-tick jitter well inside "
+                + "the range its arithmetic is defined over.");
         }
 if (options.WalMaxPendingBatches < 1)
 {

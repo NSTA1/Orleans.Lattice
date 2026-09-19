@@ -4246,6 +4246,40 @@ public static class LatticeMetrics
         new(TagOutcome, "no_checkpointed_uncovered_partition");
 
     /// <summary>
+    /// Every <c>outcome</c> arm of <see cref="LeafSnapshotCoverageRepairs"/>, and
+    /// the single source the zero-priming walk iterates.
+    /// <para>
+    /// This exists so that the instrument's "a zero is a MEASURED zero" claim is
+    /// earned rather than asserted. Priming used to be a hand-written run of
+    /// <c>Add(0, ...)</c> calls, one per arm, with nothing relating it to the
+    /// arms that actually exist: an arm added later and omitted from that run
+    /// would publish no zero, and its absence would read as "the path never ran"
+    /// on precisely the tree under diagnosis. Issue #3194 is the proof that the
+    /// hazard is real rather than theoretical - adding <c>rearmed</c> required a
+    /// sixth priming line written by hand, and nothing in the build would have
+    /// noticed had it been left out.
+    /// </para>
+    /// <para>
+    /// The sibling <c>blocked_leaf_reactivations_total</c> earns the same claim
+    /// by walking an enum through a switch that throws on an unmapped member.
+    /// These arms are <see cref="KeyValuePair{TKey,TValue}"/> statics rather than
+    /// an enum, so the equivalent guarantee is supplied by a reflection test that
+    /// asserts this array holds every <c>CoverageRepair*</c> arm declared on this
+    /// class. Add an arm and forget this array, and that test fails; there is no
+    /// shape in which an unarmed arm ships.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?>[] CoverageRepairArms =
+    [
+        CoverageRepairRepaired,
+        CoverageRepairUnsatisfied,
+        CoverageRepairExhausted,
+        CoverageRepairCaptureInFlight,
+        CoverageRepairNoUncoveredPartition,
+        CoverageRepairRearmed,
+    ];
+
+    /// <summary>
     /// Reactivations of a dormant leaf whose unusable durable materialiser pin
     /// was blocking its tree's WAL cursor floor (issue #2710 Limitation 2),
     /// tagged by tree and outcome

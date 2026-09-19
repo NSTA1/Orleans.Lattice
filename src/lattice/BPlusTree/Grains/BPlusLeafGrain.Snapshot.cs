@@ -198,12 +198,59 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// How long a spent zero-coverage repair budget stays abandoned before it
-    /// is re-armed. Deliberately far longer than the coverage-lag bound's
-    /// default period so that re-arming cannot turn into a retry loop: a leaf
-    /// whose captures keep failing spends eight attempts, then makes no further
-    /// attempt for this long, whatever its timer period is.
+    /// is re-armed, DOUBLING on each successive abandonment to
+    /// <see cref="ZeroCoverageRepairRearmMaxBackoff"/>.
+    /// <para>
+    /// The decay is the point, and it is taken from the same #2783 precedent
+    /// the abandoned/rearmed pairing comes from. A flat delay is right only
+    /// where the fault being paused for is transient. It is not, on the
+    /// population this serves: the captures measured failing on the live estate
+    /// are TIMEOUTS, tens of seconds each, and this change does not fix them.
+    /// With a flat delay such a leaf settles into a permanent cycle - spend
+    /// eight attempts, pause, spend eight more - paying a timing-out capture
+    /// on every one of them, for ever, at constant cost. Doubling keeps a
+    /// transient fault recovering quickly, in a single short pause, while a
+    /// hopeless leaf backs off to the ceiling and stops paying.
+    /// </para>
+    /// <para>
+    /// The first delay is deliberately far longer than the coverage-lag bound's
+    /// default period so that even the shortest re-arm cannot turn into a retry
+    /// loop driven by the timer.
+    /// </para>
     /// </summary>
-    private static readonly TimeSpan ZeroCoverageRepairRearmDelay = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan ZeroCoverageRepairRearmMinBackoff = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Ceiling for the doubling re-arm backoff. A leaf that reaches it is still
+    /// retrying - the repair is never retired permanently, which is the whole
+    /// defect this replaces - but at a cost per day that no longer scales with
+    /// how long the underlying capture fault persists.
+    /// </summary>
+    private static readonly TimeSpan ZeroCoverageRepairRearmMaxBackoff = TimeSpan.FromHours(8);
+
+    /// <summary>
+    /// How many times this activation's repair budget has been abandoned. Drives
+    /// the doubling in <see cref="NextZeroCoverageRepairRearmBackoff"/>, and is
+    /// never reset by a re-arm: a leaf whose captures keep failing must keep
+    /// backing off rather than restarting the decay each cycle.
+    /// </summary>
+    private int _zeroCoverageRepairAbandonments;
+
+    /// <summary>
+    /// The backoff to serve for the next abandonment, doubling from
+    /// <see cref="ZeroCoverageRepairRearmMinBackoff"/> and clamped to
+    /// <see cref="ZeroCoverageRepairRearmMaxBackoff"/>. The shift is capped
+    /// before it is applied, so a long-lived activation cannot overflow it into
+    /// a negative or wrapped delay.
+    /// </summary>
+    private TimeSpan NextZeroCoverageRepairRearmBackoff()
+    {
+        var doublings = Math.Min(_zeroCoverageRepairAbandonments, 16);
+        var ticks = ZeroCoverageRepairRearmMinBackoff.Ticks * (1L << doublings);
+        return ticks >= ZeroCoverageRepairRearmMaxBackoff.Ticks || ticks <= 0
+            ? ZeroCoverageRepairRearmMaxBackoff
+            : TimeSpan.FromTicks(ticks);
+    }
 
     /// <summary>
     /// Test hook that brings a pending zero-coverage repair re-arm forward to
@@ -677,7 +724,8 @@ internal sealed partial class BPlusLeafGrain
             var now = DateTimeOffset.UtcNow;
             if (_zeroCoverageRepairRearmAtUtc is not { } rearmAt)
             {
-                _zeroCoverageRepairRearmAtUtc = now + ZeroCoverageRepairRearmDelay;
+                _zeroCoverageRepairRearmAtUtc = now + NextZeroCoverageRepairRearmBackoff();
+                _zeroCoverageRepairAbandonments++;
                 ReportZeroCoverageRepairExhaustion();
                 return false;
             }
@@ -805,18 +853,14 @@ internal sealed partial class BPlusLeafGrain
 
         if (PrimedCoverageRepairTrees.TryAdd(treeId, 0))
         {
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairRepaired, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairUnsatisfied, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairExhausted, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairCaptureInFlight, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairNoUncoveredPartition, tenantTag);
-            LatticeMetrics.LeafSnapshotCoverageRepairs.Add(
-                0, treeTag, LatticeMetrics.CoverageRepairRearmed, tenantTag);
+            // Walks the single declared arm set rather than a hand-written run
+            // of Add(0, ...) calls, so an arm cannot ship unarmed and be read as
+            // "the path never ran" on the tree under diagnosis. A reflection
+            // test pins the array to the declared arms (issue #3194).
+            foreach (var arm in LatticeMetrics.CoverageRepairArms)
+            {
+                LatticeMetrics.LeafSnapshotCoverageRepairs.Add(0, treeTag, arm, tenantTag);
+            }
         }
 
         LatticeMetrics.LeafSnapshotCoverageRepairs.Add(1, treeTag, outcome, tenantTag);
@@ -1924,8 +1968,11 @@ internal sealed partial class BPlusLeafGrain
     /// per-leaf repair into a synchronised blob-write stampede against the
     /// storage account every interval on a tree with thousands of leaves. The
     /// jitter is derived from the grain id rather than drawn at random so a
-    /// given leaf's phase is stable across activations and reproducible in a
-    /// test.
+    /// given leaf's phase is stable for as long as the process lives and is
+    /// reproducible in a test. Whether it is also stable across processes
+    /// depends on how Orleans seeds its id hash, which this does not rely on:
+    /// the jitter's purpose is to spread a burst, and any stable per-leaf
+    /// phase achieves that.
     /// </para>
     /// </summary>
     private async Task EnsureCoverageLagTimerAsync()
@@ -1943,11 +1990,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var period = TimeSpan.FromSeconds(lagSeconds);
-
-        // Deterministic per-leaf phase in [0, period). Non-negative regardless
-        // of the hash's sign, which a plain modulus of GetHashCode is not.
-        var phase = (uint)context.GrainId.GetHashCode() % (uint)Math.Max(1, period.Ticks);
-        var dueTime = TimeSpan.FromTicks(phase);
+        var dueTime = ComputeCoverageLagJitter(context.GrainId.GetHashCode(), period);
 
         try
         {
@@ -1961,6 +2004,40 @@ internal sealed partial class BPlusLeafGrain
             // deactivation drivers remain, exactly as before this bound existed.
             _coverageLagTimer = null;
         }
+    }
+
+    /// <summary>
+    /// Deterministic per-leaf first-tick phase in <c>[0, period)</c>, derived
+    /// from <paramref name="grainIdHash"/>. Non-negative regardless of the
+    /// hash's sign, which a plain modulus of a hash code is not.
+    /// <para>
+    /// BOTH OPERANDS ARE WIDENED TO 64 BITS BEFORE THE MODULUS, and that is the
+    /// substance of this helper rather than defensive typing. A tick is 100ns,
+    /// so one second is 10^7 ticks and <see cref="uint.MaxValue"/> is reached at
+    /// 429.5 seconds: a 32-bit denominator wraps at any configured lag of 430
+    /// seconds or more, collapsing the spread to a fraction of a second and
+    /// reinstating in silence exactly the synchronised stampede the jitter
+    /// exists to prevent. Widening the denominator ALONE is not enough either,
+    /// because a raw 32-bit hash caps the numerator at that same 429.5 seconds,
+    /// so the modulus becomes a no-op beyond it and the spread stays capped
+    /// however long the period is. The multiply by the 64-bit golden-ratio
+    /// constant diffuses the 32-bit hash across the full 64-bit range first, so
+    /// the phase spans the whole period at every supported lag.
+    /// </para>
+    /// <para>
+    /// The denominator is clamped in <see cref="long"/> BEFORE any narrowing,
+    /// so it can never be zero and this can never throw on the activation path.
+    /// The earlier form clamped the same way but then narrowed to
+    /// <see cref="uint"/>, which let a period whose tick count is an exact
+    /// multiple of 2^32 narrow back to zero - the clamp was not doing the job
+    /// its placement implied.
+    /// </para>
+    /// </summary>
+    internal static TimeSpan ComputeCoverageLagJitter(int grainIdHash, TimeSpan period)
+    {
+        var mixed = (ulong)(uint)grainIdHash * 0x9E3779B97F4A7C15UL;
+        var phase = (long)(mixed % (ulong)Math.Max(1L, period.Ticks));
+        return TimeSpan.FromTicks(phase);
     }
 
     /// <summary>

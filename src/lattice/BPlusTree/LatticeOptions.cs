@@ -1752,6 +1752,17 @@ public class LatticeOptions
     public const int DefaultLeafSnapshotMaxCoverageLagSeconds = 300;
 
     /// <summary>
+    /// Maximum accepted value for <see cref="LeafSnapshotMaxCoverageLagSeconds"/>
+    /// (<c>86400</c>, one day). A coverage lag longer than a day is not a bound
+    /// in any useful sense: the whole point of the setting is that a read-held
+    /// leaf cannot hold its tree's WAL trim floor indefinitely, and a ceiling
+    /// measured in days concedes that. The ceiling also keeps the per-leaf
+    /// first-tick jitter comfortably inside the range its arithmetic is defined
+    /// over.
+    /// </summary>
+    public const int MaxLeafSnapshotCoverageLagSeconds = 86_400;
+
+    /// <summary>
     /// When <c>true</c> (the default), a leaf snapshot capture encodes its
     /// rows into the compact binary frame
     /// (<c>LeafSnapshotBlob.EncodedRows</c>) instead of persisting them as the

@@ -1246,4 +1246,32 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardMinShardEntries)));
     }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(LatticeOptions.DefaultLeafSnapshotMaxCoverageLagSeconds)]
+    [TestCase(430)]
+    [TestCase(LatticeOptions.MaxLeafSnapshotCoverageLagSeconds)]
+    public void LeafSnapshotMaxCoverageLagSeconds_within_range_succeeds(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotMaxCoverageLagSeconds = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    /// <summary>
+    /// The ceiling is a real bound, not decoration. The option exists so that a
+    /// leaf held permanently active by read traffic cannot hold its tree's WAL
+    /// trim floor indefinitely (issue #3194); a lag configured in weeks concedes
+    /// exactly the property the option was added to guarantee, so it is rejected
+    /// at configuration time rather than silently accepted.
+    /// </summary>
+    [TestCase(-1)]
+    [TestCase(LatticeOptions.MaxLeafSnapshotCoverageLagSeconds + 1)]
+    [TestCase(int.MaxValue)]
+    public void LeafSnapshotMaxCoverageLagSeconds_outside_range_fails(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotMaxCoverageLagSeconds = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)));
+    }
 }
