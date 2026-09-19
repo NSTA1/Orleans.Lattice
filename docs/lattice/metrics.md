@@ -251,6 +251,15 @@ and nothing in the outcome counters distinguishes them. The `eval.*` samples do:
 they are emitted by the evaluation itself, so their presence is proof it ran and
 their values are exactly what it tested.
 
+Issue #3207 closed the second of those causes for any shard the collector
+visits. Until then the gate was read in exactly one place, at the end of the
+provider's trim, so a shard whose scan stopped on its **first** entry - the
+shape a held tree-wide offset floor produces - was never evaluated at all, at
+any dead ratio, for as long as the floor stood. The collector now evaluates a
+shard it released nothing from, so on a swept tree an absent `eval.*` sample
+indicts the sweep reaching that shard rather than the gate, and a present sample
+alongside a flat `compactions` series is genuine threshold-bound declining.
+
 **A dead ratio derived from published byte totals is only an upper bound.**
 `eval.retained_bytes` and `eval.dead_bytes` - like every WAL byte figure this
 library publishes - count **payload** length, whereas the file stores **framed**

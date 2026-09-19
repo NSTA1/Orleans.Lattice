@@ -23,8 +23,21 @@ IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOff
 Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken);
+Task EvaluateCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default no-op
 Task ReconcileAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default no-op
 ```
+
+### Reclamation without a trim (`EvaluateCompactionAsync`)
+
+`EvaluateCompactionAsync` asks a provider to decide whether a shard is due for physical reclamation, and to perform it if its own policy says so. The WAL GC calls it on a shard whose scan released nothing, so `TrimAsync` is not invoked for that shard on that pass.
+
+It exists because trimming and reclamation are separable concerns that a log-structured backend can accidentally weld together. Trimming decides which *live* entries may be released and is gated by consumers that have not yet applied them; reclamation returns space belonging to entries that are *already* trimmed and that nothing references. A provider that reclaims only as a side effect of being trimmed cannot reclaim at all while the retention floor is held - and a held floor is precisely the state in which the backlog is largest. Issue #3207 measured that shape: a shard whose scan stopped on the offset floor at its **first** entry was never evaluated against any compaction threshold, at any dead ratio, for as long as the stop persisted, so no value of any compaction option could reach it.
+
+The call carries no watermark and must not move one. It is not a trim, it grants no additional release, and the shard's **logical** contents must be identical either side of it: the offsets `ReadAsync`, `GetLowestOffsetAsync`, and `GetHighestOffsetAsync` report are unchanged whether or not a compaction ran. Whether anything happens is entirely the provider's decision, taken against the same policy - and reported through the same `orleans.lattice.wal.compactions` arms - as the evaluation `TrimAsync` already performs.
+
+The default interface implementation is a no-op. That is correct rather than an omission for a backend whose trim deletes its storage outright: deletion *is* reclamation for the in-memory and Azure Table providers, so no dead bytes exist and there is nothing to evaluate. Only a backend that reclaims by rewriting - the file provider - overrides it.
+
+Because the evaluation is threshold-gated it is self-limiting, and so needs no frequency bound of its own: a compaction zeroes the shard's dead bytes, after which every further evaluation returns at the minimum-dead floor until new trims accumulate, and an evaluation that declines rewrites nothing.
 
 ### Activation-time recovery (`ReconcileAsync`)
 

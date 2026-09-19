@@ -313,6 +313,57 @@ public interface IWalStorageProvider
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Asks the provider to evaluate whether
+    /// <paramref name="treeId"/> / <paramref name="shardIndex"/> is due for
+    /// physical reclamation, and to perform it if its own policy says so.
+    /// Called by the GC predicate (<see cref="ILatticeWalGc"/>) on a shard
+    /// whose scan released nothing, so <see cref="TrimAsync"/> is not invoked
+    /// for it on that pass.
+    /// <para>
+    /// This exists because for a log-structured backend the two are separable
+    /// concerns that had been accidentally welded together. Trimming decides
+    /// which <i>live</i> entries may be released, and is gated by consumers
+    /// that have not yet applied them; reclamation returns space belonging to
+    /// entries that are <i>already</i> trimmed and that nothing references. A
+    /// provider that only reclaims as a side effect of being trimmed therefore
+    /// cannot reclaim at all while the retention floor is held - and the floor
+    /// being held is precisely the state in which the backlog is largest
+    /// (issue #3207).
+    /// </para>
+    /// <para>
+    /// The call carries no watermark and must not move one: it is not a trim,
+    /// it grants no additional release, and it is safe to invoke on any shard
+    /// at any time. Whether anything happens is entirely the provider's
+    /// decision, taken against the same policy - and reported through the same
+    /// instruments - as the evaluation <see cref="TrimAsync"/> performs. The
+    /// contract is that the shard's <i>logical</i> contents are unchanged: the
+    /// offsets <see cref="ReadAsync"/>, <see cref="GetLowestOffsetAsync"/> and
+    /// <see cref="GetHighestOffsetAsync"/> report must be identical either
+    /// side of the call.
+    /// </para>
+    /// <para>
+    /// The default implementation is a no-op, which is correct and not an
+    /// omission for a backend whose trim deletes its storage outright (the
+    /// in-memory and Azure Table providers): deletion <i>is</i> reclamation
+    /// there, so no dead bytes exist and there is nothing to evaluate. Only a
+    /// backend that reclaims by rewriting - the file provider - has anything
+    /// to do here.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
+    Task EvaluateCompactionAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Activation-time recovery hook. Called by the WAL grain's
     /// <c>OnActivateAsync</c> immediately after
     /// <see cref="GetHighestOffsetAsync"/>, before the grain accepts

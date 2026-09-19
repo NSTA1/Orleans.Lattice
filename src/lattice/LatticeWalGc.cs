@@ -1484,6 +1484,29 @@ public sealed class LatticeWalGc(
 
         if (lastEligibleOffset < 0)
         {
+            // Nothing was released, so the TrimAsync below - and with it the
+            // unconditional compaction evaluation the file provider performs
+            // at the end of it - is skipped. That is the only site at which a
+            // shard's already-dead bytes are ever measured against any
+            // threshold, so a shard whose scan keeps stopping is not merely
+            // trimming slowly: it is never evaluated for reclamation at all,
+            // at any dead ratio, for as long as the stop persists. No value of
+            // any compaction option can reach that state, because none of them
+            // is ever read (issue #3207).
+            //
+            // Deliberately NOT conditioned on why the scan stopped. Keying it
+            // to OffsetFloor would rebuild the same unreachable-site defect
+            // one level along: the floor advances by a single entry, the arm
+            // becomes Exhausted, and reclamation silently stops again. The
+            // quantity that matters is "this shard holds dead bytes", which is
+            // the provider's to judge and is independent of every stop reason.
+            //
+            // This is a reachability repair and not a threshold change. The
+            // provider evaluates exactly the policy it already applies after a
+            // trim, so a shard below its thresholds still declines - it now
+            // declines visibly, having been asked, rather than never being
+            // asked at all.
+            await provider.EvaluateCompactionAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
             return (0, stopReason);
         }
 
