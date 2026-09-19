@@ -605,15 +605,25 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
-    public async Task A_tree_under_its_ceiling_is_not_driven()
+    public async Task A_tree_that_is_neither_breaching_nor_stranded_is_not_driven()
     {
         // The scope guard, stated as design rather than as a limitation. The arm
-        // inherits the byte-pressure gate that licenses the classification, and
-        // that is the right population: a tree inside its ceiling is not
-        // exhibiting unbounded growth, so there is no symptom to explain and no
-        // justification for spending durable reads and activations on it. The
-        // consequence to state plainly is that a deployment with no ceiling
-        // configured gets no repair from this arm.
+        // is licensed by evidence of a problem - a byte ceiling being breached,
+        // or a trim scan that met WAL it could not reclaim (issue #3229) - and
+        // that is the right population: a tree exhibiting neither is not growing
+        // unboundedly, so there is no symptom to explain and no justification
+        // for spending durable reads and activations on it.
+        //
+        // Note what this fixture does NOT say, and once wrongly did. It used to
+        // record the consequence as "a deployment with no ceiling configured
+        // gets no repair from this arm", which was true of the implementation
+        // and was the defect rather than the design: WalMaxRetainedBytes has no
+        // default, so that sentence condemned every untuned silo. The report
+        // here is quiet on both axes, which is a different thing entirely -
+        // Report(0) carries no backlog, so this tree is genuinely healthy. The
+        // stock-silo case now lives in
+        // A_stranded_floor_holder_is_driven_on_a_silo_with_no_byte_ceiling_configured
+        // and asserts the opposite outcome on the opposite evidence.
         var storage = new LeafStateBook();
         storage.PutLive(RepairLeafGrainId(0), OrphanSweepTree);
 
