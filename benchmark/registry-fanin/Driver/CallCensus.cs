@@ -40,13 +40,35 @@ internal enum CallOutcome
 /// the runtime already produces. Always <see langword="false"/> for other outcomes.
 /// </param>
 /// <param name="FaultType">The exception type name for a non-ok outcome.</param>
+/// <param name="FaultMessage">
+/// The exception message for a non-ok outcome, truncated. Carried because a
+/// fault TYPE alone routinely cannot distinguish a rig misconfiguration from a
+/// genuine server fault, and a rig that confuses the two produces measurements
+/// nobody should trust.
+/// </param>
 internal readonly record struct CallSample(
     DateTimeOffset StartedAtUtc,
     double ElapsedMs,
     string Member,
     CallOutcome Outcome,
     bool CarriedDiagnostics,
-    string? FaultType);
+    string? FaultType,
+    string? FaultMessage);
+
+/// <summary>
+/// A recorded call together with the value it returned.
+/// </summary>
+/// <typeparam name="T">The call's result type.</typeparam>
+/// <param name="Sample">The recorded sample.</param>
+/// <param name="Value">The returned value, or <c>default</c> when the call did not return.</param>
+internal readonly record struct CallResult<T>(CallSample Sample, T Value)
+{
+    /// <summary>How the call ended.</summary>
+    public CallOutcome Outcome => Sample.Outcome;
+
+    /// <summary>The exception type name for a non-ok outcome.</summary>
+    public string? FaultType => Sample.FaultType;
+}
 
 /// <summary>
 /// Client-side census of driven grain calls: per-call latency, deadline
@@ -100,6 +122,7 @@ internal sealed class CallCensus
         CallOutcome outcome;
         var carriedDiagnostics = false;
         string? faultType = null;
+        string? faultMessage = null;
 
         try
         {
@@ -110,12 +133,14 @@ internal sealed class CallCensus
         {
             outcome = CallOutcome.Deadline;
             faultType = ex.GetType().Name;
+            faultMessage = Truncate(ex.Message);
             carriedDiagnostics = OrleansTimeoutText.CarriesDiagnosticsClause(ex);
         }
         catch (Exception ex)
         {
             outcome = CallOutcome.Fault;
             faultType = ex.GetType().Name;
+            faultMessage = Truncate(ex.Message);
         }
         finally
         {
@@ -128,7 +153,8 @@ internal sealed class CallCensus
             member,
             outcome,
             carriedDiagnostics,
-            faultType);
+            faultType,
+            faultMessage);
 
         lock (_gate)
         {
@@ -138,8 +164,32 @@ internal sealed class CallCensus
         return sample;
     }
 
-    private void RaisePeak(int observed)
+    /// <summary>
+    /// Runs a value-returning <paramref name="call"/>, recording it exactly as
+    /// <see cref="MeasureAsync(string, Func{Task})"/> does and carrying the
+    /// returned value through.
+    /// </summary>
+    /// <typeparam name="T">The call's result type.</typeparam>
+    /// <param name="member">The grain member being called.</param>
+    /// <param name="call">The call to drive.</param>
+    /// <returns>The recorded sample and the value, with <c>default</c> on any fault.</returns>
+    public async Task<CallResult<T>> MeasureAsync<T>(string member, Func<Task<T>> call)
     {
+        ArgumentNullException.ThrowIfNull(member);
+        ArgumentNullException.ThrowIfNull(call);
+
+        T? value = default;
+        // The lambda must be typed as Func<Task> explicitly. Written bare, the
+        // assignment expression makes it a Func<Task<T>>, so overload resolution
+        // picks THIS method and it recurses into itself - which compiles as a
+        // plain type error here, but would otherwise be a silent infinite loop.
+        Func<Task> inner = async () => value = await call().ConfigureAwait(false);
+        var sample = await MeasureAsync(member, inner).ConfigureAwait(false);
+
+        return new CallResult<T>(sample, value!);
+    }
+
+    private void RaisePeak(int observed)    {
         var peak = Volatile.Read(ref _peakInFlight);
         while (observed > peak)
         {
@@ -152,4 +202,7 @@ internal sealed class CallCensus
             peak = seen;
         }
     }
+
+    private static string Truncate(string message) =>
+        message.Length <= 400 ? message : message[..400] + "...";
 }

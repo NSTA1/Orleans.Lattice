@@ -71,6 +71,13 @@ internal sealed record LatencyDistribution(
 /// ACTIVATING, so the call was never served at all.
 /// </param>
 /// <param name="Fault">Calls that threw something other than a deadline.</param>
+/// <param name="FaultTypes">
+/// The distinct exception type names behind <paramref name="Fault"/>, with
+/// counts. Without this a fault population is just a number, and the rig's own
+/// misconfiguration is indistinguishable from a genuine server fault - which is
+/// exactly the confusion a measurement rig must not introduce.
+/// </param>
+/// <param name="FaultExamples">One example message per distinct fault type.</param>
 /// <param name="Served">The latency distribution of the calls that returned.</param>
 internal sealed record MemberCensus(
     string Member,
@@ -79,6 +86,8 @@ internal sealed record MemberCensus(
     int DeadlineWithDiagnostics,
     int DeadlineWithoutDiagnostics,
     int Fault,
+    IReadOnlyDictionary<string, int> FaultTypes,
+    IReadOnlyDictionary<string, string> FaultExamples,
     LatencyDistribution Served);
 
 /// <summary>
@@ -110,6 +119,13 @@ internal sealed record DeadlineEvent(
 /// </param>
 /// <param name="Members">The per-member outcome census.</param>
 /// <param name="Deadlines">Every deadline, timestamped.</param>
+/// <param name="Estate">
+/// How much state the estate held, where the invocation measured it. Reported on
+/// every measurement because a timeout count without the estate's depth cannot
+/// discriminate registry fan-in (which scales with tree count) from storage
+/// starvation during snapshot replay (which scales with leaf count and store
+/// size), and the two mechanisms call for different remedies.
+/// </param>
 /// <param name="Notes">Free-form notes (a refusal reason, a teardown summary).</param>
 internal sealed record DriverReport(
     string Verb,
@@ -120,6 +136,7 @@ internal sealed record DriverReport(
     int PeakInFlight,
     IReadOnlyList<MemberCensus> Members,
     IReadOnlyList<DeadlineEvent> Deadlines,
+    EstateCensus? Estate,
     IReadOnlyList<string> Notes)
 {
     /// <summary>
@@ -131,6 +148,7 @@ internal sealed record DriverReport(
     /// <param name="treePrefix">The tree-id prefix.</param>
     /// <param name="census">The recorded calls.</param>
     /// <param name="notes">Free-form notes.</param>
+    /// <param name="estate">The estate census, where one was taken.</param>
     /// <returns>The report.</returns>
     public static DriverReport From(
         string verb,
@@ -138,7 +156,8 @@ internal sealed record DriverReport(
         int treeCount,
         string treePrefix,
         CallCensus census,
-        IReadOnlyList<string> notes)
+        IReadOnlyList<string> notes,
+        EstateCensus? estate = null)
     {
         ArgumentNullException.ThrowIfNull(verb);
         ArgumentNullException.ThrowIfNull(treePrefix);
@@ -156,6 +175,12 @@ internal sealed record DriverReport(
                 g.Count(s => s.Outcome == CallOutcome.Deadline && s.CarriedDiagnostics),
                 g.Count(s => s.Outcome == CallOutcome.Deadline && !s.CarriedDiagnostics),
                 g.Count(s => s.Outcome == CallOutcome.Fault),
+                g.Where(s => s.Outcome == CallOutcome.Fault)
+                    .GroupBy(s => s.FaultType ?? "unknown", StringComparer.Ordinal)
+                    .ToDictionary(f => f.Key, f => f.Count(), StringComparer.Ordinal),
+                g.Where(s => s.Outcome == CallOutcome.Fault)
+                    .GroupBy(s => s.FaultType ?? "unknown", StringComparer.Ordinal)
+                    .ToDictionary(f => f.Key, f => f.First().FaultMessage ?? string.Empty, StringComparer.Ordinal),
                 LatencyDistribution.From(
                     g.Where(s => s.Outcome == CallOutcome.Ok).Select(s => s.ElapsedMs).ToArray())))
             .ToArray();
@@ -175,6 +200,7 @@ internal sealed record DriverReport(
             census.PeakInFlight,
             members,
             deadlines,
+            estate,
             notes);
     }
 }

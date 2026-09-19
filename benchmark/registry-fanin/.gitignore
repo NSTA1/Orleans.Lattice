@@ -1,0 +1,8 @@
+# Per-run driver publish output and measurement spills. Neither belongs in git:
+# the publish directory is a build artefact, and a raw run directory holds a
+# whole container log.
+Driver/publish/
+Driver/bin/
+Driver/obj/
+results/runs/
+parameters.local.ps1

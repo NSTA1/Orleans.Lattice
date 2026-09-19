@@ -73,6 +73,13 @@ internal static class Program
         var notes = new List<string>();
         var startedAt = DateTimeOffset.UtcNow;
         var exitCode = 0;
+        EstateCensus? estate = null;
+
+        // The credential is scoped around the WHOLE workload rather than per
+        // call. It rides Orleans' RequestContext, which is ambient and flows
+        // into every continuation the workload spawns, so one scope covers the
+        // parallel sweeps without threading anything through.
+        using var credential = DriverCredential.Use(options.Subject, options.Scheme);
 
         try
         {
@@ -81,6 +88,34 @@ internal static class Program
                 case "create":
                     await fleet.CreateAsync(options.Trees, census, options.Parallelism, lifetime.Token).ConfigureAwait(false);
                     notes.Add($"created {options.Trees} trees with prefix '{options.Prefix}'");
+                    break;
+
+                case "populate":
+                    var written = await fleet.PopulateAsync(
+                        options.Trees,
+                        options.LeavesPerTree,
+                        options.KeysPerLeaf,
+                        options.ValueBytes,
+                        options.BatchSize,
+                        census,
+                        options.Parallelism,
+                        lifetime.Token).ConfigureAwait(false);
+                    var approxBytes = written * options.ValueBytes;
+                    notes.Add(
+                        $"wrote {written} entries of {options.ValueBytes}B across {options.Trees} trees " +
+                        $"(target {options.LeavesPerTree} leaves/tree at {options.KeysPerLeaf} keys/leaf; " +
+                        $"~{approxBytes / (1024d * 1024d):F1} MiB of values)");
+                    estate = await fleet.CountAsync(options.Trees, options.KeysPerLeaf, census, options.Parallelism, lifetime.Token).ConfigureAwait(false);
+                    break;
+
+                case "census":
+                    var counted = await fleet.CountAsync(options.Trees, options.KeysPerLeaf, census, options.Parallelism, lifetime.Token).ConfigureAwait(false);
+                    estate = counted;
+                    notes.Add(
+                        $"{counted.Trees} trees hold {counted.TotalEntries} entries " +
+                        $"(>= {counted.ImpliedLeaves} leaves at {counted.KeysPerLeaf} keys/leaf); " +
+                        $"per-tree entries {counted.MinEntries}..{counted.MaxEntries}; " +
+                        $"{counted.FailedTrees} counts did not return");
                     break;
 
                 case "load":
@@ -117,7 +152,7 @@ internal static class Program
             exitCode = 4;
         }
 
-        var report = DriverReport.From(options.Verb, startedAt, options.Trees, options.Prefix, census, notes);
+        var report = DriverReport.From(options.Verb, startedAt, options.Trees, options.Prefix, census, notes, estate);
         Emit(report, options.OutputPath);
         await host.StopAsync(CancellationToken.None).ConfigureAwait(false);
         return exitCode;
