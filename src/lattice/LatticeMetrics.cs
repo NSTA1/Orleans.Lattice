@@ -1922,15 +1922,25 @@ public static class LatticeMetrics
     /// fraction - so physical occupancy is not a level but a sawtooth
     /// oscillating between the live set and that multiple of it. A check against
     /// occupancy would therefore read whatever phase of the cycle the pass
-    /// happened to land in, and at the trough it reports a comfortable ceiling
-    /// for a tree that will breach at its next peak. That false negative is not
-    /// hypothetical: the estate in issue #3242 was measured at 3,211 MiB
-    /// physical against a 4,096 MB ceiling, then two shards compacted and it
-    /// fell to 2,876 MiB - the same tree, the same unreachable ceiling, and an
-    /// occupancy-based check flipping from firing to silent with nothing about
-    /// the configuration having changed. The live set moved by 59 MB across the
-    /// same window. <b>The ceiling must clear the peak of the sawtooth, and only
-    /// the logical total predicts where that peak is.</b>
+    /// happened to land in: at the peak it condemns a ceiling that is in fact
+    /// reachable, and at the trough it reports a comfortable ceiling for a tree
+    /// that will breach again at its next peak. Both readings are of the same
+    /// tree under the same unchanged configuration, which is what makes
+    /// occupancy the wrong quantity to decide a <i>sizing</i> question against -
+    /// the gap between the two is routinely a large fraction of the live set on
+    /// a real deployment, not a rounding difference. <b>The ceiling must clear
+    /// the peak of the sawtooth, and only the logical total predicts where that
+    /// peak is.</b>
+    /// </para>
+    /// <para>
+    /// <b>This instrument is justified by the condition's silence, not by any
+    /// particular deployment exhibiting it.</b> An unsatisfiable ceiling is
+    /// indistinguishable, in every series that existed before this one, from a
+    /// tree whose consumers are merely lagging - so it can persist indefinitely
+    /// while looking exactly like a transient. That is true whether or not any
+    /// tree is in the condition today, which is the point: a guard argued from a
+    /// live incident stops being justified the moment the incident clears, and
+    /// this one does not.
     /// </para>
     /// <para>
     /// Zero-primed per tree beside the pass-outcome arms, so a flat zero is a

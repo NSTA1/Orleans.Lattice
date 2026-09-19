@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Tests;
 /// <c>WalMaxRetainedBytes</c> is arithmetically unreachable against its own
 /// working set is indistinguishable, on every series this repository exports,
 /// from a tree whose consumers are lagging. The two demand opposite responses -
-/// raise the ceiling versus unblock the consumer - and the estate that
-/// motivated the issue spent its diagnosis on the wrong one.
+/// raise the ceiling versus unblock the consumer - so the condition can persist
+/// indefinitely while presenting as a transient, and an operator can spend the
+/// whole diagnosis on the wrong one of the two. That is a property of what the
+/// series can express, not of any deployment currently exhibiting it.
 /// </para>
 /// <para>
 /// It is a separate counter rather than an eighth arm of

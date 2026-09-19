@@ -122,27 +122,32 @@ public sealed class LatticeWalGcCeilingSatisfiabilityTests
     }
 
     [Test]
-    public async Task The_measured_shortfall_from_issue_3242_is_reported_unsatisfiable()
+    public async Task A_ceiling_between_logical_and_twice_logical_is_reported_unsatisfiable()
     {
-        // Calibrated directly against the issue's evidence package rather than
-        // against a round number: repo-context-vector-index measured 2,226 MB
-        // logical retained against a 4,096 MB ceiling, a 355 MB shortfall
-        // below the 4,451 MB floor. Scaled down by 1 MB per byte so the
-        // fixture holds the ratio the estate actually exhibited.
-        const long LogicalMb = 2226;
-        const long CeilingMb = 4096;
+        // Chosen so the ceiling lands strictly between the logical working set
+        // and twice it - the exact band in which a ceiling is unsatisfiable by
+        // construction while the tree is perfectly healthy. The neighbouring
+        // test pins the top of that band at one byte; this one sits well inside
+        // it, at 1.84x, where the ceiling still looks generous (it is nearly
+        // twice the data) and is nevertheless unreachable. That gap between how
+        // a number looks and what it does is the reason this instrument exists.
+        //
+        // 2226 and 4096 are a convenient ratio, not a measurement; scaled at
+        // 1 MB per byte to keep the fixture cheap.
+        const long LogicalUnits = 2226;
+        const long CeilingUnits = 4096;
 
         var provider = new InMemoryWalStorageProvider();
         await provider.AppendBatchAsync(Tree, 0,
-            [Entry(0, "a", new byte[LogicalMb], Hlc(10))], CancellationToken.None);
+            [Entry(0, "a", new byte[LogicalUnits], Hlc(10))], CancellationToken.None);
 
         var logical = await provider.GetRetainedByteSizeAsync(Tree, 0, CancellationToken.None);
-        var report = await Gc(provider, CeilingMb * logical / LogicalMb).RunOnceAsync(Tree);
+        var report = await Gc(provider, CeilingUnits * logical / LogicalUnits).RunOnceAsync(Tree);
 
         Assert.Multiple(() =>
         {
             Assert.That(report.CeilingUnsatisfiable, Is.True,
-                "the configuration the issue measured must be named by the signal the issue asked for.");
+                "a ceiling at 1.84x the live set is below the 2x floor and must be named as unreachable.");
             Assert.That(report.ByteCeiling, Is.GreaterThan(report.LogicalRetainedBytes!.Value),
                 "and it must fire while the ceiling is still comfortably above the live set - which is "
                 + "exactly why the pre-existing over-ceiling condition never named it.");
