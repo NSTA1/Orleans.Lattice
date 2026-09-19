@@ -462,10 +462,19 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
-    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
-    /// idle expiry, or scale-down). For long-running scans prefer
-    /// <see cref="LatticeExtensions.ScanKeysAsync"/>, which transparently recovers
-    /// from that abort and resumes deterministically (no duplicates, no gaps).
+    /// if the remote enumerator is reclaimed mid-scan. Four of the five causes
+    /// are rare environmental events - silo failover, cold start, enumerator
+    /// idle expiry, scale-down. The fifth is not: the tree grain behind this
+    /// interface is <c>[StatelessWorker]</c>, and Orleans keeps enumerator state
+    /// on the activation that served <c>StartEnumeration</c> while routing every
+    /// subsequent <c>MoveNext</c> independently, so a <c>MoveNext</c> can land on
+    /// a sibling worker that has no record of the enumeration. That cause is
+    /// <b>load-proportional rather than environmental</b>: it rises with
+    /// concurrency on the tree, not with the age or duration of the scan, and it
+    /// is a steady-state background rate rather than an incident. Prefer
+    /// <see cref="LatticeExtensions.ScanKeysAsync"/> for scans of any length,
+    /// which transparently recovers from that abort and resumes deterministically
+    /// (no duplicates, no gaps).
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -478,6 +487,10 @@ public interface ILattice : IGrainWithStringKey
     /// argument (not ambient state), so it is applied consistently on every
     /// per-shard page and reconciliation drain across the whole scan.
     /// </summary>
+    /// <remarks>
+    /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
+    /// Prefer <c>LatticeExtensions.ScanKeysWhereAsync</c>.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
@@ -493,11 +506,12 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
-    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
-    /// idle expiry, or scale-down). For long-running exports prefer
-    /// <see cref="LatticeExtensions.ScanEntriesAsync"/>, which transparently
-    /// recovers from that abort and resumes deterministically (no duplicates,
-    /// no gaps).
+    /// if the remote enumerator is reclaimed mid-scan; see
+    /// <see cref="KeysAsync"/> for the five causes, one of which - per-message
+    /// stateless-worker mis-routing - is load-proportional rather than
+    /// environmental. Prefer <see cref="LatticeExtensions.ScanEntriesAsync"/> for
+    /// exports of any length, which transparently recovers from that abort and
+    /// resumes deterministically (no duplicates, no gaps).
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -511,6 +525,10 @@ public interface ILattice : IGrainWithStringKey
     /// consistently on every per-shard page and reconciliation drain across the
     /// whole scan.
     /// </summary>
+    /// <remarks>
+    /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
+    /// Prefer <c>LatticeExtensions.ScanEntriesWhereAsync</c>.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 

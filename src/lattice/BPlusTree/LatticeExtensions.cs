@@ -13,7 +13,8 @@ public static class LatticeExtensions
     /// <summary>
     /// Default reconnect budget for <see cref="ScanKeysAsync"/> and
     /// <see cref="ScanEntriesAsync"/> when the remote enumerator is reclaimed
-    /// mid-scan (silo failover, cold start, idle expiry, scale-down).
+    /// mid-scan (per-message stateless-worker mis-routing - the load-proportional
+    /// cause - plus silo failover, cold start, idle expiry, scale-down).
     /// Overridable per call via the <c>maxAttempts</c> parameter.
     /// </summary>
     public const int DefaultScanReconnectAttempts = 8;
@@ -575,7 +576,17 @@ public static class LatticeExtensions
     /// Resilient forward/reverse key scan. Wraps <see cref="ILattice.KeysAsync"/>
     /// and transparently recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
     /// (raised when the remote enumerator on the orchestrator grain is reclaimed
-    /// mid-scan due to silo failover, cold start, idle expiry, or scale-down).
+    /// mid-scan). Five causes raise it. Four are environmental and rare - silo
+    /// failover, cold start, idle expiry, scale-down. The fifth is neither:
+    /// <c>LatticeGrain</c> is <c>[StatelessWorker]</c>, Orleans holds enumerator
+    /// state on the activation that served <c>StartEnumeration</c>, and it routes
+    /// each later <c>MoveNext</c> to a worker with no affinity to that
+    /// activation, so a sibling worker answers and reports the enumerator
+    /// missing. That cause is <b>load-proportional, not environmental</b>: its
+    /// rate follows concurrency on the tree rather than scan duration or cluster
+    /// health, so it cannot be bounded away by keeping scans short, and it does
+    /// not need an incident to occur. It is why this wrapper is the default for
+    /// scans of every length.
     /// The wrapper tracks the last yielded key and - on abort - reopens the
     /// underlying scan with a tightened bound so the result stream is
     /// deterministic: no duplicates, no gaps, original ordering preserved.
@@ -683,6 +694,8 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the wrapper that makes the raw
+            // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null
                 ? lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.KeysWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
@@ -1039,6 +1052,8 @@ public static class LatticeExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the wrapper that makes the raw
+            // primitive safe; it reopens the enumeration itself.
             var enumerator = (predicate is null
                 ? lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.EntriesWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
@@ -1270,7 +1285,9 @@ public static class LatticeExtensions
     /// This is the delete-side analogue of <see cref="ScanKeysAsync"/>: it
     /// transparently recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
     /// (raised when the remote enumerator backing a step is reclaimed mid-drain
-    /// due to silo failover, cold start, idle expiry, or scale-down) by opening
+    /// by per-message stateless-worker mis-routing - load-proportional, not
+    /// environmental - or by silo failover, cold start, idle expiry, or
+    /// scale-down) by opening
     /// a fresh cursor over the same still-live range and resuming, up to
     /// <paramref name="maxAttempts"/> times (default
     /// <see cref="DefaultScanReconnectAttempts"/>, negative clamps to zero). The

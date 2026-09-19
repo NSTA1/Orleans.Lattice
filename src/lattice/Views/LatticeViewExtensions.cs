@@ -19,8 +19,12 @@ public static class LatticeViewExtensions
     /// Resilient forward key scan over a view. Wraps
     /// <see cref="ILatticeView.KeysAsync"/> and transparently recovers from
     /// <c>Orleans.Runtime.EnumerationAbortedException</c> (raised when the remote
-    /// enumerator on the view's active tree is reclaimed mid-scan by grain
-    /// deactivation, idle expiry, silo failover, or a rebuild's shadow-swap).
+    /// enumerator on the view's active tree is reclaimed mid-scan by per-message
+    /// stateless-worker mis-routing - the tree grain is <c>[StatelessWorker]</c>
+    /// and a <c>MoveNext</c> can be served by a worker that never saw
+    /// <c>StartEnumeration</c>, which makes this cause load-proportional rather
+    /// than environmental - or by grain deactivation, idle expiry, silo
+    /// failover, or a rebuild's shadow-swap).
     /// The wrapper tracks the last yielded key and - on abort - reopens the scan
     /// with the lower bound tightened to the successor of that key
     /// (<c>lastKey + "\u0000"</c>), so the result stream is deterministic: no
@@ -99,6 +103,8 @@ public static class LatticeViewExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the view wrapper that makes the raw
+            // view primitive safe; it reopens the enumeration itself.
             var enumerator = view.KeysAsync(s, e, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;
@@ -246,6 +252,8 @@ public static class LatticeViewExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the view wrapper that makes the raw
+            // view primitive safe; it reopens the enumeration itself.
             var enumerator = view.EntriesAsync(s, e, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;

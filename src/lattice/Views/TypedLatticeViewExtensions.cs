@@ -51,6 +51,8 @@ public static class TypedLatticeViewExtensions
     {
         ArgumentNullException.ThrowIfNull(view);
         ArgumentNullException.ThrowIfNull(serializer);
+        // raw-enumeration-ok: typed projection of the raw view primitive; the
+        // resilient sibling is ScanEntriesAsync<T>.
         await foreach (var entry in view.EntriesAsync(startInclusive, endExclusive, cancellationToken))
         {
             yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
@@ -63,6 +65,8 @@ public static class TypedLatticeViewExtensions
         string? startInclusive = null,
         string? endExclusive = null,
         CancellationToken cancellationToken = default) =>
+        // raw-enumeration-ok: default-serializer forward onto the raw typed
+        // overload above, which carries its own justification.
         view.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, cancellationToken);
 
     /// <summary>

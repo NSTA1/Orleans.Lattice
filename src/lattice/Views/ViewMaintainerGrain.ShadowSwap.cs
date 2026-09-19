@@ -280,8 +280,13 @@ internal sealed partial class ViewMaintainerGrain
         // KeysAsync MoveNextAsync calls can let the server-side enumerator idle
         // past its expiration and abort the scan mid-flight. Materialising the
         // key set bounds the enumerator's lifetime to the (write-free) drain.
+        // The drain itself still uses ScanKeysAsync rather than the raw
+        // primitive: bounding the enumerator's lifetime does nothing about
+        // stateless-worker mis-routing, which is per-message and so fires in
+        // proportion to concurrent load on the source tree rather than to how
+        // long this scan is held open.
         var sourceKeys = new List<string>();
-        await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
+        await foreach (var key in sourceTree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             sourceKeys.Add(key);
         }
@@ -435,8 +440,10 @@ internal sealed partial class ViewMaintainerGrain
         // are heavy enough that interleaving them between KeysAsync MoveNextAsync
         // calls can expire the server-side enumerator and abort the scan. Buffering
         // the key set keeps the enumerator's lifetime to the write-free drain.
+        // As there, the drain uses ScanKeysAsync: a short-lived enumerator is
+        // still fully exposed to per-message stateless-worker mis-routing.
         var sourceKeys = new List<string>();
-        await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
+        await foreach (var key in sourceTree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             sourceKeys.Add(key);
         }
@@ -595,7 +602,11 @@ internal sealed partial class ViewMaintainerGrain
     private static async Task ClearTreeAsync(ILattice tree, CancellationToken cancellationToken)
     {
         var keys = new List<string>();
-        await foreach (var key in tree.KeysAsync(cancellationToken: cancellationToken))
+
+        // ScanKeysAsync: an aborted drain here would leave the generation
+        // partially cleared, and the abort it recovers from is load-proportional
+        // rather than a rare failover event.
+        await foreach (var key in tree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             keys.Add(key);
         }
