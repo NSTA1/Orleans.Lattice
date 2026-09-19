@@ -89,13 +89,37 @@ public partial class ShardHealingOrchestratorGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(_ => map);
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+
+        // The registry derives ResolveAsync and GetShardMapAsync from the single
+        // TreeRegistryEntry (see LatticeRegistryGrain.GetEntryCoreAsync), so a
+        // double that reports a live map through one member and a null map
+        // through the other is not a faithful stand-in for the real grain. Read
+        // the current map through the same closure the GetShardMapAsync arm uses,
+        // so SetMap keeps both arms in agreement.
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = baseShardCount,
+                ShardMap = map,
             }));
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(call =>
+        {
+            var result = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in (IReadOnlyList<string>)call[0])
+            {
+                result[id] = new TreeRegistryEntry
+                {
+                    MaxLeafKeys = 128,
+                    MaxInternalChildren = 128,
+                    ShardCount = baseShardCount,
+                    ShardMap = map,
+                };
+            }
+
+            return Task.FromResult(result);
+        });
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 

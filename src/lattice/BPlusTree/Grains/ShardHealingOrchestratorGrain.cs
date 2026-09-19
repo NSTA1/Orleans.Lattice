@@ -190,10 +190,12 @@ internal sealed class ShardHealingOrchestratorGrain(
 
         // Structural observation. The routing map and the tree's pinned base
         // shard count are all the cheap clauses need, so a healthy tree never
-        // reaches a single shard grain.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        // reaches a single shard grain. The map read goes through the silo's
+        // bounded registry path: this orchestrator is birthed once per tree, so
+        // an un-gated read here is one of the two terms in the cold-start fan-in
+        // product that RegistryFanInGate exists to bound.
         var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var map = await registry.GetShardMapAsync(TreeId)
+        var map = await optionsResolver.RegistryReads.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
         var shardCount = physicalShards.Count;
@@ -215,7 +217,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             return;
         }
 
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = await optionsResolver.RegistryReads.ResolveAsync(TreeId);
 
         // Reconcile the persisted in-flight set before anything else: it is
         // bounded by MaxConcurrentShardConsolidations, it is what a reactivated

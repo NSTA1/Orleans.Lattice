@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Lattice.Views;
 using Orleans.Runtime;
@@ -45,6 +46,19 @@ public class ViewMaintainerSourceIdentityTests
     {
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(Arg.Any<string>()).Returns(resolvesTo);
+
+        // The maintainer now resolves through the silo's bounded registry read
+        // path, which reads the entry and projects PhysicalTreeId exactly as
+        // LatticeRegistryGrain.ResolveAsync does. Stub the entry the projection
+        // comes from, so this double reports one identity rather than two.
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = 1,
+                PhysicalTreeId = resolvesTo,
+            }));
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
 
@@ -67,7 +81,7 @@ public class ViewMaintainerSourceIdentityTests
             commitLogReader: null!,
             subscriber: null!,
             cursorRegistry: cursorRegistry!,
-            optionsResolver: null!,
+            optionsResolver: Fakes.TestOptionsResolver.ForFactory(factory),
             viewOptions,
             latticeOptions: null!,
             replicationContext: null!,
@@ -87,7 +101,7 @@ public class ViewMaintainerSourceIdentityTests
 
         Assert.That(healed, Is.False, "A steady-state bind must not report a heal.");
         Assert.That(state.State.BoundPhysicalTreeId, Is.EqualTo(Source));
-        await registry.Received(1).ResolveAsync(Source);
+        await registry.Received(1).GetEntryAsync(Source);
     }
 
     [Test]
@@ -104,7 +118,7 @@ public class ViewMaintainerSourceIdentityTests
         clock.Advance(TimeSpan.FromSeconds(10));
         await grain.EnsureBoundForTestingAsync(reg);
 
-        await registry.Received(1).ResolveAsync(Source);
+        await registry.Received(1).GetEntryAsync(Source);
     }
 
     [Test]
@@ -119,7 +133,7 @@ public class ViewMaintainerSourceIdentityTests
         clock.Advance(TimeSpan.FromSeconds(31));
         await grain.EnsureBoundForTestingAsync(reg);
 
-        await registry.Received(2).ResolveAsync(Source);
+        await registry.Received(2).GetEntryAsync(Source);
     }
 
     [Test]
@@ -138,7 +152,7 @@ public class ViewMaintainerSourceIdentityTests
         clock.Advance(TimeSpan.FromSeconds(5));
         await grain.EnsureBoundForTestingAsync(reg);
 
-        await registry.Received(2).ResolveAsync(Source);
+        await registry.Received(2).GetEntryAsync(Source);
     }
 
     [Test]
@@ -148,7 +162,7 @@ public class ViewMaintainerSourceIdentityTests
 
         await grain.NotifySourceIdentityChangedAsync("orders-v2", CancellationToken.None);
 
-        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+        await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -179,7 +193,7 @@ public class ViewMaintainerSourceIdentityTests
             Throws.InstanceOf<InvalidOperationException>());
 
         // Two resolves prove the failed heal did not gate the retry inside the window.
-        await registry.Received(2).ResolveAsync(Source);
+        await registry.Received(2).GetEntryAsync(Source);
     }
 
     [TestCase("")]

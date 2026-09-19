@@ -350,11 +350,14 @@ internal sealed class HotShardMonitorGrain(
             }
         }
 
-        // Resolve the current shard map and list of physical shards.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        // Resolve the current shard map and list of physical shards. Both reads go
+        // through the silo's bounded registry path rather than straight at the
+        // registry singleton: this monitor is birthed once per tree, so an
+        // un-gated read here is one of the two terms in the cold-start fan-in
+        // product that RegistryFanInGate exists to bound.
+        var physicalTreeId = await optionsResolver.RegistryReads.ResolveAsync(TreeId);
         var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var map = await registry.GetShardMapAsync(TreeId)
+        var map = await optionsResolver.RegistryReads.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
 
