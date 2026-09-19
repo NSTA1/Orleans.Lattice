@@ -2476,8 +2476,12 @@ public class LatticeOptions
     /// mechanism: a correct value is a fraction of the volume the WAL lives on,
     /// which the library cannot know, and any value the library picked would be
     /// wrong for most deployments in one direction or the other. Enabling it also
-    /// costs one <c>GetPhysicalByteSizeAsync</c> probe per WAL partition on every
-    /// garbage-collection pass - a cost every consumer would pay for a signal
+    /// costs one <c>GetPhysicalByteSizeAsync</c> probe and one
+    /// <c>GetRetainedByteSizeAsync</c> probe per WAL partition on every
+    /// garbage-collection pass - the second samples the logical working set the
+    /// <see cref="WalMaxRetainedBytesWorkingSetMultiple"/> rule below is checked
+    /// against, and both are contractually O(1) reads that never scan the log -
+    /// a cost every consumer would pay for a signal
     /// most do not need. Leaving it off does not blind an operator: the
     /// unconditional pass counter still reports every pass and its outcome, and
     /// reclaimed volume is visible through the entries-trimmed counter, so a tree
@@ -2501,9 +2505,70 @@ public class LatticeOptions
     /// figure per partition and is understated to that same degree; both
     /// figures are surfaced separately on the storage-usage report so the gap
     /// is visible rather than inferred.
+    /// <para>
+    /// <b>Size it above
+    /// <see cref="WalMaxRetainedBytesWorkingSetMultiple"/> times the largest
+    /// tree's logical working set.</b> This is not a style preference; it is
+    /// what makes the ceiling reachable at all. Compaction is the mechanism that
+    /// actually bounds a log-structured WAL, it is decided per shard, and with
+    /// the file provider's absolute dead-byte ceiling disabled by default the
+    /// sole trigger is its dead-byte <i>ratio</i> threshold (0.5). Designed
+    /// steady-state physical occupancy is therefore about twice the live set.
+    /// Since the comparison moved to physical bytes (issue #3107), a value below
+    /// that multiple is unsatisfiable by construction: the tree breaches while
+    /// perfectly healthy, and no amount of reclamation can bring it inside.
+    /// </para>
+    /// <para>
+    /// Getting it wrong does not merely produce a spurious breach, it produces a
+    /// <b>permanently armed advisory alarm</b>. Because
+    /// <see cref="WalBytePressureReclaimTarget"/> defaults to 0.8, the disarm
+    /// point of a ceiling set below the multiple sits <i>below</i> the natural
+    /// floor of the tree's own compaction cycle, so the policy arms and never
+    /// disarms - and an alarm that cannot clear cannot distinguish pathological
+    /// growth from normal size, which is the one distinction it exists to draw.
+    /// </para>
+    /// <para>
+    /// <b>The working set grows, so this is a rule with an expiry date.</b> A
+    /// value calibrated once against a measured working set stops holding as soon
+    /// as that set doubles, which is why nothing validates the rule at
+    /// registration time: the working set is not knowable at startup, so a static
+    /// check would be either vacuous or wrong. The condition is reported at
+    /// runtime instead, by
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/>, which every
+    /// garbage-collection pass evaluates against the working set it just measured
+    /// and which is zero-primed per tree so a flat zero is a measurement rather
+    /// than silence (issue #3242).
     /// </para>
     /// </summary>
     public long? WalMaxRetainedBytes { get; set; }
+
+    /// <summary>
+    /// The multiple of a tree's <i>logical</i> retained payload that
+    /// <see cref="WalMaxRetainedBytes"/> must exceed for the ceiling to be
+    /// reachable by a healthy tree, and the multiple
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> tests against.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It is 2 because that is where a log-structured provider's compaction
+    /// policy puts designed steady-state occupancy. Such a provider reclaims dead
+    /// bytes only by rewriting a segment, and it rewrites when dead bytes reach a
+    /// configured fraction <c>t</c> of total payload, so occupancy peaks at
+    /// <c>live / (1 - t)</c>. The file provider's default ratio threshold is 0.5,
+    /// giving <c>2 x live</c>.
+    /// </para>
+    /// <para>
+    /// It is a constant here rather than a per-provider reading because the core
+    /// library does not reference any storage provider package and so cannot see
+    /// that threshold, and because the value is a sizing rule an operator applies
+    /// by hand to a number they measured. A provider tuned to a larger threshold
+    /// needs a correspondingly larger ceiling, so a tree sized to this multiple is
+    /// the floor of the safe range and never the whole of it - treat a
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> zero as "not
+    /// provably unsatisfiable", not as "comfortably sized".
+    /// </para>
+    /// </remarks>
+    public const double WalMaxRetainedBytesWorkingSetMultiple = 2.0;
 
     /// <summary>
     /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the

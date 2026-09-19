@@ -2031,6 +2031,27 @@ internal sealed class LatticeWalGcScheduler(
             // PublishBacklogBytes for the contract a consumer relies on.
             PublishBacklogBytes(report.RetainedBytesAfter, report.ByteCeiling, treeTag, tenantTag);
 
+            // The configuration verdict, recorded beside the backlog metering
+            // and deliberately NOT folded into the pass-outcome arm above
+            // (issue #3242). Those arms partition invocations, and this
+            // condition is not a pass outcome: it co-occurs with `reclaimed`,
+            // `over_ceiling` and `stranded` alike, so an arm would have had to
+            // take invocations away from whichever arm names them today - an
+            // operator alerting on `stranded` would have watched it fall silent
+            // at the moment the condition worsened. It would also have been
+            // unreachable exactly where it matters most, because ClassifyPass
+            // consults `overCeiling` and `stranded` only when the cursor floor
+            // is Available, so a blocked tree would never have reached it.
+            //
+            // Recorded once per pass rather than once per breach episode so the
+            // rate is readable against wal.gc.passes: a tree whose every pass
+            // agrees is stating a standing property of its configuration, which
+            // is what this condition is.
+            if (report.CeilingUnsatisfiable)
+            {
+                LatticeMetrics.WalGcCeilingUnsatisfiable.Add(1, treeTag, tenantTag);
+            }
+
             // Self-healing remedy for the blocked condition, not just a label
             // for it (issue #2710 Limitation 2). A blocked tree stays blocked
             // until the offending leaf activates and replays, and nothing on
@@ -2647,6 +2668,26 @@ internal sealed class LatticeWalGcScheduler(
         // first of those is the reading an operator most wants to be able to
         // trust, because it is the one the whole defect made unavailable.
         RecordPass(0, LatticeMetrics.OutcomeStranded, treeTag, tenantTag);
+
+        // The ceiling-satisfiability verdict is primed here rather than at its
+        // recording site, and for this instrument the priming carries more than
+        // the usual argument (issue #3242). The condition is reported only for a
+        // tree that has a ceiling configured AND whose provider accounts logical
+        // bytes, so on the majority of deployments - which configure no ceiling -
+        // it can never fire. Unprimed, "this tree's ceiling is satisfiable", "no
+        // ceiling is configured here", "this provider cannot account bytes" and
+        // "the build predates the instrument" would be one silence, and the first
+        // of those is the reading an operator confirming a re-sized ceiling needs
+        // to be able to trust. It is also the series that stops advancing when
+        // the remedy lands, which is precisely the shape a Counter cannot express
+        // without having been primed first.
+        //
+        // The tag set is the same (tree, tenant) pair the emission site in
+        // CollectTreeAsync uses, deriving the tenant from the same tree id
+        // through the same LatticeTenantLabel.ForTree. A prime whose tags differ
+        // from the emitter's mints a second series the emitter can never join,
+        // which leaves a permanent zero sitting beside the real value.
+        LatticeMetrics.WalGcCeilingUnsatisfiable.Add(0, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
