@@ -116,6 +116,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts per-package release plumbing (csproj/nuspec), not instrument declarations",
             ["ProcessorCountPoolSizingGuardTests"] =
                 "asserts no raw ProcessorCount pool sizing across packages, not instrument declarations",
+            ["RawAsyncEnumerableAdoptionGuardTests"] =
+                "asserts every raw IAsyncEnumerable enumeration in src is wrapped or justified, not instrument declarations",
             ["SecurityInstructionsCoverageTests"] =
                 "asserts the security instructions cover the packages they claim, not instruments",
             ["UnslicedPackageHygieneCoverageTests"] =
