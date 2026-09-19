@@ -341,13 +341,38 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// <para>
     /// <b>Why so few are enough.</b> A reader needs to know which state the
-    /// floor's holder is in, not a census. The durable materialiser offset floor
-    /// is a minimum over every pin, so the pins carrying the lowest frontier are
-    /// the ones holding it and every other pin is, by definition, not the
+    /// floor's holder is in, not a census. The durable materialiser offset
+    /// floor is a minimum over the pins that constrain it, so a bounded sample
+    /// taken from the low end of <i>that same axis</i> is drawn from the
+    /// holders themselves and every pin above it is, by construction, not the
     /// answer. Eight matches <c>LatticeWalGc.MaxReportedBlockingConsumers</c>,
     /// which is the width the floor's own blocking report settled on for the
     /// same question on the blocked arm, so the two arms report a comparable
     /// number of holders rather than one being arbitrarily richer.
+    /// </para>
+    /// <para>
+    /// <b>The axis is load-bearing, and it is the offset one.</b> Do not
+    /// restate the paragraph above as "the pins carrying the lowest frontier
+    /// are the ones holding it". Frontier and offset advance independently -
+    /// <c>FlushDurableMaterialiserFrontierAsync</c> reads the clock once and
+    /// then loops per partition - so ordering by frontier does not order by
+    /// offset, and a sample selected on the frontier axis need not contain the
+    /// offset floor's holder at all. An earlier revision of this remark drew
+    /// exactly that conclusion from an offset premise, and because a wrong
+    /// warrant for a right conclusion gives a reader no reason to go and look,
+    /// it was repeated as the justification for trusting this diagnostic before
+    /// the implementation below was read (issue #3194).
+    /// </para>
+    /// <para>
+    /// The selection in <see cref="SweepOrphanedMaterialiserPinsAsync"/>
+    /// accordingly keeps <b>two</b> capped lists, split on whether a pin
+    /// constrains an offset floor and ascending by offset, precisely because
+    /// <c>ComputeMaterialiserOffsetFloorAsync</c> skips every -1: a sentinel
+    /// pin is the <i>weakest</i> pin on that axis rather than the strongest, so
+    /// a single ascending list would fill with pins that hold no offset floor
+    /// at all and evict every pin that does (issue #3178). That comment and
+    /// this one are the same claim stated at the two ends of one mechanism -
+    /// change them together or not at all.
     /// </para>
     /// </remarks>
     private const int MaxFloorHolderClassificationsPerSweep = 8;
@@ -4229,6 +4254,11 @@ internal sealed class LatticeWalGcScheduler(
         // hold no offset floor at all and evict every pin that does. Disjoint by
         // construction, so the classification still reads at most one durable
         // record per admitted candidate.
+        //
+        // The ordering axis here is the offset one, and MaxFloorHolderClassifications-
+        // PerSweep's own remarks state the same claim from the other end. Keep the
+        // two in step: a frontier-ordered sample would not select these pins, because
+        // frontier and offset advance independently (issue #3194).
         var unusableHolders = classifyFloorHolders
             ? new List<WalGcFloorHolderCandidate>(MaxFloorHolderClassificationsPerSweep)
             : null;
