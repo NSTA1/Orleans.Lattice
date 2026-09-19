@@ -38,12 +38,28 @@ internal sealed class LatticeRegistryGrain(
     // make the registry impossible to implement on top of Lattice itself.
     private ISystemLattice Registry => grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId);
 
-    public async Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
+    public Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
-        // The existence check is also used by the DIAG block below; keep
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Register,
+            () => RegisterCoreAsync(treeId, entry));
+    }
+
+    /// <summary>
+    /// The registration itself, uninstrumented.
+    /// </summary>
+    /// <remarks>
+    /// Split out for the same reason as <see cref="GetEntryCoreAsync"/>: the
+    /// census arm must count inbound grain calls only. This member carries no
+    /// <c>[AlwaysInterleave]</c>, so it holds the singleton's turn token for its
+    /// whole duration - including the existence check below, which is itself a
+    /// hop onto the backing system tree.
+    /// </remarks>
+    private async Task RegisterCoreAsync(string treeId, TreeRegistryEntry? entry)
+    {        // The existence check is also used by the DIAG block below; keep
         // the call outside the directive so foreground behaviour is
         // identical whether or not LATTICE_DIAG is defined.
         var existsAtCall = await Registry.ExistsAsync(treeId);
@@ -258,10 +274,12 @@ internal sealed class LatticeRegistryGrain(
         await Registry.SetAsync(treeId, SerializeEntry(entry));
     }
 
-    public async Task UnregisterAsync(string treeId)
+    public Task UnregisterAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        await Registry.DeleteAsync(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Unregister,
+            () => Registry.DeleteAsync(treeId));
     }
 
     public Task<bool> ExistsAsync(string treeId)

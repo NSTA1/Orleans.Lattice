@@ -72,6 +72,45 @@ internal static class RegistryCallCensus
     /// <summary><see cref="ILatticeRegistry.GetAllTreeIdsAsync(string?)"/>.</summary>
     internal const string GetAllTreeIds = "get_all_tree_ids";
 
+    /// <summary><see cref="ILatticeRegistry.RegisterAsync"/>.</summary>
+    internal const string Register = "register";
+
+    /// <summary><see cref="ILatticeRegistry.UnregisterAsync"/>.</summary>
+    internal const string Unregister = "unregister";
+
+    /// <summary>
+    /// The arms that are <b>not</b> <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>,
+    /// and on which the admitted-call reading therefore means something different.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This distinction is load-bearing for any attempt to read these instruments,
+    /// so it is recorded in source rather than left to the reader to rederive from
+    /// <see cref="ILatticeRegistry"/>.
+    /// </para>
+    /// <para>
+    /// On an interleaved point read, a short service time beside an admitted count
+    /// far below the offered load does mean calls were never admitted. On a
+    /// <b>non-interleaved</b> member it means no such thing: callers serialise
+    /// behind the singleton's turn token, so a slow downstream hop produces a
+    /// short <i>per-call</i> service time and a low admitted count as well. A
+    /// mechanism that is really downstream cost therefore wears the signature of
+    /// one that is really admission failure, and the two are not separable from
+    /// the duration arm alone.
+    /// </para>
+    /// <para>
+    /// <see cref="LatticeMetrics.RegistryCallInFlight"/> is what separates them,
+    /// and it is a precondition rather than a supporting signal: the width on a
+    /// non-interleaved member is pinned to zero by construction, because the
+    /// count excludes the arriving call and no second call can be in the body at
+    /// the same time. Observing a width that never rises above zero is therefore
+    /// the tell that a duration reading on that member carries no admission
+    /// information, and no attribution should be made from it.
+    /// </para>
+    /// </remarks>
+    internal static readonly IReadOnlyList<string> NonInterleavedOperations =
+        [GetAllTreeIds, Register, Unregister];
+
     /// <summary>Every operation arm this census can record.</summary>
     /// <remarks>
     /// Exposed so the arms are enumerable from one place in source rather than
@@ -79,7 +118,7 @@ internal static class RegistryCallCensus
     /// single attribution rule.
     /// </remarks>
     internal static readonly IReadOnlyList<string> Operations =
-        [Exists, GetEntry, Resolve, GetShardMap, GetAllTreeIds];
+        [Exists, GetEntry, Resolve, GetShardMap, GetAllTreeIds, Register, Unregister];
 
     private static int _inFlight;
 
@@ -103,6 +142,47 @@ internal static class RegistryCallCensus
         try
         {
             return await body().ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+            LatticeMetrics.RegistryCallDuration.Record(
+                Stopwatch.GetElapsedTime(from).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, operation),
+                LatticeTenantLabel.Platform);
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/>, recording the same two readings as
+    /// <see cref="MeasureAsync{T}"/> for a member that returns no value.
+    /// </summary>
+    /// <param name="operation">The <see cref="ILatticeRegistry"/> member being served.</param>
+    /// <param name="body">The member's work.</param>
+    /// <returns>A task that completes when the member's work completes.</returns>
+    /// <remarks>
+    /// The mutators need this overload, and they are the members for which the
+    /// readings matter most: each is a read-then-write that holds the singleton's
+    /// turn token for its whole duration, so a cold start registering K trees
+    /// costs K serialised turns whose individual cost grows with the estate.
+    /// </remarks>
+    internal static async Task MeasureAsync(string operation, Func<Task> body)
+    {
+        // Deliberately not expressed as MeasureAsync(operation, async () => { await body(); return true; }).
+        // That shape compiles, but the lambda's inferred type sends overload
+        // resolution back to this same non-generic overload rather than to the
+        // generic one, so the method recurses into itself - and it does so
+        // silently, as unbounded recursion rather than a compile error.
+        var inFlight = Interlocked.Increment(ref _inFlight) - 1;
+        LatticeMetrics.RegistryCallInFlight.Record(
+            inFlight,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, operation),
+            LatticeTenantLabel.Platform);
+
+        var from = Stopwatch.GetTimestamp();
+        try
+        {
+            await body().ConfigureAwait(false);
         }
         finally
         {
