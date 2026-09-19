@@ -38,14 +38,25 @@ internal sealed class FileWalShard : IDisposable
     private long _writePosition;
     private long _retainedBytes;
     private long _deadBytes;
+    private long _deadEntries;
     private long _trimWatermark = -1;
 
     // Built once per shard rather than per emission. The priming pass and the
     // compaction record site are both on paths that must not allocate to
-    // report, so the two tags every compaction measurement carries are cached
-    // here instead of being constructed at each call.
+    // report, so the three tags every compaction measurement carries are
+    // cached here instead of being constructed at each call.
     private readonly KeyValuePair<string, object?> _treeTag;
     private readonly KeyValuePair<string, object?> _tenantTag;
+
+    // Compaction is decided per shard - the ratio test reads this instance's
+    // own _retainedBytes and _deadBytes - so a tree-scoped measurement is the
+    // average of one threshold test per shard and reports a dead fraction no
+    // shard holds. Issue #3206 measured that: three of eight shards holding
+    // 81% of a 1.6 GB WAL had never compacted while the tree-level counters
+    // advanced healthily. LatticeMetrics.TagShard is the correct key rather
+    // than TagPartition, which names the producer-side writer partition and is
+    // reserved for the writer-layer instruments.
+    private readonly KeyValuePair<string, object?> _shardTag;
 
     internal FileWalShard(string directory, FileWalStorageOptions options)
         : this(directory, options, string.Empty, 0, GcWalReadPressureGovernor.Instance)
@@ -67,6 +78,7 @@ internal sealed class FileWalShard : IDisposable
         _governor = governor;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         _tenantTag = LatticeTenantLabel.ForTree(treeId);
+        _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
     }
 
     /// <summary>
@@ -487,6 +499,15 @@ internal sealed class FileWalShard : IDisposable
     /// </summary>
     internal long DeadBytes => _deadBytes;
 
+    /// <summary>
+    /// Trimmed entries that compaction has not yet reclaimed. The record-count
+    /// companion to <see cref="DeadBytes"/>: the two together give the dead
+    /// records' mean payload, which is what makes the per-record framing
+    /// overhead computable and so the shard's true dead ratio exact rather than
+    /// bounded (issue #3206).
+    /// </summary>
+    internal long DeadEntries => _deadEntries;
+
     /// <summary>Trims every entry with offset &lt;= <paramref name="throughOffsetInclusive"/>.</summary>
     internal async Task TrimAsync(long throughOffsetInclusive, CancellationToken cancellationToken)
     {
@@ -511,6 +532,7 @@ internal sealed class FileWalShard : IDisposable
             {
                 _retainedBytes -= _entries[firstSurvivor].PayloadLength;
                 _deadBytes += _entries[firstSurvivor].PayloadLength;
+                _deadEntries++;
                 firstSurvivor++;
             }
 
@@ -580,6 +602,14 @@ internal sealed class FileWalShard : IDisposable
     /// the reading that made issue #3107 take as long to diagnose as it did,
     /// so the arms are armed before anything can fire them.
     /// </para>
+    /// <para>
+    /// The zeros carry this shard's own <see cref="LatticeMetrics.TagShard"/>,
+    /// so the priming guarantee holds per shard rather than per tree. A
+    /// tree-scoped prime would leave "this shard has never compacted"
+    /// indistinguishable from "this shard is not reporting" the moment one
+    /// sibling compacted, which is the ambiguity issue #3206 measured on a
+    /// live estate and exists to remove.
+    /// </para>
     /// </summary>
     private void PrimeCompactionCounters()
     {
@@ -590,10 +620,16 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
-        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
-        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
-        LatticeMetrics.WalCompactions.Add(0, _treeTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
-        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, _tenantTag);
+
+        // The gate-input samples are armed from the shard's true post-recovery
+        // state rather than a synthetic zero, so the very first scrape after a
+        // load already carries this shard's retained and dead figures even if
+        // it is never trimmed again.
+        RecordCompactionEvaluation();
     }
 
     private void RecoverFromDisk()
@@ -603,6 +639,7 @@ internal sealed class FileWalShard : IDisposable
         _entries.Clear();
         _retainedBytes = 0;
         _deadBytes = 0;
+        _deadEntries = 0;
         _trimWatermark = -1;
 
         var committed = new List<IndexEntry>();
@@ -663,6 +700,7 @@ internal sealed class FileWalShard : IDisposable
             if (entry.Offset <= watermark)
             {
                 _deadBytes += entry.PayloadLength;
+                _deadEntries++;
                 continue;
             }
 
@@ -775,6 +813,12 @@ internal sealed class FileWalShard : IDisposable
 
     private void CompactIfNeeded()
     {
+        // Sampled before any arm is tested, so every evaluation is reported
+        // whichever way it goes. That ordering is the point: an absent sample
+        // now means the shard was never evaluated, which is a different fault
+        // from a shard that is evaluated every sweep and correctly declines.
+        RecordCompactionEvaluation();
+
         if (_deadBytes < _options.CompactionMinimumDeadBytes)
         {
             return;
@@ -866,6 +910,7 @@ internal sealed class FileWalShard : IDisposable
         _entries.AddRange(newEntries);
         _writePosition = newWritePosition;
         _deadBytes = 0;
+        _deadEntries = 0;
         RecordCompaction(trigger, reclaimed);
     }
 
@@ -881,6 +926,14 @@ internal sealed class FileWalShard : IDisposable
     /// the instrument exists to answer. Present occupancy is reported instead
     /// as derived truth, by <see cref="GetPhysicalByteSizeAsync"/>.
     /// </para>
+    /// <para>
+    /// Both carry this shard's <see cref="LatticeMetrics.TagShard"/>, because
+    /// the trigger that produced the measurement is shard-local: the ratio
+    /// test compares this instance's own dead bytes against its own payload.
+    /// The pre-#3206 tree-scoped tagging forced a reader to sum across shards,
+    /// which averages one threshold test per shard and hides a stranded
+    /// majority behind an active minority.
+    /// </para>
     /// </summary>
     private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
     {
@@ -889,11 +942,48 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
-        LatticeMetrics.WalCompactions.Add(1, _treeTag, trigger, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, trigger, _tenantTag);
         if (reclaimedBytes > 0)
         {
-            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _tenantTag);
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, _tenantTag);
         }
+    }
+
+    /// <summary>
+    /// Samples the four quantities the shard-local compaction gate tests, at
+    /// the moment it tests them and before any arm fires.
+    /// <para>
+    /// Publishing the decision's inputs rather than only its outcome is what
+    /// lets a reader reconstruct the gate from outside the process. Issue #3206
+    /// established that the outcome counters alone cannot settle the question
+    /// they are asked: a shard whose series is flat may be declining correctly
+    /// every sweep or may never be reaching the evaluation at all, and those
+    /// have opposite remedies. It further established that the byte figures
+    /// alone cannot settle it either, because both track <b>payload</b> length
+    /// while the file stores <b>framed</b> records, so any ratio derived by
+    /// subtracting published byte totals carries the framing overhead in
+    /// numerator and denominator alike and is strictly an upper bound. The
+    /// entry counts make mean payload observable, and mean payload is what
+    /// turns that bound back into the exact figure.
+    /// </para>
+    /// <para>
+    /// Sampled unconditionally, including when every quantity is zero, for the
+    /// same reason <see cref="PrimeCompactionCounters"/> arms the outcome
+    /// counters: an absent series must mean "this shard is not reporting" and
+    /// nothing else.
+    /// </para>
+    /// </summary>
+    private void RecordCompactionEvaluation()
+    {
+        if (_treeId.Length == 0)
+        {
+            return;
+        }
+
+        LatticeMetrics.WalCompactionEvalRetainedBytes.Record(_retainedBytes, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalDeadBytes.Record(_deadBytes, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalRetainedEntries.Record(_entries.Count, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalDeadEntries.Record(_deadEntries, _treeTag, _shardTag, _tenantTag);
     }
 
     private int LowerBound(long target)

@@ -1380,19 +1380,28 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of WAL entries removed by a <see cref="ILatticeWalGc.RunOnceAsync"/>
-    /// pass, tagged with <see cref="TagTree"/>. Emitted from
-    /// <see cref="LatticeWalGc"/> after every pass that trims at least one
-    /// entry; a zero-trim pass does not emit so a high-frequency GC pass
-    /// against an empty WAL produces no measurement traffic.
+    /// pass, tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Emitted from <see cref="LatticeWalGc"/> once per shard the pass
+    /// actually scanned, including when that shard trimmed nothing, so every
+    /// scanned shard publishes a series.
+    /// <para>
+    /// The shard tag was added by issue #3206. Trimming is decided and
+    /// performed per shard, so a tree-scoped total is a sum over per-shard
+    /// results and cannot say which shard produced it; read against the
+    /// equally shard-tagged <see cref="WalCompactions"/> it is the
+    /// discriminator that separates a shard which trims and compacts from one
+    /// which trims and strands the bytes.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalEntriesTrimmed =
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
-            description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
+            description: "WAL entries removed by the per-tree garbage collector, tagged by tree and by the shard the scan trimmed. Emitted once per shard the pass scanned, including a zero for a shard that reclaimed nothing, so an absent series means the shard was not scanned on this silo rather than that it reclaimed nothing.");
 
     /// <summary>
     /// Counter of WAL shard compactions - the operation that actually returns
-    /// trimmed space to the filesystem - tagged with <see cref="TagTree"/> and
-    /// <see cref="TagTrigger"/>. Emitted by the file WAL provider.
+    /// trimmed space to the filesystem - tagged with <see cref="TagTree"/>,
+    /// <see cref="TagShard"/> and <see cref="TagTrigger"/>. Emitted by the
+    /// file WAL provider.
     /// <para>
     /// Trimming and reclaiming are different events, and conflating them is the
     /// blindness issue #3107 was filed for. A trim only marks a prefix dead;
@@ -1412,12 +1421,23 @@ public static class LatticeMetrics
     /// non-zero rate on it means the deployment is buying bounded disk at the
     /// cost of write amplification. <c>reconcile</c> is the unconditional
     /// activation-time compaction, which reclaims whatever the steady-state
-    /// triggers left behind. All arms are zero-primed per tree.
+    /// triggers left behind. All arms are zero-primed per shard.
+    /// </para>
+    /// <para>
+    /// <see cref="TagShard"/> was added by issue #3206. Every compaction
+    /// trigger is shard-local - the ratio test compares one shard's dead bytes
+    /// against its own payload - so a tree-scoped series averages one
+    /// threshold test per shard and reports a dead fraction no shard holds. On
+    /// the estate that motivated the change, three of eight shards holding 81%
+    /// of a 1.6 GB WAL had never compacted while the tree-level counters
+    /// advanced healthily. <see cref="TagShard"/> is the correct key rather
+    /// than <see cref="TagPartition"/>, which names the producer-side writer
+    /// partition and is reserved for the writer-layer instruments.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalCompactions =
         Meter.CreateCounter<long>("orleans.lattice.wal.compactions", unit: "{compaction}",
-            description: "WAL shard compactions - the operation that returns trimmed space to the filesystem - tagged by tree and by the trigger that fired. 'ratio' is the default amortised policy (dead bytes reached the configured fraction of payload); 'ceiling' is the opt-in absolute dead-byte bound, whose sustained use trades write amplification for bounded disk; 'reconcile' is the unconditional activation-time compaction. Distinct from orleans.lattice.wal.entries_trimmed, which counts entries marked dead rather than bytes returned: the two can diverge for hours, and that divergence is normal convergence rather than a fault. All arms are zero-primed per tree.");
+            description: "WAL shard compactions - the operation that returns trimmed space to the filesystem - tagged by tree, by the storage shard the rewrite ran on, and by the trigger that fired. 'ratio' is the default amortised policy (dead bytes reached the configured fraction of payload); 'ceiling' is the opt-in absolute dead-byte bound, whose sustained use trades write amplification for bounded disk; 'reconcile' is the unconditional activation-time compaction. Every trigger is shard-local, so the discriminator must be read per shard: summed to the tree an active minority of shards masks a stranded majority. Distinct from orleans.lattice.wal.entries_trimmed, which counts entries marked dead rather than bytes returned: the two can diverge for hours, and that divergence is normal convergence rather than a fault. All arms are zero-primed per shard.");
 
     /// <summary>Canonical name of <see cref="WalCompactions"/>.</summary>
     public const string WalCompactionsName = "orleans.lattice.wal.compactions";
@@ -1452,7 +1472,8 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of bytes physically returned to the filesystem by WAL shard
-    /// compaction, tagged with <see cref="TagTree"/>. Zero-primed per tree.
+    /// compaction, tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Zero-primed per shard.
     /// <para>
     /// Monotonic by design. The obvious alternative - an up/down gauge of dead
     /// bytes currently held - needs a compensating write per compaction, and
@@ -1463,13 +1484,119 @@ public static class LatticeMetrics
     /// <see cref="BPlusTree.TreeStorageUsageReport.WalPhysicalBytes"/>, which is
     /// derived on each sample and so cannot drift.
     /// </para>
+    /// <para>
+    /// <see cref="TagShard"/> was added by issue #3206, for the reason given on
+    /// <see cref="WalCompactions"/>: the rewrite that released the bytes ran on
+    /// one shard, so a tree-scoped total lets an active minority of shards mask
+    /// a stranded majority.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> WalCompactionReclaimedBytes =
         Meter.CreateCounter<long>("orleans.lattice.wal.compaction.reclaimed_bytes", unit: "By",
-            description: "Bytes physically returned to the filesystem by WAL shard compaction, tagged by tree. Monotonic by design: an up/down gauge of currently-held dead bytes would need a compensating write that can be lost, which ratchets the series (issue #2700). For present-truth occupancy compare the tree's physical and retained WAL bytes on the storage-usage report instead. Zero-primed per tree.");
+            description: "Bytes physically returned to the filesystem by WAL shard compaction, tagged by tree and by the storage shard the rewrite ran on. Monotonic by design: an up/down gauge of currently-held dead bytes would need a compensating write that can be lost, which ratchets the series (issue #2700). For present-truth occupancy compare the tree's physical and retained WAL bytes on the storage-usage report instead. Zero-primed per shard.");
 
     /// <summary>Canonical name of <see cref="WalCompactionReclaimedBytes"/>.</summary>
     public const string WalCompactionReclaimedBytesName = "orleans.lattice.wal.compaction.reclaimed_bytes";
+
+    /// <summary>
+    /// Retained (live) payload bytes a WAL shard held at the moment its
+    /// compaction threshold was evaluated, tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>. Sampled once per evaluation, before any arm
+    /// fires, so a shard that is evaluated and declines is distinguishable from
+    /// a shard that is never evaluated at all.
+    /// <para>
+    /// This and its three siblings -
+    /// <see cref="WalCompactionEvalDeadBytes"/>,
+    /// <see cref="WalCompactionEvalRetainedEntries"/> and
+    /// <see cref="WalCompactionEvalDeadEntries"/> - are the complete input set
+    /// of the shard-local compaction gate, published so the decision can be
+    /// reconstructed exactly from outside the process. Issue #3206 established
+    /// why the byte figures alone are not enough: both counters track
+    /// <b>payload</b> length, while the file stores <b>framed</b> records, so a
+    /// dead ratio derived by subtracting published byte aggregates carries the
+    /// per-record framing overhead in numerator and denominator alike and is
+    /// therefore only an upper bound on the ratio the gate itself tests. The
+    /// entry counts make the mean payload observable, which makes the framing
+    /// term computable and the gate's own ratio exact rather than bounded.
+    /// </para>
+    /// <para>
+    /// A histogram rather than an up/down counter for the reason issue #2700
+    /// established and <see cref="WalCompactionReclaimedBytes"/> restates: a
+    /// level maintained by compensating writes ratchets permanently when one is
+    /// lost. Each evaluation is an independent sample of present truth instead,
+    /// which is the same shape <see cref="WalGcBacklogBytes"/> already uses.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalCompactionEvalRetainedBytes =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.compaction.eval.retained_bytes", unit: "By",
+            description: "Retained (live) payload bytes a WAL shard held when its compaction threshold was evaluated, tagged by tree and storage shard. Sampled once per evaluation before any arm fires, so an evaluated-and-declined shard is distinguishable from an unevaluated one. Paired with the dead-byte and the two entry-count samples so the shard-local gate's ratio can be reconstructed exactly, including the per-record framing the payload-only byte figures omit (issue #3206).");
+
+    /// <summary>Canonical name of <see cref="WalCompactionEvalRetainedBytes"/>.</summary>
+    public const string WalCompactionEvalRetainedBytesName =
+        "orleans.lattice.wal.compaction.eval.retained_bytes";
+
+    /// <summary>
+    /// Dead (trimmed but not yet reclaimed) payload bytes a WAL shard held at
+    /// the moment its compaction threshold was evaluated, tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. This is the numerator
+    /// the ratio arm tests and the quantity both the minimum-dead floor and the
+    /// absolute ceiling are compared against.
+    /// <para>
+    /// See <see cref="WalCompactionEvalRetainedBytes"/> for why the four
+    /// evaluation samples are published together and why payload bytes alone
+    /// under-determine the gate.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalCompactionEvalDeadBytes =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.compaction.eval.dead_bytes", unit: "By",
+            description: "Dead (trimmed but not yet reclaimed) payload bytes a WAL shard held when its compaction threshold was evaluated, tagged by tree and storage shard. The numerator of the ratio arm and the quantity the minimum-dead floor and absolute ceiling are tested against. Sampled once per evaluation before any arm fires (issue #3206).");
+
+    /// <summary>Canonical name of <see cref="WalCompactionEvalDeadBytes"/>.</summary>
+    public const string WalCompactionEvalDeadBytesName =
+        "orleans.lattice.wal.compaction.eval.dead_bytes";
+
+    /// <summary>
+    /// Retained (live) entry count a WAL shard held at the moment its
+    /// compaction threshold was evaluated, tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>.
+    /// <para>
+    /// Divided into <see cref="WalCompactionEvalRetainedBytes"/> this yields the
+    /// shard's mean live payload, which is the quantity that decides how much
+    /// per-record framing a physical-minus-retained subtraction has silently
+    /// folded into a derived dead ratio. Before issue #3206 no published series
+    /// carried an entry count except
+    /// <see cref="WalEntriesTrimmed"/>, so mean payload was not derivable from
+    /// telemetry at all and the derived ratio could not be corrected.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalCompactionEvalRetainedEntries =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.compaction.eval.retained_entries", unit: "{entry}",
+            description: "Retained (live) entry count a WAL shard held when its compaction threshold was evaluated, tagged by tree and storage shard. Divided into the retained-byte sample it yields mean live payload, which is what decides how much per-record framing a physical-minus-retained subtraction folds into a derived dead ratio (issue #3206).");
+
+    /// <summary>Canonical name of <see cref="WalCompactionEvalRetainedEntries"/>.</summary>
+    public const string WalCompactionEvalRetainedEntriesName =
+        "orleans.lattice.wal.compaction.eval.retained_entries";
+
+    /// <summary>
+    /// Dead (trimmed but not yet reclaimed) entry count a WAL shard held at the
+    /// moment its compaction threshold was evaluated, tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. Counts the records
+    /// whose payload <see cref="WalCompactionEvalDeadBytes"/> totals, so the
+    /// two together give the dead records' mean payload and hence their framing
+    /// contribution.
+    /// <para>
+    /// Distinct from <see cref="WalEntriesTrimmed"/>, which is a monotonic
+    /// count of trim events: this is the present backlog awaiting a rewrite and
+    /// returns to zero each time one completes.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalCompactionEvalDeadEntries =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.compaction.eval.dead_entries", unit: "{entry}",
+            description: "Dead (trimmed but not yet reclaimed) entry count a WAL shard held when its compaction threshold was evaluated, tagged by tree and storage shard. Gives the dead records' mean payload when divided into the dead-byte sample, and so their framing contribution. Distinct from wal.entries_trimmed, which counts trim events monotonically; this is the present backlog awaiting a rewrite and returns to zero when one completes (issue #3206).");
+
+    /// <summary>Canonical name of <see cref="WalCompactionEvalDeadEntries"/>.</summary>
+    public const string WalCompactionEvalDeadEntriesName =
+        "orleans.lattice.wal.compaction.eval.dead_entries";
 
     /// <summary>
     /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
