@@ -24,11 +24,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description>
 /// Callers time out while this histogram stays short and its call count stays
 /// far below the offered load - the calls were <b>never admitted</b>. The
-/// registry body is not where the time went, so the block is upstream of it: the
-/// activation had not completed, or the calls were queued behind a turn that
-/// never yielded. Interleaving attributes cannot fix that, because
-/// <c>[AlwaysInterleave]</c> admits a call past a running turn and does not admit
-/// one during activation, which is not interleavable.
+/// registry body is not where the time went, so the block is upstream of it.
+/// Three mechanisms produce this, and they are <b>not</b> distinguished by this
+/// instrument: the activation had not completed; the calls were queued behind a
+/// turn that never yielded; or the whole process was stalled. Interleaving
+/// attributes cannot fix any of them, because <c>[AlwaysInterleave]</c> admits a
+/// call past a running turn and does not admit one during activation, which is
+/// not interleavable, and no grain-level attribute survives a process-wide
+/// stall at all.
 /// </description></item>
 /// <item><description>
 /// Callers time out and this histogram's tail approaches the caller's deadline
@@ -37,6 +40,29 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// and the remedy is a scheduling or caching one at that hop.
 /// </description></item>
 /// </list>
+/// <para>
+/// <b>The blind spot, stated so it is not mistaken for a reading.</b> The third
+/// mechanism above - a process-wide stall, a blocking gen2 GC pause being the
+/// realistic one - is invisible <em>to this instrument in principle</em>, not
+/// merely unmeasured. A blocking collection suspends every managed thread,
+/// including the one recording here, so the census's own clock stops with
+/// everything else: the stall is elided from the histogram rather than recorded
+/// in it. It is also the only one of the three that blocks
+/// <c>[AlwaysInterleave]</c> members and non-interleaved members
+/// <em>indiscriminately</em>, because it is beneath the scheduler rather than
+/// inside it.
+/// </para>
+/// <para>
+/// That matters for the inference in the other direction. A timeout population
+/// falling entirely on interleaved members rules out turn-token contention, but
+/// it does <b>not</b> leave activation as the only survivor - a process-wide
+/// stall fits it equally well. Separating those two needs the runtime counters,
+/// not this census: <c>dotnet_gc_pause_time_total</c> against wall clock,
+/// <c>dotnet_gc_collections_total{gen2}</c>, and the managed heap and committed
+/// figures against the process memory cap. Read those before concluding
+/// activation from a never-served population, because this instrument cannot
+/// tell you which of the two you are looking at.
+/// </para>
 /// <para>
 /// <b>Why not a storage instrument.</b> Orleans tags
 /// <c>orleans-storage-read-latency</c> with <c>state_name</c> taken from a

@@ -7,6 +7,81 @@ scripts**. It deliberately contains **no fix and no asserting test fixture** -
 the behaviour under investigation is unresolved, so a fixture written now would
 land red in CI and assert a conclusion the measurements do not yet support.
 
+## Read this first: the rig does not reproduce the production storm
+
+**If you came here expecting a storm, you will not get one, and that is the
+finding rather than a failure of the rig.** Seven controlled cold-start cells,
+varying tree count 4x and host CPU 27x, produced **one** storm between them - at
+4.25x the live tree count and ~2x the live registry load, three of four K=80
+cold starts were entirely clean. The proposed
+`(trees) x (per-tree background services)` scaling law **is not supported**.
+Full cells and dispersion are in [Results](#results-so-far); do not re-run them
+expecting a different answer without first reading Findings 4 and 5.
+
+More useful than the negative: the one storm the rig **did** produce is a
+**different failure** from the production one, and there is a cheap test that
+tells them apart.
+
+### The signature test - use this before attributing any registry storm
+
+Two orthogonal readings classify a timeout population. Take both from the log,
+never from a counter scrape.
+
+|  | **never served** | **served slowly** |
+|---|---|---|
+| how to read it | timeout clusters at the exact deadline; no `Status:`/`Diagnostics:` clause in the body | timeout carries a diagnostics clause; census duration tail approaches the deadline with a matching call count |
+| means | the call was never admitted to the body | the call was admitted and the time went inside it |
+
+|  | **on interleaved members** | **on non-interleaved members** |
+|---|---|---|
+| how to read it | member carries `[AlwaysInterleave]` - read from source, never inferred | member does not |
+| means | turn-token contention is **excluded** - an interleaved call cannot queue behind another interleaved call | turn-token contention is available as an explanation |
+
+Crossing them:
+
+| | production storm | this rig's storm (`birth-K80`) |
+|---|---|---|
+| total / on the registry | 103 / 103 | 28 / 26 |
+| **never served** | **103** | 2 |
+| **served slowly** | 0 | **26** |
+| members | `ResolveAsync` 49, `GetEntryAsync` 46, `GetShardMapAsync` 8 | `RegisterAsync` 10, `GetAllTreeIdsAsync` 8, `GetEntryAsync` 4, `ResolveAsync` 4 |
+| **on interleaved members** | **100%** | 29% |
+| grain diagnostics | - | `NumRunning=3 NonReentrancyQueueSize=4` |
+| mechanism | **not** turn-token contention | **turn-token contention** |
+
+The production storm is 100% never-served on members that **all** carry
+`[AlwaysInterleave]` (`ResolveAsync` `ILatticeRegistry.cs:246`, `GetEntryAsync`
+`:129`, `GetShardMapAsync` `:259`). This also explains, without needing any
+further conjecture, why PR #3183's interleaving attributes were present in the
+binary that produced the 103-timeout storm and did not prevent it.
+
+The rig's storm is 93% served-slowly and 64% on non-interleaved members
+(`GetAllTreeIdsAsync` `:169`, `RegisterAsync` `:096`). Different mechanism,
+different remedy.
+
+**Consequence for anyone writing the fix: a remedy validated against this rig
+would be validated against the wrong failure.**
+
+### What the never-served-on-interleaved reading does and does not license
+
+It **excludes** turn-token contention. It does **not** leave activation-blocking
+as the only survivor. Any mechanism that stalls the whole process stalls
+interleaved calls too, because it sits beneath the scheduler rather than inside
+it - a blocking gen2 GC pause being the realistic one. Activation-blocking and a
+process-wide stall fit this signature **equally well**, and separating them is
+not reachable from this rig at all:
+
+- the census records from inside the grain body, so a process-wide stall
+  suspends its clock along with everything else and is **elided** from the
+  histogram rather than recorded in it;
+- the distinguishing evidence is runtime counters on the affected process -
+  `dotnet_gc_pause_time_total` against wall clock,
+  `dotnet_gc_collections_total{gen2}`, and managed heap and committed size
+  against the process memory cap.
+
+An earlier revision of this file asserted activation-blocking as the sole
+possibility. That was too strong and is corrected here.
+
 ## The question
 
 The live estate produced 103 `System.TimeoutException`, all on the single
@@ -17,6 +92,41 @@ five minutes after start - and then **zero for the following 46 minutes**.
 
 The proposed scaling law was (number of trees) x (per-tree background services)
 fanning in onto one activation.
+
+## The instrument that was specified, and why it cannot exist
+
+The brief asked for a `state_name="lattice-registry"` series in
+`orleans_storage_read_latency_count`, so that the registry's activation-time
+state load would be observable. **That series cannot exist, and its absence is
+correct rather than a gap.** Orleans takes `state_name` from a grain's
+`[PersistentState]` declaration. `LatticeRegistryGrain` declares none - its
+primary constructor at `LatticeRegistryGrain.cs:27` carries no such attribute.
+It is a POCO grain with no persistent state and no activation-time state load at
+all, reading everything through the backing `_lattice_trees` Lattice tree
+instead.
+
+Absence from source plus absence from the metrics endpoint are two readings of
+the same absence, so the claim is instead settled against the **siblings**, which
+makes it two-sided:
+
+| grain | `[PersistentState]` | series present |
+|---|---|---|
+| `TxRegistryGrain` (`:46`) | yes, `TxRegistryState` | yes - `state_name="tx-registry"`, 19 reads / 21 writes |
+| `ViewRegistryGrain` (`:13`) | yes, `ViewRegistryState` | yes - `state_name="view-registry"`, 1 read |
+| `LatticeRegistryGrain` (`:27`) | **no** | **absent** |
+
+Two grains that declare it appear; the one that does not, does not. The
+instrument is working and reporting a true negative. Manufacturing the specified
+series would have meant giving the grain state it does not have, in order to
+measure a load that does not happen.
+
+What ships instead measures the thing that actually governs the activation
+window: per-member service time, fan-in width, and which members are
+non-interleaved (read from source, never inferred). See
+[`RegistryCallCensus.cs`](../../src/lattice/BPlusTree/Grains/RegistryCallCensus.cs),
+whose XML doc also records the instrument's own blind spot - a process-wide
+stall suspends the census's clock along with everything else, so it is elided
+from the histogram rather than recorded in it.
 
 ## Three findings that shape how this rig must be used
 
@@ -126,7 +236,7 @@ indistinguishable from a correct read in the output.
 | `scripts/_fanin-helpers.ps1` | timeout census, counter baselining, restart detection, isolation guard, Prometheus parse, host load, interleaving parse |
 | `scripts/collect-window.ps1` | the measurement proper: per-arm service time, fan-in width, attribution validity, timeout census, host load |
 | `scripts/run-cell.ps1` | one cell = K x depth x cold start x window |
-| `scripts/run-breadth.ps1` | steady-state enumeration vs K - **superseded and unrun**; see Finding 2, the per-tree services are reminder-birthed so a steady-state sweep samples the wrong regime |
+| `scripts/run-breadth.ps1` | steady-state enumeration vs K - **superseded and unrun**; see finding 1 above, the per-tree services are reminder-birthed so a steady-state sweep samples the wrong regime |
 | `scripts/run-birth-curve.ps1` | **cold-start birth curve** - the experiment that targets the storm regime |
 | `scripts/run-host-pressure.ps1` | cold start at fixed K while a throwaway burner contends for the host |
 | `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers (41) |
@@ -213,7 +323,7 @@ because that is the variable that actually moved.
 **This does not confirm host contention as the mechanism.** `run-host-pressure.ps1`
 manufactured 7.9 burner cores plus three I/O writers at K=20 and produced zero
 timeouts, with the rig's silo still at 0.13-0.64 cores - the host had headroom
-at 16 cores, so the silo was never genuinely starved. Finding 7 closes that gap
+at 16 cores, so the silo was never genuinely starved. Finding 5 closes that gap
 and the answer is still negative.
 
 What can be said without qualification is the negative: **the
@@ -221,7 +331,7 @@ What can be said without qualification is the negative: **the
 4.25x the live tree count and ~2x the live registry load, three of four cold
 starts were entirely clean.
 
-### Finding 7: scale and host CPU saturation, jointly, do not reproduce it either
+### Finding 5: scale and host CPU saturation, jointly, do not reproduce it either
 
 Finding 4's pressure arm left one gap: 7.9 burner cores on a 16-core host is not
 saturation, so a clean result there proves only that an unsaturated host is
@@ -250,37 +360,39 @@ here**: inducing host-wide memory pressure would put the protected
 `repocontextcontainer-repocontext` container at risk, which the isolation rule
 forbids without qualification. It is recorded as an open lead, not as a result.
 
-### Finding 5: when it does storm, it is served slowly, not never served
+### Finding 6: when it does storm, it is served slowly, not never served
 
-The storm census from `birth-K80`, after the attribution fix below:
+**The classification table is [above the fold](#the-signature-test---use-this-before-attributing-any-registry-storm)
+and is the reusable artefact; this section records only what is not there.**
+
+Timing, which the summary table omits:
 
 | | live estate | `birth-K80` |
 |---|---|---|
-| total | 103 | 28 |
-| on `latticeregistry/_lattice_trees` | 103 | 26 |
-| never served (no status clause) | 103 | 2 |
-| served slowly | 0 | 26 |
-| members | `ResolveAsync` 49, `GetEntryAsync` 46, `GetShardMapAsync` 8 | `RegisterAsync` 10, `GetAllTreeIdsAsync` 8, `GetEntryAsync` 4, `ResolveAsync` 4 |
-| interleaved members | 100% | 29% |
 | window | ~2 min, ~5 min after start | t+70 s to t+252 s, then zero |
 
-These are **different failures**, and the difference is the Phase 2
-discriminator:
+Both are bounded windows followed by flat zero, which is the one respect in
+which the rig genuinely resembles the live estate. It is also the weakest of the
+available similarities, and on its own it misled the first reading of this rig -
+a bounded window is what *any* transient produces, so it does not discriminate
+between mechanisms and should not be cited as if it does.
 
-- Live is 100% never-served on members that all carry `[AlwaysInterleave]`. An
-  interleaved call cannot queue behind another interleaved call, so the only
-  thing that can block all of them at once is **activation**, which is not
-  interleavable. That is consistent with activation-blocking.
-- The rig's storm is 93% served-slowly and 64% on **non-interleaved** members
-  (`RegisterAsync`, `GetAllTreeIdsAsync`), with the grain's own diagnostics
-  reporting `NumRunning=3 NonReentrancyQueueSize=4`. That is **turn-token
-  contention**, a different mechanism with a different remedy.
+The discriminating readings are never-served-vs-served-slowly and
+interleaved-vs-not, and they say the two storms are **different failures**:
+turn-token contention here, something that is not turn-token contention there.
+
+An earlier revision of this section concluded from the live estate's
+never-served-on-interleaved population that "the only thing that can block all
+of them at once is activation". **That was too strong.** It correctly excludes
+turn-token contention, but activation is not the only mechanism beneath it - any
+process-wide stall blocks interleaved and non-interleaved members alike. See
+[what that reading does and does not license](#what-the-never-served-on-interleaved-reading-does-and-does-not-license).
 
 So the rig has not reproduced the live storm. It has produced an adjacent
 saturation that is distinguishable from it, and the instrument is what makes
 them distinguishable.
 
-### Finding 6: the timeout parser attributed every storm to its caller
+### Finding 7: the timeout parser attributed every storm to its caller
 
 Worth recording because it nearly inverted the result. Orleans renders a request
 as `[<silo> <source>]->[<silo> <target>]`, so source and target are
@@ -302,4 +414,26 @@ timeout previously parsed as an empty member and vanished from the census).
 A parser that guesses is worse than one that fails: the guess is confident,
 plausible, and wrong. `Get-FanInTimeoutTarget` now returns empty fields when it
 cannot find a request descriptor.
+
+## Arms deliberately not run
+
+Recorded so a future session does not rebuild them believing they are gaps.
+
+**Sustained-load steady-state hold (originally contention arm (b)).** This was
+to hold load for 30 minutes without a restart, testing whether the
+"saturates at cold start only, healthy thereafter" characterisation is true at
+all. **Retired: the live estate has already run a better version of it.** Four
+hours of uninterrupted steady state on the protected container - 243,934
+registry calls at 17.01 calls/s across one activation, 46 faulted (0.019%), and
+**zero** timeouts, against real trees, real views, real materialiser pins and
+`txregistry` traffic this driver never generates. A synthetic 30-minute hold
+would be a weaker instance of an experiment that has run at longer duration and
+higher fidelity. Note the denominator: that is not "zero because idle".
+
+**Host memory pressure.** The one condition separating the single storming run
+from every clean cell since is that its neighbour sat at 99.1% of a 12 GiB
+memory cap, not merely busy on CPU. Inducing that would endanger the protected
+container, which the isolation rule forbids without qualification. It does not
+need inducing in any case - the protected container is itself the instrument,
+and its own runtime counters are the place to look. Open lead, not a result.
 
