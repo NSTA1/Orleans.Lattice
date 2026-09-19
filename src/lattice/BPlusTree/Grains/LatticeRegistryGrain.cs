@@ -388,7 +388,15 @@ internal sealed class LatticeRegistryGrain(
         var end = scoped ? LatticeKeyRange.PrefixUpperBound(prefix!) : null;
 
         var keys = new List<string>();
-        await foreach (var key in Registry.KeysAsync(start, end))
+        // ScanKeysAsync, not the raw KeysAsync primitive. The registry tree is
+        // backed by LatticeGrain, which is [StatelessWorker], so a MoveNext can
+        // be routed to a sibling worker activation that holds no state for this
+        // enumerator and the scan aborts - a steady-state background rate that
+        // rises with concurrency, not a rare failover event, and one a
+        // single-page scan is fully exposed to. The wrapper reopens and resumes
+        // from the successor of the last yielded key, so the catalog it returns
+        // has no duplicates and no gaps.
+        await foreach (var key in Registry.ScanKeysAsync(start, end))
         {
             // The reserved system-tree namespace is never part of the catalog,
             // whether or not the scan was scoped. Kept inside the loop so a
