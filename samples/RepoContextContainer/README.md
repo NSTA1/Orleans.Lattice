@@ -60,20 +60,50 @@ claims, and why you must not enable it in the middle of a measurement.
 ## Prerequisites
 
 - Docker with Compose v2.
-- Memory: budget at least 12 GiB for the host container, and give the Docker VM
-  headroom above that. This is much more than a default allocation. Measured on
-  a ~8000-file index, steady-state working set settled at about 10.2 GiB; a
-  single-variable run differing only in the memory limit produced 756
-  OutOfMemoryException and 528 failed grain activations at 4 GiB, and zero of
-  each at 12 GiB (issue #2364). Under-provisioning does not present as memory
-  pressure: a cgroup limit becomes the .NET GC heap hard limit, so the process is
-  never OOM-killed and there is no restart, exit code or resource event. The
-  visible symptom is a STORAGE error while reading grain state, because the
-  allocation that fails is a leaf-snapshot deserialisation; the leaf then
-  activates cold and replays its whole WAL window, raising pressure further. The
+- Memory: derive the grant with
+  [`scripts/New-TuningEnv.ps1`](scripts/New-TuningEnv.ps1) (issue #2779) rather
+  than copying a figure from here. This is much more than a default Docker VM
+  allocation, so give the VM headroom above whatever the script derives. **Two
+  figures matter and they are not the same number.** *Steady state* is fitted at
+  3 GiB plus 1 MB per indexed file, so a ~8,200-file index settles near 11 GiB.
+  *The reclamation peak* is what a box costs to **reach** that steady state, and
+  it is higher: on an 8,224-file index whose WAL garbage collection had been
+  blocked, releasing the backlog ran at 450-590% CPU and drove the working set to
+  13.23 GiB before turning over at 12.84 GiB, while a 12 GiB limit crash-looped
+  twice in 16 minutes (issue #3252). An earlier revision of this list recommended
+  "at least 12 GiB" against a 10.2 GiB steady state; **both figures are
+  withdrawn.** The peak is a *migration* cost paid once, the first time a backlog
+  of stuck WAL is released, so an operator upgrading into a WAL GC fix needs more
+  headroom than one already running healthy.
+- Memory, two reading notes that decide whether the numbers above mean anything.
+  A working set measured under a generous cap is an **upper bound on need, not a
+  requirement** - .NET collects less eagerly the further it is from its ceiling,
+  so 13.23 GiB observed at an 18 GiB grant does not establish that 13.23 GiB is
+  needed; what is established is that 12 GiB is not enough for that corpus during
+  reclamation, because it crash-looped rather than ran slowly. And **the grant is
+  not the ceiling that throws**: .NET applies its default
+  `GCHeapHardLimitPercent` to a container limit, so the managed heap ceiling is
+  about 75% of the grant - 12 GiB grants 9 GiB, 18 GiB grants 13.5 GiB. That
+  conversion is why 12 looked sufficient.
+- Memory: under-provisioning does not present as memory pressure. A cgroup limit
+  becomes the .NET GC heap hard limit, so the process is never OOM-killed and
+  there is no restart, exit code or resource event. The visible symptom is a
+  STORAGE error while reading grain state, because the allocation that fails is a
+  leaf-snapshot deserialisation; the leaf then activates cold and replays its
+  whole WAL window, raising pressure further (issue #2364). The
   `orleans.lattice.leaf.snapshot.load_failures` counter names the real cause
-  directly (`reason=resource_exhausted`). No limit is set in the sample compose
-  file on purpose - measure your own corpus rather than copying 12.
+  directly (`reason=resource_exhausted`), but it only fires once an allocation
+  has **already** failed, so it reports an arrival rather than warning of an
+  approach. Alert instead on the signals that engage *before* exhaustion:
+  `lattice_repocontext_heap_committed_bytes /
+  lattice_repocontext_heap_limit_bytes` for heap-ceiling adherence (check
+  `lattice_repocontext_heap_high_load_threshold_reachable` first - a `0` means
+  the runtime's own pressure threshold can never fire, issue #3133),
+  `orleans.lattice.wal.replay.permit_adaptations` with
+  `outcome=withheld, trigger=occupancy` for the proactive replay-concurrency
+  backpressure, and `orleans.lattice.leaf.snapshot.hydration_admissions` with
+  `outcome=queued`. All are zero-primed, so a flat zero is a measured zero and an
+  absent series means the running image predates the instrument.
 - Build context differs per image: the host image's is the REPOSITORY ROOT (it
   ProjectReferences the just-built `src/` bits), so its service sets
   `context: ../..`; the embedder builds from its own `apps/embedding-onnx`

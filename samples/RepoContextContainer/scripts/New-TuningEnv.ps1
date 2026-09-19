@@ -220,6 +220,34 @@ $FLOOR_BYTES = 6GB
 # POLICY. Headroom above the fitted requirement. .NET sizes its heap hard limit from the
 # cgroup limit and collects harder as it approaches it, so a grant at exactly the
 # requirement trades throughput for a cap that is technically sufficient.
+#
+# THE RECLAMATION TRANSIENT IS NOT IN THE MODEL ABOVE, AND THIS BAND IS THE ONLY THING
+# COVERING IT (issue #3252). FIXED_OVERHEAD_BYTES and PER_FILE_BYTES were fitted against
+# a STEADY-STATE plateau, which by construction excludes the cost of the work a box does
+# to REACH steady state. The expensive instance of that work is the first WAL garbage
+# collection pass after a backlog of stuck WAL is released: measured at 450-590% CPU,
+# driving the container working set to 13.23 GiB on an 8,224-file corpus whose derived
+# grant is 13.26 GiB. It completed, and the working set turned over rather than
+# ratcheting, so the transient is bounded - but it consumed essentially the whole of
+# this 20% band, leaving about 30 MiB of the margin that exists so a grant is not
+# sitting at exactly its requirement.
+#
+# THE VALUE IS DELIBERATELY UNCHANGED, AND THAT IS A JUDGEMENT RATHER THAN AN OVERSIGHT.
+# Raising it on this evidence would repeat the error the two fitted constants above
+# already warn about at length: one corpus, one host, one run, and - decisively - no run
+# at the derived 13.26 GiB grant at all. The 13.23 GiB figure was measured under an 18
+# GiB cap, and a working set measured under a generous cap is an upper bound on need
+# rather than a requirement, because .NET collects less eagerly the further it sits from
+# its ceiling. Fitting a policy constant to it would be fitting to the cap.
+#
+# WHAT AN OPERATOR SHOULD DO MEANWHILE. The transient is a MIGRATION cost, paid once, on
+# the first run after upgrading into a WAL GC fix. Grant above the derived figure for
+# that run, then re-derive. A 12 GiB grant on the corpus above crash-looped twice in 16
+# minutes; an 18 GiB grant completed clean.
+#
+# FALSIFIER, and it is the measurement that would settle whether this band is enough: a
+# run at exactly the derived grant, across a release of stuck WAL, on a corpus of known
+# size. A clean completion confirms 20%; an OutOfMemoryException wave refits it.
 $HEADROOM_FRACTION = 0.20
 
 # ---------------------------------------------------------------------------
