@@ -320,16 +320,31 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? PartitionCursor(int partition) =>
             floorResult.IsPartitionBlocked(partition) ? null : floorResult.Floor;
 
+        // The offset floor a given WAL partition trims against (issue #3178).
+        //
+        // Previously a single tree-wide minimum was applied to every partition.
+        // That coupled each partition's retention to every other partition's
+        // slowest pin, and because a leaf's pin for partition p only advances
+        // when an entry is appended to partition p, a partition that had
+        // converged and then fully drained held its terminal checkpoint
+        // permanently and capped every sibling partition's scan forever. No
+        // reactivation could lift it: the holding partition is empty by
+        // construction, so there is nothing to replay and nothing to advance
+        // over. See MaterialiserOffsetCoverage.FloorFor for the safety argument
+        // and for the fail-closed cases that still fall back to the tree-wide
+        // minimum.
+        long? PartitionOffsetFloor(int partition) => offsetCoverage.FloorFor(partition);
+
         // The offset-space entitlement a given WAL partition trims against
         // (issue #3172), or null where the offset axis may not grant anything.
         //
         // Three independent conditions must all hold, and each is a fail-closed
         // gate rather than a refinement:
         //
-        //   1. A durable offset floor was actually computed this pass. A null
-        //      floor - an unreachable pin store, a host that reports no offsets,
-        //      an all-"-1" pin set - admits NOTHING, leaving the predicate
-        //      byte-identical to its pre-#3172 behaviour.
+        //   1. A durable offset floor was actually computed this pass for THIS
+        //      partition. A null floor - an unreachable pin store, a host that
+        //      reports no offsets, an all-"-1" pin set - admits NOTHING, leaving
+        //      the predicate byte-identical to its pre-#3172 behaviour.
         //   2. The uncovered-consumer cursor was computed over both retention
         //      populations. Where ApplyDurableMaterialiserFloorAsync took an
         //      early exit it has not established who the floor fails to speak
@@ -341,15 +356,19 @@ public sealed class LatticeWalGc(
         //      the floor demonstrably does not speak for it. The cursor branch is
         //      already disabled there and the offset branch must be too.
         //
-        // The Floor carried here is the same tree-wide value the offset-floor
-        // STOP below compares against, and the comparisons are exact
-        // complements (stop on `> floor`, admit on `<= floor`), so admission can
-        // never reach an entry the stop would not already have walked past. That
-        // is what keeps the cross-partition conservatism of the single global
-        // minimum intact: it is not re-derived, merely read in the other
-        // direction.
+        // EXACT-COMPLEMENT INVARIANT - load-bearing, and pairwise. The Floor
+        // carried here must be the SAME value the offset-floor STOP below
+        // compares against for the SAME partition, because the two comparisons
+        // are exact complements (stop on `> floor`, admit on `<= floor`). That
+        // is what guarantees admission can never reach an entry the stop would
+        // not already have walked past. Both sides therefore read
+        // PartitionOffsetFloor(partition) and neither reads a tree-wide value.
+        // Do not change one side without the other: admission GRANTS
+        // entitlement rather than subtracting it (see the #3172 note above), so
+        // an admission floor above the stop floor loses data rather than merely
+        // over-retaining.
         WalGcOffsetAdmission? PartitionOffsetAdmission(int partition)
-            => offsetFloor is { } floor
+            => PartitionOffsetFloor(partition) is { } floor
                 && floorResult.UncoveredCursorComputed
                 && !floorResult.IsPartitionBlocked(partition)
                     ? new WalGcOffsetAdmission(floor, floorResult.UncoveredCursor)
@@ -461,7 +480,7 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, PartitionOffsetFloor(partition), PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, shardScan.StopReason);
@@ -1067,6 +1086,55 @@ public sealed class LatticeWalGc(
     }
 
     /// <summary>
+    /// Extracts the WAL partition a materialiser pin's consumer id speaks for
+    /// (issue #3178). The multi-partition id shape is
+    /// <c>_lattice_materialiser_{treeId}_{leafGrainId}_{partition}</c>; the
+    /// single-partition shape omits the suffix entirely.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately strict, because the cost of a false positive is a
+    /// relaxation of a retention floor. A trailing run of ASCII digits is only
+    /// accepted when it is non-empty, parses as a non-negative
+    /// <see cref="int"/>, and carries no redundant leading zero (so
+    /// <c>"_07"</c> is refused rather than read as partition 7). Anything else
+    /// - no underscore, an empty or non-numeric suffix, an overflowing value -
+    /// returns <see langword="false"/>, and the caller then treats the pin as
+    /// unattributable and lets it constrain every partition.
+    /// </remarks>
+    internal static bool TryParseConsumerPartition(string consumerId, out int partition)
+    {
+        partition = -1;
+        if (string.IsNullOrEmpty(consumerId))
+        {
+            return false;
+        }
+
+        var separator = consumerId.LastIndexOf('_');
+        if (separator < 0 || separator == consumerId.Length - 1)
+        {
+            return false;
+        }
+
+        var suffix = consumerId.AsSpan(separator + 1);
+        foreach (var c in suffix)
+        {
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+        }
+
+        // "0" is legitimate; "00" or "07" is not a canonical partition suffix
+        // and is far more likely to be part of a grain id than a partition.
+        if (suffix.Length > 1 && suffix[0] == '0')
+        {
+            return false;
+        }
+
+        return int.TryParse(suffix, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out partition);
+    }
+
+    /// <summary>
     /// Computes the offset-space retention floor for <paramref name="treeName"/>:
     /// the lowest leaf-materialiser checkpoint offset across every pin shard. The
     /// WAL GC must never trim an entry at or above this offset, because a leaf
@@ -1121,6 +1189,21 @@ public sealed class LatticeWalGc(
 
             long? floor = null;
             HashSet<string>? covered = null;
+
+            // Per-partition attribution of the SAME minimum (issue #3178).
+            // Built alongside the tree-wide floor, never instead of it: `floor`
+            // and `covered` below are computed exactly as before, so every
+            // consumer of them - ApplyDurableMaterialiserFloorAsync's
+            // covered/uncovered split in particular - is unchanged.
+            //
+            // `unattributed` is the fail-closed channel. A consumer id with no
+            // parseable partition suffix (the legacy single-partition shape,
+            // `_lattice_materialiser_{treeId}_{leafGrainId}`) could speak for
+            // any partition, so it is folded into EVERY partition's floor at
+            // the end rather than being dropped.
+            Dictionary<int, long>? byPartition = null;
+            long? unattributed = null;
+
             foreach (var (consumerId, offset) in offsets)
             {
                 // Skip the "-1" sentinel: a consumer reports -1 when it has no
@@ -1137,6 +1220,13 @@ public sealed class LatticeWalGc(
                 // trim for the whole tree - the empty-partition case reports -1
                 // indefinitely and legitimately - so only real checkpoints
                 // (offset >= 0) constrain the offset floor.
+                //
+                // Note this sentinel does NOT catch the converged-then-drained
+                // partition that issue #3178 is about. Such a partition was
+                // written, was fully consumed, and was then trimmed to nothing;
+                // its leaves hold a REAL durable checkpoint (offset >= 0) at the
+                // partition's terminal offset, not -1. The gap is in the
+                // predicate, not an oversight about empty partitions in general.
                 if (offset < 0)
                 {
                     continue;
@@ -1154,9 +1244,37 @@ public sealed class LatticeWalGc(
                 {
                     floor = offset;
                 }
+
+                if (TryParseConsumerPartition(consumerId, out var partition))
+                {
+                    byPartition ??= new Dictionary<int, long>();
+                    if (!byPartition.TryGetValue(partition, out var partitionFloor) || offset < partitionFloor)
+                    {
+                        byPartition[partition] = offset;
+                    }
+                }
+                else if (unattributed is not { } currentUnattributed || offset < currentUnattributed)
+                {
+                    unattributed = offset;
+                }
             }
 
-            return new MaterialiserOffsetCoverage(floor, covered);
+            // Fold the unattributable minimum into every partition. Without
+            // this an unsuffixed pin would constrain nothing once any suffixed
+            // pin existed, which would be a relaxation this change does not
+            // intend and cannot justify.
+            if (byPartition is not null && unattributed is { } unattributedFloor)
+            {
+                foreach (var partition in byPartition.Keys.ToArray())
+                {
+                    if (unattributedFloor < byPartition[partition])
+                    {
+                        byPartition[partition] = unattributedFloor;
+                    }
+                }
+            }
+
+            return new MaterialiserOffsetCoverage(floor, covered, byPartition);
         }
         catch
         {
@@ -1219,13 +1337,55 @@ public sealed class LatticeWalGc(
     /// </param>
     private readonly record struct MaterialiserOffsetCoverage(
         long? Floor,
-        IReadOnlySet<string>? CoveredConsumerIds)
+        IReadOnlySet<string>? CoveredConsumerIds,
+        IReadOnlyDictionary<int, long>? FloorsByPartition = null)
     {
         /// <summary>
         /// No offset floor on this pass, and therefore no consumer covered by
         /// one. The fail-closed value.
         /// </summary>
-        public static MaterialiserOffsetCoverage None => new(null, null);
+        public static MaterialiserOffsetCoverage None => new(null, null, null);
+
+        /// <summary>
+        /// The offset floor WAL partition <paramref name="partition"/> trims
+        /// against (issue #3178).
+        /// <para>
+        /// A leaf's materialiser pin for partition <c>p</c> only ever advances
+        /// when an entry is appended to partition <c>p</c>, so a partition that
+        /// has converged and then fully drained holds its terminal checkpoint
+        /// permanently. Minimised across partitions, that terminal value caps
+        /// every OTHER partition's trim scan forever, and no amount of
+        /// reactivating the holding leaf can lift it - the partition is empty by
+        /// construction, so there is nothing to replay and nothing to advance
+        /// over. Attributing the minimum per partition removes that coupling.
+        /// </para>
+        /// <para>
+        /// Safe because the seam's own safety argument quantifies over LEAVES,
+        /// not partitions: an entry at offset <c>O</c> in partition <c>p</c> is
+        /// only ever replayed by leaves reading partition <c>p</c>
+        /// (<c>ReplayPartitionAsync</c> resolves an
+        /// <c>ILeafReplayCoordinatorGrain</c> keyed <c>{treeId}/{partition}</c>
+        /// and every slice read goes through it), gated by that leaf's
+        /// checkpoint for partition <c>p</c> alone
+        /// (<c>ProjectionCheckpointOffsetsByPartition[p]</c>). The leaf that
+        /// owns <c>O</c> therefore still holds partition <c>p</c>'s minimum
+        /// below <c>O</c> until it genuinely applies. The cross-partition term
+        /// protected nothing, because no leaf reads partition <c>p</c> through
+        /// partition <c>q</c>'s checkpoint.
+        /// </para>
+        /// <para>
+        /// Fails closed to the tree-wide <see cref="Floor"/> in every case it
+        /// cannot attribute: a partition no pin reported on, an unsuffixed
+        /// (legacy single-partition) consumer id, or no per-partition map at
+        /// all. Unattributable pins are additionally folded INTO every
+        /// partition's floor by the builder, so they keep constraining the whole
+        /// tree exactly as before.
+        /// </para>
+        /// </summary>
+        public long? FloorFor(int partition)
+            => FloorsByPartition is { } map && map.TryGetValue(partition, out var partitionFloor)
+                ? partitionFloor
+                : Floor;
     }
 
     /// <summary>
