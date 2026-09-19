@@ -160,6 +160,15 @@ public static class RepoContextEffectiveConfiguration
             RepoContextClaimLeases.MaxLockLeaseSecondsKey,
             RepoContextShutdownBudget.StopGracePeriodKey,
 
+            // The heap admission override (issue #3255). Classified safe because its
+            // value is a byte count and nothing else - the check honours it only on an
+            // exact numeric match against a recorded ceiling, so a value that is not a
+            // plain integer cannot do anything except fail to match. Printing it is the
+            // point: this is the one setting here that suppresses a safety check, and
+            // withholding its value would leave an operator unable to see whether the
+            // figure they set still matches the evidence it was meant to override.
+            RepoContextMemoryAdmission.OverrideKey,
+
             // Not a LATTICE_ key, and deliberately reported anyway: it is the value that
             // sized the oversubscribed WAL replay gate in issue #2279, and a report scoped
             // to this project's own prefix would have missed the most damaging setting in

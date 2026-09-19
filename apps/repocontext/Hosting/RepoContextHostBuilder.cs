@@ -156,6 +156,33 @@ public static class RepoContextHostBuilder
 
         PrepareDataPaths(config);
 
+        // Startup admission, sited here on purpose: immediately after the data paths
+        // are prepared, because that is the first moment the recorded evidence is
+        // reachable, and before any service is registered, so there is exactly one
+        // place that decides whether this process accepts work at the ceiling it has
+        // been given. Putting it any later would mean refusing after partially
+        // building a host; putting it at the call sites that allocate would scatter
+        // the decision across every one of them. See RepoContextMemoryAdmission for
+        // why the refusal rests only on evidence this deployment recorded about
+        // itself, and why it fails open everywhere else (issue #3255).
+        var heapHistoryPath = RepoContextMemoryHistory.PathIn(config.DataRoot);
+        var lastMemory = RepoContextMemoryHistory.Read(heapHistoryPath);
+        var admission = RepoContextMemoryAdmission.Evaluate(
+            GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
+            lastMemory,
+            Environment.GetEnvironmentVariable(RepoContextMemoryAdmission.OverrideKey),
+            heapHistoryPath);
+
+        if (admission.Verdict == RepoContextMemoryVerdict.Refuse)
+        {
+            // Thrown rather than logged-and-continued, and thrown here rather than
+            // reported through readiness: a container that answers 503 for ever is
+            // the failure mode being removed, not a gentler version of it. The
+            // message names both numbers - granted and recorded - because the
+            // failure it replaces named neither.
+            throw new InvalidOperationException(admission.Message);
+        }
+
         // The container's single application listener: the MCP port, bound on all
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
@@ -248,6 +275,39 @@ public static class RepoContextHostBuilder
         // (issues #2543, #2765, #2767).
         var heapCeilingMeter = new RepoContextHeapCeilingMeter();
         builder.Services.AddSingleton(heapCeilingMeter);
+
+        // What that ceiling turned out to cost: the peak commitment reached and the
+        // margin actually consumed, remembered at its worst rather than sampled at a
+        // moment, and recorded on the data mount so the next process is sized from a
+        // measurement instead of from constants fitted on another host (issue #3255,
+        // item 3).
+        //
+        // The meter is constructed eagerly, like its three neighbours above, so its
+        // observable instruments are published before the first scrape can arrive.
+        // The watch it reads cannot be: it needs a logger, and no logger exists until
+        // the container is built. So the meter reads through a reference that the
+        // watch's own singleton factory fills in, and until then reports the zero its
+        // instrument descriptions already document as "no sample taken yet". The
+        // recorded exhaustion ceiling is read from the history directly, so the
+        // number an operator needs in order to override a refusal is published even
+        // if the watch never starts.
+        RepoContextMemoryWatch? memoryWatch = null;
+        var memoryWatchMeter = new RepoContextMemoryWatchMeter(
+            () => memoryWatch?.Current ?? default,
+            () => lastMemory?.ExhaustedAtLimitBytes);
+        builder.Services.AddSingleton(memoryWatchMeter);
+
+        builder.Services.AddSingleton(sp =>
+        {
+            var watch = new RepoContextMemoryWatch(
+                sp.GetRequiredService<ILogger<RepoContextMemoryWatch>>(),
+                admission,
+                lastMemory,
+                observation => RepoContextMemoryHistory.TryWrite(heapHistoryPath, observation));
+            memoryWatch = watch;
+            return watch;
+        });
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoContextMemoryWatch>());
 
         var isAzure = config.Profile == DurabilityProfile.Azure;
 

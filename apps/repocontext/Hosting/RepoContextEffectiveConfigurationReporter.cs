@@ -256,6 +256,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextBackup.RetentionKeepLastKey,
         RepoContextBackup.RetentionMaxAgeDaysKey,
         RepoContextBackup.RestoreBackupIdKey,
+        RepoContextMemoryAdmission.OverrideKey,
     ];
 
     /// <summary>
@@ -373,6 +374,17 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             // running process believe.
             DescribeGrant(),
 
+            // The admission override (issue #3255, item 2), reported on every start
+            // whether set or not. It is the only setting in this list that suppresses a
+            // safety check, and a knob that disables a check while being invisible when
+            // engaged is precisely the unsupported-claim-about-configuration shape this
+            // report exists to end. The value is echoed verbatim rather than normalised,
+            // because the check honours it only on an exact match against a recorded
+            // ceiling - so the exact characters are the diagnostic, and an off-by-one is
+            // meant to be visible here rather than inferred from the refusal it failed
+            // to suppress.
+            DescribeAdmissionOverride(),
+
             // A runtime fact rather than a setting, and reported for that reason: nothing
             // in this list would have exposed it. There is no default to compare against,
             // because the value the runtime would have chosen unaided is not observable
@@ -473,6 +485,23 @@ public sealed class RepoContextEffectiveConfigurationReporter(
             static string Ceiling(long? value) => value is null
                 ? "disabled"
                 : value.Value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // Read straight from the environment rather than through IConfiguration, and
+        // deliberately: that is the read RepoContextMemoryAdmission itself performs, and
+        // a report sourcing a value differently from the code that acted on it can
+        // disagree with it. A report that can disagree with the process it describes is
+        // worse than no report, because it is believed.
+        static string DescribeAdmissionOverride()
+        {
+            const string Unset = "unset";
+            var declared = Environment.GetEnvironmentVariable(RepoContextMemoryAdmission.OverrideKey);
+
+            return RepoContextEffectiveConfiguration.DescribeSetting(
+                RepoContextMemoryAdmission.OverrideKey,
+                string.IsNullOrWhiteSpace(declared) ? Unset : declared,
+                Unset,
+                RepoContextEffectiveConfiguration.ProvenanceOf(declared));
         }
 
         string DescribeGrant()
