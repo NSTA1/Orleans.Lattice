@@ -915,25 +915,82 @@ public partial class BPlusLeafGrainTests
                 ["seven"] = 7, ["eight"] = 8, ["nine"] = 9, ["ten"] = 10,
             };
 
-            var claim = Regex.Match(
-                description!,
-                @"\bAll (three|four|five|six|seven|eight|nine|ten) arms\b",
-                RegexOptions.IgnoreCase);
-
-            Assert.That(claim.Success, Is.True,
-                "the description no longer makes an 'All N arms' zero-priming claim. That "
-                + "claim is what tells an operator an absent series means the path never ran, "
-                + "so if it was deliberately reworded, update this guard rather than deleting "
-                + "it - a silently dropped claim is how the arity went stale in the first place");
-
-            if (claim.Success)
+            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                Assert.That(counts[claim.Groups[1].Value], Is.EqualTo(armed.Length),
-                    $"the description claims '{claim.Value}' but {armed.Length} arms are armed. "
-                    + "This is the exact defect MetricDocArmArityTests would have caught had "
-                    + "LatticeMetrics.cs been in its scan scope - issue #3194");
-            }
+                ["third"] = 3, ["fourth"] = 4, ["fifth"] = 5, ["sixth"] = 6,
+                ["seventh"] = 7, ["eighth"] = 8, ["ninth"] = 9, ["tenth"] = 10,
+            };
+
+            // `rearmed` is the sole LIFECYCLE arm: it co-occurs with a terminal
+            // arm rather than excluding one, so it is in the primed set but not
+            // in the partition. Named from the production static rather than
+            // subtracted as a bare 1, so that the terminal count below stays
+            // derived. This set is a TRIPWIRE, not a derivation - there is no
+            // way to tell a lifecycle arm from a terminal one by looking at the
+            // array, so a second lifecycle arm added without being listed here
+            // reddens the terminal-arity assertion with a misleading message
+            // rather than passing. Reddening is the point; the message is the
+            // cost.
+            var lifecycleArms = new[] { LatticeMetrics.CoverageRepairRearmed.Value?.ToString() };
+            var terminalArms = armed.Where(a => !lifecycleArms.Contains(a)).ToArray();
+
+            Assert.That(terminalArms, Is.Not.Empty,
+                "every armed arm was classified as lifecycle, so the terminal-arity "
+                + "assertions below would pass vacuously - issue #3194");
+
+            // Three numeric claims live in this one string, and guarding only
+            // the first reproduces the very defect this test exists to catch:
+            // a claim that reddens in one place while retaining its authority
+            // everywhere the guard does not look. Add an eighth arm and all
+            // three must redden together.
+            AssertArityClaim(
+                description!, @"\bAll (three|four|five|six|seven|eight|nine|ten) arms\b",
+                counts, armed.Length, "zero-priming (the whole armed set)");
+
+            AssertArityClaim(
+                description!, @"\b(three|four|five|six|seven|eight|nine|ten) terminal arms\b",
+                counts, terminalArms.Length, "the terminal partition (armed set minus lifecycle arms)");
+
+            AssertArityClaim(
+                description!, @"\bthe (third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) tag value\b",
+                ordinals, armed.Length, "the ordinal position of the lifecycle arm in the armed set");
         });
+    }
+
+    /// <summary>
+    /// Asserts that a single numeric claim in an instrument description matches
+    /// the count it is describing. Factored out because the coverage_repairs
+    /// description makes three such claims over two different sets, and a guard
+    /// that covered only one of them would be the same partial-coverage defect
+    /// it is meant to prevent, one level down.
+    /// </summary>
+    private static void AssertArityClaim(
+        string description,
+        string pattern,
+        Dictionary<string, int> words,
+        int expected,
+        string what)
+    {
+        var claims = Regex.Matches(description, pattern, RegexOptions.IgnoreCase);
+
+        Assert.That(claims.Count, Is.GreaterThan(0),
+            $"the coverage_repairs description no longer makes its {what} claim "
+            + $"(pattern '{pattern}'). If it was deliberately reworded, update this guard "
+            + "rather than deleting it - a silently dropped claim is how the arity went "
+            + "stale in the first place - issue #3194");
+
+        // EVERY occurrence, not just the first. The description states the
+        // terminal arity twice, so a Regex.Match would have let somebody update
+        // one and leave the other stale - the same partial-coverage defect this
+        // test exists to catch, two levels down.
+        foreach (Match claim in claims)
+        {
+            Assert.That(words[claim.Groups[1].Value], Is.EqualTo(expected),
+                $"the coverage_repairs description says '{claim.Value}' but the correct value "
+                + $"for {what} is {expected}. That string is the HELP text on /metrics, and this "
+                + "is the exact defect MetricDocArmArityTests would have caught had "
+                + "LatticeMetrics.cs been in its scan scope - issue #3194");
+        }
     }
 
     /// <summary>
