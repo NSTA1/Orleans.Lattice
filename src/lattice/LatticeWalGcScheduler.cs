@@ -408,14 +408,19 @@ internal sealed class LatticeWalGcScheduler(
     /// clear the episode on the rest. That is issue #2772 rebuilt: the episode
     /// carries the attempt budget, the abandoned flag and the backoff cycle, so
     /// clearing it on 11 of every 15 passes would destroy the give-up budget
-    /// before it could ever be spent.
+    /// before it could ever be spent. A tree admitted on the stranded disjunct
+    /// alone (issue #3229) relaxes toward <c>StrandedRelaxCeiling</c> rather
+    /// than sitting on the floor, so it sweeps closer to every pass and leans on
+    /// the cache less - but it is the same cache and the same reasoning, and the
+    /// three-valued return below is what keeps both populations safe.
     /// </para>
     /// <para>
     /// <b>It cannot outlive the condition that justified it.</b> The entry is
-    /// replaced by every classifying sweep, dropped when the tree stops
-    /// breaching its byte ceiling, and dropped when the tree becomes genuinely
-    /// floor-blocked - at which point the blocked arm's own report is a better
-    /// answer to the same question than a sample of it.
+    /// replaced by every classifying sweep, dropped when the tree is neither
+    /// breaching its byte ceiling nor holding a retained backlog (issue #3229),
+    /// and dropped when the tree becomes genuinely floor-blocked - at which
+    /// point the blocked arm's own report is a better answer to the same
+    /// question than a sample of it.
     /// </para>
     /// <para>
     /// <b>A stale id cannot starve a live one.</b> A consumer repaired on the
@@ -2176,7 +2181,64 @@ internal sealed class LatticeWalGcScheduler(
                 // MaxFloorHolderClassificationsPerSweep reads and passed only
                 // here, so the blocked arm's once-per-consumer-per-episode
                 // classification is untouched.
-                if (overCeiling)
+                //
+                // `stranded` is OR-ed in because the gate above it was the last
+                // place the remedy was still keyed to configuration rather than
+                // to evidence (issue #3229), and it is the root cause of #3094.
+                // Two distinct harms, both measured on the deployed container:
+                //
+                //  - On a stock silo `overCeiling` is false for the life of the
+                //    process, because it is decided by WalMaxRetainedBytes and
+                //    that option HAS NO DEFAULT - the same fact the comment on
+                //    `stranded` above states in terms. So the sweep never ran
+                //    with classifyFloorHolders, _repairableFloorHolders was
+                //    never populated, and the drive below never touched
+                //    anything. Twelve of nineteen trees read
+                //    blocked_leaf_reactivations_total{outcome="attempted"} = 0
+                //    and floor_holder_classification{classified} = 0, one of
+                //    them holding 453 MB. That zero is a reading rather than an
+                //    absence because the same instrument, in the same process,
+                //    reads non-zero on the one tree that did have a ceiling
+                //    configured - so the series is being written and these trees
+                //    are being counted at zero, not failing to report.
+                //    Counted the other way round, by the disjunct rather than by
+                //    the outcome, FIFTEEN of nineteen trees sit in the
+                //    stranded > 0, over_ceiling = 0 cell. That is the population
+                //    this gate newly admits, and it is most of the estate rather
+                //    than an edge case.
+                //
+                //  - On a configured silo the else arm below deleted the
+                //    candidate set the instant the tree fell under its ceiling,
+                //    which is the instant the repair SUCCEEDED. That made the
+                //    remedy a hysteresis oscillator that switches itself off as
+                //    soon as it starts working: reclaim and ratio-triggered
+                //    compaction advanced together while over ceiling and both
+                //    froze for 25+ minutes at the sample the tree dropped under
+                //    it, while the WAL regrew at 4.29 MB/min. So the drain phase
+                //    is not evidence the tree is healthy - it is the cause of
+                //    the remedy being withdrawn, and the peak it regrows to is
+                //    higher than the one it started from.
+                //
+                // `stranded` is the right second disjunct rather than a new
+                // signal invented here. It is #3213's configuration-free backlog
+                // evidence, decided by the trim scan itself; it is already
+                // trusted to name this population through ClassifyPass and to
+                // hold its cadence through StrandedRelaxCeiling; and it was
+                // simply never carried the one further step to the remedy. On
+                // the tree above it reads 254 -> 368 and climbing across the
+                // very window in which over_ceiling is frozen at 39, so the
+                // disjunct being added here was already true, already measured,
+                // and already being ignored on exactly the tree that needs it.
+                //
+                // Nothing downstream of this gate consults byte accounting, so a
+                // stranded tree with no ByteCeiling reaches it intact:
+                // SweepOrphanedMaterialiserPinsAsync reads the pin store and the
+                // pin offsets, ClassifyFloorHolderPinsAsync reads durable leaf
+                // state, and ObserveAndHealBlockedTreeAsync iterates consumer
+                // ids. The report's byte fields are read at exactly two sites in
+                // this file - `overCeiling` above and PublishBacklogBytes, which
+                // is already explicitly two-branch about an absent sample.
+                if (overCeiling || stranded)
                 {
                     var swept = await SweepOrphanedMaterialiserPinsAsync(
                         treeId, treeTag, tenantTag, stoppingToken, classifyFloorHolders: true)
@@ -2203,9 +2265,18 @@ internal sealed class LatticeWalGcScheduler(
                 }
                 else
                 {
-                    // No breach, so the condition that licensed the sample is
-                    // gone and it will not be refreshed. Drop it rather than
+                    // Neither breaching nor stranded, which after issue #3229 is
+                    // the genuinely healthy case and nothing else: the trim scan
+                    // ran, reclaimed what it was entitled to, and met no WAL it
+                    // had to retain. The condition that licensed the sample is
+                    // gone and will not be refreshed, so drop it rather than
                     // drive an ever-staler set.
+                    //
+                    // This arm is deliberately kept. The fix above is not "never
+                    // forget candidates" - a tree that has stopped holding a
+                    // backlog must still retire its sample, or the drive would
+                    // spend touches on a healthy tree forever off a classification
+                    // no sweep will ever replace.
                     _repairableFloorHolders.Remove(treeId);
                 }
 
