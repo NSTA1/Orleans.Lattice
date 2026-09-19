@@ -341,15 +341,51 @@ services:
       # so a value that was ignored is visible rather than merely assumed.
       # MEMORY. This box needs FAR more than a default Docker VM allocation, and
       # under-provisioning it fails in a way that does not look like memory
-      # (issue #2364). Measured on a ~8000-file index: steady-state working set
-      # settled at about 10.2 GiB, so budget at least 12 GiB for the host
-      # container. A single-variable run - same image, same volume, same corpus,
-      # only the limit differing - produced 756 OutOfMemoryException and 528
-      # failed grain activations at 4 GiB, and zero of each at 12 GiB.
+      # (issue #2364). TWO figures matter here and they are NOT the same number:
+      # what the box costs once it is healthy, and what it costs to GET there.
+      #
+      # STEADY STATE. The fitted requirement is 3 GiB fixed plus 1 MB per indexed
+      # file, so a ~8,200-file index settles near 11 GiB. An earlier revision of
+      # this note gave 10.2 GiB and recommended "at least 12 GiB"; both figures
+      # are WITHDRAWN. They predate scripts/New-TuningEnv.ps1 (issue #2779),
+      # which derives the grant from YOUR corpus and clamps it to your host. That
+      # script is the only number to use; nothing in this comment is copyable.
+      #
+      # RECLAMATION PEAK. Steady state excludes the cost of the operation a box
+      # must perform in order to REACH steady state, and that omission is what
+      # made the withdrawn figure unsafe. On an 8,224-file index whose WAL
+      # garbage collection had been blocked, the pass that finally released the
+      # backlog ran at 450-590% CPU and drove the container working set to
+      # 13.23 GiB - above the 12 GiB that was being recommended - before turning
+      # over at 12.84 GiB (issue #3252). At a 12 GiB limit the same corpus
+      # crash-looped twice in 16 minutes (129 then 304 OutOfMemoryException,
+      # ExitCode=0, OOMKilled=false, /health/ready 503); at 18 GiB it completed
+      # clean with zero of either.
+      #
+      # So an operator upgrading INTO a WAL GC fix needs more headroom than one
+      # already running healthy, and needs it ONCE. The peak is a MIGRATION cost
+      # paid the first time a backlog of stuck WAL is released, not a permanent
+      # requirement: provision for it for that run, then re-derive.
+      #
+      # READ THE TWO KINDS OF FIGURE CORRECTLY. A working set measured under a
+      # generous cap is an UPPER BOUND on need, not a requirement - .NET collects
+      # less eagerly the further it sits from its ceiling, so 13.23 GiB observed
+      # at an 18 GiB grant does not establish that 13.23 GiB is needed. What IS
+      # established is that 12 GiB is not enough for this corpus during
+      # reclamation, because that limit crash-looped rather than ran slowly.
+      #
+      # THE GRANT IS NOT THE CEILING THAT THROWS, AND THAT IS WHY 12 LOOKED LIKE
+      # ENOUGH. Under a container memory limit .NET applies its default
+      # GCHeapHardLimitPercent to the grant, so the managed heap ceiling is about
+      # 75% of what you grant: a 12 GiB grant yields a 9 GiB ceiling and an
+      # 18 GiB grant yields 13.5 GiB. Every LIMIT named above is a grant and
+      # every WORKING SET named above is container RSS; neither is comparable
+      # with the other until you apply that 75%.
       #
       # No memory limit is declared here on purpose, for the same reason as the
       # CPU ceiling above: the right number is a property of your corpus, not of
-      # this file. Measure yours rather than copying 12.
+      # this file. Derive yours with scripts/New-TuningEnv.ps1 rather than
+      # copying any figure from this comment.
       #
       # The failure mode is why this is worth stating. A cgroup limit becomes the
       # .NET GC heap HARD limit, so the process is not OOM-killed: there is no
@@ -357,9 +393,36 @@ services:
       # leaf-snapshot deserialisation fails, the snapshot read fails, and the leaf
       # activates COLD and replays its whole WAL window - which raises pressure
       # further. What an operator sees is a STORAGE error, so the box looks slow
-      # and flaky rather than short of memory. Watch
+      # and flaky rather than short of memory.
+      #
+      # WATCH A LEADING INDICATOR, NOT ONLY THE LAGGING ONE.
       # orleans.lattice.leaf.snapshot.load_failures with reason=resource_exhausted
-      # to name it directly.
+      # names the cause directly, but its precondition is that an allocation has
+      # ALREADY failed, so it cannot warn of an approach - only report an
+      # arrival. These three engage BEFORE exhaustion and are what to alert on:
+      #
+      #   lattice_repocontext_heap_committed_bytes
+      #     / lattice_repocontext_heap_limit_bytes
+      #       Heap-ceiling adherence: the direct approach signal, already
+      #       published by this image. Read
+      #       lattice_repocontext_heap_high_load_threshold_reachable FIRST - a 0
+      #       there means the runtime's own pressure threshold sits ABOVE the
+      #       limit and can never fire (issue #3133), which makes this ratio the
+      #       only pressure reading you have.
+      #
+      #   orleans.lattice.wal.replay.permit_adaptations
+      #     with outcome=withheld, trigger=occupancy
+      #       The PROACTIVE replay-concurrency backpressure, which withholds a
+      #       permit at 75% managed-heap occupancy and restores it below 60%. A
+      #       rising withheld rate is the silo reducing concurrency to stay under
+      #       the ceiling, which is the mechanism working rather than a fault.
+      #
+      #   orleans.lattice.leaf.snapshot.hydration_admissions with outcome=queued
+      #       Cold-start hydrations being serialised rather than allowed to
+      #       exhaust the heap together.
+      #
+      # All three are zero-primed, so a flat zero is a MEASURED zero and an
+      # ABSENT series means the running image predates the instrument.
       # GARBAGE COLLECTION. Follows directly from the memory note above, because
       # the hazard is the PAIR (issue #2596): .NET defaults to Workstation GC,
       # which collects a single heap with effectively single-threaded blocking
