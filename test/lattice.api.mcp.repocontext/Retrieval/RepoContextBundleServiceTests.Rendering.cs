@@ -510,14 +510,14 @@ public sealed partial class RepoContextBundleServiceTests
             SemanticIndexRanking(symbolKey),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             AvailableEmbedder());
 
-        var graph = new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]));
+        var graph = new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]), new RepoContextRetrievalLatencyReporter());
         var sessions = new RepoContextSessionStore(grainFactory, Serializer);
 
         return new RepoContextBundleService(
-            search, graph, sessions, grainFactory, Serializer, Counter, NoOpUsageRecorder.Instance);
+            search, graph, sessions, grainFactory, Serializer, Counter, NoOpUsageRecorder.Instance, new RepoContextRetrievalLatencyReporter());
     }
 
     // A tree that also answers the versioned read the store's recall path uses, so a

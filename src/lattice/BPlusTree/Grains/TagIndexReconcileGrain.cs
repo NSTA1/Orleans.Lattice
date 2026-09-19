@@ -95,6 +95,26 @@ internal sealed class TagIndexReconcileGrain(
     protected override bool InProgress => state.State.InProgress;
     protected override string LogContext => $"tag index {IndexName}";
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// This grain's key is the logical index name, not a tree id, so the base
+    /// default would tag the phase-tick failure counter with a value that is
+    /// not a tree name at all. Reports the sibling index tree
+    /// (<c>tag-{indexName}</c>) that the reconciliation sweep's repairs
+    /// actually land in - the same choice
+    /// <c>RepoContextAnnIndexBuildGrain</c> makes in reporting its backing
+    /// vector-index tree.
+    /// </para>
+    /// <para>
+    /// The index tree is the right subject rather than any covered subject
+    /// tree, because a sweep spans every tree the index covers and so has no
+    /// single subject tree to name. The index name remains legible in the tag
+    /// because the tree id contains it verbatim.
+    /// </para>
+    /// </remarks>
+    protected override string MetricsTreeId => string.Concat(IndexTreeIdPrefix, IndexName);
+
     public async Task EnsureScheduleAsync()
     {
         var opts = Options;

@@ -1,0 +1,169 @@
+{
+  "Label": "depth-1281leaves",
+  "ContainerId": "406169b89c73395e0e24b465a4ba564f2d359b5097b667696cc4c2f4e60a44a3",
+  "ContainerName": "lattice-registry-fanin-repocontext-1",
+  "Image": "repocontext-mcp:fanin-rig",
+  "StartedAtUtc": "2026-09-19T14:09:43.0341826Z",
+  "ReadyAtUtc": "2026-09-19T14:09:49.0000000Z",
+  "ReadingAtUtc": "2026-09-19T14:14:40.7521477Z",
+  "RestartCount": 0,
+  "WindowSeconds": 900,
+  "BucketSeconds": 30,
+  "ReadingSpansRestart": {
+    "SpansRestart": false,
+    "StartedAfterBaseline": false,
+    "RestartCount": 0,
+    "BaselineTimeUtc": "2026-09-19T14:09:49Z",
+    "StartedAtUtc": "2026-09-19T14:09:43.0341826Z",
+    "Reason": ""
+  },
+  "TimeoutCensus": {
+    "ReadyAtUtc": "2026-09-19T14:09:49Z",
+    "BucketSeconds": 30,
+    "WindowSeconds": 900,
+    "Total": 0,
+    "TotalOutsideWindow": 0,
+    "NeverServed": 0,
+    "ServedSlowly": 0,
+    "FirstOffsetSeconds": null,
+    "LastOffsetSeconds": null,
+    "Buckets": [],
+    "ByGrain": [],
+    "ByMember": [],
+    "ByCaller": [],
+    "Events": []
+  },
+  "RegistryArms": [
+    {
+      "Operation": "get_all_tree_ids",
+      "Interleaved": false,
+      "AdmittedCalls": 2447,
+      "MeanServiceMs": 3.557,
+      "MeanFanInWidth": 0.0225,
+      "WidthEverExceededOne": true,
+      "AttributionValid": true,
+      "AttributionNote": "width rose above one under load, so the duration arm carries admission information",
+      "TotalServiceMs": 8703.96
+    },
+    {
+      "Operation": "get_entry",
+      "Interleaved": true,
+      "AdmittedCalls": 31011,
+      "MeanServiceMs": 0.6445,
+      "MeanFanInWidth": 1.9631,
+      "WidthEverExceededOne": true,
+      "AttributionValid": true,
+      "AttributionNote": "width rose above one under load, so the duration arm carries admission information",
+      "TotalServiceMs": 19988.14
+    },
+    {
+      "Operation": "get_shard_map",
+      "Interleaved": true,
+      "AdmittedCalls": 7215,
+      "MeanServiceMs": 0.3064,
+      "MeanFanInWidth": 0.8374,
+      "WidthEverExceededOne": true,
+      "AttributionValid": true,
+      "AttributionNote": "width rose above one under load, so the duration arm carries admission information",
+      "TotalServiceMs": 2210.9
+    },
+    {
+      "Operation": "register",
+      "Interleaved": false,
+      "AdmittedCalls": 68,
+      "MeanServiceMs": 1.2626,
+      "MeanFanInWidth": 1.4412,
+      "WidthEverExceededOne": true,
+      "AttributionValid": true,
+      "AttributionNote": "width rose above one under load, so the duration arm carries admission information",
+      "TotalServiceMs": 85.86
+    },
+    {
+      "Operation": "resolve",
+      "Interleaved": true,
+      "AdmittedCalls": 13240,
+      "MeanServiceMs": 1.0144,
+      "MeanFanInWidth": 0.6616,
+      "WidthEverExceededOne": true,
+      "AttributionValid": true,
+      "AttributionNote": "width rose above one under load, so the duration arm carries admission information",
+      "TotalServiceMs": 13430.79
+    }
+  ],
+  "StorageSeries": {
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"hot-shard-monitor\",state_type=\"HotShardMonitorState\"}": 266.35030000000006,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"wal-materialiser-pins\",state_type=\"WalMaterialiserPinState\"}": 5253.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-registry\",state_type=\"ViewRegistryState\"}": 1.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"hot-shard-monitor\",state_type=\"HotShardMonitorState\"}": 309.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tx-registry\",state_type=\"TxRegistryState\"}": 3.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf\",state_type=\"LeafNodeState\"}": 577.6325999999999,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-registry\",state_type=\"ViewRegistryState\"}": 93.5136,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-snapshot\",state_type=\"TreeSnapshotState\"}": 21.59060000000001,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-reshard\",state_type=\"TreeReshardState\"}": 23.6244,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf-snapshot\",state_type=\"LeafSnapshotBlob\"}": 259.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tx-registry\",state_type=\"TxRegistryState\"}": 2.0309,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-merge\",state_type=\"TreeMergeState\"}": 309.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf-snapshot\",state_type=\"LeafSnapshotBlob\"}": 100.00470000000003,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tombstone-compaction\",state_type=\"TombstoneCompactionState\"}": 2.3251999999999997,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-resize\",state_type=\"TreeResizeState\"}": 49.389700000000026,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-checkpoint\",state_type=\"ViewCheckpointState\"}": 1.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shardroot\",state_type=\"ShardRootState\"}": 19847.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shard-healing\",state_type=\"ShardHealingOrchestratorState\"}": 193.9560000000001,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-reshard\",state_type=\"TreeReshardState\"}": 309.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"leaf\",state_type=\"LeafNodeState\"}": 266.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shardroot\",state_type=\"ShardRootState\"}": 2348.9201000000153,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"view-checkpoint\",state_type=\"ViewCheckpointState\"}": 8.543,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"shard-healing\",state_type=\"ShardHealingOrchestratorState\"}": 309.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tombstone-compaction\",state_type=\"TombstoneCompactionState\"}": 3.0,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-resize\",state_type=\"TreeResizeState\"}": 309.0,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"wal-materialiser-pins\",state_type=\"WalMaterialiserPinState\"}": 493.8757999999999,
+    "orleans_storage_read_latency_sum{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-merge\",state_type=\"TreeMergeState\"}": 24.060299999999998,
+    "orleans_storage_read_latency_count{provider_type_name=\"AdoNetGrainStorage\",state_name=\"tree-snapshot\",state_type=\"TreeSnapshotState\"}": 309.0
+  },
+  "HostLoadAtEnd": [
+    {
+      "Name": "lattice-registry-fanin-repocontext-1",
+      "CpuPercent": 29.76,
+      "Cores": 0.298,
+      "Memory": "560.2MiB / 27.24GiB",
+      "BlockIO": "131kB / 35.7MB"
+    },
+    {
+      "Name": "lattice-registry-fanin-embedder-1",
+      "CpuPercent": 0.02,
+      "Cores": 0.0,
+      "Memory": "869.2MiB / 27.24GiB",
+      "BlockIO": "0B / 0B"
+    },
+    {
+      "Name": "repocontextcontainer-repocontext-1",
+      "CpuPercent": 136.88,
+      "Cores": 1.369,
+      "Memory": "10.43GiB / 12GiB",
+      "BlockIO": "337MB / 8.15GB"
+    },
+    {
+      "Name": "repocontextcontainer-embedder-1",
+      "CpuPercent": 0.01,
+      "Cores": 0.0,
+      "Memory": "1.046GiB / 5GiB",
+      "BlockIO": "13.4MB / 0B"
+    },
+    {
+      "Name": "repocontextcontainer-azurite-backup-sink-1",
+      "CpuPercent": 7.21,
+      "Cores": 0.072,
+      "Memory": "91MiB / 27.24GiB",
+      "BlockIO": "37.7MB / 12.3MB"
+    },
+    {
+      "Name": "lattice-test-azurite",
+      "CpuPercent": 0.0,
+      "Cores": 0.0,
+      "Memory": "71.93MiB / 27.24GiB",
+      "BlockIO": "50.6MB / 18.8MB"
+    }
+  ],
+  "CoTenancyNote": "Windows are timestamped so a co-tenant compaction burst can be excluded afterwards. Treat an anomalous window against a materially different load profile as suspect until cleared, rather than averaging it in.",
+  "Method": "Timeouts bucketed by log timestamp, never by counter scrape. A single scrape of a cumulative counter reads as an active fault and a short delta of the same counter reads as healthy; both are wrong, in opposite directions."
+}

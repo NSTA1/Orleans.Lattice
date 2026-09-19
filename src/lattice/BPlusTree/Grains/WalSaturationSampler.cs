@@ -473,9 +473,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var drainLagEnabled = opts.WalSaturationMaterialiserLagThreshold is not null;
         var drainLagSampleWindows = opts.WalSaturationMaterialiserLagSampleWindows;
         var drainLagThreshold = opts.WalSaturationMaterialiserLagThreshold;
+        var drainLagConsumerFreshness = opts.WalDrainLagConsumerFreshness;
         var pinLatencyEnabled = opts.WalSaturationMaterialiserPinLatencyThreshold is not null;
         var pinLatencySampleWindows = opts.WalSaturationMaterialiserPinLatencySampleWindows;
         var observedAt = _time.GetUtcNow();
+        var drainLagReportedAtOrAfterTicks = drainLagConsumerFreshness == TimeSpan.Zero
+            ? long.MinValue
+            : observedAt.UtcTicks - drainLagConsumerFreshness.Ticks;
 
         // Drain-lag is computed live every tick from two in-memory sources, so
         // the signal engages immediately on a write spike instead of waiting for
@@ -483,16 +487,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         // on a non-replicated tree). For each tree that has accepted a write,
         // the lag is the WAL head wall clock (the newest routed entry's HLC,
         // tracked in WalCommitLogWriter._walHeadWallClockTicks) minus the slowest
-        // in-memory materialiser cursor (the IWalCursorRegistry min). It is
-        // head-relative, so it reads zero once the materialiser catches up -
-        // including on a quiescent tree whose head stops advancing while the
-        // cursor drains forward - so an idle-but-healthy tree never trips. A
-        // null / Zero frontier (no consumer has reported a real checkpoint, or a
-        // block pin disabled the cursor branch) is treated as zero lag rather
-        // than the absolute head, so a never-checkpointed leaf never pins the
-        // regime - exactly as the block-pin contract requires. Every checked
-        // tree seeds a perTree accumulator (even at zero lag) so a recovered
-        // tree is reclassified back to Healthy even when it has no live tracker.
+        // fresh in-memory materialiser cursor. The WAL GC trim floor deliberately
+        // reads all registered consumers, including cold leaves, because routine
+        // deactivation must not let GC trim entries the next activation may need
+        // to replay. The saturation classifier does not trim: it gates only a
+        // pacing delay, so it applies WalDrainLagConsumerFreshness and excludes a
+        // cold leaf from this lag-plane read while leaving GetMinCursorAsync
+        // unchanged for GC. A null / Zero frontier (no fresh consumer has
+        // reported a real checkpoint, or a block pin disabled the cursor branch)
+        // is treated as zero lag rather than the absolute head, so a
+        // never-checkpointed or all-cold tree never pins the regime. Every
+        // checked tree seeds a perTree accumulator (even at zero lag) so a
+        // recovered tree is reclassified back to Healthy even when it has no live
+        // tracker.
         //
         // The IWalCursorRegistry is always present: AddLattice registers the
         // in-memory default as a guaranteed fallback (a host that opts into a
@@ -509,7 +516,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
                 long lagTicks = 0;
                 var frontier = await _cursors
-                    .GetMinCursorAsync(treeId, cancellationToken)
+                    .GetMinCursorForDrainLagAsync(treeId, drainLagReportedAtOrAfterTicks, cancellationToken)
                     .ConfigureAwait(false);
                 if (frontier is { } cursor && cursor > HybridLogicalClock.Zero
                     && headWallTicks > cursor.WallClockTicks)
@@ -532,6 +539,41 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 if (lagTicks > lagThreshold.Ticks)
                 {
                     acc.MaterialiserDrainLagOverThreshold = true;
+
+                    // Decompose the aggregate for this tree only. The drain-lag
+                    // above is a min() across consumers, so it reads identically
+                    // for one dormant consumer and for many genuinely falling
+                    // behind - two conditions with opposite responses (issue
+                    // #2444). Counting the consumers individually past the same
+                    // threshold separates them without putting unbounded consumer
+                    // identity on a tag. It does NOT name the contributor; that is
+                    // issue #2505, out of band via SnapshotAsync.
+                    //
+                    // Deliberately inside the over-threshold branch: a healthy
+                    // estate never reaches here, so steady-state per-tick cost is
+                    // unchanged. Consumers that never reported a cursor (Zero) are
+                    // excluded, matching the min() meet that produced the
+                    // aggregate, so a never-checkpointed consumer cannot inflate
+                    // the count any more than it can pin the regime.
+                    var snapshot = await _cursors
+                        .SnapshotAsync(treeId, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var lagging = 0;
+                    foreach (var entry in snapshot)
+                    {
+                        if (entry.Cursor > HybridLogicalClock.Zero
+                            && entry.LastReportedAtTicks >= drainLagReportedAtOrAfterTicks
+                            && headWallTicks - entry.Cursor.WallClockTicks > lagThreshold.Ticks)
+                        {
+                            lagging++;
+                        }
+                    }
+
+                    LatticeMetrics.MaterialiserLaggingConsumers.Record(
+                        lagging,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        LatticeTenantLabel.ForTree(treeId));
                 }
             }
         }

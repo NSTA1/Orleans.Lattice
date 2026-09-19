@@ -73,6 +73,9 @@ internal static class RepoContextKeys
     /// <summary>The vector-membership segment token.</summary>
     internal const string VectorMembershipSegment = "vmem";
 
+    /// <summary>The per-page vector-coverage digest segment token.</summary>
+    internal const string VectorCoverageSegment = "vcov";
+
     private const char Separator = '/';
 
     /// <summary>Builds the key for a repository root node: <c>repo/{repoId}</c>.</summary>
@@ -242,6 +245,35 @@ internal static class RepoContextKeys
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     internal static string VectorMembershipsPrefix(string repoId) =>
         $"{RepoScanPrefix(repoId)}{VectorMembershipSegment}{Separator}";
+
+    /// <summary>
+    /// Builds the key of one vector-coverage digest page:
+    /// <c>repo/{repoId}/vcov/p{page:d3}</c>. The page index is zero-padded to three
+    /// digits so the ordinal key order the store sorts by is also the numeric page
+    /// order, which keeps a range scan over the digest and a numeric walk of it
+    /// identical.
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="page">The digest page index, in [0, <see cref="RepoContextCoveragePage.PageCount"/>).</param>
+    /// <exception cref="ArgumentOutOfRangeException">The page index is out of range.</exception>
+    internal static string VectorCoveragePage(string repoId, int page)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(page);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(page, RepoContextCoveragePage.PageCount);
+        return $"{RepoScanPrefix(repoId)}{VectorCoverageSegment}{Separator}p{page.ToString("d3", System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// Builds the key of a repository's vector-coverage digest state marker:
+    /// <c>repo/{repoId}/vcov/state</c>. Its presence is what distinguishes "the
+    /// digest has been built and its emptiness is meaningful" from "no digest has
+    /// ever been built here", which an empty page range cannot express on its own -
+    /// and mistaking the second for the first on an existing deployment would report
+    /// every source as missing and re-embed the whole repository.
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string VectorCoverageState(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{VectorCoverageSegment}{Separator}state";
 
     /// <summary>
     /// Builds the range-scan prefix for all memory records under a topic:

@@ -44,7 +44,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         var keys = SourceKeys("A", "B", "C");
         var (writer, logs) = Create(requested => Rows(requested, Enabled));
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
 
         Assert.That(covered, Has.Count.EqualTo(3), "classification must be unchanged");
         var line = Single(logs);
@@ -70,7 +70,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         // touched by nothing and reported by nothing.
         var (writer, logs) = Create(requested => Rows(requested.Take(2), Enabled));
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
 
         Assert.That(covered, Has.Count.EqualTo(2), "an omitted key still reads as uncovered");
         var line = Single(logs);
@@ -111,7 +111,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             return rows;
         });
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
 
         Assert.That(covered, Has.Count.EqualTo(1));
         var line = Single(logs);
@@ -140,7 +140,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             return rows;
         });
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
 
         Assert.That(covered, Has.Count.EqualTo(1));
         var line = Single(logs);
@@ -175,7 +175,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             return rows;
         });
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
 
         var line = Single(logs);
         Assert.Multiple(() =>
@@ -241,7 +241,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         // The store answers for one key and omits two, with nothing else irregular,
         // which isolates the not-returned count.
         var (quietWriter, quietLogs) = Create(requested => Rows(requested.Take(1), Enabled));
-        var quietCovered = await quietWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var quietCovered = (await quietWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
         var quiet = Single(quietLogs);
 
         // Every key answered, plus one well-formed row nobody asked for.
@@ -251,7 +251,7 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
             rows[requested[0] + "ZZZ"] = Enabled();
             return rows;
         });
-        var loudCovered = await loudWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+        var loudCovered = (await loudWriter.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
         var loud = Single(loudLogs);
 
         Assert.Multiple(() =>
@@ -279,15 +279,146 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
         });
     }
 
+    /// <summary>
+    /// Issue #2679. The defect here is an ABSENCE, so the assertion has to be a
+    /// PRESENCE: a probe that ran and asked for nothing must emit a line, because a
+    /// silent zero is byte-identical in the log to a probe that never executed.
+    /// <para>
+    /// This replaces a fixture that asserted the opposite - "a probe with nothing to
+    /// ask must not log" - which was the defect written down as an intention. Three
+    /// states collapsed onto that one empty log: the probe ran and found a clean
+    /// membership, the probe ran and requested zero keys, and the probe never ran at
+    /// all. An operator enabling debug on this category to investigate vector-writer
+    /// dispositions would read the first, which is a pass, from evidence that equally
+    /// supports the third.
+    /// </para>
+    /// <para>
+    /// The path is reachable rather than defensive, which is why it is worth a
+    /// fixture. Both symbol-arm callers in the ingestor build their page keys by
+    /// filtering out null-valued records and hand the result straight to the probe
+    /// with no empty guard, so a page whose rows all read null arrives with an empty
+    /// candidate set. Note that the reachable zero is the empty candidate set, not
+    /// the <c>Requested == 0</c> guard the issue named: a non-empty candidate set
+    /// always yields at least one requested key, so that guard is only ever entered
+    /// from the path this fixture exercises.
+    /// </para>
+    /// <para>
+    /// The contrast arm is load-bearing rather than decorative. The zero case could
+    /// be made to emit by rendering every probe through one uniform message, which
+    /// would satisfy a bare presence assertion while destroying the breakdown the
+    /// non-zero path exists to report. Pinning the two lines as distinguishable, and
+    /// pinning the non-zero line's counts, is what forecloses that repair.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task An_empty_candidate_set_reports_nothing()
+    public async Task A_probe_that_requested_nothing_still_reports_that_it_ran()
     {
-        var (writer, logs) = Create(_ => []);
+        var (emptyWriter, emptyLogs) = Create(_ => []);
+        var (askedWriter, askedLogs) = Create(requested => Rows(requested, Enabled));
 
-        var covered = await writer.ProbeEmbeddedMembersAsync(RepoId, [], Ct);
+        var emptyCovered = (await emptyWriter.ProbeEmbeddedMembersAsync(RepoId, [], Ct)).SourceIds;
+        var askedCovered = (await askedWriter.ProbeEmbeddedMembersAsync(RepoId, SourceKeys("A", "B"), Ct)).SourceIds;
 
-        Assert.That(covered, Is.Empty);
-        Assert.That(logs.Entries, Is.Empty, "a probe with nothing to ask must not log");
+        var emptyLine = Single(emptyLogs);
+        var askedLine = Single(askedLogs);
+        Assert.Multiple(() =>
+        {
+            Assert.That(emptyCovered, Is.Empty, "classification must be unchanged");
+
+            // The presence assertion. Silence here IS the defect, so this is the
+            // clause that fails against the unfixed writer.
+            Assert.That(
+                emptyLine.Message,
+                Does.Contain("Repo-context membership probe"),
+                "the zero must join the population an operator already greps for, or it stays invisible");
+            Assert.That(
+                emptyLine.Message,
+                Does.Contain(": requested=0"),
+                "the zero must be positively identifiable as a zero, not merely present");
+            Assert.That(
+                emptyLine.Level,
+                Is.EqualTo(LogLevel.Debug),
+                "a probe with nothing to ask is ordinary, not an anomaly");
+
+            // The contrast arm: the true-positive path must keep its breakdown, and
+            // must not read as an empty probe.
+            Assert.That(askedCovered, Has.Count.EqualTo(2), "classification must be unchanged");
+            Assert.That(askedLine.Message, Does.Contain(": requested=2"));
+            Assert.That(askedLine.Message, Does.Contain("embedded=2"), "the breakdown must survive");
+            Assert.That(askedLine.Message, Does.Contain("notReturned=0"), "the breakdown must survive");
+
+            // The ": " anchor below is load-bearing rather than tidiness. The
+            // eleven-field template renders "unrequested={Unrequested}", so a bare
+            // Does.Not.Contain("requested=0") also matches "unrequested=0" and would
+            // fail spuriously against a perfectly good probe. Only the colon that
+            // precedes the first field separates the two. Do not simplify it away.
+            Assert.That(
+                askedLine.Message,
+                Does.Not.Contain(": requested=0"),
+                "a probe that really asked must not read as one that did not");
+            Assert.That(
+                emptyLine.Message,
+                Is.Not.EqualTo(askedLine.Message),
+                "the two executions must be distinguishable from each other as well as from silence");
+        });
+    }
+
+    /// <summary>
+    /// Issue #2277. A key an access gate removed before fan-out and a key that was
+    /// never written arrive at the probe as the same observation - an absence - so
+    /// the count of the first has to be carried down from the layer that applied
+    /// the filter. This pins the arithmetic that makes the two separable at all:
+    /// pruned is an overlay on notReturned, so genuinely absent is the difference.
+    /// </summary>
+    [Test]
+    public async Task A_pruned_key_is_carried_into_the_accounting_as_an_overlay_on_the_short_read()
+    {
+        var keys = SourceKeys("A", "B", "C");
+
+        // Two keys the gate removed, so the store answers for one. The short read is
+        // three-minus-one either way; only the prune count says how much of it was
+        // the gate rather than a real gap.
+        var (writer, logs) = Create(requested => Rows(requested.Take(1), Enabled), prunedByAccessGate: 2);
+
+        var covered = (await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct)).SourceIds;
+
+        var line = Single(logs);
+        Assert.Multiple(() =>
+        {
+            Assert.That(covered, Has.Count.EqualTo(1), "classification must be unchanged");
+            Assert.That(line.Message, Does.Contain("notReturned=2"), "a pruned key is still a key the store did not answer with");
+            Assert.That(line.Message, Does.Contain("pruned=2"), "the prune count is reported on its own");
+            Assert.That(line.Message, Does.Contain("accounted=3"), "pruned is an overlay, so the categories still partition the request");
+
+            // The whole point of the counter: on an ungated deployment this is zero
+            // and absence is conclusive, so the sweep may act on it. Here it is not.
+            Assert.That(
+                line.Level,
+                Is.EqualTo(LogLevel.Warning),
+                "a pruned probe has no benign reading - it never self-clears, so it must not be silent");
+        });
+    }
+
+    [Test]
+    public async Task An_ungated_probe_reports_no_prune_and_leaves_absence_conclusive()
+    {
+        var keys = SourceKeys("A", "B", "C");
+
+        // The control arm, and the reason the warning above is safe to add: the
+        // ordinary case - a real gap on an ungated store - must stay quiet, or the
+        // signal is muted by the noise of firing on every page of every pass.
+        var (writer, logs) = Create(requested => Rows(requested.Take(1), Enabled));
+
+        var probed = await writer.ProbeEmbeddedMembersAsync(RepoId, keys, Ct);
+
+        var line = Single(logs);
+        Assert.Multiple(() =>
+        {
+            Assert.That(probed.PrunedByAccessGate, Is.Zero);
+            Assert.That(probed.AbsenceIsConclusive, Is.True, "with nothing pruned, a missing key really is missing");
+            Assert.That(line.Message, Does.Contain("pruned=0"));
+            Assert.That(line.Level, Is.EqualTo(LogLevel.Debug), "a real gap is the ordinary finding, not an anomaly");
+        });
     }
 
     private static List<string> SourceKeys(params string[] names)
@@ -327,10 +458,31 @@ public sealed class RepoContextVectorWriterMembershipProbeAccountingTests
     /// </summary>
     private static (RepoContextVectorWriter Writer, RecordingLogger Logs) Create(
         Func<List<string>, Dictionary<string, byte[]>> respond)
+        => Create(respond, prunedByAccessGate: 0);
+
+    /// <summary>
+    /// Builds a writer over a membership tree whose multi-get answer AND access-gate
+    /// prune count the test supplies, which is what lets a gated read - a store that
+    /// removed keys before fan-out rather than finding them absent - be expressed
+    /// (issue #2277).
+    /// </summary>
+    private static (RepoContextVectorWriter Writer, RecordingLogger Logs) Create(
+        Func<List<string>, Dictionary<string, byte[]>> respond,
+        int prunedByAccessGate)
     {
         var tree = Substitute.For<ILattice>();
         tree.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(call => Task.FromResult(respond(call.ArgAt<List<string>>(0))));
+
+        // The probe reads through the gate-accounting seam, so this is the stub that
+        // actually answers it; the plain one above is kept so the double still models
+        // the whole read surface.
+        tree.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(call => Task.FromResult(new GatedMultiReadResult
+            {
+                Values = respond(call.ArgAt<List<string>>(0)),
+                PrunedByAccessGate = prunedByAccessGate,
+            }));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Arg.Any<string>()).ReturnsForAnyArgs(tree);

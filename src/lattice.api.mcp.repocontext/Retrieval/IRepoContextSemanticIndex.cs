@@ -57,4 +57,38 @@ internal interface IRepoContextSemanticIndex
         EmbeddingSpaceTag querySpace,
         int k,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether this implementation is currently withholding an exact fallback it
+    /// would otherwise run for <paramref name="repoId"/>, because a gather over that
+    /// repository has already proved it cannot finish.
+    /// <para>
+    /// <b>Per repository, deliberately, unlike <see cref="RetrievalPath"/>.</b> That
+    /// property is per index and so must declare a constant - one index serves every
+    /// repository, and a declaration tracking current state would be wrong the moment
+    /// two repositories were in different states (see issue #2441, which declined
+    /// exactly that change). This method takes the repository as an argument, so it
+    /// carries a genuinely per-observation fact and none of that reasoning applies.
+    /// </para>
+    /// <para>
+    /// <b>Read only to explain an empty result, never to skip a search.</b> The
+    /// search service calls it after a search returned no matches, to tell a
+    /// suppressed fallback
+    /// (<see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>) from a
+    /// plane that holds nothing
+    /// (<see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/>). It is
+    /// a racy snapshot and is safe only in that direction: a suppression lifted
+    /// between the search and this read reports the older, weaker classification,
+    /// which was the answer before this method existed and never over-claims.
+    /// </para>
+    /// <para>
+    /// The default is <see langword="false"/>, which is correct for every
+    /// implementation that has no such guard - including
+    /// <see cref="ExactKnnSemanticIndex"/>, which is the fallback rather than a
+    /// caller of one.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository being searched.</param>
+    /// <returns><see langword="true"/> when an exact fallback is being withheld.</returns>
+    bool IsExactFallbackSuppressed(string repoId) => false;
 }

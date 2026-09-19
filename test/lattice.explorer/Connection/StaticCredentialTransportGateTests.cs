@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using Grpc.Core;
 using Grpc.Net.Client;
 using Orleans.Lattice.Explorer.Core.Connection;
@@ -27,6 +28,7 @@ namespace Orleans.Lattice.Explorer.Tests.Connection;
 /// </para>
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds a GrpcChannel in-process with no listener or cluster; measured at 36 ms for 5 tests, so it stays in the fast dev loop.")]
 public sealed class StaticCredentialTransportGateTests
 {
     private static LatticeConnectionSettings Settings(

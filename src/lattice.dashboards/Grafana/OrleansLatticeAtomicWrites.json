@@ -23,7 +23,7 @@
         },
         "enable": true,
         "iconColor": "rgba(255, 96, 96, 1)",
-        "expr": "sum by (outcome) (increase(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\"}[5m]))",
+        "expr": "sum by (outcome) (increase(orleans_lattice_atomic_write_completed_total{outcome!=\"committed\"}[5m]))",
         "titleFormat": "atomic_write {{outcome}}"
       }
     ]
@@ -219,8 +219,13 @@
           "legendFormat": "compensated"
         },
         {
+          "refId": "SHUT",
+          "expr": "sum (rate(orleans_lattice_atomic_write_completed_total{outcome=\"shutdown_refused\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "legendFormat": "shutdown_refused"
+        },
+        {
           "refId": "TOTAL",
-          "expr": "sum (rate(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "expr": "sum (rate(orleans_lattice_atomic_write_completed_total{outcome!=\"committed\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
           "legendFormat": "non-committed"
         }
       ]
@@ -363,7 +368,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (outcome) (increase(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range])) or vector(0)",
+          "expr": "sum by (outcome) (increase(orleans_lattice_atomic_write_completed_total{outcome!=\"committed\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range])) or vector(0)",
           "legendFormat": "{{outcome}}"
         }
       ]
@@ -402,15 +407,14 @@
     },
     {
       "id": 102,
-      "title": "Per-key saga work - p95 per-key duration vs serial-gap wait (ms)",
-      "description": "saga.perkey.duration: per-key work inside the saga loop. saga.wait.serial_gap: time the saga sat idle between per-key operations. A growing serial_gap relative to perkey.duration indicates the saga is queue-bound rather than work-bound.",
+      "title": "Per-key saga work - p95 per-key duration (ms)",
+      "description": "saga.perkey.duration: per-key work inside the saga loop, derived as the batch's elapsed time divided by its entry count. Compare against saga.prepare.duration to see how much of the saga envelope the data writes account for.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" },
-        { "refId": "W", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_wait_serial_gap_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 wait.serial_gap" }
+        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" }
       ]
     },
     {
@@ -442,15 +446,14 @@
     {
       "id": 10,
       "title": "Cross-tree failure rate (%)",
-      "description": "Fraction of cross-tree coordinator sagas that did not commit, split into failed, compensated, and combined non-committed. A non-zero compensated rate is expected under contention (a participant vetoed the global commit); a sustained failed rate points at coordinator-side or transport faults. Not filtered by $tree.",
+      "description": "Fraction of cross-tree coordinator sagas that did not commit. The coordinator emits exactly two outcomes, committed and precondition_failed, so this panel charts the precondition_failed share alongside the combined non-committed share; the two coincide today and diverge the moment a third outcome is added. A non-zero precondition_failed rate is expected under contention (a participant vetoed the global commit); a sustained one points at coordinator-side or transport faults. Not filtered by $tree.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
       "targets": [
-        { "refId": "FAIL", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=\"failed\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "failed" },
-        { "refId": "COMP", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=\"compensated\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "compensated" },
-        { "refId": "TOTAL", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=~\"failed|compensated\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "non-committed" }
+        { "refId": "PRECOND", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=\"precondition_failed\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "precondition_failed" },
+        { "refId": "TOTAL", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome!=\"committed\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "non-committed" }
       ]
     },
     {

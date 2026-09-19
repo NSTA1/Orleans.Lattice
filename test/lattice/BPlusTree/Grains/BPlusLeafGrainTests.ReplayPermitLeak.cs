@@ -64,7 +64,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         warmState.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)warmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         Assert.That(gate, Is.Not.Null,
@@ -72,12 +72,24 @@ public partial class BPlusLeafGrainTests
         var baseline = gate!.CurrentCount;
 
         var observedWhileThrowing = -1;
-        var loggerFactory = new ReplayPermitProbeLoggerFactory(() => observedWhileThrowing = gate.CurrentCount);
+        // Record the FIRST resolution only. The injected factory throws from
+        // CreateLogger, so ResolveLogger's cache is never populated and every
+        // subsequent resolution re-enters the probe. Since #2871 there IS a
+        // subsequent one: the replay now runs as a background task whose fault
+        // handler emits a diagnostic, and that handler runs after the permit has
+        // been released, so a last-writer-wins probe would sample an empty window
+        // and report no permit was ever held. The first resolution is the one
+        // inside the permit window, which is the sample this fixture is about.
+        var loggerFactory = new ReplayPermitProbeLoggerFactory(() =>
+        {
+            if (observedWhileThrowing < 0)
+                observedWhileThrowing = gate.CurrentCount;
+        });
         var (grain, state) = CreateGrainWithLoggerFactory(loggerFactory);
         state.State.TreeId = UniqueReplayPermitTree();
 
         Assert.ThrowsAsync<ReplayPermitProbeException>(
-            async () => await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None),
             "the injected observation fault must propagate out of activation, exactly as a real "
             + "logging-sink fault would");
 
@@ -108,7 +120,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         warmState.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)warmGrain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         Assert.That(gate, Is.Not.Null);
@@ -119,7 +131,7 @@ public partial class BPlusLeafGrainTests
             persistedCheckpoint: 0,
             walHead: 0);
         state.State.TreeId = UniqueReplayPermitTree();
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
         Assert.That(gate.CurrentCount, Is.EqualTo(baseline),
             "a clean activation must return the permit it took");

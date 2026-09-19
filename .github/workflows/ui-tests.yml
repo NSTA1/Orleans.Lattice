@@ -46,6 +46,34 @@ on:
       - '.github/workflows/ui-tests.yml'
       - '.github/workflows/ui-test-shards.json'
 
+  # Integration-branch lane, mirroring ci.yml's push trigger (#2972). A pull
+  # request INTO a bucket was gated; the bucket itself was not, so its combined
+  # state went unevaluated until the epic's single pull request into `main`.
+  #
+  # ADVISORY, AND MUST NEVER BECOME BRANCH PROTECTION - the same constraint
+  # ci.yml states at length. A bucket exists so members merge in any order
+  # without invalidating each other.
+  #
+  # DISCLOSED LIMIT, because it is narrower than it looks: GitHub evaluates a
+  # `paths:` filter on a push against the PUSH diff, which on a bucket is the
+  # one member that just merged - not the bucket against `main`. So this lane
+  # runs on a push only when THAT merge touched Explorer UI files, and a bucket
+  # carrying such a change from an earlier member will not re-run it when a
+  # later unrelated member lands. That is weaker than ci.yml's push lane, which
+  # bypasses diff-scoping entirely. It is accepted rather than worked around:
+  # the alternative is provisioning a browser on every bucket merge, and this
+  # lane's value on the integration branch is the browser-driven signal that no
+  # other lane provides, which is worth having on the merges that touch it.
+  push:
+    branches: ['*/epic/**']
+    paths:
+      - 'src/lattice.explorer/**'
+      - '!src/lattice.explorer/**/*.md'
+      - 'test/lattice.explorer.uitests/**'
+      - '!test/lattice.explorer.uitests/**/*.md'
+      - '.github/workflows/ui-tests.yml'
+      - '.github/workflows/ui-test-shards.json'
+
 permissions:
   contents: read
 

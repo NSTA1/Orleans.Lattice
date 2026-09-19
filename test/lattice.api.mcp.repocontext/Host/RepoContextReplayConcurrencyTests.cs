@@ -53,6 +53,45 @@ public sealed class RepoContextReplayConcurrencyTests
             RepoContextReplayConcurrency.ResolveMaxConcurrentReplays(Configuration(null)),
             Is.EqualTo(RepoContextReplayConcurrency.DefaultMaxConcurrentReplays));
 
+    [TestCase("auto")]
+    [TestCase("AUTO")]
+    [TestCase("  Auto  ")]
+    public void The_auto_token_selects_the_librarys_derivation_deliberately(string raw)
+        => Assert.That(
+            RepoContextReplayConcurrency.ResolveMaxConcurrentReplays(Configuration(raw)),
+            Is.EqualTo(RepoContextReplayConcurrency.DefaultMaxConcurrentReplays),
+            "`auto` must reach the same derivation an absent variable reaches, because the "
+            + "acceptance runs that pin this knob are measuring that derivation and would be "
+            + "measuring something else if the token took a second code path. The token exists "
+            + "for the layer above (issue #2863): the tuning overlay guards this variable with a "
+            + "compose presence check, which cannot inspect a value, so `0` satisfied the guard "
+            + "while meaning exactly what the guard forbids and an operator who forgot to export "
+            + "the variable was indistinguishable from one who chose the derivation.");
+
+    [Test]
+    public void The_auto_token_is_the_spelling_the_deployment_is_told_to_use()
+        => Assert.That(
+            RepoContextReplayConcurrency.AutoToken,
+            Is.EqualTo("auto"),
+            "the sample deployment's preflight and .env.example both name this literal, so "
+            + "renaming it here without renaming it there produces a .env that passes its own "
+            + "preflight and then throws at startup.");
+
+    [Test]
+    public void A_garbage_value_still_fails_loudly_rather_than_deriving_quietly()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => RepoContextReplayConcurrency.ResolveMaxConcurrentReplays(Configuration("atuo")));
+
+        Assert.That(
+            ex!.Message,
+            Does.Contain(RepoContextReplayConcurrency.AutoToken),
+            "a near miss of the token is the likeliest way to mistype it, so the refusal has to "
+            + "name the spelling it wanted. Falling through to the derivation instead would make a "
+            + "typo indistinguishable from the deliberate token, which is the same conflation "
+            + "#2863 is about, reintroduced one layer down.");
+    }
+
     [Test]
     public void A_blank_variable_defers_to_the_library()
         => Assert.That(

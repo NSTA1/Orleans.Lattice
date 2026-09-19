@@ -188,10 +188,11 @@ public partial class BPlusLeafGrainTests
     /// partition gap fits inside the budget is an idle leaf, not a livelock".
     /// If that were true, removing the budget term would turn every idle leaf
     /// into a fault line. It is not true: an idle leaf is one with nothing to
-    /// replay, <c>head &lt;= checkpoint</c>, and that returns before the gate is
-    /// ever evaluated. This leaf re-activates repeatedly at a checkpoint that
-    /// never moves - the literal frozen checkpoint - and must stay silent,
-    /// because its checkpoint is frozen at the head rather than behind it.
+    /// replay - its checkpoint is the newest entry that exists, at
+    /// <c>head - 1</c> - and that returns before the gate is ever evaluated.
+    /// This leaf re-activates repeatedly at a checkpoint that never moves - the
+    /// literal frozen checkpoint - and must stay silent, because its checkpoint
+    /// is frozen at the newest entry rather than behind it.
     /// </para>
     /// </summary>
     [Test]
@@ -200,14 +201,23 @@ public partial class BPlusLeafGrainTests
         BPlusLeafGrain.ResetReplayWarningStateForTests();
         var logs = new RecordingLoggerFactory();
 
-        // head == checkpoint: fully caught up, so there is no work outstanding
-        // and no forward progress to fail to make.
-        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 100, maxLeafReplayEntries: 10_000);
-        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 100, maxLeafReplayEntries: 10_000);
-        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 100, maxLeafReplayEntries: 10_000);
+        // Fully caught up, expressed as a state the system can actually occupy.
+        // The head is the NEXT sequence to be assigned, so the newest entry sits
+        // at head - 1 and a leaf that has scanned it holds exactly that offset.
+        //
+        // This fixture previously passed persistedCheckpoint: 100 against the
+        // same head of 100. That state is UNREACHABLE: the checkpoint is only
+        // ever assigned from the offset of an entry the scan really read, so it
+        // cannot equal the exclusive head. Pinning the unreachable neighbour
+        // while leaving the reachable one untested is precisely how the
+        // off-by-one of issue #2668 shipped, so the reachable state is used here
+        // and BPlusLeafGrainTests.ReplayStallHeadBoundary covers it directly.
+        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 99, maxLeafReplayEntries: 10_000);
+        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 99, maxLeafReplayEntries: 10_000);
+        await ActivateStallCandidateAsync(logs, partitionHead: 100, persistedCheckpoint: 99, maxLeafReplayEntries: 10_000);
 
         Assert.That(StalledFaultLines(logs), Is.Empty,
-            "An idle leaf returns on the head <= checkpoint check and never reaches the fault gate, so widening that gate cannot make idleness noisy at any level.");
+            "An idle leaf returns on the newest-entry check and never reaches the fault gate, so widening that gate cannot make idleness noisy at any level.");
     }
 
     /// <summary>

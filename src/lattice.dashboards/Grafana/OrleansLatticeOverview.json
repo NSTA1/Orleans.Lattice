@@ -400,6 +400,11 @@
           "refId": "L",
           "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
           "legendFormat": "leaf {{tree}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_byte_overflow_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "byte-overflow {{outcome}} {{tree}}"
         }
       ]
     },
@@ -889,8 +894,13 @@
           "legendFormat": "{{tree}} compensated"
         },
         {
+          "refId": "SHUT",
+          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome=\"shutdown_refused\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "legendFormat": "{{tree}} shutdown_refused"
+        },
+        {
           "refId": "TOTAL_FAIL",
-          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
+          "expr": "sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{outcome!=\"committed\",tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)",
           "legendFormat": "{{tree}} non-committed"
         }
       ]
@@ -979,13 +989,13 @@
     {
       "id": 23,
       "title": "Storage footprint by tree",
-      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
+      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 68 },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 68 },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
       "targets": [
         {
@@ -1008,7 +1018,7 @@
     {
       "id": 24,
       "title": "Cluster total retained bytes",
-      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster.",
+      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster. A tree contributes nothing here until it has had a deep storage-usage publish, because the total omits two of its three terms otherwise; check 'Storage usage measurement depth by tree' to tell an unmeasured tree from an empty one (issue #2693).",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -1021,6 +1031,25 @@
           "refId": "TOTAL",
           "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "cluster total"
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "title": "Storage usage measurement depth by tree",
+      "description": "1 when the tree's last storage-usage report came from the deep path that actually measures snapshot and leaf-state bytes, 0 when only the cheap WAL-only background poller has reported (orleans.lattice.storage.usage_deep_published). Read this panel BEFORE reading the snapshot / leaf-state / total series above: those three report no data rather than a synthesised 0 until a deep publish has run, and the deep path runs only on an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call. A tree sitting at 0 here means those panels are 'not measured', not 'measured empty'. Before issue #2693 the poller seeded them to 0 without measuring them, and a reader took that zero as a measurement and concluded no leaf state or snapshots were ever written while 137 MB of snapshot state was on disk (issue #2692). Published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree and this panel ignores the $silo selector.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "DEEP",
+          "expr": "max by (tree) (orleans_lattice_storage_usage_deep_published{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{tree}}"
         }
       ]
     },
@@ -1080,7 +1109,7 @@
       "targets": [
         {
           "refId": "RATIO",
-          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
+          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} savings"
         }
       ]
@@ -1275,7 +1304,7 @@
     {
       "id": 40,
       "title": "Snapshot pins (current)",
-      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins up/down counter). Pins hold a snapshot alive against trimming; a monotonically climbing value can indicate a pin leak.",
+      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins observable gauge, derived from the WAL cursor registry). Pins hold a snapshot alive against trimming. The gauge reports only the pins held now, so a value that climbs and does not come back down is a real pin leak rather than accumulated metric drift.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 124 },
@@ -1512,6 +1541,167 @@
         { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p50" },
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p95" },
         { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 64,
+      "title": "Grain-call contention (uncensored)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 191 },
+      "panels": []
+    },
+    {
+      "id": 65,
+      "title": "Outstanding calls per target activation, by grain type",
+      "description": "Per-grain-type contention from orleans_lattice_grain_call_outstanding_depth, recorded at dispatch on EVERY outgoing grain call by the LatticeGrainCallObservationFilter (enable with ISiloBuilder.AddLatticeGrainCallObservation). The value is how many calls this silo had already issued to the same target activation and not yet seen complete, so on a non-reentrant target it is the depth the new call queues behind. Read this instead of the NonReentrancyQueueSize= clause of the Orleans near-timeout diagnostic: that clause is emitted only for a request already approaching the 30s deadline and describes only that request's own wait, so a grain type that queues deeply without tripping the timeout contributes nothing to it. Two known limits: the count is per-silo, so cluster-wide contention is under-stated (treat it as a floor), and on a reentrant or AlwaysInterleave target a high value means pipelining rather than queueing.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "MEAN", "expr": "sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_sum{cluster=~\"$cluster\"}[5m])) / clamp_min(sum by (grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_count{cluster=~\"$cluster\"}[5m])), 1)", "legendFormat": "{{grain_type}} mean" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type) (rate(orleans_lattice_grain_call_outstanding_depth_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} p95" }
+      ]
+    },
+    {
+      "id": 66,
+      "title": "Grain-call duration by grain type and outcome",
+      "description": "orleans_lattice_grain_call_duration_milliseconds, recorded by the same filter for every outgoing grain call and tagged outcome = completed | faulted. Split by outcome deliberately: the faulted series carries the 30s message timeouts, which would otherwise pile up at the deadline and dominate any quantile taken over the combined population - the same censoring that makes the near-timeout log diagnostic unusable for sizing a queue. Compare against the outstanding-depth panel: rising duration WITH rising depth is contention on the target; rising duration with flat depth is the target itself getting slower.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 192 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le, grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "{{grain_type}} {{outcome}} p95" },
+        { "refId": "RATE", "expr": "sum by (grain_type, outcome) (rate(orleans_lattice_grain_call_duration_milliseconds_count{cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{grain_type}} {{outcome}} calls/s" }
+      ]
+    },
+    {
+      "id": 68,
+      "title": "Coordinator phase-tick failures (rate)",
+      "description": "Rate of coordinator phase-timer ticks that threw and were swallowed by the phase loop (orleans_lattice_coordinator_phase_tick_failures_total), split by the coordinator kind and the tree it drives. Each such tick is a phase of work the coordinator began and discarded: the loop absorbs the fault and re-arms, so throughput degrades silently and no other series moves. Before this counter existed the only trace was a log line, and 35 failures over 516 minutes on the acceptance rig left every exported series flat - which is what issue #2705 was filed for. The counter is zero-primed for every coordinator when its phase timer starts, so a flat line at zero is a positive reading that ticks are succeeding, NOT an absent series; 'No data' here means the coordinator never started, which is itself worth investigating. Any sustained non-zero rate is operator-actionable, and the emitting grain escalates its own log from warning to error after three consecutive failures - so correlate a step here with the error-level log to find the failing coordinator.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1007 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, kind) (rate(orleans_lattice_coordinator_phase_tick_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 69,
+      "title": "Leaf division fast path forfeited (rate)",
+      "description": "Rate of leaf splits that could not place their pivot from the snapshot frame and fell back to materialising the whole leaf (orleans_lattice_leaf_bisect_refusals_total), split by the refusal reason and by the cache surface that had already released the frame. Read the two tags together - the reason alone cannot tell a benign refusal from a harmful one. reason=no_snapshot_attached with detach_seam=none is benign: no frame was ever attached (a leaf replayed from the WAL), the leaf is already resident, and the fallback costs nothing extra. The SAME reason with any other detach_seam is the defect (issue #2787): a frame WAS attached and an unrelated whole-leaf operation consumed it, so the division must now make every row resident and unsheddable for the life of the activation - on precisely the oversized leaf that can least afford the allocation, and the operation that would have reduced its size. The refusal is a function of activation history, not of leaf size, so the split seam itself cannot distinguish the two cases and this counter is the only place the forfeiture is observable. Any sustained non-zero rate carrying a detach_seam other than 'none' is operator-actionable, and names the seam to convert.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1014 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, reason, detach_seam) (rate(orleans_lattice_leaf_bisect_refusals_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{tree}} {{reason}} via {{detach_seam}}"
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "title": "Leaf divisions sought (rate)",
+      "description": "Rate of divisions SOUGHT on an over-capacity leaf (orleans_lattice_leaf_split_attempts_total), split by outcome: divided (the division ran to completion), gate_contended (another turn held the split gate, so this turn returned without evaluating the leaf), already_under_capacity (the in-gate re-check found the leaf back under threshold because a concurrent turn had divided it). Read this BESIDE the bisect-refusal panel, which is uninterpretable alone. A zero refusal rate has two opposite meanings - no division ever forfeited its fast path, or no division was ever attempted - and only the attempt count separates them. That distinction is the whole question on an oversized leaf: a leaf sitting far above MaxLeafBytes with zero refusals AND zero attempts is not a leaf whose splits are succeeding, it is a leaf nothing is trying to split, which is a different defect with a different fix. All three outcomes are pre-minted at zero whenever a leaf reaches the byte-bound check on the snapshot-capture path, carrying the tag set a real emission carries, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero here is a MEASURED zero and 'No data' means the capture seam was never reached, which is itself the finding. Sustained gate_contended with no divided is the pathological shape - divisions are being sought and none is completing.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1014 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_leaf_split_attempts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 71,
+      "title": "Coordinator consecutive phase-tick failure run",
+      "description": "Length of the CURRENT run of consecutive failed phase ticks per coordinator kind and tree (orleans_lattice_coordinator_phase_tick_consecutive_failures), as the maximum over the activations sharing a tag set. Read it BESIDE the phase-tick failure rate panel, which cannot answer this question: a cumulative counter has no notion of consecutiveness, so a coordinator failing one tick in a thousand and one that has failed every tick since the process started both present as a rising rate - yet the first is a transient the loop absorbs by design and the second is a phase machine that has stopped advancing and will not resume without intervention. That distinction is what issue #2814 turned on, and the only evidence for it was the phrase '156 times in a row' in a 53 MB log stream. Every live coordinator reports, enrolling at zero when its phase timer arms, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero is a MEASURED zero meaning the last tick succeeded, and 'No data' means no coordinator of that kind is live, which is itself the finding. A series that keeps returning to zero is a coordinator absorbing transients; one that only climbs is a wedge, and its value is how many ticks of work have been discarded back to back. A zero does NOT mean the coordinator is progressing - a tick that returns without advancing its phase machine is a success by this measure.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1021 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree, kind) (orleans_lattice_coordinator_phase_tick_consecutive_failures{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} {{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 72,
+      "title": "Leaf-split completions in flight",
+      "description": "Count of leaf-split completions currently suspended inside CompleteSplitAsync per tree (orleans_lattice_leaf_split_completion_in_flight, issue #2967). The divided/faulted outcome counters partition only TERMINATED divisions, so a division still in the completion body at scrape time is a member of none of them, and because the catch that records faulted is unconditional a division carrying neither divided nor faulted did not throw - it is genuinely in flight. Read this BESIDE the oldest-completion-age panel: a non-zero count is only actionable once that age is climbing. A tree with nothing in flight emits no series, so 'No data' is the healthy steady state, not a gap.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1028 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (orleans_lattice_leaf_split_completion_in_flight{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 73,
+      "title": "Oldest leaf-split completion age",
+      "description": "Age in seconds of the oldest leaf-split completion currently suspended inside CompleteSplitAsync per tree (orleans_lattice_leaf_split_completion_oldest_age, issue #2967). This is the signal that separates a division momentarily in flight (age near zero, falling as scrapes advance) from one that is STUCK (age climbing without bound), which the bare in-flight count cannot do. It is a measurement, not a threshold: the code encodes no age at which a completion is declared abandoned, so alert on a sustained climb read against real completion durations rather than on a fixed value. A tree with nothing in flight emits no series, so 'No data' is the healthy steady state.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1028 },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree) (orleans_lattice_leaf_split_completion_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 75,
+      "title": "Tree-registry singleton - service time and fan-in width",
+      "description": "The tree registry is one activation for the whole cluster, addressed by every per-tree background service, so a cold start fans the whole estate onto it. When it saturates, callers see only a 30s response-deadline TimeoutException - and that same observation is produced both by a call served slowly and by a call never served at all, which have opposite remedies. registry.call.duration records only calls the grain actually ADMITTED, so read its tail together with its rate against the caller-side timeout count: a short tail whose rate is far below the offered load means the calls never reached the body at all (blocked in activation, or behind a turn that never yielded - neither of which an [AlwaysInterleave] attribute admits past), while a tail approaching the caller deadline at a matching rate means they were admitted and the time went on the awaited hop to the backing _lattice_trees tree. registry.call.in_flight is the fan-in WIDTH at the moment each call is admitted, excluding the arriving call: a long tail over a flat-zero width is a slow backing hop, whereas a width that climbs with estate size is the (trees x per-tree background services) scaling law saturating one activation. Both are platform-tenant series - the registry spans every tenant, so there is no per-tree breakdown to filter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1035 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "D", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{operation}} mean service time (ms)" },
+        { "refId": "R", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{operation}} admitted calls/s (secondary)" },
+        { "refId": "F", "expr": "sum by (operation) (rate(orleans_lattice_registry_call_in_flight_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (operation) (rate(orleans_lattice_registry_call_in_flight_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{operation}} mean fan-in width (secondary)" }
+      ]
+    },
+    {
+      "id": 74,
+      "title": "Deployed build (version / commit)",
+      "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 1035 },
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "colorMode": "value", "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (version, sha) (orleans_lattice_build_info{cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{version}}+{{sha}}"
+        }
       ]
     }
   ]

@@ -152,6 +152,24 @@ internal sealed class SubstitutedVectorTrees
                 return Task.FromResult(found);
             });
 
+        // The membership coverage probe reads through the gate-accounting seam
+        // (issue #2277), so a double that stubs only GetManyAsync hands it a null
+        // Task. These trees model an UNGATED store: the same rows, nothing pruned.
+        tree.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(call =>
+            {
+                var found = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                foreach (var key in call.ArgAt<List<string>>(0))
+                {
+                    if (records.TryGetValue(key, out var value))
+                    {
+                        found[key] = value;
+                    }
+                }
+
+                return Task.FromResult(new GatedMultiReadResult { Values = found });
+            });
+
         tree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(call => Task.FromResult(records.ContainsKey(call.ArgAt<string>(0))));
 

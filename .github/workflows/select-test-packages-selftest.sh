@@ -544,6 +544,336 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 7. Sample -> test-project dependency seeding (issue #2653).
+#
+#    A samples-only change used to seed nothing, so CI reported "no
+#    test-relevant files changed" for a change whose changed file was the body
+#    of a test. These arms pin both directions of the fix, and - because an
+#    absence is textually identical to a check that never ran - 7e validates the
+#    method itself against a planted, known-good case before 7d's negative
+#    result is believed.
+# ---------------------------------------------------------------------------
+
+# sample_dependents_for <changed paths...> -> newline-separated packages.
+sample_dependents_for() {
+  printf '%s\n' "$@" | bash "$SELECTOR" --sample-dependents 2>/dev/null
+}
+
+# 7a. The denominator, computed here by a different route than the selector
+#     uses. If this tree contained no sample-path reference at all, every arm
+#     below would pass vacuously.
+independentRefs=$(grep -rlzE 'samples["'"'"']?[[:space:]]*[,/\\][[:space:]]*["'"'"']?RepoContextContainer' \
+                    --include='*.cs' --exclude-dir=bin --exclude-dir=obj test 2>/dev/null | tr '\0' '\n' | grep -c . || true)
+
+check
+if [ "${independentRefs:-0}" -lt 2 ]; then
+  fail "found only ${independentRefs:-0} test source(s) naming samples/RepoContextContainer by path; the sample-dependency arms below would be near-vacuous. If the sample was renamed, retarget these checks - do not delete them."
+else
+  pass "${independentRefs} test source(s) name samples/RepoContextContainer by path, so the sample-dependency arms have a real subject."
+fi
+
+# 7b. The #2653 case, named explicitly. `test/lattice.api.mcp.repocontext` is
+#     the ONLY executor of the provenance suite that lives in the sample, and it
+#     matches none of the content gate's Formal|Hygiene|Docs selectors, so if
+#     this leg is not selected the suite is not run by anything.
+#
+#     This asserts over --sample-dependents, which is the output ci.yml's gate
+#     actually reads, and NOT over the full selection. The distinction was found
+#     by perturbation and is the whole assertion: break the scan and the
+#     selector's no-match fallback selects all 46 packages, so the full
+#     selection still contains this package and a check written against it stays
+#     green - while the gate, seeing an empty --sample-dependents, decides not to
+#     run tests at all. The fallback would have masked a fully reopened hole.
+provenanceDependents="$(sample_dependents_for "samples/RepoContextContainer/scripts/Test-ContainerProvenance.ps1")"
+
+check
+if printf '%s\n' "$provenanceDependents" | grep -qx "lattice.api.mcp.repocontext"; then
+  pass "--sample-dependents names lattice.api.mcp.repocontext for a change to the provenance suite, so ci.yml's gate runs its only executor."
+else
+  fail "--sample-dependents reported \`$(printf '%s' "$provenanceDependents" | tr '\n' ' ')\` for a change to samples/RepoContextContainer/scripts/Test-ContainerProvenance.ps1, which does not name lattice.api.mcp.repocontext - the package whose test project is the suite's only executor. ci.yml's gate reads exactly this output, so the #2653 hole is reopened: the suite is edited and nothing runs it."
+fi
+
+mapfile -t provenanceSelection < <(select_for "samples/RepoContextContainer/scripts/Test-ContainerProvenance.ps1")
+
+check
+if contains "lattice.api.mcp.repocontext" "${provenanceSelection[@]}"; then
+  pass "the full selection for that change also contains lattice.api.mcp.repocontext."
+else
+  fail "the full selection for a samples-only change to the provenance suite was \`${provenanceSelection[*]}\`, which does not include lattice.api.mcp.repocontext."
+fi
+
+# 7c. Targeted, not "run everything". Closing the hole by fanning every samples
+#     change out to the full matrix would be a permanent cost on every sample
+#     edit, so assert the selection stayed small.
+check
+if [ ${#provenanceSelection[@]} -ge $(( packageCount / 2 )) ]; then
+  fail "a samples-only change selected ${#provenanceSelection[@]} of ${packageCount} packages; the sample seeding has degenerated into a full fan-out."
+else
+  pass "a samples-only change selects ${#provenanceSelection[@]} of ${packageCount} packages: \`${provenanceSelection[*]}\`."
+fi
+
+# 7d. The other direction. A sample no test source names must still take the
+#     cheap samples-only lane and select no leg. Computed rather than assumed:
+#     find a sample that currently has no dependent, and fail if there is none
+#     (which would make this arm vacuous and 7e impossible to plant).
+unreferencedSample=""
+sampleProbeTries=0
+for dir in samples/*/; do
+  [ "$sampleProbeTries" -ge 8 ] && break
+  sampleProbeTries=$((sampleProbeTries + 1))
+  candidateSample="$(basename "$dir")"
+  if [ -z "$(sample_dependents_for "samples/${candidateSample}/probe.txt")" ]; then
+    unreferencedSample="$candidateSample"
+    break
+  fi
+done
+
+check
+if [ -z "$unreferencedSample" ]; then
+  fail "none of the first ${sampleProbeTries} samples is free of test-project dependents, so the 'selects nothing' direction cannot be exercised and 7e has nowhere to plant a probe."
+else
+  pass "a change to samples/${unreferencedSample}/ selects no package leg, so the samples-only fast path survives."
+fi
+
+# 7e. Negative control for 7d, executed rather than asserted, and the reason
+#     7d's empty result can be believed at all.
+#
+#     7d passing means "no test source names that sample TODAY". On its own it
+#     is indistinguishable from a scan that finds nothing ever - a dropped
+#     --include, a pattern that no longer matches, a grep flag that changed
+#     meaning would all produce the same empty output and the same green. Plant
+#     a reference to that same sample inside a real package's test tree and
+#     require the selector to start reporting that package; then remove it and
+#     require the report to go back to empty. Only a check that moves in both
+#     directions can tell "not depended on" from "not looking".
+#
+#     The probe is a comment, and a comment is enough because the scan reads
+#     text. That is deliberate: if a crash ever left the file behind it still
+#     compiles, unlike a probe that had to be real code.
+probePackage=""
+for p in "${packages[@]}"; do
+  [ "$p" = "lattice" ] && continue
+  [ "$p" = "lattice.dashboards" ] && continue
+  if [ -d "test/${p}" ] && [ -n "$(find "test/${p}" -maxdepth 1 -name '*.csproj' -type f)" ]; then
+    probePackage="$p"
+    break
+  fi
+done
+
+check
+if [ -z "$unreferencedSample" ] || [ -z "$probePackage" ]; then
+  fail "cannot plant the sample-reference probe (sample='${unreferencedSample}', package='${probePackage}'); the negative control for 7d did not run, so 7d's empty result is unverified."
+else
+  sampleProbe="test/${probePackage}/SelectTestPackagesSampleProbe.tmp.cs"
+  cleanup_sample_probe() { rm -f "$sampleProbe"; }
+  trap cleanup_sample_probe EXIT
+
+  printf '// select-test-packages self-test probe: Path.Combine(root, "samples", "%s", "x")\n' \
+    "$unreferencedSample" > "$sampleProbe"
+
+  plantedDeps="$(sample_dependents_for "samples/${unreferencedSample}/probe.txt")"
+
+  cleanup_sample_probe
+  trap - EXIT
+
+  clearedDeps="$(sample_dependents_for "samples/${unreferencedSample}/probe.txt")"
+
+  if ! printf '%s\n' "$plantedDeps" | grep -qx "$probePackage"; then
+    fail "a planted reference to samples/${unreferencedSample} from test/${probePackage} was NOT reported (got \`$(printf '%s' "$plantedDeps" | tr '\n' ' ')\`); the sample-dependency scan does not see references, so 7d's empty result proves nothing."
+  elif [ -n "$clearedDeps" ]; then
+    fail "removing the planted reference left \`$(printf '%s' "$clearedDeps" | tr '\n' ' ')\` still reported; the scan is not reading the current tree."
+  else
+    pass "the scan reports test/${probePackage} only while a reference to samples/${unreferencedSample} exists, and nothing once it is removed - it moves in both directions."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Doc -> test-project dependency seeding (issue #2974).
+#
+#    Eight markdown files under docs/ are read at runtime by test sources, so
+#    for those the prose IS the fixture's input. The selector discarded every
+#    *.md before the package seed, so they contributed nothing.
+#
+#    The arm that matters is the MIXED change - a src edit plus a doc edit -
+#    and choosing it is the whole of 8b. A docs-only change left the seed empty
+#    and took the no-match fallback to all packages, so it over-selected and
+#    could not miss a test; an assertion written against it would have stayed
+#    green against a completely broken scan. Only when some other file has
+#    already seeded is the fallback inactive, and only then does a dropped doc
+#    edge show up as a missing leg. The measured before/after is:
+#
+#      src/lattice.storage.file/FileStore.cs                     -> 2 packages
+#      + docs/lattice.explorer/what-the-explorer-remembers.md    -> 2 packages
+#
+#    i.e. the doc added nothing at all, and the leg whose tests read it never
+#    ran. That is the defect, and 8b is its direct negation.
+#
+#    8d exists because 8c bounds the selection only from above. A scan that
+#    silently matched nothing would satisfy "targeted" perfectly, so the
+#    expected set is re-computed here by an independent route and asserted as a
+#    floor. 8d2 pins the converse decision: the seed is deliberately additive
+#    only and must NOT narrow a markdown-only change, because that case already
+#    fans out to everything and is safe by construction.
+# ---------------------------------------------------------------------------
+
+# 8a. The denominator, computed by a different route than the selector uses.
+#     If no test source named a doc path at all, every arm below would pass
+#     vacuously - which is exactly the failure mode #2974 is about.
+docIndependentRefs=$(grep -rlzE 'docs["'"'"']?[[:space:]]*[,/\\][[:space:]]*["'"'"']?lattice' \
+                       --include='*.cs' --exclude-dir=bin --exclude-dir=obj test 2>/dev/null | tr '\0' '\n' | grep -c . || true)
+
+check
+if [ "${docIndependentRefs:-0}" -lt 2 ]; then
+  fail "found only ${docIndependentRefs:-0} test source(s) naming a docs/<package>/ path; the doc-dependency arms below would be near-vacuous. If the docs were moved, retarget these checks - do not delete them."
+else
+  pass "${docIndependentRefs} test source(s) name a docs/<package>/ path, so the doc-dependency arms have a real subject."
+fi
+
+# 8b. The #2974 case, named explicitly, in the mixed form the fallback cannot
+#     mask. The control half is asserted too: without the doc the leg is
+#     absent, so a green here cannot come from the package having been selected
+#     for some unrelated reason.
+mapfile -t docMixedControl < <(select_for "src/lattice.storage.file/FileStore.cs")
+mapfile -t docMixedWithDoc < <(select_for "src/lattice.storage.file/FileStore.cs" "docs/lattice.explorer/what-the-explorer-remembers.md")
+
+check
+if contains "lattice.explorer" "${docMixedControl[@]}"; then
+  fail "the control selection \`${docMixedControl[*]}\` already contains lattice.explorer without any doc change, so 8b cannot attribute its presence to the doc edge and proves nothing. Pick a control src file whose selection excludes lattice.explorer."
+elif contains "lattice.explorer" "${docMixedWithDoc[@]}"; then
+  pass "adding docs/lattice.explorer/ to a src-only change adds lattice.explorer to the selection (\`${docMixedControl[*]}\` -> \`${docMixedWithDoc[*]}\`)."
+else
+  fail "a change to src/lattice.storage.file/ plus docs/lattice.explorer/what-the-explorer-remembers.md selected \`${docMixedWithDoc[*]}\`, which does not include lattice.explorer - the package whose test sources read that doc. The #2974 hole is reopened: the doc is edited, the seed is already non-empty so the no-match fallback does not fire, and nothing runs the tests that read it."
+fi
+
+# 8c. Targeted, not "run everything". Closing the hole by fanning every mixed
+#     change out to the full matrix would be a permanent cost on every edit
+#     that happens to touch a doc, so assert the selection stayed small.
+check
+if [ ${#docMixedWithDoc[@]} -ge $(( packageCount / 2 )) ]; then
+  fail "a src change plus a docs/lattice.explorer/ change selected ${#docMixedWithDoc[@]} of ${packageCount} packages; the doc seeding has degenerated into a full fan-out."
+else
+  pass "a src change plus a docs/lattice.explorer/ change selects ${#docMixedWithDoc[@]} of ${packageCount} packages: \`${docMixedWithDoc[*]}\`."
+fi
+
+# 8d. The floor. 8c bounds the selection from above; without this arm a scan
+#     that silently matched nothing would satisfy 8c perfectly. Re-derive, from
+#     the test tree and without invoking the selector, every package whose
+#     sources name docs/lattice.explorer, and require the mixed selection to
+#     cover all of them.
+#
+#     The trailing separator class is load-bearing and was found by this arm
+#     failing. `docs/lattice.explorer` is a prefix of the real sibling
+#     directories `docs/lattice.explorer.entra` and
+#     `docs/lattice.explorer.entra.web`, so an unanchored pattern credits their
+#     consumers to this doc and demands legs the doc does not justify. The
+#     selector itself is not exposed to this: it captures greedily and then
+#     tests the captured name for package membership, so it resolves the
+#     longest real package name rather than a prefix of one.
+declare -A docExpectedPkgs=()
+while IFS= read -r docSrcFile; do
+  [ -n "$docSrcFile" ] || continue
+  case "$docSrcFile" in test/*) ;; *) continue ;; esac
+  docOwner="${docSrcFile#test/}"
+  docOwner="${docOwner%%/*}"
+  docExpectedPkgs["$docOwner"]=1
+done < <(grep -rlzE 'docs["'"'"']?[[:space:]]*[,/\\][[:space:]]*["'"'"']?lattice\.explorer["'"'"'/\\]' \
+           --include='*.cs' --exclude-dir=bin --exclude-dir=obj test 2>/dev/null | tr '\0' '\n' | grep . || true)
+
+docFloorMissing=()
+for docExpected in "${!docExpectedPkgs[@]}"; do
+  contains "$docExpected" "${docMixedWithDoc[@]}" || docFloorMissing+=("$docExpected")
+done
+
+check
+if [ ${#docExpectedPkgs[@]} -eq 0 ]; then
+  fail "the independent re-derivation found no package whose test sources name docs/lattice.explorer, so the floor is vacuous and 8c's 'targeted' result is unverified."
+elif [ ${#docFloorMissing[@]} -gt 0 ]; then
+  fail "the mixed selection \`${docMixedWithDoc[*]}\` omits \`${docFloorMissing[*]}\`, whose test sources name docs/lattice.explorer by an independent scan. Those legs read the changed doc and are not being run."
+else
+  pass "the mixed selection covers all ${#docExpectedPkgs[@]} package(s) an independent scan says read docs/lattice.explorer: \`${!docExpectedPkgs[*]}\`."
+fi
+
+# 8d2. Doc seeding is ADDITIVE ONLY, and this pins the decision rather than
+#      leaving it to be re-litigated. A markdown-only change must still take
+#      the zero-match fallback and fan out to every package, which arm 5b has
+#      pinned since before #2974. Seeding a doc's consumers there would look
+#      like an optimisation - all packages down to a derived handful - but it
+#      would narrow a case that is currently safe by construction, and any
+#      reference the scan failed to resolve would silently drop a leg the
+#      fallback used to cover. The seed is therefore skipped when nothing else
+#      seeded, which makes the selection a strict superset of the previous
+#      behaviour on every possible input.
+mapfile -t docOnlySelection < <(select_for "docs/lattice.explorer/what-the-explorer-remembers.md")
+
+check
+if [ ${#docOnlySelection[@]} -eq "$packageCount" ]; then
+  pass "a docs-only change to a doc that IS a test input still fans out to all ${packageCount} packages, so doc seeding never narrows an already-safe case."
+else
+  fail "a docs-only change to docs/lattice.explorer/ selected ${#docOnlySelection[@]} of ${packageCount} packages. Doc seeding is meant to be additive only - it must not suppress the zero-match fallback - because narrowing a markdown-only change turns an unresolved doc reference into a silently dropped leg."
+fi
+
+# 8e. Negative control, executed rather than asserted, and the reason any of
+#     the above can be believed. Each arm so far passing means "the scan sees
+#     the references that exist TODAY". A scan that had quietly stopped reading
+#     the tree - a dropped --include, a pattern that no longer matches - would
+#     redden 8b, but a scan that reads the tree while resolving the WRONG
+#     package would not. Plant a reference to a docs directory that currently
+#     has no consumer, require the selector to start reporting the planting
+#     package, remove it, and require the report to stop. Only a check that
+#     moves in both directions distinguishes "not read" from "not looking".
+docProbeDir=""
+docProbeTries=0
+for candidateDocDir in docs/*/; do
+  [ "$docProbeTries" -ge 12 ] && break
+  candidateDoc="$(basename "$candidateDocDir")"
+  contains "$candidateDoc" "${packages[@]}" || continue
+  docProbeTries=$((docProbeTries + 1))
+  mapfile -t candidateMixed < <(select_for "src/lattice.storage.file/FileStore.cs" "docs/${candidateDoc}/probe.md")
+  if ! contains "$candidateDoc" "${candidateMixed[@]}"; then
+    docProbeDir="$candidateDoc"
+    break
+  fi
+done
+
+docProbePackage=""
+for p in "${packages[@]}"; do
+  [ "$p" = "lattice" ] && continue
+  [ "$p" = "lattice.dashboards" ] && continue
+  contains "$p" "${docMixedControl[@]}" && continue
+  if [ -d "test/${p}" ] && [ -n "$(find "test/${p}" -maxdepth 1 -name '*.csproj' -type f)" ]; then
+    docProbePackage="$p"
+    break
+  fi
+done
+
+check
+if [ -z "$docProbeDir" ] || [ -z "$docProbePackage" ]; then
+  fail "cannot plant the doc-reference probe (docs dir='${docProbeDir}', package='${docProbePackage}'); the negative control did not run, so the arms above are unverified."
+else
+  docProbe="test/${docProbePackage}/SelectTestPackagesDocProbe.tmp.cs"
+  cleanup_doc_probe() { rm -f "$docProbe"; }
+  trap cleanup_doc_probe EXIT
+
+  printf '// select-test-packages self-test probe: Path.Combine(root, "docs", "%s", "x.md")\n' \
+    "$docProbeDir" > "$docProbe"
+
+  mapfile -t docPlanted < <(select_for "src/lattice.storage.file/FileStore.cs" "docs/${docProbeDir}/probe.md")
+
+  cleanup_doc_probe
+  trap - EXIT
+
+  mapfile -t docCleared < <(select_for "src/lattice.storage.file/FileStore.cs" "docs/${docProbeDir}/probe.md")
+
+  if ! contains "$docProbePackage" "${docPlanted[@]}"; then
+    fail "a planted reference to docs/${docProbeDir} from test/${docProbePackage} was NOT picked up (selection was \`${docPlanted[*]}\`); the doc-dependency scan does not see references, so every arm above is unverified."
+  elif contains "$docProbePackage" "${docCleared[@]}"; then
+    fail "removing the planted reference left ${docProbePackage} still selected (\`${docCleared[*]}\`); the scan is not reading the current tree."
+  else
+    pass "the scan selects test/${docProbePackage} only while a reference to docs/${docProbeDir} exists, and not once it is removed - it moves in both directions."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 echo
 if [ "$failures" -ne 0 ]; then
   echo "select-test-packages self-test: ${failures} of ${checks} checks FAILED." >&2

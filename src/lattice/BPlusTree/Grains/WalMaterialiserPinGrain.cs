@@ -162,6 +162,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <inheritdoc />
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        PrimeAdvanceArms();
         _bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(_options);
         if (_bucketCount <= 1 || _pinStorage is null)
         {
@@ -324,7 +325,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task ReportAsync(string consumerId, HybridLogicalClock frontier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
-        if (Merge(consumerId, frontier, checkpointOffset: -1))
+        if (Merge(consumerId, frontier, checkpointOffset: NoOffset))
         {
             await ScheduleOrFlushAsync();
         }
@@ -494,18 +495,33 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool Merge(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
         var changed = false;
+        var frontierAdvanced = false;
 
         if (!_state.State.Pins.TryGetValue(consumerId, out var existing) || frontier > existing)
         {
             _state.State.Pins[consumerId] = frontier;
             changed = true;
+            frontierAdvanced = true;
         }
 
-        if (!_state.State.Offsets.TryGetValue(consumerId, out var existingOffset) || checkpointOffset > existingOffset)
+        var hadOffset = _state.State.Offsets.TryGetValue(consumerId, out var existingOffset);
+
+        // An absent offset is the same floor as the no-offset sentinel, so a
+        // brand-new consumer reporting NoOffset has not moved anything the WAL
+        // GC can use even though it does mark the pin dirty below.
+        var offsetAdvanced = checkpointOffset > (hadOffset ? existingOffset : NoOffset);
+
+        if (!hadOffset || checkpointOffset > existingOffset)
         {
             _state.State.Offsets[consumerId] = checkpointOffset;
             changed = true;
         }
+
+        // Classify what this merge actually moved, naming both axes rather than
+        // the first one that happened to move. Offset advancement is the
+        // quantity that lets the GC offset floor move, and until issue #3163 an
+        // offset advance masked whatever the frontier did alongside it.
+        RecordPinAdvance(offsetAdvanced, frontierAdvanced);
 
         if (changed)
         {
@@ -514,6 +530,76 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Records one merged pin report on
+    /// <see cref="LatticeMetrics.MaterialiserPinAdvances"/>, tagged with the
+    /// <see cref="MaterialiserPinAdvanceOutcome"/> naming <b>both</b> axes -
+    /// never the first one that happened to move. Tag pairs are materialised
+    /// once per activation, so the hot path adds no allocation.
+    /// </summary>
+    private void RecordPinAdvance(bool offsetAdvanced, bool frontierAdvanced)
+        => RecordPinAdvance(
+            (offsetAdvanced, frontierAdvanced) switch
+            {
+                (true, true) => MaterialiserPinAdvanceOutcome.Both,
+                (true, false) => MaterialiserPinAdvanceOutcome.OffsetOnly,
+                (false, true) => MaterialiserPinAdvanceOutcome.FrontierOnly,
+                (false, false) => MaterialiserPinAdvanceOutcome.None,
+            });
+
+    /// <summary>
+    /// Adds <paramref name="delta"/> to the advance counter under
+    /// <paramref name="outcome"/>. Called with one to report a real merge and
+    /// with zero to prime an arm, so both paths carry an identical tag tuple and
+    /// cannot split the series between them.
+    /// </summary>
+    private void RecordPinAdvance(MaterialiserPinAdvanceOutcome outcome, long delta = 1)
+    {
+        _ = TreeTag;
+        LatticeMetrics.MaterialiserPinAdvances.Add(
+            delta,
+            _treeTagPair,
+            ClassifyPinAdvance(outcome),
+            _tenantTagPair);
+    }
+
+    /// <summary>
+    /// Maps a <see cref="MaterialiserPinAdvanceOutcome"/> onto its pre-allocated
+    /// <see cref="LatticeMetrics.TagOutcome"/> tag. Held exhaustively armed by
+    /// the instrumented-enum gate, so an outcome added later cannot be reported
+    /// under another outcome's arm or under none.
+    /// </summary>
+    private static KeyValuePair<string, object?> ClassifyPinAdvance(MaterialiserPinAdvanceOutcome outcome)
+        => outcome switch
+        {
+            MaterialiserPinAdvanceOutcome.None => LatticeMetrics.OutcomePinNoAdvance,
+            MaterialiserPinAdvanceOutcome.FrontierOnly => LatticeMetrics.OutcomePinFrontierOnly,
+            MaterialiserPinAdvanceOutcome.OffsetOnly => LatticeMetrics.OutcomePinOffsetOnly,
+            MaterialiserPinAdvanceOutcome.Both => LatticeMetrics.OutcomePinBothAdvanced,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(outcome), outcome, "Unarmed leaf-materialiser pin advance outcome."),
+        };
+
+    /// <summary>
+    /// Zero-primes every <see cref="MaterialiserPinAdvanceOutcome"/> arm for this
+    /// shard's tree, so an absent series means no pin grain is live for the tree
+    /// on this silo rather than that the arm's condition never occurred.
+    /// <para>
+    /// Without this, the arm a reader most wants is the one least likely to
+    /// exist: a consumer whose frontier never moves emits no <c>frontier_only</c>
+    /// and no <c>both</c> at all, and an absent series is byte-identical at the
+    /// query to a build that was never deployed. Adding zero creates the series
+    /// without perturbing any value.
+    /// </para>
+    /// </summary>
+    private void PrimeAdvanceArms()
+    {
+        foreach (var outcome in Enum.GetValues<MaterialiserPinAdvanceOutcome>())
+        {
+            RecordPinAdvance(outcome, delta: 0);
+        }
     }
 
     /// <summary>
@@ -817,12 +903,36 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private const string MaterialiserPinCoalescedOutcome = "coalesced";
 
     private string? _treeTag;
+    private KeyValuePair<string, object?> _treeTagPair;
+    private KeyValuePair<string, object?> _tenantTagPair;
+
+    /// <summary>
+    /// The no-offset sentinel a consumer reports when it has no durable
+    /// checkpoint offset to pin (the value <see cref="ReportAsync"/> supplies).
+    /// Also the floor an absent offset is compared against, so "no offset yet"
+    /// and "explicitly no offset" classify identically.
+    /// </summary>
+    private const long NoOffset = -1;
 
     /// <summary>
     /// The logical tree id this pin shard belongs to, used as the metric tree
     /// tag. The grain key is either the bare <c>{treeName}</c> (single-shard
     /// layout) or a shard-suffixed key; the suffix is stripped so every shard of
-    /// a tree reports under the same tree tag.
+    /// a tree reports under the same tree tag. Materialising it also caches the
+    /// tree and tenant tag pairs used by the per-report advance counter.
     /// </summary>
-    private string TreeTag => _treeTag ??= WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+    private string TreeTag
+    {
+        get
+        {
+            if (_treeTag is null)
+            {
+                _treeTag = WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+                _treeTagPair = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeTag);
+                _tenantTagPair = LatticeTenantLabel.ForTree(_treeTag);
+            }
+
+            return _treeTag;
+        }
+    }
 }

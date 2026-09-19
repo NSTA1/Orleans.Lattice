@@ -37,7 +37,11 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Provider, Is.EqualTo(EmbedExecutionProvider.Cpu));
             Assert.That(options.Port, Is.EqualTo(EmbedServerOptions.DefaultPort));
             Assert.That(options.MaxContextLength, Is.EqualTo(EmbedServerOptions.DefaultMaxContextLength));
-            Assert.That(options.IntraOpThreads, Is.EqualTo(0));
+            Assert.That(options.IntraOpThreads, Is.GreaterThanOrEqualTo(1),
+                "an undeclared intra-op count is now derived rather than left at zero, "
+                + "because zero lets ONNX Runtime size its pool from the host core count "
+                + "and ignore the container CPU quota.");
+            Assert.That(options.IntraOpThreadCount.Source, Is.Not.EqualTo(IntraOpThreadSource.Declared));
             Assert.That(options.DeviceId, Is.EqualTo(0));
         });
     }
@@ -59,6 +63,7 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Provider, Is.EqualTo(EmbedExecutionProvider.Cuda));
             Assert.That(options.Port, Is.EqualTo(9500));
             Assert.That(options.IntraOpThreads, Is.EqualTo(4));
+            Assert.That(options.IntraOpThreadCount.Source, Is.EqualTo(IntraOpThreadSource.Declared));
             Assert.That(options.DeviceId, Is.EqualTo(1));
             Assert.That(options.MaxContextLength, Is.EqualTo(256));
         });
@@ -130,7 +135,6 @@ public sealed class EmbedServerOptionsTests
         {
             ["EMBED_PORT"] = "not-a-number",
             ["EMBED_MAX_CONTEXT_LENGTH"] = "-1",
-            ["EMBED_INTRA_THREADS"] = "abc",
         }));
 
         Assert.Multiple(() =>
@@ -138,8 +142,32 @@ public sealed class EmbedServerOptionsTests
             Assert.That(options.Port, Is.EqualTo(EmbedServerOptions.DefaultPort));
             Assert.That(
                 options.MaxContextLength, Is.EqualTo(EmbedServerOptions.DefaultMaxContextLength));
-            Assert.That(options.IntraOpThreads, Is.EqualTo(0));
+            Assert.That(
+                options.IntraOpThreadCount.Source,
+                Is.Not.EqualTo(IntraOpThreadSource.Declared),
+                "with the variable absent the derivation still runs, which is the correct and "
+                + "unchanged half of issue #2887.");
         });
+    }
+
+    [Test]
+    public void FromEnvironment_refuses_an_unusable_intra_op_declaration_rather_than_deriving()
+    {
+        // EMBED_INTRA_THREADS used to be listed alongside the lenient knobs above,
+        // and moving it here is the behaviour change issue #2887 asked for. The
+        // boundary is deliberate and is asserted by the two cases together: the
+        // lenient knobs stay lenient in the test above, and only the knob whose
+        // silent derivation is an unannounced MODE change refuses.
+        Assert.That(
+            () => EmbedServerOptions.FromEnvironment(Environment(new Dictionary<string, string>
+            {
+                ["EMBED_INTRA_THREADS"] = "abc",
+            })),
+            Throws.InvalidOperationException
+                .With.Message.Contains("EMBED_INTRA_THREADS")
+                .And.Message.Contains("abc"),
+            "the refusal has to reach the caller through FromEnvironment, not only through the "
+            + "pure resolver, or the server still boots into a configuration nobody chose.");
     }
 
     private Func<string, string?> Environment(Dictionary<string, string> values) => name =>

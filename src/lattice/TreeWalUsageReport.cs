@@ -34,6 +34,22 @@ public readonly record struct TreeWalUsageReport
     [Id(1)] public long WalRetainedBytes { get; init; }
 
     /// <summary>
+    /// Summed <b>physical</b> WAL bytes across the tree's partitions: every
+    /// byte the backend occupies, inclusive of per-record framing and of dead
+    /// (trimmed but not yet reclaimed) payload. This is the figure that bounds
+    /// disk and the one the byte-pressure threshold is evaluated against;
+    /// <see cref="WalRetainedBytes"/> omits dead bytes and so can understate
+    /// occupancy by a factor approaching two under a log-structured backend's
+    /// default compaction policy (issue #3107).
+    /// <para>
+    /// Falls back to the retained figure for a provider without physical
+    /// accounting, which is exact for a backend whose trim deletes rows and
+    /// therefore carries no dead bytes.
+    /// </para>
+    /// </summary>
+    [Id(4)] public long WalPhysicalBytes { get; init; }
+
+    /// <summary>
     /// <c>true</c> when at least one WAL partition's provider reported the
     /// "byte accounting unsupported" sentinel, so <see cref="WalRetainedBytes"/>
     /// is a lower bound. The aggregator does not publish a wrong byte count

@@ -36,6 +36,7 @@ public partial class BPlusLeafGrainTests
         ILeafCursorReporter? reporter = null,
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         int? maxLeafReplayEntries = null,
+        TimeSpan? starvationDriveBudget = null,
         ILoggerProvider? loggerProvider = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
@@ -93,6 +94,15 @@ public partial class BPlusLeafGrainTests
         // able to lower the budget rather than inflate the WAL.
         if (maxLeafReplayEntries is { } leafReplayBudget)
             baseOptions.MaxLeafReplayEntries = leafReplayBudget;
+
+        // Optional so the production default (5 minutes) stays in force for every
+        // test that does not care. A fixture that drives the starvation-drive
+        // abandonment path has to be able to lower it, because the property under
+        // test - that the permit comes back while the provider is STILL parked -
+        // is only observable within the budget, and a five-minute wait is not a
+        // unit test.
+        if (starvationDriveBudget is { } driveBudget)
+            baseOptions.StarvationDriveBudget = driveBudget;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
@@ -177,7 +187,7 @@ public partial class BPlusLeafGrainTests
         };
 
     private static Task ActivateAsync(BPlusLeafGrain grain, CancellationToken ct = default) =>
-        ((IGrainBase)grain).OnActivateAsync(ct);
+        LeafActivationHarness.ActivateAsync(grain, ct);
 
     [Test]
     public async Task Materialiser_no_op_when_tree_id_unset()
@@ -266,7 +276,12 @@ public partial class BPlusLeafGrainTests
         // Seed the leaf as the owner of "k1", then replay a fresh value.
         // The replay's HLC dominates the seeded value's HLC under LWW.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("replayed"), hlcPhysical: 500));
-        var coord = BuildCoordinator(head: 1, entry);
+        // Head is the NEXT sequence to be assigned (WalShardGrain rebuilds it as
+        // `highest + 1`), so an entry at offset 1 implies a head of 2. This
+        // fixture used to pass head: 1, a WAL production cannot produce (issue
+        // #2668); the seeded cache suppresses the cold-path -1 coercion, so the
+        // impossible head was load-bearing for this test reaching replay at all.
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedEntries: e => e["k1"] = new LwwValue<byte[]>
@@ -290,7 +305,8 @@ public partial class BPlusLeafGrainTests
         // Seed three entries; replay a DeleteRange [k2, k4) that should
         // tombstone k2 and k3 but leave k1 and k4 visible.
         var entry = new CommitLogSliceEntry(1, BuildDeleteRange("k2", "k4", hlcPhysical: 500));
-        var coord = BuildCoordinator(head: 1, entry);
+        // head: 2 for an entry at offset 1 - the head is exclusive (issue #2668).
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedEntries: e =>
@@ -604,7 +620,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Materialiser_replays_multiple_slices_when_budget_exceeded()
     {
-        // Seed > ReplaySliceBudget (256) entries so the inner while-loop
+        // Seed > WalReplaySliceBudget (256) entries so the inner while-loop
         // must stitch slices. Each slice returns at most 256 entries
         // (BuildCoordinator honours the budget arg). The materialiser
         // must continue iterating until fromExclusive reaches head.
@@ -640,7 +656,7 @@ public partial class BPlusLeafGrainTests
     public async Task Materialiser_request_slice_budget_does_not_exceed_const()
     {
         // Bound assertion: the materialiser must never request a slice
-        // larger than the documented ReplaySliceBudget (256). If a
+        // larger than the documented WalReplaySliceBudget (256). If a
         // future refactor accidentally raises the per-call request
         // size the leaf's worst-case activation memory footprint
         // grows unboundedly. NSubstitute captures the largest budget
@@ -1254,7 +1270,8 @@ public partial class BPlusLeafGrainTests
                 Timestamp = new HybridLogicalClock { WallClockTicks = 500 },
                 ShardIndex = 99,
             });
-        var coord = BuildCoordinator(head: 1, entry);
+        // head: 2 for an entry at offset 1 - the head is exclusive (issue #2668).
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 1,

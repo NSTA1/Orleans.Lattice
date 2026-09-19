@@ -565,7 +565,7 @@ the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
   outside this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership range
   on iteration, so the iteration cost is bounded by the leaf's own range
   rather than by the WAL head. The replay still bounds the per-slice work
-  via `ReplaySliceBudget` on the read side.
+  via `WalReplaySliceBudget` on the read side.
 - **Fall-off-log rebuild.** The persisted checkpoint is older than the WAL trim
   watermark - the entries it would replay are no longer available. The
   coordinator falls back to `ILeafProjection.Rebuild`, which drains the leaf's
@@ -816,7 +816,7 @@ The GC publishes one counter on the `orleans.lattice` meter:
 
 | Instrument | Tags | Description |
 |---|---|---|
-| `orleans.lattice.wal.entries_trimmed` | `tree` | Total WAL entries removed by a GC pass. Incremented only when the pass trimmed at least one entry. |
+| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
 
 ## Relationship to replication
 
@@ -865,8 +865,6 @@ tree id and (for `leaf.commit.duration`) the pipeline step.
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
 | `leaf.commit.duration` | histogram (ms) | `tree`, `step` ∈ `{wal, apply, observer}` | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is in-memory-only; `observer` is the publish under the commit-log scope. |
-| `leaf.replay.duration` | histogram (ms) | `tree`, `outcome` ∈ `{tail, rebuild}` | Wall-clock cost of activation-time WAL replay. `tail` is the cheap incremental path; `rebuild` is the fall-off-log path. |
-| `leaf.replay.entries` | counter | `tree`, `result` ∈ `{applied, skipped}` | Mutations consumed during replay. `skipped` covers entries below the persisted checkpoint or out-of-order arrivals filtered by LWW. |
 
 The bundled Grafana dashboards consume these instruments directly; see
 [`../lattice.dashboards/README.md`](../lattice.dashboards/README.md).

@@ -6,8 +6,8 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 public sealed class VectorIndexBuildProgressTests
 {
     private static VectorIndexBuildProgress Progress(
-        VectorIndexBuildPhase phase, int indexed, int expected) =>
-        new(phase, Generation: 1, indexed, expected, PartitionsPersisted: 0, PartitionsTotal: 0,
+        VectorIndexBuildPhase phase, int indexed, int expected, int partitions = 0) =>
+        new(phase, Generation: 1, indexed, expected, PartitionsPersisted: 0, PartitionsTotal: partitions,
             RestoredFromDurableState: false);
 
     [Test]
@@ -15,11 +15,52 @@ public sealed class VectorIndexBuildProgressTests
     {
         foreach (var phase in Enum.GetValues<VectorIndexBuildPhase>())
         {
-            var progress = Progress(phase, 1, 2);
+            var progress = Progress(phase, 1, 2, partitions: 4);
 
             Assert.That(progress.IsReady, Is.EqualTo(phase == VectorIndexBuildPhase.Ready),
                 $"Phase {phase} reported the wrong readiness.");
         }
+    }
+
+    // The phase is necessary but not sufficient, and this is the arm that was
+    // missing. Until issue #2439 this fixture built every value with
+    // PartitionsTotal: 0 and asserted that readiness followed the phase alone, so
+    // a passing test certified the exact behaviour the type documents itself as
+    // not having. Holding the deciding variable constant is what made it possible,
+    // which is why the two arms below vary it and the phase sweep above does not.
+    [Test]
+    public void The_ready_phase_without_a_partitioning_does_not_report_ready()
+    {
+        var progress = Progress(VectorIndexBuildPhase.Ready, 100, 100, partitions: 0);
+
+        Assert.That(progress.IsReady, Is.False,
+            "A build that finished without partitioning does not answer from a partitioning, "
+            + "and IsReady is documented as reporting exactly that.");
+    }
+
+    [Test]
+    public void The_ready_phase_with_a_partitioning_reports_ready()
+    {
+        var progress = Progress(VectorIndexBuildPhase.Ready, 100, 100, partitions: 2);
+
+        Assert.That(progress.IsReady, Is.True);
+    }
+
+    [Test]
+    public void The_ingested_fraction_is_one_for_a_completed_build_that_did_not_partition()
+    {
+        // Deliberately decoupled from IsReady. Partitioning has nothing to do with
+        // how much of the corpus was ingested: this build took in every vector it
+        // was going to, so reporting a fraction below 1 would be a fresh false
+        // signal introduced by a fix for false signals. The two properties answer
+        // different questions and only ever agreed by accident.
+        var progress = Progress(VectorIndexBuildPhase.Ready, 0, 100, partitions: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(progress.IngestedFraction, Is.EqualTo(1d));
+            Assert.That(progress.IsReady, Is.False);
+        });
     }
 
     [Test]

@@ -120,7 +120,30 @@ internal sealed partial class BPlusLeafGrain
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)
+        {
+            // Partition 0 lives in the scalar slot, which has no initializer and
+            // is therefore born 0 rather than at the -1 "nothing applied"
+            // sentinel every other partition uses (issue #2703). An unassigned 0
+            // is genuinely ambiguous - it means either "checkpointed at offset
+            // 0" or "never checkpointed" - so resolve it the conservative way
+            // and report the sentinel. Under-reporting progress costs at most a
+            // re-read of WAL offset 0, whose apply is idempotent; over-reporting
+            // it skips the replay advance that would have recorded the
+            // checkpoint, which is the defect itself. The first assignment sets
+            // ProjectionCheckpointOffsetAssigned, after which a persisted 0 is
+            // read at face value and the deferral disappears for good.
+            //
+            // This is the ONLY place the ambiguity is resolved. Every consumer
+            // of a per-partition checkpoint reads through this accessor, so all
+            // of them are honest by construction rather than by each carrying
+            // its own guard.
+            if (state.State.ProjectionCheckpointOffset == 0
+                && state.State.ProjectionCheckpointOffsetAssigned != true)
+            {
+                return -1L;
+            }
             return state.State.ProjectionCheckpointOffset;
+        }
         var arr = state.State.ProjectionCheckpointOffsetsByPartition;
         if (arr is null || partition >= arr.Length)
             return -1L; // "nothing applied" sentinel - legacy state has no per-partition value.
@@ -132,6 +155,10 @@ internal sealed partial class BPlusLeafGrain
         if (partition == 0)
         {
             state.State.ProjectionCheckpointOffset = value;
+            // Records that the scalar now holds an assigned value, so a
+            // persisted 0 stops reading as the ambiguous type default
+            // (issue #2703).
+            state.State.ProjectionCheckpointOffsetAssigned = true;
         }
         // Mirror partition 0 into the array slot (when present) so a
         // host that later reads ProjectionCheckpointOffsetsByPartition
@@ -149,7 +176,7 @@ internal sealed partial class BPlusLeafGrain
             // except partition 0, which mirrors the scalar slot.
             for (var i = 0; i < arr.Length; i++)
                 arr[i] = -1L;
-            arr[0] = state.State.ProjectionCheckpointOffset;
+            arr[0] = GetPersistedCheckpointForPartition(0);
             arr[partition] = value;
             state.State.ProjectionCheckpointOffsetsByPartition = arr;
             return;
@@ -362,7 +389,16 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await MaybeRunPeriodicSnapshotRecheckAsync();
+            // Arm the coverage-lag bound here as well as at activation. A leaf
+            // BORN in this activation has no tree id when the replay samples it
+            // (the birth seam seeds it afterwards), so the activation site
+            // declines - correctly, since arming there would resolve options for
+            // an empty id and can deadlock the silo. This site runs on a leaf
+            // that has provably been seeded and has provably persisted a
+            // checkpoint, which is exactly the population the bound is for, and
+            // the call is idempotent so it costs one field read thereafter.
+            await EnsureCoverageLagTimerAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync(fromCheckpointPersist: true);
         }
         catch (Exception ex)
         {
@@ -580,13 +616,44 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            foreach (var (key, _) in Cache.EnumerateRows())
+            // Walked in bounded key windows clipped to the delete range, rather
+            // than over the whole-cache view. Only keys are retained here, so
+            // nothing on this path needs the rows to stay resident - and the
+            // whole-cache view calls HydrateAll, which ends in DetachSnapshot
+            // and leaves every row resident for the life of the activation,
+            // forfeiting the leaf's cheap division (issue #2771). A replayed
+            // unpredicated range delete is a routine mutation, so before this
+            // change any leaf replaying one lost its lazily hydrated frame.
+            //
+            // Clipping matters as much as windowing. An unpredicated range
+            // delete may span the whole leaf, so a single EnumerateRange over
+            // [startInclusive, endExclusive) would materialise all of it at
+            // once and peak exactly where HydrateAll did - bounded only in the
+            // sense that it could be evicted afterwards, which is not the
+            // property this needs.
+            //
+            // The windows are disjoint, exhaustive and ascending, so
+            // intersecting each with the delete range visits every key in the
+            // range exactly once and in the same order the whole-cache walk
+            // produced. The explicit lower/upper guards the one-pass walk
+            // needed are now carried by the range bounds themselves.
+            foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
             {
-                if (string.CompareOrdinal(key, startInclusive) < 0)
+                var from = windowStart is null
+                    || string.CompareOrdinal(windowStart, startInclusive) < 0
+                        ? startInclusive
+                        : windowStart;
+                var to = windowEnd is null
+                    || string.CompareOrdinal(windowEnd, endExclusive) > 0
+                        ? endExclusive
+                        : windowEnd;
+                if (string.CompareOrdinal(from, to) >= 0)
                     continue;
-                if (string.CompareOrdinal(key, endExclusive) >= 0)
-                    break;
-                (toRewrite ??= []).Add(key);
+
+                foreach (var (key, _) in Cache.EnumerateRange(from, to))
+                {
+                    (toRewrite ??= []).Add(key);
+                }
             }
         }
 

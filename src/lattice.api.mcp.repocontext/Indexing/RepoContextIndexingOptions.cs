@@ -36,6 +36,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="EmbeddingGapScanInterval"/> (in seconds).</summary>
     public const string EmbeddingGapScanIntervalSecondsKey = "LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS";
 
+    /// <summary>Environment variable overriding <see cref="CoverageDigestAuditInterval"/> (in seconds).</summary>
+    public const string CoverageDigestAuditIntervalSecondsKey = "LATTICE_COVERAGE_DIGEST_AUDIT_INTERVAL_SECONDS";
+
     /// <summary>Environment variable overriding <see cref="VectorCacheTtl"/> (in seconds).</summary>
     public const string VectorCacheTtlSecondsKey = "LATTICE_VECTOR_CACHE_TTL_SECONDS";
 
@@ -53,6 +56,9 @@ internal sealed class RepoContextIndexingOptions
 
     /// <summary>Environment variable overriding <see cref="AnnIndexReclamation"/>.</summary>
     public const string AnnIndexReclamationKey = "LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION";
+
+    /// <summary>Environment variable overriding <see cref="AnnSweepInterval"/> (in seconds).</summary>
+    public const string AnnSweepIntervalSecondsKey = "LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS";
 
     /// <summary>The <see cref="SemanticRetrieval"/> value selecting the persisted approximate index (the default).</summary>
     public const string SemanticRetrievalApproximate = "approximate";
@@ -110,15 +116,75 @@ internal sealed class RepoContextIndexingOptions
     /// files whose structural record is committed but whose vector never landed. Expressed
     /// as wall clock; what the reconcile counts is <see cref="PassesPerEmbeddingGapScan"/>.
     /// <para>
-    /// The probe costs two membership reads per indexed source, so on a converged
-    /// repository it is by far the most expensive part of a pass while finding nothing.
-    /// Spacing it out does not delay healing: the self-index grain runs a continuous,
+    /// <b>Why this is now 20 minutes and no longer 4 hours - the derivation, kept next to
+    /// the constant (issue #2486).</b> The old figure was a consequence of the old cost
+    /// model, not a judgement about how quickly a gap should be found. Detection used to
+    /// cost two membership point-reads per indexed source: 2N reads on a corpus of N
+    /// sources, against the one tree that is the write-ahead-log replay-debt hotspot behind
+    /// the symbol re-embed loop (issue #2071). At the ~20k-source scale this deployment
+    /// runs, that is ~40,000 reads per scan on the hottest tree in the system, so the only
+    /// way to make it affordable was to ration it - hence 4 hours (issue #2049), which is
+    /// roughly one scan per 12 reconciles. Detection frequency and replay debt were
+    /// therefore coupled: the window could not be shortened without making the hotspot
+    /// worse.
+    /// </para>
+    /// <para>
+    /// The per-page coverage digest breaks that coupling. A scan now reads
+    /// <see cref="RepoContextCoveragePage.PageCount"/> pages plus one state marker - 257
+    /// rows - on a <b>different</b> tree
+    /// (<see cref="RepoContextTrees.VectorCoverage"/>), and that figure does not move with
+    /// N. So the cost that justified 4 hours is gone in two independent ways at once: it is
+    /// ~155x smaller at 20k sources, and none of it lands on the #2071 hotspot.
+    /// </para>
+    /// <para>
+    /// <b>Re-derived from the new cost model.</b> The remaining reason not to simply scan
+    /// every pass is that the scan is not free: it still walks the structural file range
+    /// (keys only, a read the pass performs anyway) and reads 257 digest rows. Setting the
+    /// interval at or below <see cref="MaximumReconcileSpacing"/> would make
+    /// <see cref="PassesPerEmbeddingGapScan"/> equal 1 - a scan every pass, ~257 rows every
+    /// ~20 minutes. 20 minutes is exactly that boundary at the default spacing
+    /// (<see cref="ReconcileInterval"/> 15 minutes + <see cref="ReconcileIntervalJitter"/>
+    /// 5 minutes), so this value is the shortest detection window the scheduler can
+    /// express, chosen deliberately: at 257 rows there is nothing left to ration, and
+    /// worst-case gap-detection latency drops from ~4 hours to one reconcile.
+    /// </para>
+    /// <para>
+    /// <b>The break-even, stated so the constant is not read as unconditionally cheaper.</b>
+    /// The digest costs a fixed 257 rows, the old probe cost 2N. Below roughly 128 indexed
+    /// sources the old probe was the cheaper read. That is not a regime worth optimising
+    /// for - a 128-source repository reconciles in milliseconds either way - but the digest
+    /// is an accelerator for large corpora, not a universal improvement, and the crossover
+    /// belongs next to the number.
+    /// </para>
+    /// <para>
+    /// Spacing still does not delay healing: the self-index grain runs a continuous,
     /// bounded, paged gap sweep out of band and forces an immediate in-pass scan the moment
     /// it finds a gap, and a repository that has not yet been observed clean is re-probed
     /// on every pass until it is.
     /// </para>
     /// </summary>
-    public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromHours(4);
+    public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// How often the coverage digest is re-derived from an authoritative whole-set
+    /// membership scan, bounding how far the digest can drift from the membership tree it
+    /// mirrors.
+    /// <para>
+    /// This is the O(sources) read that <see cref="EmbeddingGapScanInterval"/> used to be,
+    /// and moving it here is the point of the split: the expensive exhaustive read now runs
+    /// on a long cadence and does only the job that genuinely needs it, while detection -
+    /// the job that wants to be frequent - runs every pass off the digest. It is a
+    /// correctness backstop, not the healing path: the digest's write ordering makes it a
+    /// subset of membership at every crash point, so the failure it repairs is
+    /// under-reporting, which costs redundant idempotent embeds rather than missed gaps.
+    /// </para>
+    /// <para>
+    /// 24 hours is chosen so the exhaustive scan's amortised cost against the #2071 hotspot
+    /// is 2N reads per day rather than the 2N per 4 hours it was before - a 6x reduction in
+    /// the exhaustive read alone, on top of removing it from the detection path entirely.
+    /// </para>
+    /// </summary>
+    public TimeSpan CoverageDigestAuditInterval { get; init; } = TimeSpan.FromHours(24);
 
     /// <summary>
     /// The widest spacing two consecutive reconciles can be scheduled at:
@@ -143,6 +209,52 @@ internal sealed class RepoContextIndexingOptions
     /// scans on every pass, exactly as it did before the cadence existed.
     /// </summary>
     public int PassesPerEmbeddingGapScan => PassesPerInterval(EmbeddingGapScanInterval);
+
+    /// <summary>
+    /// <see cref="CoverageDigestAuditInterval"/> expressed as a number of reconciles, which
+    /// is the cadence the reconcile actually enforces for the exhaustive coverage-digest
+    /// re-derivation. Never less than one.
+    /// </summary>
+    public int PassesPerCoverageDigestAudit => PassesPerInterval(CoverageDigestAuditInterval);
+
+    /// <summary>
+    /// <see cref="EmbeddingGapScanInterval"/> as the reconcile actually enforces it:
+    /// <see cref="PassesPerEmbeddingGapScan"/> passes at <see cref="MaximumReconcileSpacing"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is the value worth reporting to an operator, and it is not the configured one.
+    /// The deadline is counted in passes, rounded <b>up</b> and clamped to at least one, so
+    /// a configured interval that is not a whole multiple of the reconcile spacing is
+    /// silently lengthened, and one below the spacing is silently raised to a single pass.
+    /// A report that echoed the configured value would confirm a setting that did not take
+    /// - worse than saying nothing, because it is confidently wrong.
+    /// </remarks>
+    public TimeSpan EffectiveEmbeddingGapScanInterval
+        => EnforcedCadence(PassesPerEmbeddingGapScan, EmbeddingGapScanInterval);
+
+    /// <summary>
+    /// <see cref="CoverageDigestAuditInterval"/> as the reconcile actually enforces it:
+    /// <see cref="PassesPerCoverageDigestAudit"/> passes at
+    /// <see cref="MaximumReconcileSpacing"/>. Rounded exactly as
+    /// <see cref="EffectiveEmbeddingGapScanInterval"/> is, and reported for the same reason.
+    /// </summary>
+    public TimeSpan EffectiveCoverageDigestAuditInterval
+        => EnforcedCadence(PassesPerCoverageDigestAudit, CoverageDigestAuditInterval);
+
+    /// <summary>
+    /// The wall-clock cadence a pass-counted deadline resolves to.
+    /// </summary>
+    /// <param name="passes">The pass count the deadline is enforced in.</param>
+    /// <param name="configured">
+    /// The configured interval, returned unchanged when the spacing is non-positive: there
+    /// is then no pass rhythm to round to, so claiming any other figure would invent one.
+    /// </param>
+    /// <returns>The enforced cadence.</returns>
+    private TimeSpan EnforcedCadence(int passes, TimeSpan configured)
+    {
+        var spacing = MaximumReconcileSpacing;
+        return spacing <= TimeSpan.Zero ? configured : passes * spacing;
+    }
 
     /// <summary>
     /// Whether the directory-modification-time prune cache can ever be acted on under
@@ -292,6 +404,67 @@ internal sealed class RepoContextIndexingOptions
         AnnIndexScheduling && SemanticRetrieval == RepoContextSemanticRetrievalMode.Approximate;
 
     /// <summary>
+    /// The floor on <see cref="EffectiveAnnSweepInterval"/>. Arming is idempotent, so a
+    /// re-sweep is cheap, but it is one grain call and one reminder re-registration per
+    /// registered repository - which must not become a hot loop on a host that configures
+    /// a very short interval.
+    /// </summary>
+    public static readonly TimeSpan MinimumAnnSweepInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How often the approximate-index build sweep re-arms every registered repository's
+    /// build coordinator. Resolved from <see cref="AnnSweepIntervalSecondsKey"/>; floored
+    /// at <see cref="MinimumAnnSweepInterval"/> when read, through
+    /// <see cref="EffectiveAnnSweepInterval"/>.
+    /// <para>
+    /// <b>This is deliberately not derived from <see cref="ReconcileInterval"/>, and used
+    /// to be (issue #2459).</b> The two pace unrelated subsystems: the reconcile walks the
+    /// workspace for changed files, while the sweep arms index build coordinators. An
+    /// operator who raised the reconcile interval to quiesce walk load - a reasonable and
+    /// innocuous-looking action, with nothing in its name or documentation to suggest
+    /// otherwise - also throttled arming by the same factor, observed live at 86400s
+    /// against this 60s floor, a factor of 1440.
+    /// </para>
+    /// <para>
+    /// That is worse than a slow sweep. Two things arm a coordinator: this sweep, and the
+    /// self-index grain finishing a vectorising pass. A converged repository whose index
+    /// was never built has no vectorising pass to finish, so the sweep is its <b>only</b>
+    /// arming path - and the vectorising pass was paced by the reconcile interval too, so
+    /// raising it did not slow one path of two, it slowed the only two that exist. The
+    /// index then serves nothing and the retrieval counter records only
+    /// <c>state="bootstrapping"</c>, which is indistinguishable at the metric from a
+    /// genuine approximate-index defect. The coupling did not merely degrade the system;
+    /// it manufactured a fault that was then misattributed.
+    /// </para>
+    /// <para>
+    /// The default is 15 minutes, which is <see cref="ReconcileInterval"/>'s own default,
+    /// so a host that configures neither variable sweeps at exactly the cadence it did
+    /// before this option existed. The only deployments whose behaviour changes are those
+    /// that set the reconcile interval - which is precisely the population the coupling
+    /// was mistreating.
+    /// </para>
+    /// </summary>
+    public TimeSpan AnnSweepInterval { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// <see cref="AnnSweepInterval"/> with <see cref="MinimumAnnSweepInterval"/> applied.
+    /// This is the value the sweep actually runs at, and the one to report: deriving it
+    /// here rather than at the sweep is what keeps the cadence the host announces and the
+    /// cadence it runs from being two separate calculations that can drift apart.
+    /// </summary>
+    public TimeSpan EffectiveAnnSweepInterval =>
+        AnnSweepInterval > MinimumAnnSweepInterval ? AnnSweepInterval : MinimumAnnSweepInterval;
+
+    /// <summary>
+    /// Whether <see cref="MinimumAnnSweepInterval"/> is what decides
+    /// <see cref="EffectiveAnnSweepInterval"/>, rather than the configured
+    /// <see cref="AnnSweepInterval"/>. Reported so an operator who configures a shorter
+    /// interval and observes a longer one is told the floor raised it, instead of being
+    /// left to conclude the setting was ignored.
+    /// </summary>
+    public bool AnnSweepIntervalIsFloored => AnnSweepInterval <= MinimumAnnSweepInterval;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -307,12 +480,15 @@ internal sealed class RepoContextIndexingOptions
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
             EmbeddingGapScanInterval = ReadSeconds(
                 EmbeddingGapScanIntervalSecondsKey, defaults.EmbeddingGapScanInterval),
+            CoverageDigestAuditInterval = ReadSeconds(
+                CoverageDigestAuditIntervalSecondsKey, defaults.CoverageDigestAuditInterval),
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
             SemanticRetrieval = ReadSemanticRetrieval(SemanticRetrievalKey, defaults.SemanticRetrieval),
             AnnIndexScheduling = ReadBoolean(AnnIndexSchedulingKey, defaults.AnnIndexScheduling),
             AnnIndexReclamation = ReadBoolean(AnnIndexReclamationKey, defaults.AnnIndexReclamation),
+            AnnSweepInterval = ReadSeconds(AnnSweepIntervalSecondsKey, defaults.AnnSweepInterval),
         };
     }
 

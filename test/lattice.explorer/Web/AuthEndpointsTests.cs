@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
@@ -19,6 +20,7 @@ namespace Orleans.Lattice.Explorer.Tests.Web;
 /// in or out (login / logout CSRF).
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no external dependency; measured at 1 second for 4 tests, below the 5-second threshold.")]
 public class AuthEndpointsTests
 {
     private const string TokenFieldName = "__RequestVerificationToken";

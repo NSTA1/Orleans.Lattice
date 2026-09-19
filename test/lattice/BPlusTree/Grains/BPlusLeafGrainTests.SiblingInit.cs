@@ -51,6 +51,8 @@ public sealed class BPlusLeafGrainSiblingInitTests
             HighKeyExclusive = "z",
             NextSibling = next,
             PrevSibling = prev,
+            MovedAwaySlots = new[] { 3, 9 },
+            MovedAwayVirtualShardCount = 16,
         });
 
         Assert.That(state.State.TreeId, Is.EqualTo("tree-1"));
@@ -59,6 +61,11 @@ public sealed class BPlusLeafGrainSiblingInitTests
         Assert.That(state.State.HighKeyExclusive, Is.EqualTo("z"));
         Assert.That(state.State.NextSibling, Is.EqualTo(next));
         Assert.That(state.State.PrevSibling, Is.EqualTo(prev));
+
+        // The moved-away seal is a birth-time slot like any other, so "every
+        // slot" has to include it or this fixture's name over-claims. Issue 3121.
+        Assert.That(state.State.MovedAwaySlots, Is.EqualTo(new[] { 3, 9 }));
+        Assert.That(state.State.MovedAwayVirtualShardCount, Is.EqualTo(16));
 
         // One write covers the whole batch, not five.
         Assert.That(state.WriteCount, Is.EqualTo(1));
@@ -131,7 +138,14 @@ public sealed class BPlusLeafGrainSiblingInitTests
         // grain in its default single-partition checkpoint shape.
         await grain.SetCheckpointOffsetHintsAsync([0]);
 
-        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(0));
+        // The sentinel, not 0. A skipped hint assigns nothing, and since
+        // issue #2703 an unassigned partition-0 checkpoint reports -1 rather
+        // than the born-0 scalar. That distinction is what this test needs to
+        // exist: while the unassigned value read back as 0 this assertion
+        // could not tell "the non-positive entry was skipped" from "the 0 hint
+        // was applied", so the property in the test's own name was the one
+        // thing it could not observe.
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1));
     }
 
     [Test]

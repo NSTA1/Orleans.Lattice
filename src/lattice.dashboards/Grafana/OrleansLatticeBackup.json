@@ -900,6 +900,35 @@
           "legendFormat": "{{scope}}"
         }
       ]
+    },
+    {
+      "id": 27,
+      "title": "Scheduler capture failures by reason",
+      "description": "Capture cycles that faulted, split by classified reason. A rising permission-denied series means a gated host is refusing scheduled backups; without it a denial presents only as an absence of successful captures.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_backup_scheduler_failures_total{scope=~\"$scope\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
     }
   ]
 }

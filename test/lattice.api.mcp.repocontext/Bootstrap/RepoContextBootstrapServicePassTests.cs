@@ -652,6 +652,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
 
         public void Dispose()
         {
+            Service.Dispose();
             _loggerFactory.Dispose();
             try
             {

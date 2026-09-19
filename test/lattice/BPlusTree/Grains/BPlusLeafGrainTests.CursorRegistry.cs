@@ -25,7 +25,8 @@ public partial class BPlusLeafGrainTests
         string? treeId = CursorTreeId,
         ILeafCursorReporter? reporter = null,
         bool registerReporter = true,
-        IServiceProvider? servicesOverride = null)
+        IServiceProvider? servicesOverride = null,
+        int walPartitions = 1)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -54,7 +55,7 @@ public partial class BPlusLeafGrainTests
             state.State.TreeId = treeId;
 
         var grainFactory = Substitute.For<IGrainFactory>();
-        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions { WalPartitions = 1 }, maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions { WalPartitions = walPartitions }, maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
         var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         return (grain, reporter, state);
     }

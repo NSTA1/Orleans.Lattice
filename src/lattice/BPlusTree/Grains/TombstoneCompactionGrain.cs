@@ -107,7 +107,8 @@ internal sealed class TombstoneCompactionGrain(
     /// Everything a leaf batch may mutate about its position within the current
     /// shard, as one value. The chain walk resumes from a <b>key</b>, the
     /// dirty-leaves fast path from an <b>index</b> into its persisted snapshot,
-    /// and the snapshot itself is pulled and cleared by the same batch - but
+    /// and the snapshot itself is pulled by the batch that enters a shard and
+    /// dropped by whichever path leaves it - but
     /// every caller that guards a state write has to save and restore all of it
     /// as a unit, or a failing persist leaves the activation's position ahead of
     /// disk (issue 1973). The superseded leaf-id cursor is carried too, so
@@ -144,11 +145,26 @@ internal sealed class TombstoneCompactionGrain(
     /// leaf-id cursor, so state written by an older build cannot survive into a
     /// pass that no longer reads it.
     /// </summary>
+    /// <remarks>
+    /// The dirty-leaves snapshot is part of the position, not a cache beside
+    /// it: the list names leaves ONE shard root nominated, and the watermark is
+    /// only meaningful against that same shard's dirty set. Leaving either in
+    /// place makes the next shard's first batch find a non-null list, skip its
+    /// own <c>GetDirtyLeavesSinceLastCompactionAsync</c> entirely, walk leaves
+    /// it was never handed, and then drain its dirty set up to a watermark it
+    /// never observed - discarding dirty-leaf signal for leaves that were never
+    /// compacted. The completion path clears it explicitly, so the gap was only
+    /// ever on the paths that LEAVE a shard without finishing it: the
+    /// retries-exhausted skip, a scoped or operator pass re-entering at a
+    /// different shard, and pass completion.
+    /// </remarks>
     private void ClearShardCursor()
     {
         state.State.NextLeafKeyInShard = null;
         state.State.CurrentShardDirtyIndex = 0;
         state.State.NextLeafIdInShard = null;
+        state.State.CurrentShardDirtyLeaves = null;
+        state.State.CurrentShardDirtyAdvance = default;
     }
 
     /// <summary>
@@ -941,17 +957,59 @@ internal sealed class TombstoneCompactionGrain(
 
                 while (dirtyIndex < dirtyLeaves.Length)
                 {
-                    var dirtyLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(GrainId.Parse(dirtyLeaves[dirtyIndex]));
+                    var dirtyLeafId = GrainId.Parse(dirtyLeaves[dirtyIndex]);
+                    var dirtyLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(dirtyLeafId);
                     try
                     {
                         await dirtyLeaf.CompactTombstonesAsync(gracePeriod);
                     }
-                    catch
+                    catch (Exception leafEx)
                     {
+                        // A leaf that will not compact is a LEAF-scoped fault and
+                        // must not abort the shard's walk. Re-throwing here left
+                        // dirtyIndex pinned on the blocker for the life of the
+                        // process: the index only reaches storage at a batch
+                        // boundary the throw skips, so every pass re-nominated the
+                        // identical list, starved every leaf behind the blocker,
+                        // and spent a *shard*-scoped retry budget on a *leaf*-scoped
+                        // fault (issue 2926).
+                        //
+                        // Advancing past it is only safe once the blocker's own
+                        // dirty mark has been lifted above the watermark this pass
+                        // will drain to. Without that, completing the shard calls
+                        // ClearDirtyLeavesUpToAsync(advance), which removes every
+                        // entry marked at-or-before it - the blocker included - so
+                        // the one leaf the exercise exists to reclaim becomes the
+                        // one leaf silently forgotten, and the shard reports clean
+                        // success while doing it. That trade improves every
+                        // observable while degrading the thing being measured, so
+                        // it is refused below: when the mark cannot be retained the
+                        // fault is re-raised and the pre-2926 head-of-line stall
+                        // stands. A loud stall beats a quiet omission.
                         RecordSkippedLeaf(physicalTreeId, pathTag, triggerScope is not null);
-                        throw;
+                        try
+                        {
+                            await shardRoot.RetainDirtyLeafAsync(
+                                dirtyLeafId, state.State.CurrentShardDirtyAdvance);
+                        }
+                        catch (Exception retainEx)
+                        {
+                            logger.LogWarning(retainEx,
+                                "Leaf {LeafId} of shard {ShardKey} refused to compact ({LeafFault}) and its dirty mark could not be retained above the pass watermark; failing the batch so the drain cannot discard it.",
+                                dirtyLeafId, shardKey, leafEx.Message);
+                            throw;
+                        }
+
+                        logger.LogWarning(leafEx,
+                            "Leaf {LeafId} of shard {ShardKey} refused to compact; recorded as skipped and its dirty mark retained above the pass watermark, so the walk continues and the next pass re-nominates it.",
+                            dirtyLeafId, shardKey);
                     }
 
+                    // Charged for a skipped leaf as well as a compacted one: a
+                    // skip still costs the grain call the leaf cap exists to
+                    // bound, and before 2926 a failing leaf left the loop by
+                    // throwing, so the cap was never charged for the very case
+                    // that can repeat across a whole shard.
                     dirtyIndex++;
                     budget.RecordLeafVisited();
 
@@ -967,12 +1025,20 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     // Dirty-set path completion: drain the shard-root dirty
                     // set up to the watermark we observed at snapshot time.
+                    // Read the watermark before clearing, which now drops the
+                    // snapshot with the rest of the in-shard position.
                     // Best-effort - a transient failure here just leaves the
                     // entries in place for the next pass to re-walk.
+                    //
+                    // Leaves skipped during this walk are NOT drained: each was
+                    // re-marked strictly above `advance` before the walk moved
+                    // past it, so the existing strictly-greater preservation
+                    // rule in ClearDirtyLeavesUpToAsync retains exactly them and
+                    // the next pass re-nominates them (issue 2926). Nothing here
+                    // needs to know which leaves those were - the ordering is
+                    // what carries the guarantee.
                     var advance = state.State.CurrentShardDirtyAdvance;
                     ClearShardCursor();
-                    state.State.CurrentShardDirtyLeaves = null;
-                    state.State.CurrentShardDirtyAdvance = default;
                     try
                     {
                         await shardRoot.ClearDirtyLeavesUpToAsync(advance);
@@ -1038,9 +1104,18 @@ internal sealed class TombstoneCompactionGrain(
     /// Tags the per-leaf visited counter with <c>outcome=skipped</c> for a leaf
     /// the coordinator gave up on, so operators can distinguish it from a leaf
     /// that legitimately had nothing to reap (<c>outcome=noop</c>) or actively
-    /// reaped (<c>outcome=reaped</c>). The caller re-throws afterwards, so the
+    /// reaped (<c>outcome=reaped</c>).
+    /// <para>
+    /// On the legacy chain walk the caller re-throws afterwards, so the
     /// surrounding shard-level retry/skip logic in <c>ProcessNextShardAsync</c>
-    /// still drives the shard.retries / shard.skipped counters.
+    /// still drives the shard.retries / shard.skipped counters. On the
+    /// dirty-set fast path it does not: since issue 2926 a leaf fault is
+    /// absorbed, the leaf's dirty mark is retained above the pass watermark,
+    /// and the walk continues, so this counter is the ONLY signal that a
+    /// specific leaf is wedged. It fires once per blocker per pass for as long
+    /// as the blocker persists, which is what keeps the condition loud now that
+    /// it no longer also stalls the shard.
+    /// </para>
     /// </summary>
     private void RecordSkippedLeaf(string physicalTreeId, KeyValuePair<string, object?> pathTag, bool tagTrigger)
     {

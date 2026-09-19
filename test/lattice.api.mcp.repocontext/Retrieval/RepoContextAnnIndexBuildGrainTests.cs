@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoContextAnnIndexBuildGrainTests
+public sealed partial class RepoContextAnnIndexBuildGrainTests
 {
     private const string RepoId = AnnPlaneFixture.RepoId;
 
@@ -68,7 +68,23 @@ public sealed class RepoContextAnnIndexBuildGrainTests
 
         public required IGrainContext Context { get; init; }
 
-        public void Dispose() => Registry.Dispose();
+        /// <summary>
+        /// The timer registry the coordinator base class armed its phase pump
+        /// through. Holding it lets a test recover the real timer callback and
+        /// drive a tick the way production does - with a token - rather than
+        /// calling <c>ProcessNextPhaseAsync</c> directly, which bypasses the
+        /// very publication under test.
+        /// </summary>
+        public required ITimerRegistry Timers { get; init; }
+
+        /// <summary>The build-corpus reporter this activation's grain emits onto.</summary>
+        public required RepoContextAnnBuildCorpusReporter CorpusReporter { get; init; }
+
+        public void Dispose()
+        {
+            Registry.Dispose();
+            CorpusReporter.Dispose();
+        }
     }
 
     /// <summary>
@@ -99,16 +115,23 @@ public sealed class RepoContextAnnIndexBuildGrainTests
             // activation's service provider, so a test that drives arming
             // end-to-end needs a timer registry wired in.
             var services = Substitute.For<IServiceProvider>();
-            services.GetService(typeof(ITimerRegistry)).Returns(Substitute.For<ITimerRegistry>());
+            var timers = Substitute.For<ITimerRegistry>();
+            services.GetService(typeof(ITimerRegistry)).Returns(timers);
             context.ActivationServices.Returns(services);
 
             var reminders = Substitute.For<IReminderRegistry>();
+            var corpusReporter = new RepoContextAnnBuildCorpusReporter();
+            var sliceReporter = new RepoContextAnnBuildSliceReporter();
             var grain = new RepoContextAnnIndexBuildGrain(
                 context,
                 reminders,
                 registry,
                 Backing,
                 Indexing,
+                new NullRepoIndexRunAuthority(),
+                UnrestrictedCorpusGateProbe.Instance,
+                corpusReporter,
+                sliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 State);
 
@@ -118,6 +141,8 @@ public sealed class RepoContextAnnIndexBuildGrainTests
                 Grain = grain,
                 Reminders = reminders,
                 Context = context,
+                Timers = timers,
+                CorpusReporter = corpusReporter,
             };
         }
 

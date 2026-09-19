@@ -46,7 +46,7 @@ internal static class RepoContextRecordMerge
             RepoContextRecordKind.Package => Fold<PackageNode>(serializer, existing, incoming, PackageNode.Merge),
             RepoContextRecordKind.File => Fold<FileNode>(serializer, existing, incoming, FileNode.Merge),
             RepoContextRecordKind.Symbol => Fold<SymbolRecord>(serializer, existing, incoming, SymbolRecord.Merge),
-            RepoContextRecordKind.Memory => FoldMemory(existing, incoming),
+            RepoContextRecordKind.Memory => FoldMemory(key, existing, incoming),
             RepoContextRecordKind.Content => Fold<ContentRecord>(serializer, existing, incoming, ContentRecord.Merge),
             _ => incoming,
         };
@@ -62,11 +62,11 @@ internal static class RepoContextRecordMerge
     /// live conflict set to a single value and lose the losing replica's dot on the
     /// next write.
     /// </summary>
-    private static byte[] FoldMemory(byte[] existing, byte[] incoming)
+    private static byte[] FoldMemory(string key, byte[] existing, byte[] incoming)
     {
         var merged = MvRegister.Merge(
-            RepoContextMemoryCodec.DecodeRegister(existing),
-            RepoContextMemoryCodec.DecodeRegister(incoming));
+            RepoContextMemoryCodec.DecodeRegister(existing, key),
+            RepoContextMemoryCodec.DecodeRegister(incoming, key));
         return JsonLatticeSerializer<MvRegister>.Default.Serialize(merged);
     }
 

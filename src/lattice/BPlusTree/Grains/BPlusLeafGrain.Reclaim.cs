@@ -92,6 +92,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<LeafReclaimProbe> GetReclaimProbeAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         // Reuse CountAsync rather than reading Cache.Count directly: it is the
         // method that already knows about expiry, tombstones, the in-progress
         // split boundary and prepared-but-uncommitted rows. A leaf that looks
@@ -114,7 +116,17 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<bool> TryBeginRetirementAsync()
     {
-        // Latch FIRST, before any await. Everything that makes this decision
+        await AwaitReplayBarrierAsync();
+
+        // Latch FIRST, before any await THAT COULD CARRY AN OBSERVATION ACROSS
+        // IT. The replay-gate await above is deliberately outside that rule and
+        // does not weaken it: nothing has been observed at that point, so there
+        // is no judgement for a concurrent mutation to invalidate. Its effect is
+        // only to delay the whole decision until the projection is real, which
+        // is required - a retirement decision taken against an un-replayed
+        // projection would see an empty leaf and retire a populated one.
+        //
+        // Everything that makes this decision
         // sound depends on the leaf being frozen while it is taken, and the
         // latch is the only thing that freezes it.
         //
@@ -299,6 +311,13 @@ internal sealed partial class BPlusLeafGrain
     /// owner of keys it would then refuse to serve.
     /// </para>
     /// <para>
+    /// There is a third question neither of these can answer, because both
+    /// concern leaves that already exist: may a NEW leaf be minted over part of a
+    /// sealed leaf's range without the seal? That is a division, and it is
+    /// answered at the birth seam by <see cref="MovedAwaySealInheritance"/>
+    /// instead of by a predicate here (issue 3121).
+    /// </para>
+    /// <para>
     /// The moved-away seal is the answer to the second question and it is the
     /// only one, because it is the only leaf state that makes a leaf refuse a
     /// key it legitimately owns. Every other arm of
@@ -400,6 +419,8 @@ internal sealed partial class BPlusLeafGrain
         GrainId? newNext,
         string? absorbHighKeyExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -538,6 +559,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task AbsorbSuccessorRangeAsync(string? highKeyExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         // See SetNextSiblingAsync for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try

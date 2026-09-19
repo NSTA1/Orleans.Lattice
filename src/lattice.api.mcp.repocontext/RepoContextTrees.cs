@@ -97,6 +97,38 @@ internal static class RepoContextTrees
     internal const string VectorIndex = "repo-context-vector-index";
 
     /// <summary>
+    /// Tree holding the per-page vector-coverage digest: a compacted mirror of
+    /// <see cref="VectorMembership"/>, partitioned into
+    /// <see cref="Retrieval.RepoContextCoveragePage.PageCount"/> fixed pages by the
+    /// leading byte of each source identifier, maintained incrementally on the same
+    /// write path that maintains membership (issue #2486). Reading it costs a fixed
+    /// number of rows, so gap detection stops costing two membership point-reads per
+    /// indexed source.
+    /// <para>
+    /// <b>Why a dedicated tree rather than a range inside
+    /// <see cref="VectorMembership"/>.</b> The saving this digest buys is
+    /// specifically a saving on membership reads, because the membership tree is the
+    /// write-ahead-log replay-debt hotspot behind the symbol re-embed loop (issue
+    /// #2071). Digest rows placed in that same tree would convert a read-path saving
+    /// into a write-path cost on the very tree the change exists to relieve, and the
+    /// two would net out to an unknown sign. Held apart, the digest's own churn
+    /// competes for its own replay budget, compacts under its own policy, and can be
+    /// reset independently.
+    /// </para>
+    /// <para>
+    /// It is <see cref="LocalDerived"/> for the same reason
+    /// <see cref="VectorIndex"/> is: it is wholly recomputable from
+    /// <see cref="VectorMembership"/>, so each cluster derives its own far more
+    /// cheaply than it could ship one, and replicating a derived mirror of an
+    /// already-replicated tree would be pure waste. It is also
+    /// <see cref="IsRebuildableVectorTree"/>, because a digest that outlived a reset
+    /// of the membership tree it mirrors would <b>over-report</b> coverage - the one
+    /// unsafe direction, in which a real gap is masked rather than merely re-embedded.
+    /// </para>
+    /// </summary>
+    internal const string VectorCoverage = "repo-context-vector-coverage";
+
+    /// <summary>
     /// Tree holding per-session context-bundle reuse bookkeeping: one
     /// <see cref="RepoContextSessionRecord"/> per <c>(repoId, sessionId)</c>, keyed
     /// by <c>repo/{repoId}/session/{sessionId}</c>, recording the opaque receipts of
@@ -152,6 +184,7 @@ internal static class RepoContextTrees
     internal static IReadOnlyList<string> LocalDerived { get; } = new[]
     {
         VectorIndex,
+        VectorCoverage,
     };
 
     /// <summary>
@@ -221,6 +254,7 @@ internal static class RepoContextTrees
         VectorPayload,
         VectorMetadata,
         VectorIndex,
+        VectorCoverage,
     };
 
     private static readonly IReadOnlySet<string> CodeIndexTreeSet =
@@ -244,8 +278,9 @@ internal static class RepoContextTrees
     /// <summary>
     /// The fail-closed allow-list of derived vector-plane trees the self-healing
     /// re-derivation may reset when one falls terminally off its write-ahead log.
-    /// It contains exactly the two <b>rebuildable</b> vector projections
-    /// (<see cref="VectorMetadata"/> and <see cref="VectorMembership"/>) whose full
+    /// It contains exactly the <b>rebuildable</b> vector projections
+    /// (<see cref="VectorMetadata"/>, <see cref="VectorMembership"/>, and the
+    /// <see cref="VectorCoverage"/> digest derived from membership) whose full
     /// content can be regenerated from the store-of-record structural, symbol, and
     /// memory trees plus the working files. The content-addressed, write-once
     /// <see cref="VectorPayload"/> tree is intentionally excluded (it has no
@@ -255,7 +290,7 @@ internal static class RepoContextTrees
     /// anything not listed here is refused.
     /// </summary>
     private static readonly IReadOnlySet<string> RebuildableVectorTrees =
-        new HashSet<string>(StringComparer.Ordinal) { VectorMetadata, VectorMembership };
+        new HashSet<string>(StringComparer.Ordinal) { VectorMetadata, VectorMembership, VectorCoverage };
 
     /// <summary>
     /// Reports whether <paramref name="treeName"/> is a rebuildable derived
@@ -267,7 +302,7 @@ internal static class RepoContextTrees
     /// never against a tree id parsed from a wire- or exception-supplied string.
     /// </summary>
     /// <param name="treeName">The tree name to classify. May be <see langword="null"/>.</param>
-    /// <returns><see langword="true"/> only for <see cref="VectorMetadata"/> or <see cref="VectorMembership"/>.</returns>
+    /// <returns><see langword="true"/> only for <see cref="VectorMetadata"/>, <see cref="VectorMembership"/>, or <see cref="VectorCoverage"/>.</returns>
     internal static bool IsRebuildableVectorTree(string? treeName)
         => treeName is not null && RebuildableVectorTrees.Contains(treeName);
 

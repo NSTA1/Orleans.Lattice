@@ -31,6 +31,18 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task RebuildProjectionFromWalAsync()
     {
+        // Retire the replay before anything else (issue #2871). This method IS a
+        // replay reset: it clears the projection and sets the checkpoint back so
+        // the NEXT activation re-replays from zero. A replay still in flight from
+        // THIS activation would race that - writing entries into the cache this
+        // method is clearing, and advancing the checkpoint this method is about to
+        // rewind - so the rebuild could complete and leave behind a projection
+        // neither wholly old nor wholly new. Retiring rather than merely
+        // cancelling also stops a later data operation on this activation
+        // re-arming a replay against the half-cleared state; the deactivation at
+        // the end of this method is what returns the leaf to a clean start.
+        RetireReplayBarrier();
+
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG rebuild-enter] gid={context.GrainId} treeId={state.State.TreeId} shardIndex={state.State.ShardIndex} " +
             $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
@@ -87,6 +99,9 @@ internal sealed partial class BPlusLeafGrain
         // -1-for-empty-WAL contract, so the materialiser reads from
         // offset 0 inclusive on the next activation.
         state.State.ProjectionCheckpointOffset = -1;
+        // Clear the assignment marker alongside the sentinel so the rebuilt row
+        // reads as "nothing applied" through every path (issue #2703).
+        state.State.ProjectionCheckpointOffsetAssigned = null;
         // Drop the per-partition slot too: a rebuild seeds a fresh
         // single-partition shape and a future write fans out lazily.
         state.State.ProjectionCheckpointOffsetsByPartition = null;
@@ -102,6 +117,20 @@ internal sealed partial class BPlusLeafGrain
         _pendingTxOffsets = null;
         _recentlyTerminal = null;
         _backstoppedTerminals = null;
+        // The destination-side shadow markers are activation-scoped in exactly
+        // the same way, and dropping them is load-bearing rather than tidy.
+        // _shadowedSagas is gated against _recentlyTerminal: a marker is safe
+        // to serve past only once its saga's terminal has been seen on this
+        // leaf. Clearing _recentlyTerminal while leaving the markers in place
+        // therefore does not preserve the markers, it strands them - every
+        // marked key becomes permanently unsafe for the life of the
+        // activation, because the terminal that would have cleared it has
+        // already been forgotten and cannot arrive twice. The read gate would
+        // raise StaleShardRoutingException for those keys until the grain
+        // deactivates. A fresh activation holds no markers, so dropping them
+        // is what actually makes the rebuild indistinguishable from one, which
+        // is the property the comment above claims.
+        _shadowedSagas = null;
 
         // Drop the cached XxHash128 hasher so the rebuild's first
         // contribution allocates a fresh instance. The cached hasher

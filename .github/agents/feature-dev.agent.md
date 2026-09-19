@@ -115,43 +115,45 @@ These are **scriptable, deterministic checks** that have caused PR-time CI failu
 
 The agent **must invoke each command below verbatim** and **paste the tail of its output into the chat reply** as evidence the gate ran. A claim of "I checked and it's clean" without the corresponding tool transcript is a protocol violation and the work is not complete.
 
+Every gate below is invoked through `tools/Invoke-RepositoryWideGates.ps1`, never through a hand-composed `dotnet test --filter`. A raw filter that matches nothing - a typo, or an invented fixture name - prints `No test matches the given testcase filter` and **exits 0**, so a gate that never ran is byte-identical to a gate that passed. The runner reports the EXECUTED count per fixture and fails any gate that executed zero tests, so following the documented command is sufficient and no extra care is required. See issue #3017.
+
 1. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture TypeAliasesTests -Project test/lattice
    ```
 
 2. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture AuditHygieneRegressionTests -Project test/lattice
    ```
 
 3. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture DocsSnippetCompilationTests -Project test/lattice
    ```
 
 4. **Em-dash hygiene.** Em-dash characters (U+2014) must not appear in any tracked text file - source, tests, docs, build scripts, samples, or configuration. The repo convention is plain ASCII hyphens. Word processors and editors auto-convert `--` to an em-dash on paste, so this leak is recurrent. `EmDashHygieneTests.No_em_dashes_in_tracked_files` enforces it:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture EmDashHygieneTests -Project test/lattice
    ```
 
 6. **Mojibake hygiene.** Byte-level mojibake sequences - UTF-8 bytes decoded as Windows-1252 / CP437 / latin1 and re-encoded as UTF-8 - must not appear in any tracked text file. They sneak in when PR-body text or doc prose is pasted from a terminal or word processor whose code page disagreed with the underlying UTF-8 bytes (this campaign caught arrow and check-mark leaks in doc prose and on a PR-success log line). `MojibakeHygieneTests.No_mojibake_sequences_in_tracked_files` enforces it via a curated trigram set covering smart quotes, smart apostrophes, ellipses, en / em dashes, arrows, and check-marks. `MojibakeHygieneTests.Every_needle_is_actually_detectable_in_an_in_memory_string` is the smoke-detector-battery-test for the gate itself:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MojibakeHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture MojibakeHygieneTests -Project test/lattice
    ```
 
 7. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureStorageEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.replication
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.replication.grpc
+   pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.storage.azuretable
    ```
 
    If a fixture is flagged, either tag it (`[Category("Integration")]` is the default) or, if the detection is a false positive (the fixture stores a `*ClusterFixture`-suffixed type for an unrelated reason), rename the field type so it does not match the detection signal. Do not weaken the detection list to accommodate a single fixture.
@@ -197,7 +199,7 @@ Before telling the user the work is done, self-review. Each numbered item must b
 Only when the user explicitly asks:
 
 1. **Final pre-PR verify.** Before the commit, run the non-chaos suite for **every** test project covering a package the PR touches (per the master, `.github/instructions/testing.instructions.md`), and the core project's targeted hygiene gates when the PR touches repo-level files - confirm `Failed: 0`. The full cross-solution non-chaos suite is **CI's job** on every PR, not a required local step; keep the local run scoped as Phase 6c and the master describe.
-2. **Update `CHANGELOG.md`'s `## [Unreleased]` section** with a one-line entry for the feature (or fix / docs change) about to be committed. Add under the appropriate subsection (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`); create the subsection if it does not yet exist under `[Unreleased]`. Phrase the entry from the user's perspective (what they can now do, or what changed for them), not from the implementation perspective. Do **not** stamp a version number or release date here - that is Phase 9's job. The entry stays under `[Unreleased]` until the next release is cut.
+2. **Update `CHANGELOG.md`'s `## Unreleased` section** with one entry for the feature (or fix / docs change) about to be committed, written to the **entry style** in [`docs/RELEASING.md`](../../docs/RELEASING.md) ("Updating `CHANGELOG.md`" -> "Entry style") - that document is the single source of truth; follow it rather than any copy. In short: a `**<Prefix> - <Short title>.**` heading plus prose totalling **300 characters or fewer**, phrased from the user's perspective (what they can now do, or what changed for them) and not from the implementation perspective, closing with a link to every issue the work implements - or to this PR when there is no issue - and the package list it ships in (`` `repository-wide` `` when it ships no package). Add under the appropriate subsection (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`); create the subsection if it does not yet exist under `## Unreleased`. **If the area you touched already has an entry under `## Unreleased`, extend that entry** - add your issue link to its list, widen the sentence if the scope grew - rather than adding a second entry for the same area. Do **not** write a paragraph: detail belongs in the issue, and a paragraph-length entry is the failure mode the cap exists to prevent. Do **not** stamp a version number or release date here - that is Phase 9's job. The entry stays under `## Unreleased` until the next release is cut.
 3. **Commit** with a conventional commit message: `feat: <description>` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes. The changelog update is part of this same commit.
 4. **Push** the branch.
 5. **Create a PR** using `gh pr create` with:
@@ -269,12 +271,12 @@ When the user explicitly asks to release one or more packages:
 
 1. **Run the docs agent protocol** (`.github/agents/docs.agent.md`) end-to-end across the markdown corpus. The release must not ship documentation drift introduced since the last cut. Apply every fix the docs agent surfaces, in its own commit(s) on a separate docs branch / PR if the corrections are non-trivial, before proceeding to step 2. Do not skip this step on the grounds that "the last feature PR already updated the docs" - the docs agent verifies the whole corpus against the current code, not just the diff of the most recent feature.
 
-2. **Update `CHANGELOG.md` for the release.** Fold every entry currently under `## [Unreleased]` into today's dated section, following the convention in [`docs/RELEASING.md`](../../docs/RELEASING.md) (the "Updating `CHANGELOG.md`" section) - that document is the single source of truth for the header format, same-day consolidation, and compare-link rules. After the move, `## [Unreleased]` must be left empty of entries (keep the heading itself in place, ready for the next cycle). Verify with `git diff CHANGELOG.md` that no entry was lost in transit and that the subsection headings (`### Added` / `### Changed` / `### Fixed` / etc.) were preserved.
+2. **Update `CHANGELOG.md` for the release.** Fold every entry currently under `## Unreleased` into today's dated section, following the convention in [`docs/RELEASING.md`](../../docs/RELEASING.md) (the "Updating `CHANGELOG.md`" section) - that document is the single source of truth for the header format, same-day consolidation, entry style, and compare-link rules. After the move, `## Unreleased` must be left empty of entries (keep the heading itself in place, ready for the next cycle). Verify with `git diff CHANGELOG.md` that no entry was lost in transit and that the subsection headings (`### Added` / `### Changed` / `### Fixed` / etc.) were preserved.
 
 3. **Raise a chore release PR.** This PR contains the changelog stamp from step 2 **and** the package-version bumps to `X.Y.Z` across every `.csproj` / `Directory.Packages.props` / version-stamping file that participates in the release. Workflow:
    - Branch name: `chore/release-X-Y-Z` (kebab-case, per the branch-name convention in [`.github/copilot-instructions.md`](../copilot-instructions.md), which the CI branch-name guard enforces).
    - Commit message: `chore: cut vX.X.X release`.
-   - **Verification scope: hygiene gates only.** Run Phase 6a (build clean) and Phase 6b (every hygiene gate) - do **not** run the Phase 6c unit-test suite or the Phase 8 cross-solution sweep. The feature PRs that fed `[Unreleased]` already ran the full suite at their own merge; the release PR is a metadata-only change (changelog text + version strings) and re-running the full suite buys no signal at the cost of CI wall-clock.
+   - **Verification scope: hygiene gates only.** Run Phase 6a (build clean) and Phase 6b (every hygiene gate) - do **not** run the Phase 6c unit-test suite or the Phase 8 cross-solution sweep. The feature PRs that fed `## Unreleased` already ran the full suite at their own merge; the release PR is a metadata-only change (changelog text + version strings) and re-running the full suite buys no signal at the cost of CI wall-clock.
    - PR title: `chore: cut vX.X.X release`. PR label: `dependencies` (closest existing label for a version-bump-only change) plus any release-tracking label the repo uses.
    - PR body: list each package being bumped and its old/new version, and link the `[YYYY-MM-DD]` changelog section as the source of truth for what's in the release.
    - **Do not proceed to step 4 until this PR is merged into `main`.** Tagging before the chore PR merges will publish packages whose `CHANGELOG.md` says `Unreleased` and whose assembly versions don't match the tag - the worst of both worlds.

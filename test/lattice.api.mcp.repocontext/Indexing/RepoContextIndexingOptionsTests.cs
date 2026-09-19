@@ -318,4 +318,86 @@ public sealed class RepoContextIndexingOptionsTests
         // inclusive, so a reconcile landing at the boundary forces a full sweep.
         Assert.That(options.PruningCanEngage, Is.False);
     }
+    /// <summary>
+    /// The reported cadence must be the one the reconcile enforces. Both deadlines are
+    /// counted in passes, rounded up, so a configured interval that is not a whole
+    /// multiple of the reconcile spacing is silently lengthened - and a report echoing the
+    /// configured value would confirm a setting that did not take.
+    /// </summary>
+    [Test]
+    public void An_interval_that_is_not_a_whole_number_of_passes_is_reported_as_the_longer_cadence_it_becomes()
+    {
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromMinutes(5),
+            ReconcileIntervalJitter = TimeSpan.Zero,
+            EmbeddingGapScanInterval = TimeSpan.FromMinutes(7),
+            CoverageDigestAuditInterval = TimeSpan.FromMinutes(12),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(2));
+            Assert.That(
+                options.EffectiveEmbeddingGapScanInterval,
+                Is.EqualTo(TimeSpan.FromMinutes(10)),
+                "seven minutes buys two passes, so ten is the cadence in force");
+            Assert.That(options.PassesPerCoverageDigestAudit, Is.EqualTo(3));
+            Assert.That(
+                options.EffectiveCoverageDigestAuditInterval,
+                Is.EqualTo(TimeSpan.FromMinutes(15)));
+        });
+    }
+
+    /// <summary>
+    /// An interval below the reconcile spacing is clamped to a single pass, so the shortest
+    /// cadence obtainable is the spacing itself however small a value is supplied.
+    /// </summary>
+    [Test]
+    public void An_interval_below_the_reconcile_spacing_is_reported_as_a_single_pass()
+    {
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromMinutes(5),
+            ReconcileIntervalJitter = TimeSpan.Zero,
+            EmbeddingGapScanInterval = TimeSpan.FromSeconds(30),
+            CoverageDigestAuditInterval = TimeSpan.FromSeconds(1),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.EffectiveEmbeddingGapScanInterval,
+                Is.EqualTo(TimeSpan.FromMinutes(5)));
+            Assert.That(
+                options.EffectiveCoverageDigestAuditInterval,
+                Is.EqualTo(TimeSpan.FromMinutes(5)));
+        });
+    }
+
+    /// <summary>
+    /// With no pass rhythm to round to there is no enforced cadence to report, so the
+    /// configured value is returned rather than a figure this type invented.
+    /// </summary>
+    [Test]
+    public void A_non_positive_reconcile_spacing_reports_the_configured_interval_unchanged()
+    {
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.Zero,
+            ReconcileIntervalJitter = TimeSpan.Zero,
+            EmbeddingGapScanInterval = TimeSpan.FromMinutes(20),
+            CoverageDigestAuditInterval = TimeSpan.FromHours(24),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.EffectiveEmbeddingGapScanInterval,
+                Is.EqualTo(TimeSpan.FromMinutes(20)));
+            Assert.That(
+                options.EffectiveCoverageDigestAuditInterval,
+                Is.EqualTo(TimeSpan.FromHours(24)));
+        });
+    }
 }

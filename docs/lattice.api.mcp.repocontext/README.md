@@ -12,7 +12,7 @@ The repository-context module plugs into the `Orleans.Lattice.Api.Mcp` binding's
 - **Graph navigation.** `repocontext_outline` returns a file's declared-symbol skeleton without reading its body, `repocontext_related` resolves a file's structural neighbourhood (references, dependents, and covering tests) from a reverse cross-reference projection, and `repocontext_changed` reports how the workspace has drifted from the index and the blast radius of those edits - all bounded reads that never re-scan the whole repository.
 - **Exclusive claims.** `repocontext_claim`, `repocontext_renew_claim`, `repocontext_release_claim`, and `repocontext_claim_status` take a leased, fenced claim over a single memory record, so several agents can drain one shared work queue without colliding. The lease bounds a crashed holder and the monotonic fencing token is enforced on every subsequent write, so a superseded holder is refused rather than trusted. See [The agent-operated backlog](backlog.md).
 - **Token economics.** `repocontext_context` packs a ranked, explained bundle of source for a task under a hard token ceiling in one call, with reuse economics so an agent never pays twice for context it already holds; `repocontext_stats` reports aggregate token savings over a bounded recent window. See [Retrieval and token economics](retrieval-economics.md).
-- **Health.** `repocontext_health` proves the surface is registered and reachable for the authenticated caller.
+- **Health.** `repocontext_health` proves the surface is registered and reachable for the authenticated caller, and reports whether retrieval can actually serve. `available` covers reachability only; `retrievalReady` / `retrievalPhase` cover whether searches are trustworthy, read from the same readiness signal the HTTP `/health/ready` endpoint reads.
 
 Every record is stored as a CRDT value on a named Lattice tree, so concurrent updates converge without locks, and the whole store inherits Lattice's durability, TTL, and tombstone-compaction behaviour. Nothing here introduces a new storage or expiry mechanism - it composes the core.
 
@@ -53,9 +53,12 @@ For a ready-to-run, restart-durable local deployment - "codebase memory in a box
 - [Tools](tools.md) - the full `repocontext_*` tool catalogue and each tool's contract.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, the graph-navigation tools, the budgeted context bundle, reuse economics, usage accounting, and the shared token counter.
 - [Memory and TTL](memory-and-ttl.md) - agent memory, topics, and per-repository time-to-live policy.
+- [Memory durability](memory-durability.md) - what survives destroying a deployment's state, why memory and the index cannot be split across volumes, and the memory archive that makes `docker compose down -v` survivable.
 - [The agent-operated backlog](backlog.md) - leased, fenced claims over memory records, and the backlog they make safe for concurrent agent workers.
 - [Semantic search](semantic-search.md) - the embedding seam, the exact-kNN index and its warm vector cache, keyword search over file content, and fail-closed degradation.
 - [Container quickstart](container.md) - running the module as a single durable local container.
+- [Local deployment runbook](local-deployment-runbook.md) - operating a long-lived tuned local deployment: the build-and-tag ladder, the pin and rollback procedure, every setting the tracked compose files resolve to and the measurement behind it, the host-cores-versus-cgroup pool-sizing class, and recovering the deployment from nothing.
+- [Acceptance measures](acceptance-measures.md) - the tracked register of the acceptance measures a reliability run scores, each pinned to the instrument arm it reads and to a ceiling derived from the constants in source, so a measure cannot be dropped between runs without the deletion appearing in a diff.
 
 Related package docs:
 

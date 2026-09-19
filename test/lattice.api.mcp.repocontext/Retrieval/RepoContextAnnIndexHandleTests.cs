@@ -145,6 +145,59 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_corpus_too_small_to_partition_serves_without_claiming_to_be_partitioned()
+    {
+        // Four vectors against a MinimumTrainingCount of eight, so VectorIndex.Train()
+        // declines, drops any partitioning, and returns false - while the build still
+        // reaches Ready, correctly, because it really did finish and the index really
+        // does serve. Issue #2439: the two must be separately observable.
+        using var rig = new Rig();
+        rig.SeedRing(4);
+
+        // This completing at all is half the assertion. EnsureBuiltAsync loops
+        // "while (!IsServing)", so conditioning the serving latch on the partition
+        // count - the obvious-looking repair - would spin here forever against a
+        // corpus that is merely too small. The latch is about whether the plane
+        // answers; the partition count is about how.
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True,
+                "an unpartitioned index still serves, exhaustively and exactly");
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready),
+                "the build finished, so the phase is Ready");
+            Assert.That(progress.PartitionsTotal, Is.Zero,
+                "training declined to partition a corpus this small");
+            Assert.That(progress.IsReady, Is.False,
+                "IsReady reports whether the index answers FROM ITS PARTITIONING, and it does not");
+        });
+    }
+
+    [Test]
+    public async Task A_partitioned_corpus_reports_ready_on_both_signals()
+    {
+        // The positive control for the test above: same handle, same options, a
+        // corpus large enough to train. Without this arm the assertion "IsReady is
+        // false" could be satisfied by IsReady never being true at all.
+        using var rig = new Rig();
+        rig.SeedRing(32);
+
+        await rig.Handle.EnsureBuiltAsync(Ct);
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ready));
+            Assert.That(progress.PartitionsTotal, Is.GreaterThan(1));
+            Assert.That(progress.IsReady, Is.True);
+        });
+    }
+
+    [Test]
     public async Task A_write_whose_vectors_are_the_wrong_width_applies_nothing()
     {
         using var rig = new Rig();
@@ -243,6 +296,42 @@ public sealed class RepoContextAnnIndexHandleTests
     }
 
     [Test]
+    public async Task A_source_whose_count_ran_out_of_budget_is_repaired_on_the_same_reasoning()
+    {
+        // The sibling of the test above, and the reason the catch was widened rather
+        // than a second handler added. There are now two ways the count can be
+        // unavailable - the store losing the enumerator (#1844) and the source
+        // declining to spend more wall clock on the walk (#2447) - and the
+        // distinction matters in a log line and nowhere else. Neither yields a
+        // figure, and a missing figure has exactly one safe reading here: possibly
+        // behind, therefore repair.
+        //
+        // Worth pinning separately because the failure mode of getting it wrong is
+        // silent. A budget-stopped count that propagated would fail the build; one
+        // that returned its partial figure would under-count, read as "not behind",
+        // and skip this repair with no error anywhere.
+        using var rig = new Rig();
+        rig.SeedRing(16);
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        rig.Restart();
+        rig.Source.Set("vec-999999", RepoContextKeys.File(RepoId, "src/Late.cs"), Rig.Unit(1));
+        rig.Source.FailNextCounts(
+            1, static () => new RepoContextCountBudgetExceededException(RepoId, 12, TimeSpan.FromSeconds(10)));
+
+        Assert.That(async () => await rig.Handle.EnsureBuiltAsync(Ct), Throws.Nothing,
+            "a count abandoned on its own budget must not fail the build either");
+
+        var outcome = await rig.Handle.SearchAsync(Rig.Unit(1), 5, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Handle.IsServing, Is.True);
+            Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
+                "an unknown count must repair, however it came to be unknown");
+        });
+    }
+
+    [Test]
     public async Task A_partitioning_the_corpus_has_drifted_away_from_is_retrained()
     {
         // Only a trained index can drift, and retraining rewrites every partition,
@@ -282,6 +371,90 @@ public sealed class RepoContextAnnIndexHandleTests
             log.Entries.Any(e => e.Message.Contains("retraining after", StringComparison.Ordinal)),
             Is.False,
             "retraining rewrites every partition, so a handful of updates must never trigger it");
+    }
+
+    [Test]
+    public async Task A_write_taken_while_the_build_is_still_streaming_is_not_applied_to_the_open_index()
+    {
+        // While the index is ingesting it holds one untrained cell, and a write
+        // the build did not make itself costs the checkpoint a rewrite of that
+        // whole cell rather than an append. The writer hands a batch over once
+        // per slice, so applying them here makes the build's write volume
+        // quadratic in corpus size - issue #2691.
+        using var rig = new Rig();
+        rig.SeedRing(64);
+
+        var progress = await rig.Handle.AdvanceAsync(Ct);
+        Assert.That(
+            progress.Phase, Is.Not.EqualTo(VectorIndexBuildPhase.Ready),
+            "the arm needs a build that is still streaming after one step");
+
+        var before = rig.Store.RecordsWritten;
+        for (var i = 0; i < 8; i++)
+        {
+            await rig.Handle.ApplyWriteAsync(
+                [new RepoContextAnnVectorUpdate(
+                    $"vec-{i:D6}", RepoContextKeys.File(RepoId, $"src/File{i}.cs"), Rig.Unit(3))],
+                [],
+                Ct);
+        }
+
+        Assert.That(
+            rig.Store.RecordsWritten,
+            Is.EqualTo(before),
+            "a write taken mid-build must be recorded for replay, not pushed into the ingesting index");
+    }
+
+    [Test]
+    public async Task A_write_taken_while_the_build_was_streaming_is_replayed_once_it_is_ready()
+    {
+        using var rig = new Rig();
+        rig.SeedRing(64);
+
+        // The build has to have STREAMED the identifier before the write arrives,
+        // or it simply reads the new value from the store of record on its way
+        // past and the replay is never what made the index current. Advancing
+        // until it has banked vectors is what orders the two: identifiers are
+        // streamed in order and this one sorts first, so it is in the index.
+        VectorIndexBuildProgress progress;
+        do
+        {
+            progress = await rig.Handle.AdvanceAsync(Ct);
+            Assert.That(
+                progress.Phase,
+                Is.Not.EqualTo(VectorIndexBuildPhase.Ready),
+                "the build finished before the arm could take a write mid-stream");
+        }
+        while (progress.VectorsIndexed == 0);
+
+        const string Revised = "vec-000000";
+        var distinctive = Rig.Unit(3);
+        rig.Source.Set(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive);
+        await rig.Handle.ApplyWriteAsync(
+            [new RepoContextAnnVectorUpdate(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive)],
+            [],
+            Ct);
+
+        await rig.Handle.EnsureBuiltAsync(Ct);
+
+        // The ring occupies dimensions 0 and 1 only, so the revised vector is
+        // orthogonal to every vector the build streamed. Identity alone would
+        // not discriminate here: a query nothing matches still returns a best
+        // result, and it can be this identifier by arbitrary ordering while the
+        // index holds the stale vector. The SCORE is what separates the two -
+        // it is one against the revised vector and zero against the ring.
+        var outcome = await rig.Handle.SearchAsync(distinctive, 1, Ct);
+        Assert.That(outcome.Matches, Is.Not.Empty, "the plane must be serving once the build is Ready");
+
+        var best = outcome.Matches[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                best.Score,
+                Is.GreaterThan(0.9d),
+                "the deferred write was never replayed, so the index still holds the vector the build streamed");
+            Assert.That(best.VectorId, Is.EqualTo(Revised));
+        });
     }
 
     [Test]

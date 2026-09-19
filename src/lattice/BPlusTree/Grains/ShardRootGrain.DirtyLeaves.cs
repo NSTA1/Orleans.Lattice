@@ -84,6 +84,19 @@ internal sealed partial class ShardRootGrain
     private IDisposable? _dirtyFlushTimer;
 
     /// <summary>
+    /// Consecutive failed dirty-mark flushes on this activation. Reset by any flush
+    /// that lands, so only an unbroken run of failures counts toward suspension.
+    /// </summary>
+    private int _dirtyFlushConsecutiveFailures;
+
+    /// <summary>
+    /// Latched once the dirty-mark flush loop has given up for this activation.
+    /// Checked by <see cref="EnsureDirtyFlushTimerArmed"/> because marking a leaf
+    /// dirty re-arms the timer, which would otherwise defeat the ceiling.
+    /// </summary>
+    private bool _dirtyFlushSuspended;
+
+    /// <summary>
     /// Records <paramref name="leafId"/> as dirty by max-merging a
     /// freshly-ticked HLC into <c>state</c>.State and arming the
     /// coalescing flush timer. Returns synchronously - the storage
@@ -142,6 +155,7 @@ internal sealed partial class ShardRootGrain
     private void EnsureDirtyFlushTimerArmed()
     {
         if (_dirtyFlushTimer is not null) return;
+        if (_dirtyFlushSuspended) return;
 
         var intervalMs = _cachedOptions?.DirtyLeafFlushIntervalMs
             ?? LatticeOptions.DefaultDirtyLeafFlushIntervalMs;
@@ -177,12 +191,29 @@ internal sealed partial class ShardRootGrain
         try
         {
             await FlushPendingDirtyMarksAsync();
+            _dirtyFlushConsecutiveFailures = 0;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
-                "Coalesced dirty-leaf flush failed for shard {ShardKey}; will retry on next tick.",
-                context.GrainId.Key.ToString());
+            _dirtyFlushConsecutiveFailures++;
+            if (_dirtyFlushConsecutiveFailures < MaxConsecutiveFlushFailures)
+            {
+                logger.LogWarning(ex,
+                    "Coalesced dirty-leaf flush failed for shard {ShardKey} ({FailureCount} of {FailureCeiling} consecutive); will retry on next tick.",
+                    context.GrainId.Key.ToString(),
+                    _dirtyFlushConsecutiveFailures,
+                    MaxConsecutiveFlushFailures);
+                return;
+            }
+
+            // Give up for this activation rather than retrying a permanent fault
+            // forever (issue 2419). The marks stay in memory - the coordinator
+            // reads them from there - and the chain-walk fallback re-discovers
+            // them, so suspending costs a colder rediscovery, never correctness.
+            _dirtyFlushSuspended = true;
+            _dirtyFlushTimer?.Dispose();
+            _dirtyFlushTimer = null;
+            ReportFlushRetriesSuspended("dirty-leaves", ex);
         }
     }
 
@@ -271,6 +302,44 @@ internal sealed partial class ShardRootGrain
             DirtyLeaves = leaves,
             ObservedAdvance = max,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task RetainDirtyLeafAsync(GrainId leafId, HybridLogicalClock above)
+    {
+        await PrepareForOperationAsync();
+
+        // Floor the mark clock at the watermark the caller is about to drain
+        // to, then let MarkLeafDirtyAsync tick strictly past that floor. That
+        // single floor is sufficient, and deliberately so:
+        //
+        //  - Tick is guaranteed to return strictly greater than its input, so
+        //    the ticked value exceeds `above`.
+        //  - MarkLeafDirtyAsync then max-merges, so the stored mark is either
+        //    that ticked value or an existing mark that is already greater
+        //    still. Both exceed `above`.
+        //
+        // The floor cannot be dropped, though: a re-activation seeds the clock
+        // from LastDirtyAdvance, which only moves on a drain and which the
+        // snapshot's observed advance legitimately exceeds. A tick from that
+        // stale seed can land below the watermark, and for a leaf with no
+        // surviving entry the max-merge has nothing to rescue it, so the mark
+        // would be written at-or-below the watermark and the drain would take
+        // it - the exact silent loss this method exists to prevent.
+        //
+        // An earlier revision also floored on the leaf's existing mark. That
+        // clause was removed because it could not be made to fail: it is
+        // reachable only when an existing mark already exceeds the floor, which
+        // is precisely the case the max-merge above already handles.
+        if (!_dirtyMarkClockInitialized)
+        {
+            _dirtyMarkClock = state.State.LastDirtyAdvance;
+            _dirtyMarkClockInitialized = true;
+        }
+
+        if (above > _dirtyMarkClock) _dirtyMarkClock = above;
+
+        await MarkLeafDirtyAsync(leafId);
     }
 
     /// <inheritdoc />

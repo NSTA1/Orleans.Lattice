@@ -668,6 +668,39 @@ internal sealed class ReplicationShipperGrain(
     protected override string LogContext => $"shipper {_treeName}/{_peerClusterId}";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// This grain's key is <c>{treeName}/{peerClusterId}</c>, so the base
+    /// default - the raw key - would tag the phase-tick failure counter with a
+    /// composite that is not a tree name. That is worse than an absent tag: it
+    /// is false in a field an operator filters on, with nothing in the series
+    /// to reveal it, so a search for a tree's discarded work silently misses
+    /// every shipper failure for that tree.
+    /// </para>
+    /// <para>
+    /// The peer cluster id rides <see cref="LogContext"/> instead. A metric
+    /// dimension multiplies a tree's series by the peer count, which is
+    /// cardinality a log line affords and a metric backend does not; and the
+    /// question the counter answers - how much of this tree's work is being
+    /// thrown away - is asked per tree, not per link.
+    /// </para>
+    /// <para>
+    /// Reports the logical tree name rather than <c>_walTreeId</c>: the
+    /// physical id can be repointed mid-stream by a registry alias swap, and a
+    /// series whose identity changes under a restore or reshard cannot be
+    /// compared with itself across that boundary.
+    /// </para>
+    /// <para>
+    /// Safe against an unparsed key because every path that arms the phase
+    /// timer - <see cref="OnActivateCoreAsync"/> and
+    /// <see cref="EnsureActiveAsync"/> - calls <see cref="ParseGrainKey"/>
+    /// first, so <c>_treeName</c> is populated before the base class's
+    /// zero-prime reads this property.
+    /// </para>
+    /// </remarks>
+    protected override string MetricsTreeId => _treeName;
+
+    /// <inheritdoc />
     public async Task EnsureActiveAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -35,6 +35,8 @@ public sealed class RepoIndexModelTests
             Assert.That((int)RepoIndexPhase.Applying, Is.EqualTo(3));
             Assert.That((int)RepoIndexPhase.Vectorising, Is.EqualTo(4));
             Assert.That((int)RepoIndexPhase.Done, Is.EqualTo(5));
+            Assert.That((int)RepoIndexPhase.Resetting, Is.EqualTo(6),
+                "Resetting is appended after Done so existing phase ordinals are undisturbed.");
         });
     }
 
@@ -149,6 +151,8 @@ public sealed class RepoIndexModelTests
             ChunksCommitted = 5,
             FilesEmbedded = 7,
             FilesContentProjected = 9,
+            TreesSwept = 6,
+            EntriesDeleted = 815,
             Attempt = 2,
             StartedAt = started,
             UpdatedAt = updated,
@@ -173,6 +177,8 @@ public sealed class RepoIndexModelTests
             Assert.That(progress.ChunksCommitted, Is.EqualTo(5));
             Assert.That(progress.FilesEmbedded, Is.EqualTo(7));
             Assert.That(progress.FilesContentProjected, Is.EqualTo(9));
+            Assert.That(progress.TreesSwept, Is.EqualTo(6));
+            Assert.That(progress.EntriesDeleted, Is.EqualTo(815));
             Assert.That(progress.Attempt, Is.EqualTo(2));
             Assert.That(progress.StartedAt, Is.EqualTo(started));
             Assert.That(progress.UpdatedAt, Is.EqualTo(updated));

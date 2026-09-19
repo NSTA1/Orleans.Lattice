@@ -186,7 +186,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // correction above generalises it to; the sentinel guard remains
         // because it is also load-bearing for a second reason. Without it, a
         // sibling created mid-run by a split (whose donor's
-        // SetCheckpointOffsetHintAsync may race the sibling's own
+        // SetCheckpointOffsetHintsAsync may race the sibling's own
         // OnActivateAsync) reads checkpoint = -1, computes gap = head + 1
         // against a sibling-populated WAL, trips the budget, and throws
         // LeafProjectionStaleException even though there is nothing to

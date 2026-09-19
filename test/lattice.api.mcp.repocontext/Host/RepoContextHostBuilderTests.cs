@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using Microsoft.Extensions.Configuration;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -10,6 +11,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// SQLite schema before the silo starts.
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds an IHost in-process with no silo or storage; measured at 212 ms for 4 tests, below the 5-second threshold.")]
 public sealed class RepoContextHostBuilderTests
 {
     private string _root = null!;

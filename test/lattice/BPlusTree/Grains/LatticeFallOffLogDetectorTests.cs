@@ -119,7 +119,7 @@ public sealed class LatticeFallOffLogDetectorTests
     {
         // Reproduces the c2-vi production scenario (silo log 20260526-201857Z):
         // a leaf that has just been created by a split races its own
-        // OnActivateAsync against the donor's SetCheckpointOffsetHintAsync.
+        // OnActivateAsync against the donor's SetCheckpointOffsetHintsAsync.
         // If the activation wins, the sibling reads
         // ProjectionCheckpointOffset = -1 (default) against a shard
         // WAL partition whose head has been pushed past 10 000 by
@@ -136,7 +136,7 @@ public sealed class LatticeFallOffLogDetectorTests
         // there is no projection state to recover, so the budget
         // semantically does not apply. The classifier returns
         // TailReplay and the materialiser handles bounding itself via
-        // ReplaySliceBudget on the read side.
+        // WalReplaySliceBudget on the read side.
         var (detector, _) = CreateDetector(head: 50_000, tail: 0);
         var options = await BuildOptionsAsync(new LatticeOptions
         {

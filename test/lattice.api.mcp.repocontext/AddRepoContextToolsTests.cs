@@ -87,6 +87,109 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
+    public void AddRepoContextTools_registers_the_marker_scan_reporter_the_writer_takes_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // The descriptor must be present, because the writer takes the reporter
+            // as an OPTIONAL constructor parameter: the container supplies the
+            // declared default for a parameter it cannot resolve rather than
+            // failing, so dropping this registration is not a startup error. It is a
+            // null reporter, an instrument that exists on no host at all, and a
+            // suite that stays green because every fixture passes one explicitly.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextMemoryMarkerScanReporter)),
+                Is.True,
+                "the marker-scan reporter must be registered, or the writer's optional "
+                + "parameter silently defaults to null and the instrument never exists");
+
+            // Resolvable, not merely described - a descriptor whose implementation
+            // cannot be constructed would satisfy the check above and still yield
+            // nothing at runtime.
+            Assert.That(provider.GetService<RepoContextMemoryMarkerScanReporter>(), Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_the_symbol_walk_reporter_the_ingestor_takes_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // Same silent-default hazard as the two reporters above. It is worth
+            // asserting separately here because this instrument's whole job is to
+            // distinguish a symbol walk that resumed banked progress from one that
+            // silently restarted at the head of the range - at the tree the two
+            // passes are byte-identical, so an absent series does not read as a
+            // missing instrument, it reads as "the resumable cursor is not live",
+            // which is exactly the wrong answer about the fix in issue #2953.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextSymbolWalkReporter)),
+                Is.True,
+                "the symbol-walk reporter must be registered, or the ingestor's optional "
+                + "parameter silently defaults to null and every arm of the instrument is absent");
+
+            Assert.That(provider.GetService<RepoContextSymbolWalkReporter>(), Is.Not.Null);
+
+            // One instance, because the three arms are a single tally over one
+            // series; a transient would give each resolution its own meter and its
+            // own priming.
+            Assert.That(
+                provider.GetService<RepoContextSymbolWalkReporter>(),
+                Is.SameAs(provider.GetService<RepoContextSymbolWalkReporter>()),
+                "the reporter must be a singleton so every pass charges one instrument");
+        });
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_the_coverage_probe_reporter_both_consumers_take_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // Same silent-default hazard as the marker-scan reporter above, and worse
+            // here because TWO consumers take this one optionally - the vector
+            // ingestor and the embedding gap scanner. Dropping the registration
+            // costs no startup error and no red test: it costs every arm of
+            // repocontext.bootstrap.coverage_probe, on every host, at once.
+            //
+            // That failure is uniquely bad for THIS instrument. An absent series
+            // would be read as all-arms-zero, and all-arms-zero is a meaningful
+            // diagnostic state for it - "no coverage resolution was ever reached" -
+            // so an unregistered reporter does not read as a missing instrument. It
+            // reads as a confident, wrong answer.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextCoverageProbeReporter)),
+                Is.True,
+                "the coverage-probe reporter must be registered, or both consumers' optional "
+                + "parameters silently default to null and every arm of the instrument is absent");
+
+            Assert.That(provider.GetService<RepoContextCoverageProbeReporter>(), Is.Not.Null);
+
+            // One instance, because the arms are a single cross-cutting tally: the
+            // ingestor and the scanner charge different arms of the SAME series, and
+            // a transient would give each consumer its own meter and its own priming.
+            Assert.That(
+                provider.GetService<RepoContextCoverageProbeReporter>(),
+                Is.SameAs(provider.GetService<RepoContextCoverageProbeReporter>()),
+                "the reporter must be a singleton so both consumers charge one instrument");
+        });
+    }
+
+    [Test]
     public void AddRepoContextTools_does_not_offer_the_write_tools_by_default()
     {
         var services = new ServiceCollection();

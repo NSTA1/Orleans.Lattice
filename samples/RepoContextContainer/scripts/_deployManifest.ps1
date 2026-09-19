@@ -1,0 +1,1291 @@
+#!/usr/bin/env pwsh
+<#
+.SYNOPSIS
+	Pure helpers that record a deployment's attribution-relevant configuration
+	and name what moved since the previous run.
+
+.DESCRIPTION
+	Issue #2931. A measured movement is only evidence about a cause if no OTHER
+	sufficient cause moved in the same step. The WAL replay gate's 16 -> 6 was
+	lost exactly there: the gate's own knob changed, and DOTNET_PROCESSOR_COUNT
+	was removed, in one deploy. Both are sufficient to produce that movement, so
+	the reading attributes to neither. Nothing was mis-set; a measurement was
+	destroyed.
+
+	The remedy is NOT to restore a particular value. A pinned constant with no
+	assertion is what produced this: the pin was believed to be in force for
+	several runs after it had been deleted, because nothing ever read it back.
+	The remedy is to make the rig incapable of changing two attribution-relevant
+	variables SILENTLY in one step - deliberately is fine and is sometimes
+	necessary, silently is what voids a comparison.
+
+	So this file does three things, and the third is the one that matters:
+
+	  1. enumerates the variables a comparison's validity depends on;
+	  2. records each one's value AND where that value came from;
+	  3. diffs a run against its predecessor and refuses a multi-variable step
+	     that nobody acknowledged.
+
+	DECLARED AND EFFECTIVE ARE DIFFERENT OBJECTS, and conflating them is the
+	failure this epic keeps rediscovering - at a value (#2928), at a checkout
+	(#2930), and at an image (the `auto` token, which the deployed binary did
+	not understand while the source did). A manifest that recorded only what the
+	compose file DECLARES would repeat it one layer up, so every record carries
+	both and a divergence between them is itself a finding.
+
+	CONVENTIONS, matching _tuningKnobs.ps1 and _provenance.ps1 beside it:
+
+	- Every function is PURE. Nothing here reads a file, an environment
+	  variable, a container, or a process. Assert-DeployManifest.ps1 does the
+	  acquisition. The split is what makes the FAILING direction demonstrable:
+	  a test can drive a two-variable step, an indeterminate provenance, or a
+	  declared/effective divergence against fabricated readings, with no daemon
+	  and no deploy.
+	- Nothing here throws for a finding. Findings are returned; the caller
+	  decides what they mean.
+	- Every finding NAMES the variable, both values, and why it matters. A diff
+	  that says "3 variables changed" is a scrollback entry. One that says which
+	  three, from what, to what, is evidence someone who was not there can cite.
+#>
+
+Set-StrictMode -Version Latest
+
+<#
+.SYNOPSIS
+	The provenance labels a resolved value can carry.
+
+.DESCRIPTION
+	Named constants rather than bare strings so a typo in a comparison is a
+	missing-property error under Set-StrictMode instead of a silently false
+	branch. `Indeterminate` is a first-class outcome, not an error case: the
+	whole point is that "we could not tell where this came from" must be
+	reportable, because the alternative is guessing and presenting the guess.
+#>
+$script:ProvenanceExplicit = 'ExplicitEnvironment'
+$script:ProvenanceCgroup = 'CgroupDerivation'
+$script:ProvenanceIndeterminate = 'Indeterminate'
+
+<#
+.SYNOPSIS
+	Whether the DECLARED half was obtained, and if not, why not.
+
+.DESCRIPTION
+	Three states, because #2983 is a case of the first two being rendered
+	identically. A manifest that prints `<absent>` for a key cannot, without
+	this, be read to mean either "compose resolved and does not declare it" or
+	"compose was never resolved, so nothing is known" - and those license
+	opposite conclusions. The second is not a weaker form of the first; it is
+	an absence of evidence being recorded in the notation reserved for evidence
+	of absence.
+
+	  Available     resolution succeeded. Every `<absent>` below it is a
+	                positive finding: the key is genuinely not declared.
+	  Unreadable    resolution was attempted and FAILED. Nothing is known about
+	                any key, and the reason is recorded beside it.
+	  NotAttempted  no resolution was asked for - the caller supplied a reading
+	                directly, or asked for the effective half alone.
+
+	Only `Available` licenses the divergence check. The other two suppress it,
+	which is correct, but they must SAY they suppressed it: a suppressed check
+	that renders as a passing one is the defect this file was written to stop,
+	and #2983 is that defect occurring inside this file.
+#>
+$script:DeclarationAvailable = 'Available'
+$script:DeclarationUnreadable = 'Unreadable'
+$script:DeclarationNotAttempted = 'NotAttempted'
+
+<#
+.SYNOPSIS
+	Whether the compose files a declared reading was resolved FROM are the ones
+	the running deployment was actually created from.
+
+.DESCRIPTION
+	The declared half is only as good as the file set it was resolved from, and
+	until #2993 that set was a hardcoded list nothing checked. It happened to be
+	right. Nothing made it right, and nothing would have said so if it stopped
+	being right - a deployment brought up with a different overlay would have
+	been resolved from the wrong files and still reported a full
+	DECLARATION_RESOLVED count.
+
+	That is RESOLVED-BUT-WRONG, which is strictly worse than absent. An absent
+	declaration is visibly unmeasured and reads as NotAttempted; a confidently
+	wrong one is scored as a measurement.
+
+	  Agreed    the container's own config_files label names exactly the files
+	            the reading was resolved from, in the same order.
+	  Diverged  the label and the list disagree. The declared half was resolved
+	            from the wrong files and must not be scored.
+	  Unknown   no label, or nothing parseable in it. Whether the set was right
+	            is NOT KNOWN - which is a different claim from knowing it wrong.
+
+	UNKNOWN IS NOT FOLDED INTO DIVERGED, for the same reason vintage
+	Indeterminate is not folded into a difference: they answer different
+	questions. Diverged says the file set is wrong; Unknown says no statement
+	about the file set can be made. A caller that cannot tell them apart will go
+	looking for an overlay mismatch that was never demonstrated.
+
+	Unknown is also the reading for a container that is not compose-managed at
+	all, which is a legitimate state rather than a fault. It is recorded rather
+	than refused - but it is RECORDED, never silently treated as agreement,
+	because falling back to the hardcoded list on a missing label would bypass
+	the check precisely when the deployment is least standard.
+#>
+$script:ComposeSetAgreed = 'Agreed'
+$script:ComposeSetDiverged = 'Diverged'
+$script:ComposeSetUnknown = 'Unknown'
+
+<#
+.SYNOPSIS
+	Which instrument version wrote a manifest, and how two of them relate.
+
+.DESCRIPTION
+	#2992. A manifest records what an instrument could READ, not only what the
+	deployment WAS, and those two come apart whenever the instrument improves.
+	Re-capturing the run-13 baseline after #2983 moved three keys from empty to
+	a value on a rig with `RestartCount=0` on every container: nothing had
+	changed except that the reader had learned to look at the embedder. The
+	comparison called it configuration drift and refused.
+
+	That direction of error is the expensive one. An artefact that reports
+	success it did not earn is survivable, because nobody acts on it; an
+	artefact that reports FAILURE it did not earn gets a bypass flag, and then
+	gets deleted. So the vintage exists to stop a correct deployment being
+	refused for a reason that is not a reason.
+
+	The vintage tracks ACQUISITION CAPABILITY - which cells the instrument is
+	able to populate - and not merely "this file changed". Bumping it for an
+	edit that cannot change what is readable would manufacture incomparability
+	between two manifests that agree perfectly, which is the same cry-wolf
+	failure one step removed.
+
+	Unknown is $null and never 0. A manifest written before this field existed
+	has an UNKNOWN vintage, which is a different claim from vintage zero:
+	zero is a value and would compare as merely older, silently asserting that
+	the file's capability is known. It is not known, and the ordering below
+	treats unknown as "older than any recorded vintage" without ever storing a
+	number that says so.
+#>
+$script:ManifestVintageCurrent = 1
+$script:VintageSame = 'Same'
+$script:VintageBaselineOlder = 'BaselineOlder'
+$script:VintageCurrentOlder = 'CurrentOlder'
+$script:VintageIndeterminate = 'Indeterminate'
+
+<#
+.SYNOPSIS
+	The compose files that must ALL be resolved for a declared reading to be
+	complete, in overlay order.
+
+.DESCRIPTION
+	Pure on purpose, and separated from the code that runs `docker compose`, so
+	the overlay requirement is assertable without a daemon. The requirement is
+	not cosmetic: a bare `docker compose config` resolves only
+	docker-compose.yml and docker-compose.override.yml, and EVERY
+	attribution-relevant knob in Get-AttributionVariable is set by
+	docker-compose.tuning.yml. Verified 2026-09-14 against the live rig - a bare
+	resolution yields zero matches for LATTICE_WAL_MAX_CONCURRENT_REPLAYS, and
+	the same resolution with the overlay yields "0".
+
+	So a fix that resolved compose WITHOUT the overlay would report `<absent>`
+	for every knob while now claiming to have looked, which is strictly worse
+	than not looking: it converts an admitted gap into a false negative. Keeping
+	the list here means a test can assert the overlay is in it without starting
+	anything.
+#>
+function Get-DeployComposeFile {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param()
+
+	return @('docker-compose.yml', 'docker-compose.tuning.yml')
+}
+
+<#
+.SYNOPSIS
+	Compares the compose files a reading was resolved from against the ones the
+	container records having been created from.
+
+.DESCRIPTION
+	PURE, and deliberately takes the label as a STRING rather than a container
+	name, so every branch - agreement, divergence, reordering, a missing label,
+	an unparseable one - is assertable without a daemon. The impure half is the
+	one line that runs `docker inspect`, and it has nothing to decide.
+
+	ORDER IS COMPARED, NOT JUST MEMBERSHIP. A compose overlay later in the list
+	overrides an earlier one, so the same two files in the opposite order can
+	resolve to different values. A set difference is empty for that case and
+	would pass it. This is the same shape as a count matching while the set does
+	not, one level further in: here the SET matches and the ORDER does not, and
+	only an ordered comparison sees it.
+
+	PATHS ARE COMPARED BY LEAF NAME. The label holds absolute paths, and on the
+	live rig they point at whichever checkout deployed the stack, which is not
+	the checkout this script is being run from and legitimately differs. The
+	leaf is the part that identifies the overlay. The cost is that two files of
+	the same name in different directories compare equal; that is accepted,
+	because the alternative - demanding the deploy checkout and the running
+	script share a path - would refuse every correct deployment operated from a
+	second worktree, which is how this repository is actually worked.
+
+	KNOWN LIMITATION: docker joins the paths with a comma and does not escape
+	them, so a compose file whose path CONTAINS a comma is indistinguishable
+	from two files. Nothing in the label can resolve that, and inventing a
+	heuristic would manufacture a confident wrong answer out of an ambiguous
+	input. Such a path would surface as Diverged - visible, and refusing to
+	score - rather than as a silent mis-parse.
+#>
+function Get-ComposeFileSetVerdict {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Expected,
+		[Parameter(Mandatory)] [AllowNull()] [AllowEmptyString()] [string] $LabelValue
+	)
+
+	$expectedLeaf = @($Expected | ForEach-Object { Split-Path -Path $_ -Leaf })
+
+	if ([string]::IsNullOrWhiteSpace($LabelValue)) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetUnknown
+			Expected = $expectedLeaf
+			Observed = @()
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = 'the container carries no com.docker.compose.project.config_files label, so the overlay set could not be verified'
+		}
+	}
+
+	# Split on the comma docker joins with, then reduce each entry to its leaf.
+	# Both separators are handled because the label is written by whichever
+	# platform created the stack, not by the platform reading it.
+	$observed = @(
+		$LabelValue -split ',' |
+			ForEach-Object { $_.Trim() } |
+			Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+			ForEach-Object { ($_ -split '[\\/]')[-1] }
+	)
+
+	if ($observed.Count -eq 0) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetUnknown
+			Expected = $expectedLeaf
+			Observed = @()
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = "the config_files label held nothing parseable ('$LabelValue'), so the overlay set could not be verified"
+		}
+	}
+
+	$missing = @($expectedLeaf | Where-Object { $observed -notcontains $_ })
+	$unexpected = @($observed | Where-Object { $expectedLeaf -notcontains $_ })
+
+	# Compared as an ordered sequence. Reached only when the two sets agree, so
+	# a true here is a pure reordering and nothing else.
+	$orderDiffers = ($missing.Count -eq 0 -and $unexpected.Count -eq 0 -and
+		(($expectedLeaf -join "`n") -ne ($observed -join "`n")))
+
+	if ($missing.Count -eq 0 -and $unexpected.Count -eq 0 -and -not $orderDiffers) {
+		return [pscustomobject]@{
+			Status = $script:ComposeSetAgreed
+			Expected = $expectedLeaf
+			Observed = $observed
+			Missing = @()
+			Unexpected = @()
+			OrderDiffers = $false
+			Reason = "the container was created from exactly $($observed -join ', ')"
+		}
+	}
+
+	$parts = @()
+	if ($missing.Count -gt 0) { $parts += "expected but not used by the deployment: $($missing -join ', ')" }
+	if ($unexpected.Count -gt 0) { $parts += "used by the deployment but not read: $($unexpected -join ', ')" }
+	if ($orderDiffers) { $parts += "same files in a different OVERLAY ORDER - read as [$($expectedLeaf -join ', ')], deployed as [$($observed -join ', ')], and a later overlay overrides an earlier one" }
+
+	return [pscustomobject]@{
+		Status = $script:ComposeSetDiverged
+		Expected = $expectedLeaf
+		Observed = $observed
+		Missing = $missing
+		Unexpected = $unexpected
+		OrderDiffers = $orderDiffers
+		Reason = ($parts -join '; ')
+	}
+}
+
+<#
+.SYNOPSIS
+	The variables whose movement invalidates a run-to-run comparison.
+
+.DESCRIPTION
+	ENUMERATED, for the same reason Get-TuningKnob is: the failure to guard
+	against is not "the known variable regressed" but "a variable nobody listed
+	moved too". #2931 is precisely that - DOTNET_PROCESSOR_COUNT was not a
+	lattice knob, was not in anybody's list, and is the one that broke the
+	attribution.
+
+	ATTRIBUTION says what a movement in this variable is sufficient to cause, in
+	the words a reader scoring a run needs. It is not decoration: a diff has to
+	tell someone who was not present WHY the delta threatens their reading, or
+	they will see a changed number and move on.
+
+	CONSUMER records who finally reads the string, which is what decides whether
+	a value can be validated locally at all. Where it is a runtime we do not
+	own, the manifest can record the value but cannot vouch for its meaning.
+#>
+function Get-AttributionVariable {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param()
+
+	return @(
+		[pscustomobject]@{
+			Name = 'DOTNET_PROCESSOR_COUNT'
+			Service = 'repocontext'
+			Consumer = 'the CLR, and every Environment.ProcessorCount consumer in the process'
+			Attribution = 'moves the thread pool, Orleans scheduling, the GC heap count where it is not pinned, AND any gate sized from ProcessorCount - so it is sufficient on its own to move almost any throughput or concurrency reading'
+		},
+		[pscustomobject]@{
+			Name = 'LATTICE_WAL_MAX_CONCURRENT_REPLAYS'
+			Service = 'repocontext'
+			Consumer = 'RepoContextReplayConcurrency.ResolveMaxConcurrentReplays'
+			Attribution = 'sets the WAL replay gate directly, so it is sufficient to move replay concurrency, activation-storm CPU, and the peak buffer footprint that produced the OutOfMemoryException wave in #2692'
+		},
+		[pscustomobject]@{
+			Name = 'DOTNET_GCHeapCount'
+			Service = 'repocontext'
+			Consumer = 'the CLR'
+			Attribution = 'sets server GC heap count, so it is sufficient to move pause distribution and peak managed footprint - the axis gate run 2 measured at 20.9% of wall-clock in stop-the-world pauses'
+		},
+		[pscustomobject]@{
+			Name = 'DOTNET_gcServer'
+			Service = 'repocontext'
+			Consumer = 'the CLR'
+			Attribution = 'selects the collector outright, so it is sufficient to move every latency reading taken on the service'
+		},
+		[pscustomobject]@{
+			Name = 'EMBED_INTRA_THREADS'
+			Service = 'embedder'
+			Consumer = 'EmbedServerOptions.ResolveIntraOpThreads'
+			Attribution = 'sizes the ONNX intra-op pool, so it is sufficient to move vectorising throughput and the kernel throttling rate under a fractional grant'
+		}
+	)
+}
+
+<#
+.SYNOPSIS
+	The resource grants whose movement invalidates a comparison just as surely.
+
+.DESCRIPTION
+	Kept apart from Get-AttributionVariable because they are read from a
+	different place - the resolved service definition rather than its
+	environment block - and a caller that can see one may not be able to see
+	the other. Merging them would force a caller to supply both or report a
+	false absence for the half it cannot reach, and a false absence is the one
+	outcome this whole file exists to prevent.
+#>
+function Get-AttributionGrant {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param()
+
+	return @(
+		[pscustomobject]@{
+			Name = 'repocontext.cpus'
+			Service = 'repocontext'
+			Consumer = 'Docker'
+			Attribution = 'bounds the CPU the process can obtain, and is the number the cgroup-aware derivations read when their variable is absent - so it is sufficient to move a reading BOTH directly and through every derivation downstream of it'
+		},
+		[pscustomobject]@{
+			Name = 'repocontext.mem_limit'
+			Service = 'repocontext'
+			Consumer = 'Docker'
+			Attribution = 'sets the .NET heap hard limit, so it is sufficient to move collection frequency, and below the working set it produces a STORAGE fault rather than a container kill - a movement here can invalidate a run without any resource event to mark it'
+		},
+		[pscustomobject]@{
+			Name = 'embedder.cpus'
+			Service = 'embedder'
+			Consumer = 'Docker'
+			Attribution = 'bounds embedder CPU and is the grant the intra-op pool derives from when EMBED_INTRA_THREADS is absent'
+		},
+		[pscustomobject]@{
+			Name = 'embedder.mem_limit'
+			Service = 'embedder'
+			Consumer = 'Docker'
+			Attribution = 'bounds embedder memory, and with repocontext.mem_limit determines whether the pair still sums to something the host can honour'
+		}
+	)
+}
+
+<#
+.SYNOPSIS
+	Decides the resolved processor count and, more importantly, where it came
+	from.
+
+.DESCRIPTION
+	The PM's requirement on #2931, in his words: a loud 6 is worth more than a
+	silent 16. So this returns the count AND its provenance, and treats "I
+	cannot tell" as a reportable outcome rather than defaulting quietly.
+
+	The three outcomes and why each is distinct:
+
+	  ExplicitEnvironment  DOTNET_PROCESSOR_COUNT is set and usable. The value
+	                       is whatever it says, and it OVERRIDES the cgroup - so
+	                       a reader must know the quota is no longer the source.
+	  CgroupDerivation     the variable is absent, so Environment.ProcessorCount
+	                       resolves from the enforced quota. This is the current
+	                       state of the live rig and it is CORRECT; it simply
+	                       has to be visible, because it was invisible for
+	                       several runs while a predicate asserted otherwise.
+	  Indeterminate        the variable is present but unusable, or absent with
+	                       no quota reading to derive from. FAIL CLOSED. A
+	                       manifest that guessed here would be asserting
+	                       provenance it does not have, which is worse than
+	                       declining to, because it would be believed.
+
+	A present-but-unusable value is Indeterminate rather than falling back to
+	the cgroup on purpose. The CLR's own handling of a malformed value is not
+	something this script should model and then present as fact - that is a
+	claim about an artefact, made from a script, which is the exact seam this
+	epic keeps losing.
+#>
+function Resolve-ProcessorCountProvenance {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[AllowNull()] [AllowEmptyString()] [string] $Declared,
+		[AllowNull()] [nullable[double]] $CgroupCpuQuota
+	)
+
+	$raw = if ($null -eq $Declared) { '' } else { $Declared.Trim() }
+
+	if ($raw.Length -gt 0) {
+		$parsed = 0
+
+		if ([int]::TryParse(
+				$raw,
+				[Globalization.NumberStyles]::Integer,
+				[Globalization.CultureInfo]::InvariantCulture,
+				[ref] $parsed) -and $parsed -gt 0) {
+			return [pscustomobject]@{
+				Resolved = $parsed
+				Source = $script:ProvenanceExplicit
+				Declared = $raw
+				Reason = "DOTNET_PROCESSOR_COUNT is set to '$raw', which OVERRIDES the cgroup quota process-wide."
+			}
+		}
+
+		return [pscustomobject]@{
+			Resolved = $null
+			Source = $script:ProvenanceIndeterminate
+			Declared = $raw
+			Reason = "DOTNET_PROCESSOR_COUNT is set to '$raw', which is not a positive integer. " +
+				'What the CLR does with it is not something this script will guess at and then report as fact.'
+		}
+	}
+
+	if ($null -eq $CgroupCpuQuota) {
+		return [pscustomobject]@{
+			Resolved = $null
+			Source = $script:ProvenanceIndeterminate
+			Declared = ''
+			Reason = 'DOTNET_PROCESSOR_COUNT is absent, so the count derives from the enforced CPU quota - ' +
+				'but no quota reading was supplied, so the resolved count is unknown.'
+		}
+	}
+
+	# Ceiling, matching what .NET itself reports for a fractional quota, so a
+	# recorded count never disagrees with the runtime in the unsafe direction.
+	$derived = [Math]::Max(1, [int][Math]::Ceiling($CgroupCpuQuota))
+
+	return [pscustomobject]@{
+		Resolved = $derived
+		Source = $script:ProvenanceCgroup
+		Declared = ''
+		Reason = "DOTNET_PROCESSOR_COUNT is absent, so Environment.ProcessorCount derives from the enforced " +
+			"CPU quota of $CgroupCpuQuota, giving $derived. This is the live rig's current state and it is " +
+			'correct; it is recorded because it was invisible while a predicate asserted a pinned 16.'
+	}
+}
+
+<#
+.SYNOPSIS
+	Builds an ordered manifest from declared and effective readings.
+
+.DESCRIPTION
+	`Declared` is what the resolved compose configuration says. `Effective` is
+	what the running container actually carries. Both are hashtables keyed by
+	variable name; a key absent from either is recorded as absent rather than
+	as empty, because those are different states and #2931 is a case of exactly
+	that difference going unrecorded.
+
+	Order is the enumeration order of Get-AttributionVariable then
+	Get-AttributionGrant, NOT hashtable order, so two manifests of the same
+	deployment are byte-identical and a diff of the files is a diff of the
+	configuration. A manifest whose line order wandered would show spurious
+	deltas and train its reader to skim them.
+#>
+function New-DeployManifest {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Declared,
+		[Parameter(Mandatory)] [hashtable] $Effective,
+		[AllowNull()] [nullable[double]] $CgroupCpuQuota,
+		[AllowNull()] [AllowEmptyString()] [string] $Label,
+		[ValidateSet('Available', 'Unreadable', 'NotAttempted')]
+		[AllowNull()] [AllowEmptyString()] [string] $DeclarationStatus,
+		[AllowNull()] [AllowEmptyString()] [string] $DeclarationReason
+	)
+
+	$records = @()
+
+	# An omitted status is inferred, so every existing caller keeps working. The
+	# inference is the OLD behaviour and is deliberately the conservative one: an
+	# empty reading becomes NotAttempted, never Available, so a caller that forgot
+	# to say cannot accidentally license the divergence check against nothing.
+	$status = if (-not [string]::IsNullOrWhiteSpace($DeclarationStatus)) {
+		$DeclarationStatus
+	}
+	elseif ($Declared.Keys.Count -gt 0) {
+		$script:DeclarationAvailable
+	}
+	else {
+		$script:DeclarationNotAttempted
+	}
+
+	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
+		$declaredValue = if ($Declared.ContainsKey($variable.Name)) {
+			$raw = $Declared[$variable.Name]
+			if ($null -eq $raw) { $null } else { [string] $raw }
+		}
+		else { $null }
+
+		$effectiveValue = if ($Effective.ContainsKey($variable.Name)) {
+			$raw = $Effective[$variable.Name]
+			if ($null -eq $raw) { $null } else { [string] $raw }
+		}
+		else { $null }
+
+		$records += [pscustomobject]@{
+			Name = $variable.Name
+			Service = $variable.Service
+			Declared = $declaredValue
+			Effective = $effectiveValue
+			Attribution = $variable.Attribution
+			Consumer = $variable.Consumer
+		}
+	}
+
+	$provenance = Resolve-ProcessorCountProvenance `
+		-Declared ($(if ($Effective.ContainsKey('DOTNET_PROCESSOR_COUNT')) { [string] $Effective['DOTNET_PROCESSOR_COUNT'] } else { '' })) `
+		-CgroupCpuQuota $CgroupCpuQuota
+
+	return [pscustomobject]@{
+		Label = if ([string]::IsNullOrWhiteSpace($Label)) { 'unlabelled' } else { $Label }
+		Records = @($records)
+		ProcessorCount = $provenance
+		# Whether a DECLARED reading was obtained, and if not why not. Inferring this
+		# from ($Declared.Keys.Count -gt 0) - which is what this did until #2983 -
+		# cannot tell "resolved, and the file declares nothing" from "never resolved",
+		# and the caller's own acquisition gap made the second case 100% of real
+		# invocations while it rendered as the first. An explicit status cannot be
+		# satisfied by forgetting to acquire.
+		DeclarationStatus = $status
+		DeclarationReason = if ([string]::IsNullOrWhiteSpace($DeclarationReason)) { '' } else { $DeclarationReason }
+		# Retained so existing readers keep working. Now DERIVED from the status
+		# rather than from emptiness, so it cannot disagree with it.
+		DeclarationAvailable = ($status -eq $script:DeclarationAvailable)
+		# Stamped by the instrument that BUILT it, so a freshly-acquired reading
+		# and a read-back baseline carry the field in the same place and the
+		# comparison never has to special-case which one it is holding.
+		ManifestVintage = $script:ManifestVintageCurrent
+	}
+}
+
+<#
+.SYNOPSIS
+	Reports where a manifest's declared and effective readings disagree.
+
+.DESCRIPTION
+	A divergence is not automatically a defect - a null-valued compose entry
+	DECLARES nothing and correctly yields nothing - so the check is asymmetric
+	and only reports the cases that can mislead:
+
+	  declared something, effective absent    the value did not reach the
+	                                          container; the deployment is not
+	                                          the one the file describes
+	  declared X, effective Y                 something between the file and the
+	                                          container rewrote it
+
+	The reverse - declared absent, effective present - is reported too, because
+	it means the value came from somewhere this manifest cannot see, and an
+	unattributable value is the thing being hunted.
+#>
+function Get-DeployManifestDivergence {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Manifest
+	)
+
+	$divergences = @()
+
+	# Only an AVAILABLE declaration licenses this check. Without a declared half
+	# there is nothing to diverge FROM, and comparing against one would report every
+	# variable the container carries as unattributable - the guard accusing the
+	# deployment of the guard's own missing input.
+	#
+	# Silence here is correct and is not a weakening: the ATTRIBUTION check
+	# (Get-AttributionVerdict) runs regardless and is the half that gates a deploy.
+	# But silence must be ATTRIBUTABLE, which is what #2983 was about - the caller
+	# never acquired a declaration, so this returned empty on every real invocation
+	# and the script printed OK. The status now says which of the two silences it
+	# is, and Get-DeclarationSuppression below turns that into a line the operator
+	# reads. A check that cannot fire must say so where a passing one would not.
+	if ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus') {
+		if ($Manifest.DeclarationStatus -ne $script:DeclarationAvailable) {
+			return ,$divergences
+		}
+	}
+	elseif ($Manifest.PSObject.Properties.Name -contains 'DeclarationAvailable' -and
+		-not $Manifest.DeclarationAvailable) {
+		return ,$divergences
+	}
+
+	foreach ($record in $Manifest.Records) {
+		$declaredAbsent = $null -eq $record.Declared -or $record.Declared.Length -eq 0
+		$effectiveAbsent = $null -eq $record.Effective -or $record.Effective.Length -eq 0
+
+		if ($declaredAbsent -and $effectiveAbsent) {
+			continue
+		}
+
+		if ($declaredAbsent) {
+			$divergences += "$($record.Name) is ABSENT from the resolved configuration but PRESENT in the " +
+				"container as '$($record.Effective)'. It came from somewhere this manifest cannot see, so " +
+				'its value is not attributable to any tracked file.'
+			continue
+		}
+
+		if ($effectiveAbsent) {
+			$divergences += "$($record.Name) is DECLARED as '$($record.Declared)' but is ABSENT from the " +
+				'container. The running deployment is not the one the configuration describes.'
+			continue
+		}
+
+		if ($record.Declared -ne $record.Effective) {
+			$divergences += "$($record.Name) is DECLARED as '$($record.Declared)' but the container carries " +
+				"'$($record.Effective)'. Something between the file and the container rewrote it."
+		}
+	}
+
+	return ,$divergences
+}
+
+<#
+.SYNOPSIS
+	Reports, in one line, that the divergence check did NOT run and why.
+
+.DESCRIPTION
+	Returns an empty string when the check ran. Otherwise it names the reason,
+	so a suppressed check is visible in exactly the place a reader looks for its
+	verdict.
+
+	This exists because #2983 was not, at bottom, a missing `docker compose`
+	call. It was that the absence of one was INDISTINGUISHABLE from a clean
+	result: Get-DeployManifestDivergence returned zero divergences, the caller
+	printed OK, and nothing anywhere said the comparison had not happened. The
+	acquisition fix stops that arising; this stops it being silent if it ever
+	arises again by another route - a resolution failure, a caller that supplies
+	only the effective half, a future overlay that will not resolve.
+
+	The general form is worth stating, because it recurs across this epic: a
+	check that can be suppressed needs a channel for "suppressed" that is not
+	the same channel as "passed". Zero findings and no findings possible are
+	different facts, and rendering them identically is what makes a guard
+	report success for work it never did.
+#>
+function Get-DeclarationSuppression {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Manifest
+	)
+
+	if (-not ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus')) {
+		return ''
+	}
+
+	$status = $Manifest.DeclarationStatus
+	$reason = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationReason') { [string] $Manifest.DeclarationReason } else { '' }
+	$suffix = if ([string]::IsNullOrWhiteSpace($reason)) { '' } else { " Reason: $reason" }
+
+	switch ($status) {
+		'Available' { return '' }
+		'Unreadable' {
+			return 'DECLARED HALF UNREADABLE: the compose configuration could not be resolved, so the ' +
+				'declared/effective divergence check DID NOT RUN. Every declared value below is ' +
+				"<unreadable>, which is not the same claim as <absent>.$suffix"
+		}
+		default {
+			return 'DECLARED HALF NOT RESOLVED: no compose resolution was attempted, so the ' +
+				'declared/effective divergence check DID NOT RUN. Declared values below are ' +
+				"<not-resolved> and assert nothing about the configuration.$suffix"
+		}
+	}
+}
+
+<#
+.SYNOPSIS
+	Names every attribution-relevant variable that moved between two manifests.
+
+.DESCRIPTION
+	Compares EFFECTIVE values, because effective is what a measurement was taken
+	under. Comparing declared values would produce a diff of intentions.
+
+	Each delta carries the variable's Attribution string, so the diff says not
+	merely that something moved but what a reader's conclusion is now exposed
+	to. That is the difference between a log line and evidence.
+
+	A variable absent from the baseline entirely - because the baseline predates
+	its being recorded - is reported as Kind 'Unrecorded' rather than as a
+	movement. Calling it a change would manufacture a delta out of an
+	improvement to the instrument, which is its own way of voiding a comparison.
+#>
+function Compare-DeployManifest {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Baseline,
+		[Parameter(Mandatory)] [pscustomobject] $Current
+	)
+
+	$deltas = @()
+	$baselineByName = @{}
+
+	foreach ($record in $Baseline.Records) {
+		$baselineByName[$record.Name] = $record
+	}
+
+	foreach ($record in $Current.Records) {
+		if (-not $baselineByName.ContainsKey($record.Name)) {
+			$deltas += [pscustomobject]@{
+				Name = $record.Name
+				Kind = 'Unrecorded'
+				Was = $null
+				Now = $record.Effective
+				Attribution = $record.Attribution
+			}
+			continue
+		}
+
+		$was = $baselineByName[$record.Name].Effective
+		$now = $record.Effective
+
+		if ($was -eq $now) {
+			continue
+		}
+
+		$kind = if ($null -eq $was -or $was.Length -eq 0) { 'Pinned' }
+			elseif ($null -eq $now -or $now.Length -eq 0) { 'Unpinned' }
+			else { 'Changed' }
+
+		$deltas += [pscustomobject]@{
+			Name = $record.Name
+			Kind = $kind
+			Was = $was
+			Now = $now
+			Attribution = $record.Attribution
+		}
+	}
+
+	return ,$deltas
+}
+
+<#
+.SYNOPSIS
+	Orders two manifest vintages, treating unknown as older than any recorded one.
+
+.DESCRIPTION
+	Unknown is $null, never 0, so a manifest that predates the field cannot
+	claim a known capability. It still ORDERS as older than any recorded
+	vintage, which is the honest reading: the field was added by an instrument
+	that could read strictly more than the ones before it.
+
+	Two unknowns are Indeterminate rather than Same. They may be the same
+	instrument or two different pre-field ones, and nothing in either file can
+	distinguish those - so the relation says so instead of guessing. This is
+	deliberately the conservative direction: Indeterminate explains no delta at
+	all, so a legacy-against-legacy comparison behaves exactly as it did before
+	this function existed, and no historical comparison changes verdict.
+#>
+function Get-VintageRelation {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[AllowNull()] [System.Nullable[int]] $BaselineVintage,
+		[AllowNull()] [System.Nullable[int]] $CurrentVintage
+	)
+
+	if ($null -eq $BaselineVintage -and $null -eq $CurrentVintage) { return $script:VintageIndeterminate }
+	if ($null -eq $BaselineVintage) { return $script:VintageBaselineOlder }
+	if ($null -eq $CurrentVintage) { return $script:VintageCurrentOlder }
+
+	if ($BaselineVintage -lt $CurrentVintage) { return $script:VintageBaselineOlder }
+	if ($BaselineVintage -gt $CurrentVintage) { return $script:VintageCurrentOlder }
+
+	return $script:VintageSame
+}
+
+<#
+.SYNOPSIS
+	Decides whether two manifests are comparable at all, before anything asks
+	whether the step between them was attributable.
+
+.DESCRIPTION
+	These are different questions and the second is meaningless when the first
+	answers no. #2992 is what happens when only the second is asked: three keys
+	that the baseline's instrument could not read compared as three pinned
+	variables, and the refusal named configuration drift on a rig where nothing
+	had moved.
+
+	A vintage difference explains exactly one class of delta, in one direction:
+
+	  BaselineOlder   'Pinned'   (empty -> value). The newer instrument reads a
+	                             cell the older one left empty.
+	  CurrentOlder    'Unpinned' (value -> empty). The older instrument cannot
+	                             read a cell the newer one recorded. This is not
+	                             hypothetical - a deploy checkout that has not
+	                             been updated runs the older script.
+	  Indeterminate   nothing.
+	  Same            nothing.
+
+	'Changed' - both sides populated and different - is NEVER explained by a
+	vintage difference, in either direction. Two instruments disagreeing about a
+	value they can both read is drift whatever wrote them, and excusing it would
+	turn this function into the silent-pass defect it exists to prevent.
+
+	THE LOAD-BEARING PROPERTY, and the one to preserve in any future edit:
+	a cross-vintage comparison that produces NO explicable delta is still
+	COMPARABLE. Incomparability is reported only when the vintage difference
+	actually bites. Without that, adding this field would itself refuse every
+	comparison against every baseline captured before it - a guard crying wolf
+	on its own installation, which is the failure mode that gets guards deleted
+	and is the reason Get-AttributionVerdict already excludes 'Unrecorded'.
+
+	KNOWN LIMITATION, deliberate and conservative. An empty cell is
+	byte-indistinguishable between "the instrument could not read it" and "the
+	deployment genuinely does not set it" - the same shape AMENDMENT 25 records
+	for DECLARATION_STATUS, one level down. So against an UNKNOWN-vintage
+	baseline this cannot tell a newly-readable cell from a newly-pinned one, and
+	it refuses both.
+
+	That is the safe direction: it declines to SCORE the comparison rather than
+	silently excusing a real change, and exit 3 is not exit 0. But it does mean
+	a genuine pin against a legacy baseline is refused rather than attributed.
+
+	The remedy is to re-capture the baseline with the current instrument, after
+	which the relation is Same and every delta is scored normally. The remedy is
+	NOT a hand-authored list of "keys this vintage newly learned to read": such a
+	list cannot be checked for completeness, and a guard whose coverage is a list
+	nobody can audit is the defect family this epic exists to remove.
+
+	Concretely, at the time of writing DOTNET_PROCESSOR_COUNT is the one cell
+	carrying effective=<absent> in run-13-postfix.manifest, so a run that pins it
+	against that baseline is refused as incomparable rather than attributed.
+#>
+function Get-ComparabilityVerdict {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyCollection()] [array] $Deltas,
+		[Parameter(Mandatory)] [string] $Relation
+	)
+
+	$explicableKind = switch ($Relation) {
+		$script:VintageBaselineOlder { 'Pinned' }
+		$script:VintageCurrentOlder { 'Unpinned' }
+		default { '' }
+	}
+
+	$explained = @()
+
+	if ($explicableKind) {
+		$explained = @($Deltas | Where-Object { $_.Kind -eq $explicableKind })
+	}
+
+	if ($explained.Count -eq 0) {
+		return [pscustomobject]@{
+			Comparable = $true
+			Relation = $Relation
+			ExplainedCount = 0
+			ExplainedNames = @()
+			Summary = ''
+		}
+	}
+
+	$names = ($explained | ForEach-Object { $_.Name }) -join ', '
+	$direction = if ($Relation -eq $script:VintageBaselineOlder) {
+		'the baseline was written by an OLDER instrument that could not populate them'
+	}
+	else {
+		'the current reading was taken by an OLDER instrument that cannot populate them'
+	}
+
+	return [pscustomobject]@{
+		Comparable = $false
+		Relation = $Relation
+		ExplainedCount = $explained.Count
+		ExplainedNames = @($explained | ForEach-Object { $_.Name })
+		Summary = "These two manifests were written by different instrument versions and are NOT " +
+			"comparable on $($explained.Count) key(s): $names. Each shows as a movement because " +
+			"$direction - not because the deployment changed. Re-capture the baseline with the " +
+			'current instrument, or pass an explicitly comparable one, before reading any verdict ' +
+			'about attribution.'
+	}
+}
+
+<#
+.SYNOPSIS
+	Decides whether a step is attributable, and says why not when it is not.
+
+.DESCRIPTION
+	THIS IS THE POINT OF THE FILE. Everything above records; this adjudicates.
+
+	A step that moves ONE attribution-relevant variable supports attributing a
+	measured movement to it. A step that moves TWO supports attributing it to
+	neither, which is what happened to the 16 -> 6 reading: the gate knob moved
+	and the processor-count pin was removed together, and both are sufficient.
+
+	'Unrecorded' deltas are excluded from the count. They are an artefact of the
+	instrument improving, not of the deployment changing, and counting them
+	would make the first run after any addition here permanently unattributable
+	- a guard that cries wolf on its own installation is a guard that gets
+	switched off.
+
+	This never throws and never blocks by itself. It returns a verdict, and
+	Assert-DeployManifest.ps1 turns a NotAttributable verdict into a non-zero
+	exit UNLESS the operator acknowledged the multi-variable step. That is the
+	whole mechanism: changing two variables at once stays POSSIBLE, because
+	sometimes it is necessary, and stops being SILENT, which is what voids a
+	comparison.
+#>
+function Get-AttributionVerdict {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyCollection()] [array] $Deltas
+	)
+
+	$moved = @($Deltas | Where-Object { $_.Kind -ne 'Unrecorded' })
+
+	if ($moved.Count -eq 0) {
+		return [pscustomobject]@{
+			Attributable = $true
+			MovedCount = 0
+			Summary = 'No attribution-relevant variable moved. A measured movement is attributable to the code under test.'
+			Detail = @()
+		}
+	}
+
+	if ($moved.Count -eq 1) {
+		$one = $moved[0]
+		return [pscustomobject]@{
+			Attributable = $true
+			MovedCount = 1
+			Summary = "Exactly one attribution-relevant variable moved: $($one.Name) ($($one.Kind), " +
+				"'$($one.Was)' -> '$($one.Now)'). A measured movement is attributable to it OR to the code " +
+				'under test, and those two are separable only if one of them is held across a further run.'
+			Detail = @("$($one.Name): $($one.Attribution)")
+		}
+	}
+
+	$names = ($moved | ForEach-Object { $_.Name }) -join ', '
+
+	return [pscustomobject]@{
+		Attributable = $false
+		MovedCount = $moved.Count
+		Summary = "$($moved.Count) attribution-relevant variables moved in one step: $names. " +
+			'Any measured movement now has more than one sufficient cause and is attributable to NONE of them. ' +
+			'This is the defect recorded in issue #2931, where a WAL replay gate moving 16 -> 6 could not be ' +
+			'attributed because a processor-count pin was removed in the same step.'
+		Detail = @($moved | ForEach-Object {
+			"$($_.Name) ($($_.Kind), '$($_.Was)' -> '$($_.Now)'): $($_.Attribution)"
+		})
+	}
+}
+
+<#
+.SYNOPSIS
+	Renders a manifest as the stable, citable text the run captures.
+
+.DESCRIPTION
+	Deterministic and ordered, so two manifests of the same configuration are
+	byte-identical and `diff` is a meaningful operation on them. Written as a
+	file rather than only to the console because the PM has to CITE it when
+	scoring a run, and a scrollback is not evidence - it is not addressable, it
+	is not durable, and it is not something a second reader can check.
+
+	Absent is rendered as `<absent>` rather than as an empty field. An empty
+	field beside a name reads as a value that happens to be blank, and this
+	whole issue is a case of absent and empty being confused.
+
+	DECLARATION_STATUS records whether the declared half was acquired at all,
+	and DECLARATION_RESOLVED records HOW MANY keys it came back with. Both are
+	written, because the first is a verdict and the second is its denominator:
+	a resolution that succeeds and returns nothing still reports Available, so
+	a reader given only the status cannot tell a populated declaration from an
+	empty one. DECLARATION_RESOLVED renders a count only when the status is
+	Available, and otherwise repeats the declared column's placeholder - `0 of
+	9` is a finding when resolution ran and an artefact when it did not, and
+	printing the same digits for both would rebuild the confusion.
+
+	MANIFEST_VINTAGE records which instrument wrote the file. Without it a
+	manifest says what the deployment was but not what the reader could SEE, so
+	an instrument that learns to read a new cell makes every older baseline
+	appear to have changed. That is #2992, and it refused a rig whose containers
+	both reported RestartCount=0.
+#>
+function Format-DeployManifest {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)] [pscustomobject] $Manifest,
+		[AllowNull()] [AllowEmptyString()] [string] $GeneratedAt
+	)
+
+	$stamp = if ([string]::IsNullOrWhiteSpace($GeneratedAt)) { '<unrecorded>' } else { $GeneratedAt }
+	$lines = @()
+
+	$lines += '# DEPLOY MANIFEST - attribution-relevant configuration (issue #2931)'
+	$lines += '#'
+	$lines += '# Every variable below is sufficient ON ITS OWN to move a throughput,'
+	$lines += '# latency or concurrency reading. Two of them moving in one step makes a'
+	$lines += '# measured movement attributable to neither. Diff this file between runs'
+	$lines += '# BEFORE scoring one against the other.'
+	$lines += '#'
+	$lines += "# label        : $($Manifest.Label)"
+	$lines += "# generated at : $stamp"
+	$lines += ''
+	# First of the key lines because it describes the FILE, not the deployment:
+	# a reader has to know which instrument wrote the rest before any of it can
+	# be compared against anything. Absent in every manifest written before
+	# #2992, which reads back as unknown rather than as zero.
+	#
+	# Taken from the manifest rather than from the constant, so re-rendering a
+	# read-back legacy manifest does not silently STAMP it with the current
+	# vintage. Promoting an old file to a known capability it never had is the
+	# same hazard AMENDMENT 25 records for DECLARATION_STATUS, and the fix is
+	# the same: carry the absence through instead of defaulting it.
+	$vintage = if ($Manifest.PSObject.Properties.Name -contains 'ManifestVintage') { $Manifest.ManifestVintage } else { $null }
+
+	if ($null -ne $vintage) {
+		$lines += "MANIFEST_VINTAGE=$vintage"
+	}
+
+	$lines += "PROCESSOR_COUNT_RESOLVED=$(if ($null -eq $Manifest.ProcessorCount.Resolved) { '<indeterminate>' } else { $Manifest.ProcessorCount.Resolved })"
+	$lines += "PROCESSOR_COUNT_SOURCE=$($Manifest.ProcessorCount.Source)"
+
+	# Recorded IN the manifest, not merely on the console, because the file is what
+	# gets cited when a run is scored. A reader who cannot tell from the file alone
+	# whether the declared column is evidence or an unfilled gap will read it as
+	# evidence - which is how #2983 survived thirteen deployments.
+	$status = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationStatus' -and
+		-not [string]::IsNullOrWhiteSpace($Manifest.DeclarationStatus)) { $Manifest.DeclarationStatus } else { 'NotAttempted' }
+	$reason = if ($Manifest.PSObject.Properties.Name -contains 'DeclarationReason') { [string] $Manifest.DeclarationReason } else { '' }
+	$lines += "DECLARATION_STATUS=$status"
+	$lines += "DECLARATION_REASON=$(if ([string]::IsNullOrWhiteSpace($reason)) { '<none>' } else { $reason })"
+
+	# `<absent>` asserts the key is not declared. That is only true when the
+	# declaration was actually read, so when it was not, the declared column renders
+	# as `<unreadable>` or `<not-resolved>` instead. Same width, different claim.
+	$declaredPlaceholder = switch ($status) {
+		'Available' { '<absent>' }
+		'Unreadable' { '<unreadable>' }
+		default { '<not-resolved>' }
+	}
+
+	# The STATUS is a verdict; this is its denominator. A status of Available says
+	# resolution was attempted and succeeded - it does NOT say how many keys came
+	# back, and an empty-but-successful resolution reports Available over nine
+	# `<absent>` rows. That is not hypothetical: it is exactly what the #2983
+	# mutation test reproduced, where the assertion on the STATUS passed against a
+	# reading that had resolved nothing and only the count caught it.
+	#
+	# Rendered with the same placeholder discipline as the declared column, because
+	# `0 of 9` from a resolution that ran is a finding, while `0 of 9` from one that
+	# never ran is an artefact of not looking. Printing the same digits for both
+	# would rebuild the conflation this line exists to prevent.
+	$resolvedCount = 0
+	foreach ($record in $Manifest.Records) {
+		if ($null -ne $record.Declared -and $record.Declared.Length -gt 0) { $resolvedCount++ }
+	}
+	$totalCount = @($Manifest.Records).Count
+	$lines += "DECLARATION_RESOLVED=$(if ($status -eq 'Available') { "$resolvedCount of $totalCount" } else { $declaredPlaceholder })"
+	$lines += ''
+
+	foreach ($record in $Manifest.Records) {
+		$declared = if ($null -eq $record.Declared -or $record.Declared.Length -eq 0) { $declaredPlaceholder } else { $record.Declared }
+		$effective = if ($null -eq $record.Effective -or $record.Effective.Length -eq 0) { '<absent>' } else { $record.Effective }
+		$lines += "$($record.Name)|declared=$declared|effective=$effective"
+	}
+
+	return ($lines -join "`n") + "`n"
+}
+
+<#
+.SYNOPSIS
+	Reads back a manifest rendered by Format-DeployManifest.
+
+.DESCRIPTION
+	The inverse of the renderer, and deliberately tolerant in exactly one
+	direction: a line it does not understand is skipped, so a manifest written
+	by a later version with extra fields still yields a usable baseline instead
+	of refusing to compare at all. A baseline that cannot be read is a
+	comparison that silently does not happen, which is the failure mode this
+	file exists to remove - so the tolerant choice is the safe one HERE, though
+	it would not be in the adjudicating functions above.
+
+	Round-trip fidelity on the fields it does understand is asserted by
+	Test-DeployManifest.ps1; without that the renderer and this could drift and
+	every diff would be against a subtly different object.
+#>
+function Read-DeployManifest {
+	[CmdletBinding()]
+	[OutputType([pscustomobject])]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyString()] [string] $Text
+	)
+
+	$records = @()
+	$label = 'unlabelled'
+	$resolved = $null
+	$source = $script:ProvenanceIndeterminate
+	$attribution = @{}
+	# A manifest written before #2983 carries no DECLARATION_STATUS line. Defaulting
+	# it to NotAttempted is the honest reading of such a file: its declared column
+	# was never acquired. Defaulting to Available would retroactively promote every
+	# historical `<absent>` into a positive finding it never was.
+	$declarationStatus = $script:DeclarationNotAttempted
+	$declarationReason = 'no DECLARATION_STATUS recorded; manifest predates #2983'
+	# Deliberately $null rather than 0. A manifest that never recorded a count is
+	# not a manifest that resolved nothing, and a reader that cannot distinguish
+	# the two will score an unmeasured baseline as a measured-and-empty one.
+	$declarationResolved = $null
+	$declarationTotal = $null
+	# $null, never 0. A manifest with no vintage line was written by an
+	# instrument whose acquisition capability is UNKNOWN, which is a different
+	# claim from "capability zero" - the latter is a value, and would let a
+	# legacy file compare as merely older while asserting that what it could
+	# read is known. See Get-VintageRelation.
+	$manifestVintage = $null
+
+	foreach ($variable in @(Get-AttributionVariable) + @(Get-AttributionGrant)) {
+		$attribution[$variable.Name] = $variable
+	}
+
+	foreach ($line in ($Text -split "`r?`n")) {
+		$trimmed = $line.Trim()
+
+		if ($trimmed.StartsWith('# label')) {
+			$separator = $trimmed.IndexOf(':')
+			if ($separator -ge 0) {
+				$label = $trimmed.Substring($separator + 1).Trim()
+			}
+			continue
+		}
+
+		if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) {
+			continue
+		}
+
+		if ($trimmed.StartsWith('MANIFEST_VINTAGE=')) {
+			$value = $trimmed.Substring('MANIFEST_VINTAGE='.Length)
+			# Only a well-formed non-negative integer is a vintage. Anything else
+			# leaves it unknown rather than guessing, because a malformed vintage
+			# that parsed to 0 would claim comparability the file cannot support.
+			if ($value -match '^\s*(\d+)\s*$') {
+				$manifestVintage = [int] $Matches[1]
+			}
+			continue
+		}
+
+		if ($trimmed.StartsWith('PROCESSOR_COUNT_RESOLVED=')) {
+			$value = $trimmed.Substring('PROCESSOR_COUNT_RESOLVED='.Length)
+			$parsed = 0
+			$resolved = if ([int]::TryParse($value, [ref] $parsed)) { $parsed } else { $null }
+			continue
+		}
+
+		if ($trimmed.StartsWith('PROCESSOR_COUNT_SOURCE=')) {
+			$source = $trimmed.Substring('PROCESSOR_COUNT_SOURCE='.Length)
+			continue
+		}
+
+		if ($trimmed.StartsWith('DECLARATION_STATUS=')) {
+			$declarationStatus = $trimmed.Substring('DECLARATION_STATUS='.Length)
+			continue
+		}
+
+		if ($trimmed.StartsWith('DECLARATION_REASON=')) {
+			$value = $trimmed.Substring('DECLARATION_REASON='.Length)
+			$declarationReason = if ($value -eq '<none>') { '' } else { $value }
+			continue
+		}
+
+		if ($trimmed.StartsWith('DECLARATION_RESOLVED=')) {
+			$value = $trimmed.Substring('DECLARATION_RESOLVED='.Length)
+			# Only an `<n> of <m>` reading is a measurement. Any placeholder leaves
+			# both halves $null, so a caller asking "how many resolved" gets "not
+			# measured" rather than a number it would treat as one.
+			if ($value -match '^\s*(\d+)\s+of\s+(\d+)\s*$') {
+				$declarationResolved = [int] $Matches[1]
+				$declarationTotal = [int] $Matches[2]
+			}
+			continue
+		}
+
+		$parts = $trimmed -split '\|'
+
+		if ($parts.Count -ne 3 -or -not $parts[1].StartsWith('declared=') -or -not $parts[2].StartsWith('effective=')) {
+			continue
+		}
+
+		$name = $parts[0]
+		$declared = $parts[1].Substring('declared='.Length)
+		$effective = $parts[2].Substring('effective='.Length)
+
+		# All three placeholders read back as $null - there is no VALUE in any of
+		# them. Which of the three it was is carried by DeclarationStatus, not by
+		# the per-record field, so a reader cannot get the two out of step.
+		$declaredValue = if ($declared -in @('<absent>', '<unreadable>', '<not-resolved>')) { $null } else { $declared }
+
+		$records += [pscustomobject]@{
+			Name = $name
+			Service = if ($attribution.ContainsKey($name)) { $attribution[$name].Service } else { '<unknown>' }
+			Declared = $declaredValue
+			Effective = if ($effective -eq '<absent>') { $null } else { $effective }
+			Attribution = if ($attribution.ContainsKey($name)) { $attribution[$name].Attribution } else { 'not enumerated by this version of the manifest' }
+			Consumer = if ($attribution.ContainsKey($name)) { $attribution[$name].Consumer } else { '<unknown>' }
+		}
+	}
+
+	return [pscustomobject]@{
+		Label = $label
+		Records = @($records)
+		DeclarationStatus = $declarationStatus
+		DeclarationReason = $declarationReason
+		DeclarationAvailable = ($declarationStatus -eq $script:DeclarationAvailable)
+		DeclarationResolvedCount = $declarationResolved
+		DeclarationRecordCount = $declarationTotal
+		ManifestVintage = $manifestVintage
+		ProcessorCount = [pscustomobject]@{
+			Resolved = $resolved
+			Source = $source
+			Declared = ''
+			Reason = 'read back from a recorded manifest'
+		}
+	}
+}

@@ -116,8 +116,11 @@ internal sealed partial class LatticeGrain
             var activeTreeId = await maintainer.GetActiveTreeIdAsync(cancellationToken);
             var viewTree = grainFactory.GetGrain<ILattice>(activeTreeId);
 
+            // ScanEntriesAsync, not EntriesAsync: the history view is read from a
+            // [StatelessWorker] LatticeGrain, so a MoveNext can land on a worker
+            // that has no record of the enumerator and abort the timeline scan.
             await foreach (var entry in viewTree
-                .EntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken))
+                .ScanEntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken))
             {
                 var row = codec.Decode(entry.Value);
 

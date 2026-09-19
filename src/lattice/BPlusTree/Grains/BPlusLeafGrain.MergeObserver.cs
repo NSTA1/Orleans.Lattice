@@ -100,6 +100,37 @@ internal sealed partial class BPlusLeafGrain
         EnvelopeCodecActive ? _envelopeCodec!.StripForFold(delta) : delta;
 
     /// <summary>
+    /// Strips the version envelope from a stored CRDT <b>state</b> before it is
+    /// deserialized to be folded into. Identity (same reference) when no codec is
+    /// active or the value carries no envelope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the state-side counterpart of <see cref="StripDeltaForFold"/> and the
+    /// two must always be applied together. Stripping only the delta leaves the fold
+    /// asymmetric: the stored value is handed to the shape still carrying its header,
+    /// and because <c>LatticeSchemaEnvelope.Magic</c> is <c>0xFE</c> - chosen precisely
+    /// because it is never a valid UTF-8 lead byte - a JSON state decode fails at byte
+    /// zero with <c>'0xFE' is an invalid start of a value</c>.
+    /// </para>
+    /// <para>
+    /// The resulting failure mode is unusually bad and is why the symmetry is worth
+    /// naming rather than leaving implicit. Reads keep working, because the read
+    /// boundary has its own decoder seam; only read-modify-write fails, and it fails
+    /// <i>permanently</i>, because every retry re-decodes the same stored bytes. A
+    /// record in that state looks perfectly healthy to every reader while no write to
+    /// it can ever succeed again.
+    /// </para>
+    /// <para>
+    /// Like the delta strip this is version-agnostic and never upcasts, so apply-time
+    /// and replay-time folds see identical bytes and WAL-replay determinism is
+    /// preserved. See the determinism remarks on <see cref="ILatticeEnvelopeCodec"/>.
+    /// </para>
+    /// </remarks>
+    private byte[] StripStateForFold(byte[] state) =>
+        EnvelopeCodecActive ? _envelopeCodec!.StripForFold(state) : state;
+
+    /// <summary>
     /// <c>true</c> when a non-null-default <see cref="ILatticeMergeObserver"/> is
     /// registered. Resolved once per activation and cached, so the LWW and CRDT
     /// merge paths pay only a cached <c>bool</c> check when no observer is wired.

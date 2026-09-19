@@ -82,6 +82,30 @@ public class LeafSnapshotRehydrateIntegrationTests
         var leafKey = leafId!.Value.GetGuidKey();
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafKey);
 
+        // Establish the precondition this test has always described and never
+        // performed. The comment above says "flush any pending checkpoint",
+        // but nothing here ever flushed one, so the leaf reached capture with
+        // no projection checkpoint at all. BuildCheckpointCoverage derives the
+        // blob's coverage FROM the checkpoint, so such a capture writes a blob
+        // carrying no coverage claim, and LeafSnapshotStorageGrain.LoadAsync
+        // fail-closes it to null via HasCapturedPrefix - a blob that claims no
+        // durable prefix is reported as "no snapshot" rather than as a snapshot
+        // with none of its rows.
+        //
+        // This assertion used to hold only because the born-0 partition-0
+        // scalar (issue #2703) read back as 0 and manufactured a coverage claim
+        // the leaf had not earned. With that ambiguity resolved the claim is
+        // honestly absent, so the rehydrate round-trip this test exists to
+        // cover has to be given a real checkpoint to round-trip against.
+        //
+        // Hinted through the partition-scoped plural seam. The singular
+        // SetCheckpointOffsetHintAsync this used to call resolved its partition
+        // from an AsyncLocal that cannot flow across a grain call, so it always
+        // landed on partition 0 whatever the caller meant; it was removed in
+        // issue #2699. Index 0 here is deliberate and now explicit - this
+        // fixture's leaf is single-partition.
+        await leaf.SetCheckpointOffsetHintsAsync([1]);
+
         // Drive a snapshot capture through the public seam. The capture
         // path stamps the blob with whatever ProjectionCheckpointOffset
         // the leaf currently holds; whether or not a flush has happened

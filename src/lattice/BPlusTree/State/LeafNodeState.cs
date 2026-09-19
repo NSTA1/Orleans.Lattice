@@ -12,10 +12,52 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// the projection-digest fold (<see cref="ProjectionHash"/>), the checkpoint
 /// offsets, and the HLC clock plus version vectors. See the reserved
 /// <c>[Id(0)]</c> slot note below.
+/// <para>
+/// Persisted through the Orleans binary serializer
+/// (<see cref="ILatticeBinaryPersistedState"/>) rather than the default JSON
+/// grain-storage serializer. The JSON path materialises the whole document as
+/// one contiguous UTF-16 string at roughly 2.7x the payload, which that
+/// interface's own documentation identifies as "the allocation that fails
+/// first when a silo is replaying a warm volume under memory pressure". That
+/// remedy was applied to <c>LeafSnapshotBlob</c> when it was introduced but
+/// not to this type, which is read and written on <b>every</b> leaf
+/// activation and carries the deliberately unbounded
+/// <see cref="UnresolvedReplayWork"/> ledger - so it was the more exposed of
+/// the two, not the less.
+/// </para>
+/// <para>
+/// Safe to mark because the interface's stated criterion holds here: every
+/// member of this type carries <c>[Id(n)]</c>, so the binary serializer
+/// persists its full state. Reads stay compatible in both directions - rows
+/// already written as JSON are detected by payload and still read, and rows
+/// written in binary stay readable if this type is later unmarked - so no
+/// migration is required.
+/// </para>
+/// <para>
+/// This lowers a constant factor; it does not bound the row. An unbounded
+/// <see cref="UnresolvedReplayWork"/> ledger still grows without limit
+/// (issue #2304, which records why an age-based reaper is unsafe: a prepare
+/// whose decision aged out reads Indeterminate yet may be committed, so
+/// discarding it loses an acknowledged write). Nor does it rescue a row
+/// already too large to deserialize, because rewriting it in binary requires
+/// activating the leaf, and the read that fails happens before any grain code
+/// runs.
+/// </para>
+/// <para>
+/// That second limit is the load-bearing one, because the cost this removes
+/// lands on <b>activation</b>. A leaf whose activation read exceeds the
+/// request timeout cannot be compacted, since compaction must activate it
+/// first, so its tombstones are never reclaimed and it only grows - an
+/// absorbing state with no escape. Removing the multiplier lowers activation
+/// cost and so raises the size at which a leaf enters that state, but it
+/// cannot return a leaf that is already in it. Whether the reduction is large
+/// enough to matter in practice is <b>unmeasured</b>; treat it as a smaller
+/// constant on a hot path, not as a proven remedy for that ratchet.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafNodeState)]
-internal sealed class LeafNodeState
+internal sealed class LeafNodeState : ILatticeBinaryPersistedState
 {
     // [Id(0)] previously held a SortedDictionary<string, LwwValue<byte[]>>
     // Entries per-key projection. The persisted leaf row was collapsed:
@@ -108,6 +150,38 @@ internal sealed class LeafNodeState
     /// </para>
     /// </summary>
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="ProjectionCheckpointOffset"/> holds a value this leaf
+    /// actually assigned, as opposed to the CLR type default (issue #2703).
+    /// <c>true</c> once the projection has written partition 0's checkpoint at
+    /// least once; <c>null</c> on every row persisted before this slot existed,
+    /// and on a row whose partition 0 has never been checkpointed at all.
+    /// <para>
+    /// The slot exists because <see cref="ProjectionCheckpointOffset"/> has no
+    /// initializer and so is born <c>0</c> rather than at the <c>-1</c>
+    /// "nothing applied" sentinel every other partition uses. A leaf that has
+    /// never checkpointed partition 0 is therefore indistinguishable, from the
+    /// persisted state alone, from one genuinely checkpointed at offset 0 - and
+    /// the serializer omits default-valued members, so the slot is absent from
+    /// the payload in both cases rather than being written as an explicit
+    /// <c>0</c>. Reading that ambiguous <c>0</c> as real progress skipped the
+    /// replay advance that would have recorded the checkpoint, leaving the
+    /// partition permanently uncheckpointed.
+    /// </para>
+    /// <para>
+    /// The remedy is additive and nullable ON PURPOSE. Re-defaulting
+    /// <see cref="ProjectionCheckpointOffset"/> to <c>-1</c> would change the
+    /// meaning of every already-deployed row that omitted the member, silently
+    /// converting real progress into "nothing applied". A new nullable slot
+    /// instead leaves legacy rows reading exactly as they did, and lets
+    /// <c>GetPersistedCheckpointForPartition</c> resolve the remaining
+    /// ambiguity conservatively: an unassigned <c>0</c> reports the sentinel, so
+    /// the partition re-reads at most one WAL entry and then assigns this slot,
+    /// after which it is never ambiguous again.
+    /// </para>
+    /// </summary>
+    [Id(22)] public bool? ProjectionCheckpointOffsetAssigned { get; set; }
 
     /// <summary>
     /// Incremental XOR-fold projection fingerprint: a 16-byte buffer that holds
@@ -308,4 +382,29 @@ internal sealed class LeafNodeState
     /// </para>
     /// </summary>
     [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }
+
+    /// <summary>
+    /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
+    /// so the next activation can reserve hydration budget accurately from its
+    /// very first moment instead of re-learning the size by overshooting
+    /// (issue #2765).
+    /// <para>
+    /// This is what makes the admission gate's progress <b>durable</b>. Without
+    /// it every claim on a cold start begins from the same generic guess, so a
+    /// process that died part-way through a storm restarts knowing nothing more
+    /// than the one before it did, and the corpus of oversized leaves the gate
+    /// exists to shepherd through division is re-measured from scratch on every
+    /// restart. With it, the estimate a restart starts from is the size the
+    /// previous run actually observed.
+    /// </para>
+    /// <para>
+    /// Stamped in memory only, at snapshot capture and after a successful load,
+    /// and persisted by whichever ordinary <c>WriteStateAsync</c> comes next.
+    /// It is deliberately never worth a write of its own: forcing a state write
+    /// per leaf during a cold-start storm would add exactly the kind of
+    /// unbounded concurrent work this issue is about. Zero means "not yet
+    /// observed", and the caller falls back to a conservative bound.
+    /// </para>
+    /// </summary>
+    [Id(23)] public long SnapshotLoadHintBytes { get; set; }
 }

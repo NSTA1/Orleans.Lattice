@@ -91,8 +91,11 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             var keys = new List<string>();
+            // ScanKeysAsync: the store tree is a [StatelessWorker] LatticeGrain,
+            // so a MoveNext can land on a worker with no record of the enumerator.
+            // An aborted drain here would delete only part of the artifact.
             await foreach (var key in Store
-                .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ScanKeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 keys.Add(key);
@@ -115,8 +118,10 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         string? previous = null;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // ScanKeysAsync: see DeleteArtifactAsync. An abort here would silently
+            // truncate the artifact listing an operator reads.
             await foreach (var key in Store
-                .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ScanKeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 var id = ArtifactIdFromChunkKey(key);
@@ -238,8 +243,14 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
     private async Task<bool> KeyExistsAsync(string start, CancellationToken cancellationToken, string? end = null)
     {
         end ??= start + "\u0000";
+        // ScanKeysAsync, though this loop is not itself exposed to the abort it
+        // recovers from: a consumer that returns on the first element issues
+        // exactly one RPC (the initial StartEnumeration), and the abort arises
+        // only from a subsequent MoveNext RPC. The wrapper is here so that an
+        // edit which drains further - counting, say - does not silently acquire
+        // the exposure, and costs one iterator hop on a one-shot probe.
         await foreach (var _ in Store
-            .KeysAsync(start, end, cancellationToken: cancellationToken)
+            .ScanKeysAsync(start, end, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             return true;

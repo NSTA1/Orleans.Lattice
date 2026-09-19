@@ -45,12 +45,28 @@ internal interface ISystemLattice : IGrainWithStringKey
     /// Streams keys in sorted order, optionally bounded by
     /// <paramref name="startInclusive"/> / <paramref name="endExclusive"/>.
     /// </summary>
+    /// <remarks>
+    /// Raw stream. It surfaces <c>EnumerationAbortedException</c> when the remote
+    /// enumerator is reclaimed mid-scan. Four causes are environmental and rare
+    /// (silo failover, cold start, idle expiry, scale-down); the fifth is not.
+    /// <c>LatticeGrain</c>, which serves this interface, is
+    /// <c>[StatelessWorker]</c>, and Orleans routes each <c>MoveNext</c> to a
+    /// worker independently of the one holding the enumerator state, so a scan
+    /// can abort purely because a sibling worker answered. That cause is
+    /// <b>load-proportional, not environmental</b> - it tracks concurrency on the
+    /// tree rather than scan duration or cluster health. Prefer
+    /// <c>SystemLatticeScanExtensions.ScanKeysAsync</c>.
+    /// </remarks>
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streams key/value entries in sorted key order, optionally bounded by
     /// <paramref name="startInclusive"/> / <paramref name="endExclusive"/>.
     /// </summary>
+    /// <remarks>
+    /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
+    /// Prefer <c>SystemLatticeScanExtensions.ScanEntriesAsync</c>.
+    /// </remarks>
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 }
 

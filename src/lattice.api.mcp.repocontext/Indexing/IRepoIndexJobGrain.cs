@@ -58,6 +58,41 @@ internal interface IRepoIndexJobGrain : IGrainWithStringKey
     /// <param name="update">The fields that changed.</param>
     Task ReportProgressAsync(RepoIndexProgressUpdate update);
 
+    /// <summary>
+    /// Marks the start of an observable index reset: records the job as
+    /// <see cref="RepoIndexStatus.Running"/> in phase
+    /// <see cref="RepoIndexPhase.Resetting"/>, zeroes the reset progress counters,
+    /// and clears any prior terminal timestamps, so <c>index_status</c> reports a
+    /// teardown in flight for the whole of the sweep that follows. A reset is not
+    /// resumable from a persisted request, so no resume reminder is armed - the
+    /// completion contract is that <see cref="CompleteResetAsync"/> is the only
+    /// call that marks the job done, and it runs only after the sweep finishes.
+    /// </summary>
+    /// <returns>The progress snapshot at the start of the reset (status running, phase resetting).</returns>
+    Task<RepoIndexProgress> BeginResetAsync();
+
+    /// <summary>
+    /// Advances the running reset's progress counters. Ignored unless the job is a
+    /// live reset (running and in <see cref="RepoIndexPhase.Resetting"/>), so a
+    /// straggling report cannot rewrite a settled teardown or a running index
+    /// build.
+    /// </summary>
+    /// <param name="treesSwept">The number of code-index trees dropped so far.</param>
+    /// <param name="entriesDeleted">The number of entries tombstoned so far.</param>
+    Task ReportResetProgressAsync(int treesSwept, int entriesDeleted);
+
+    /// <summary>
+    /// Marks a reset completed, recording the final counters and elapsed time. This
+    /// is the sole completion signal for a reset and must be called only after the
+    /// sweep has finished - writing it before or during the sweep would reproduce
+    /// exactly the "reports done before it is done" defect this surface exists to
+    /// remove.
+    /// </summary>
+    /// <param name="elapsedMilliseconds">The reset's wall-clock duration.</param>
+    /// <param name="treesSwept">The final number of code-index trees dropped.</param>
+    /// <param name="entriesDeleted">The final number of entries tombstoned.</param>
+    Task CompleteResetAsync(long elapsedMilliseconds, int treesSwept, int entriesDeleted);
+
     /// <summary>Marks the job completed, records the final counters and elapsed time, and clears the reminder.</summary>
     /// <param name="finalCounts">The final reconciliation counters.</param>
     /// <param name="elapsedMilliseconds">The run's wall-clock duration.</param>

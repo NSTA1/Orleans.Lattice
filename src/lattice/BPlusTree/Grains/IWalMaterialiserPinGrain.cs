@@ -85,9 +85,54 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     /// old timestamp at a new WAL offset) is never trimmed before the slowest
     /// leaf has applied it - a case the HLC-space <see cref="GetPinsAsync"/>
     /// floor alone cannot cover because the WAL is not HLC-monotonic in offset
-    /// once reaps are in play. An absent consumer (never reported an offset) or
-    /// a <c>-1</c> value marks a leaf that has applied nothing yet, which pins
-    /// the offset floor so nothing is trimmed by offset for the tree.
+    /// once reaps are in play.
+    /// <para>
+    /// A <c>-1</c> value is <b>excluded</b> from the floor rather than pinning
+    /// it, and an absent consumer does not constrain it either (it contributes
+    /// no entry to minimise over). <c>-1</c> means "this partition has no
+    /// WAL-replay dependency", which arises three ways, and it is worth knowing
+    /// which because only two of them are covered by a block pin:
+    /// <list type="bullet">
+    /// <item><description>
+    /// A <b>genuinely empty</b> partition - no durable checkpoint and no live
+    /// cache row - has no committed prefix to lose, so nothing needs retaining.
+    /// <c>BPlusLeafGrain.ResolveDurablePinForPartition</c> reports this case
+    /// with the leaf's <em>real</em> frontier and a <c>-1</c> offset, so it
+    /// carries <b>no</b> block pin. It does not need one.
+    /// </description></item>
+    /// <item><description>
+    /// A <b>data-bearing but not durably recoverable</b> partition (never
+    /// checkpointed, or checkpointed with no snapshot covering the prefix)
+    /// retains a <see cref="HybridLogicalClock.Zero"/> block pin alongside its
+    /// <c>-1</c>. That pin is what enforces retention here, by disabling the
+    /// cursor branch of the GC predicate outright - see <see cref="GetPinsAsync"/>.
+    /// </description></item>
+    /// <item><description>
+    /// A <b>split sibling</b> whose entries arrived by in-memory handoff from
+    /// the donor rather than by WAL replay.
+    /// </description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// <b>The exclusion is a handoff, not a gap - and not a second independent
+    /// guard.</b> Where a <c>-1</c> is covered, it is covered by the HLC block
+    /// pin and by nothing on this seam: the offset floor is abstaining, on the
+    /// assumption that the block pin is doing the work. Lifting a block pin on
+    /// a partition still reporting <c>-1</c> therefore removes <em>both</em>
+    /// protections at once and authorises a trim over a prefix the materialiser
+    /// has never replayed. Read a tree whose offsets are uniformly <c>-1</c> as
+    /// "retention is resting entirely on the HLC plane", never as "two planes
+    /// agree it is safe".
+    /// </para>
+    /// <para>
+    /// Absence is <b>not</b> the same state as a reported <c>-1</c>: a reported
+    /// <c>-1</c> comes from a leaf that is participating and has told us it owes
+    /// nothing, whereas an absent leaf has told us nothing at all and carries no
+    /// HLC cover from this seam. Absence is deliberately left non-constraining -
+    /// treating it as offset <c>0</c> would pin the WAL forever for any
+    /// permanently-departed leaf - which is a known limitation of the floor
+    /// (issue #2314), not a property to rely on.
+    /// </para>
     /// </summary>
     Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync();
 

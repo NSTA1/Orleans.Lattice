@@ -19,8 +19,12 @@ public static class LatticeViewExtensions
     /// Resilient forward key scan over a view. Wraps
     /// <see cref="ILatticeView.KeysAsync"/> and transparently recovers from
     /// <c>Orleans.Runtime.EnumerationAbortedException</c> (raised when the remote
-    /// enumerator on the view's active tree is reclaimed mid-scan by grain
-    /// deactivation, idle expiry, silo failover, or a rebuild's shadow-swap).
+    /// enumerator on the view's active tree is reclaimed mid-scan by per-message
+    /// stateless-worker mis-routing - the tree grain is <c>[StatelessWorker]</c>
+    /// and a <c>MoveNext</c> can be served by a worker that never saw
+    /// <c>StartEnumeration</c>, which makes this cause load-proportional rather
+    /// than environmental - or by grain deactivation, idle expiry, silo
+    /// failover, or a rebuild's shadow-swap).
     /// The wrapper tracks the last yielded key and - on abort - reopens the scan
     /// with the lower bound tightened to the successor of that key
     /// (<c>lastKey + "\u0000"</c>), so the result stream is deterministic: no
@@ -80,6 +84,17 @@ public static class LatticeViewExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
+        // budget and their own backoff, gated by that budget alone.
+        var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        var stallTotal = 0;
+        var stallDelayMs = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: expiry is swept at scan start
+        // rather than on a timer.
+        LatticeExtensions.FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -88,6 +103,8 @@ public static class LatticeViewExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the view wrapper that makes the raw
+            // view primitive safe; it reopens the enumeration itself.
             var enumerator = view.KeysAsync(s, e, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;
@@ -106,6 +123,33 @@ public static class LatticeViewExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See LatticeExtensions.ScanKeysAsyncCore for the
+                        // reasoning, including why an unchanged continuation
+                        // position neither refuses the resume nor lengthens its
+                        // backoff.
+                        if (stallAttempt < stallBudget && stallTotal < LatticeExtensions.DefaultScanStallResumeCeiling)
+                        {
+                            stallAttempt++;
+                            stallTotal++;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
+                            LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        LatticeExtensions.RecordScanStallTermination(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted,
+                            view,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse: false);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -113,7 +157,14 @@ public static class LatticeViewExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current;
+                    LatticeExtensions.NoteScanProgress(view, enumerator.Current);
                     yield return enumerator.Current;
                 }
             }
@@ -129,7 +180,8 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -181,6 +233,17 @@ public static class LatticeViewExtensions
         string? lastKey = null;
         var attempt = 0;
 
+        // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
+        // budget and their own backoff, gated by that budget alone.
+        var stallBudget = LatticeExtensions.ComputeScanStallResumeBudget(budget);
+        var stallAttempt = 0;
+        var stallTotal = 0;
+        var stallDelayMs = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: expiry is swept at scan start
+        // rather than on a timer.
+        LatticeExtensions.FutilityWatch.Sweep();
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -189,6 +252,8 @@ public static class LatticeViewExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this is the view wrapper that makes the raw
+            // view primitive safe; it reopens the enumeration itself.
             var enumerator = view.EntriesAsync(s, e, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;
@@ -207,6 +272,33 @@ public static class LatticeViewExtensions
                         shouldReopen = true;
                         break;
                     }
+                    catch (ScanPageStalledException stall)
+                    {
+                        // See LatticeExtensions.ScanKeysAsyncCore for the
+                        // reasoning, including why an unchanged continuation
+                        // position neither refuses the resume nor lengthens its
+                        // backoff.
+                        if (stallAttempt < stallBudget && stallTotal < LatticeExtensions.DefaultScanStallResumeCeiling)
+                        {
+                            stallAttempt++;
+                            stallTotal++;
+                            stallDelayMs = LatticeExtensions.ComputeScanStallResumeDelayMs(stall.TimeoutSeconds, stallTotal);
+                            LatticeExtensions.RecordScanStallOutcome(stall, LatticeExtensions.StallOutcomeResumed);
+                            shouldReopen = true;
+                            break;
+                        }
+
+                        LatticeExtensions.RecordScanStallTermination(
+                            stall,
+                            stallAttempt < stallBudget
+                                ? LatticeExtensions.StallOutcomeCeilingExhausted
+                                : LatticeExtensions.StallOutcomeBudgetExhausted,
+                            view,
+                            lastKey ?? startInclusive,
+                            lastKey is not null,
+                            reverse: false);
+                        throw;
+                    }
 
                     if (!hasNext)
                     {
@@ -214,7 +306,14 @@ public static class LatticeViewExtensions
                         break;
                     }
 
+                    // Progress replenishes the consecutive stall budget only;
+                    // stallTotal stays monotonic because it feeds both the
+                    // ceiling and the backoff, and `attempt` is deliberately not
+                    // reset and is not an unfixed instance of this defect (issue
+                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    stallAttempt = 0;
                     lastKey = enumerator.Current.Key;
+                    LatticeExtensions.NoteScanProgress(view, enumerator.Current.Key);
                     yield return enumerator.Current;
                 }
             }
@@ -230,7 +329,8 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ComputeReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ComputeReconnectDelayMs(attempt);
+                stallDelayMs = 0;
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);

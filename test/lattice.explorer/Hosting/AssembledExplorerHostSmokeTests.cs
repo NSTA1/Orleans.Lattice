@@ -1,3 +1,4 @@
+using Orleans.Lattice.Testing.Hygiene;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -30,6 +31,7 @@ namespace Orleans.Lattice.Explorer.Tests.Hosting;
 /// or drops out of the assembled wiring, fails here.
 /// </summary>
 [TestFixture]
+[FastInProcessHostFixture("Builds a WebApplication in-process with no external dependency; measured at 2 seconds for 10 tests, below the 5-second threshold.")]
 public class AssembledExplorerHostSmokeTests
 {
     // ---- 1. Navigation: the assembled area switcher --------------------------

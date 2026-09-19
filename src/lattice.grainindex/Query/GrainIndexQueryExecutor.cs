@@ -181,9 +181,16 @@ internal sealed class GrainIndexQueryExecutor
 
             if (execution == GrainIndexQueryExecution.Stream)
             {
+                // Scan* rather than the raw primitives: the index tree is a
+                // [StatelessWorker] LatticeGrain, whose dispatcher picks a worker
+                // per message with no enumerator affinity, so a MoveNext can land
+                // on a worker that has never seen this enumeration and abort the
+                // query mid-result. The wrapper costs one iterator hop per entry
+                // on this fast path, which is the price of the stream not simply
+                // stopping part-way under concurrent load.
                 var streamed = clause.Residual is { } streamPredicate
-                    ? _tree.KeysWherePredicateAsync(streamPredicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken)
-                    : _tree.KeysAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken);
+                    ? _tree.ScanKeysWhereAsync(streamPredicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken)
+                    : _tree.ScanKeysAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken);
 
                 await foreach (string key in streamed.WithCancellation(cancellationToken).ConfigureAwait(false))
                 {
@@ -303,9 +310,10 @@ internal sealed class GrainIndexQueryExecutor
     {
         if (payloads)
         {
+            // Scan* rather than the raw primitives; see ScanEntryKeysAsync.
             var entries = clause.Residual is { } predicate
-                ? _tree.EntriesWherePredicateAsync(predicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken)
-                : _tree.EntriesAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken);
+                ? _tree.ScanEntriesWhereAsync(predicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken)
+                : _tree.ScanEntriesAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken);
 
             await foreach (var entry in entries.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
@@ -318,9 +326,10 @@ internal sealed class GrainIndexQueryExecutor
             yield break;
         }
 
+        // Scan* rather than the raw primitives; see ScanEntryKeysAsync.
         var keys = clause.Residual is { } keyPredicate
-            ? _tree.KeysWherePredicateAsync(keyPredicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken)
-            : _tree.KeysAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken);
+            ? _tree.ScanKeysWhereAsync(keyPredicate, range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken)
+            : _tree.ScanKeysAsync(range.StartInclusive, range.EndExclusive, false, null, cancellationToken: cancellationToken);
 
         await foreach (string key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
         {

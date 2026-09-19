@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\lattice.api.replication\Orleans.Lattice.Api.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
 </Project>

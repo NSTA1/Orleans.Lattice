@@ -18,10 +18,50 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// <c>WriteStateAsync</c> call on the storage grain. No historical
 /// retention is intended; the WAL remains the long-term audit trail.
 /// </para>
+/// <para>
+/// The blob implements <see cref="ILatticeBinaryPersistedState"/>,
+/// so it is persisted through the Orleans binary serializer rather than the
+/// default JSON grain-storage serializer. On a large leaf the JSON path has
+/// to materialise the base64-encoded payload as one contiguous UTF-16
+/// string, roughly 2.7x the frame, which is the allocation that exhausts
+/// the heap when a silo replays a warm volume (issue #2481). Opting the
+/// blob in is safe because every member of its state carries an
+/// <c>[Id(n)]</c>: it already crosses a grain-call boundary on every
+/// capture, so the binary serializer is already the arbiter of what
+/// survives a round trip. The stored format is self-describing, so blobs
+/// written as JSON by an earlier build are still read correctly and no
+/// migration is required.
+/// </para>
+/// <para>
+/// <b>This type is deliberately NOT <c>[Immutable]</c>, and that absence is
+/// load-bearing rather than an oversight.</b> Marking it would be silent data
+/// corruption in persisted state, which is why the reasoning is recorded here
+/// rather than left to be re-derived. The blob IS mutated after construction:
+/// <see cref="Grains.ILeafSnapshotStorageGrain.GetSnapshotByteSizeAsync"/>
+/// lazily back-fills <see cref="SnapshotBytes"/> on its two recompute paths,
+/// assigning into the storage grain's LIVE persisted state. Because
+/// <c>LeafSnapshotStorageGrain.LoadAsync</c> returns <c>state.State</c> by
+/// reference, the deep copy Orleans performs on the way out is currently the
+/// only thing isolating a caller from that state - so suppressing the copy at
+/// the type level would hand a caller an object the storage grain still
+/// writes to, and hand its later mutations back into <c>SaveAsync</c>.
+/// </para>
+/// <para>
+/// The supportable form is the member-level marking used on
+/// <see cref="Rows"/> and <see cref="EncodedRows"/> below: those carry
+/// essentially the whole mass of a snapshot and are immutable by
+/// construction, so sharing them removes the allocation that matters while
+/// the blob shell keeps being copied. Reach for that, not for the type
+/// attribute. This is signposted because the shape invites the opposite
+/// conclusion - the type has <c>[GenerateSerializer]</c> and <c>[Alias]</c>
+/// and no <c>[Immutable]</c>, while the attribute is used widely elsewhere in
+/// this assembly, so the absence reads as an omission until you find the
+/// back-fill.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafSnapshotBlob)]
-internal sealed class LeafSnapshotBlob
+internal sealed class LeafSnapshotBlob : ILatticeBinaryPersistedState
 {
     /// <summary>
     /// WAL offset (under "SCANNED through offset N inclusive"
@@ -96,8 +136,15 @@ internal sealed class LeafSnapshotBlob
     /// before the binary encoding existed carry their rows here and must
     /// stay readable indefinitely.
     /// </para>
+    /// <para>
+    /// Marked <see cref="ImmutableAttribute"/> so Orleans shares this reference
+    /// across a grain call instead of deep-copying it. See the note on
+    /// <see cref="EncodedRows"/>, which carries the same marking for the same
+    /// reason; a legacy blob's rows live here, so leaving this slot copied would
+    /// simply move the failure onto pre-frame blobs.
+    /// </para>
     /// </summary>
-    [Id(1)] public IReadOnlyList<LeafSnapshotRow> Rows { get; set; } = Array.Empty<LeafSnapshotRow>();
+    [Id(1)][Immutable] public IReadOnlyList<LeafSnapshotRow> Rows { get; set; } = Array.Empty<LeafSnapshotRow>();
 
     /// <summary>
     /// Wall-clock <see cref="DateTime.Ticks"/> at the moment the
@@ -171,8 +218,113 @@ internal sealed class LeafSnapshotBlob
     /// <see langword="null"/>, and a blob carrying a frame leaves
     /// <see cref="Rows"/> empty, so exactly one of the two ever holds rows.
     /// </para>
+    /// <para>
+    /// Marked <see cref="ImmutableAttribute"/>, which is load-bearing rather
+    /// than an optimisation. This slot carries essentially the whole mass of a
+    /// snapshot, and <c>LeafSnapshotStorageGrain.LoadAsync</c> returns its
+    /// persisted state to a leaf that is normally CO-LOCATED, so without this
+    /// Orleans deep-copies the frame on the way out - a second contiguous
+    /// allocation the size of the payload, on a path where the first copy is
+    /// already resident. On a large leaf that copy is what exhausts the heap,
+    /// and the leaf then logs "could not load its snapshot because memory was
+    /// exhausted" and activates cold (issue #2481). Because the snapshot load
+    /// is what supplies durable coverage, and coverage is what lifts the
+    /// coverage-gated WAL trim floor off zero, a snapshot that cannot be loaded
+    /// keeps its whole tree's WAL from reclaiming.
+    /// </para>
+    /// <para>
+    /// The marking is safe in BOTH directions, which is the part that has to be
+    /// checked rather than assumed, since it suppresses the copy on the way in
+    /// to <c>SaveAsync</c> as well. A frame is produced whole by
+    /// <see cref="LeafSnapshotCodec.Encode"/> and thereafter only ever read
+    /// through the codec: nothing writes into an existing frame, and the merge
+    /// path builds a new array rather than editing one. Note this is a member
+    /// marking, NOT <c>[Immutable]</c> on the blob type - the type is genuinely
+    /// mutated after construction (the storage grain back-fills
+    /// <see cref="SnapshotBytes"/> on the first byte-size read), so marking the
+    /// type would alias a caller to live persisted state that still changes,
+    /// which is silent corruption rather than a saving. Marking the payload
+    /// members shares only what is immutable by construction and leaves every
+    /// scalar copied as before.
+    /// </para>
     /// </summary>
-    [Id(5)] public byte[]? EncodedRows { get; set; }
+    [Id(5)][Immutable] public byte[]? EncodedRows { get; set; }
+
+    /// <summary>
+    /// Number of <see cref="LeafSnapshotSegment"/> rows this snapshot's payload
+    /// is spread across, or <c>0</c> when the payload is carried inline by
+    /// <see cref="EncodedRows"/> or <see cref="Rows"/>.
+    /// <para>
+    /// A non-zero value makes this blob a <b>manifest</b>: it carries the
+    /// snapshot's coverage metadata but none of its rows, which live in
+    /// <c>{leafGuid:N}/{index}</c>-keyed segment grains. The split exists
+    /// because the storage provider materialises a BLOB column as one
+    /// contiguous array before lattice code sees it, so bounding that
+    /// allocation requires bounding the column, and a column belongs to a row
+    /// which belongs to a grain (issue #2914, following the admission gate of
+    /// issue #2844).
+    /// </para>
+    /// <para>
+    /// Writing this slot is the <b>commit point</b> of a segmented capture.
+    /// Segments are persisted first and the manifest last, so a capture torn
+    /// part-way through leaves the previous manifest in place and the previous
+    /// snapshot authoritative. A manifest is never written referencing a
+    /// segment that has not durably landed, which is what keeps the
+    /// coverage-gated WAL GC from trimming a prefix no snapshot can reproduce.
+    /// </para>
+    /// <para>
+    /// Zero on every blob persisted before segmentation existed, so a legacy
+    /// blob decodes as unsegmented and takes the inline path unchanged.
+    /// </para>
+    /// </summary>
+    [Id(6)] public int SegmentCount { get; set; }
+
+    /// <summary>
+    /// Summed length of every segment frame when <see cref="SegmentCount"/> is
+    /// non-zero; <c>0</c> otherwise. Recorded on the manifest so the hydration
+    /// admission gate and the storage-usage aggregator can size a segmented
+    /// snapshot without reading any segment - the alternative being a read of
+    /// exactly the payload the segmentation exists to avoid reading whole.
+    /// </summary>
+    [Id(7)] public long SegmentFrameBytes { get; set; }
+
+    /// <summary>
+    /// Which generation of segment grains this manifest's segments live in.
+    /// Incremented by every segmented capture, so a capture stages its segments
+    /// into addresses the live manifest does not reference and the previous
+    /// snapshot is never mutated before the new manifest commits.
+    /// <para>
+    /// <b>Without a generation the commit point is not actually a commit
+    /// point.</b> Segment addresses were previously derived from the leaf key
+    /// and the segment index alone, so a capture overwrote segments
+    /// <c>0..n-1</c> of the <i>live</i> snapshot in place before writing the
+    /// manifest that describes them. A capture torn part-way therefore left the
+    /// previous manifest referencing a mixture of new segments (those already
+    /// rewritten) and old ones (those not yet reached) - a snapshot reporting
+    /// coverage it cannot reproduce, which is exactly the shape that lets the
+    /// coverage-gated WAL GC trim the last durable copy of a prefix. The
+    /// write-order argument was sound; the addressing silently defeated it.
+    /// </para>
+    /// <para>
+    /// Zero on every blob persisted before generations existed, and generation
+    /// zero keeps the legacy <c>{leafKey}/{index}</c> address form, so an
+    /// existing segmented snapshot stays readable with no migration pass. The
+    /// first capture after upgrade writes generation 1 and retires generation
+    /// zero once its own manifest has committed.
+    /// </para>
+    /// </summary>
+    [Id(8)] public int SegmentGeneration { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when this blob is a segmented manifest whose rows
+    /// live in separate segment grains rather than inline.
+    /// <para>
+    /// Declared as a method rather than a property for the same reason as
+    /// <see cref="HasBinaryRowPayload"/>: a computed property would be
+    /// serialised into every persisted row by the grain-storage serializer.
+    /// </para>
+    /// </summary>
+    internal bool IsSegmented() => SegmentCount > 0;
 
     /// <summary>
     /// <see langword="true"/> when this blob claims to carry its rows as a

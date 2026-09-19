@@ -43,6 +43,7 @@ namespace Orleans.Lattice.Explorer.Tests.Web;
 /// </para>
 /// </remarks>
 [TestFixture]
+[Category("Integration")]
 public sealed class ShellRouteAssetShadowingTests
 {
     private static readonly string[] AssetPaths =

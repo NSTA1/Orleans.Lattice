@@ -262,6 +262,77 @@ public class LeafSpanAdmissionIntegrationTests
     }
 
     /// <summary>
+    /// The cross-shard migration twin of the merge case above, and the
+    /// regression guard for issue #3117.
+    /// <para>
+    /// Migration imports were previously <b>exempt</b> from declared-span
+    /// admission (<c>!isCrossShardMigration &amp;&amp; ContainsOutOfSpanKey(...)</c>).
+    /// The stated reason was that migration is a topology-seeding operation
+    /// whose coordinator sets the destination's range as a separate step, so
+    /// its keys are legitimately outside the range when they arrive. That
+    /// premise is true, but the exemption was never needed to honour it: a
+    /// destination whose range is not set yet has two null bounds, so
+    /// <c>HasDeclaredSpan</c> is false and the scan is skipped anyway, and a
+    /// freshly-seeded destination has no chain pointers, so the forward falls
+    /// open to a local commit. On the seeding shape the exemption was a no-op.
+    /// </para>
+    /// <para>
+    /// The only shape it actually changed was the one it was never meant to
+    /// cover, and which this test pins: a leaf whose span was narrowed by its
+    /// <b>own</b> split, receiving a late import for a key that split had moved
+    /// to its sibling. The exemption re-created that key locally as an
+    /// <c>IsMigrated=true</c> pre-saga row on a leaf that no longer owns it. The
+    /// asymmetric migration-vs-foreground guard in <c>MergeIntoStateAsync</c>
+    /// cannot suppress it, because that guard fires only when the destination
+    /// already holds a non-migrated entry and the split had removed the row
+    /// entirely. A later split then handed the stale row forward into the live
+    /// topology, where a reader observed it as a torn read.
+    /// </para>
+    /// <para>
+    /// <b>Why this fixture is the one that can observe the clause.</b> It is the
+    /// only test that drives <c>MergeManyAsync</c> with
+    /// <c>isCrossShardMigration: true</c> against a donor whose declared span
+    /// genuinely excludes the key - which is exactly and only the predicate the
+    /// removed term short-circuited. The sibling test above passes
+    /// <c>isCrossShardMigration: false</c>, so it stays green in both worlds and
+    /// can observe nothing about this clause. Restoring the term reddens the
+    /// donor arm with <c>Expected: null But was: &lt;byte[]&gt;</c> and the
+    /// declaring arm with <c>Expected: &lt;migrated-out&gt; But was: null</c> -
+    /// the row admitted on the wrong leaf and absent from the right one.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_cross_shard_migration_merge_splits_by_declared_span_instead_of_admitting_wholesale()
+    {
+        var (router, shard) = await CreateSingleShardTreeAsync($"span-migrate-{Guid.NewGuid():N}");
+        var f = await BuildSealedDonorAsync(router, shard);
+
+        var stamp = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.Ticks, Counter = 0 };
+        var outValue = Encoding.UTF8.GetBytes("migrated-out");
+
+        await Leaf(f.Donor).MergeManyAsync(
+            new Dictionary<string, LwwValue<byte[]>>
+            {
+                [f.OutOfSpanKey] = new LwwValue<byte[]> { Value = outValue, Timestamp = stamp },
+            },
+            isCrossShardMigration: true);
+
+        var mergedOnDonor = await Leaf(f.Donor).GetAsync(f.OutOfSpanKey);
+        var mergedOnDeclaring = await Leaf(f.Declaring).GetAsync(f.OutOfSpanKey);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mergedOnDonor, Is.Null,
+                "a migration import outside the donor's declared span must not be admitted here: "
+                + "re-creating the key on a leaf that no longer owns it leaves a stale IsMigrated row "
+                + "that the donor's next split hands forward into the live topology (issue #3117)");
+            Assert.That(mergedOnDeclaring, Is.EqualTo(outValue),
+                "the import must be routed to the leaf that declares the key, exactly as a "
+                + "non-migration merge already is");
+        });
+    }
+
+    /// <summary>
     /// A delete is a write: it appends a tombstone the replay filter drops on a
     /// leaf that does not declare the key, so an out-of-span delete acknowledged
     /// on the donor leaves the real row live on the declaring leaf. The caller
@@ -269,8 +340,7 @@ public class LeafSpanAdmissionIntegrationTests
     /// </summary>
     [Test]
     public async Task A_delete_outside_the_declared_span_removes_the_row_from_the_leaf_that_holds_it()
-    {
-        var (router, shard) = await CreateSingleShardTreeAsync($"span-delete-{Guid.NewGuid():N}");
+    {        var (router, shard) = await CreateSingleShardTreeAsync($"span-delete-{Guid.NewGuid():N}");
         var f = await BuildSealedDonorAsync(router, shard);
         var value = Encoding.UTF8.GetBytes("doomed");
 

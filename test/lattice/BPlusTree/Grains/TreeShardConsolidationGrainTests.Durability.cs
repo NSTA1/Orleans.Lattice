@@ -149,7 +149,7 @@ public partial class TreeShardConsolidationGrainTests
         var h = await RunCompleteFoldAsync();
 
         var freezeIndex = h.Log.IndexOf("donor.EnterReject");
-        var flipIndex = h.Log.IndexOf("registry.SetShardMap");
+        var flipIndex = h.Log.IndexOf("registry.ReassignSlots");
 
         var mergesAfterFreeze = 0;
         var mergesAfterFlip = 0;

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Dashboards.Tests;
 /// We intentionally use <em>forward</em> mapping (live instrument name to
 /// expected PromQL token forms) rather than reverse mapping (PromQL token
 /// to instrument name), because many instrument names embed underscores
-/// (for example <c>orleans.lattice.replication.apply.dependency_wait_ms</c>
+/// (for example <c>orleans.lattice.replication.apply.dependency_wait</c>
 /// and <c>orleans.lattice.replication.wal.entries_shipped</c>) and the
 /// reverse direction is fundamentally ambiguous once dot-separated
 /// segments and embedded-underscore segments are both translated to
@@ -96,30 +96,82 @@ public sealed class DashboardJsonTests
         // preserves any underscores already present in the .NET name.
         var underscored = instrumentName.Replace('.', '_');
 
+        // Only a Histogram<T> ever exports bucket series; every other instrument
+        // kind exports a single sample per series under every exporter. Registering
+        // a "_bucket" form for a counter would assert that a form exists without
+        // establishing that anything can produce it, which is exactly how a panel
+        // reading buckets off a counter used to pass this name check silently.
+        // DashboardHistogramQuantileTests states that invariant directly and is
+        // where such a panel is now reported; narrowing here stops this map from
+        // vouching for a series no exporter emits.
+        //
+        // An instrument absent from the source registry stays permissive: the
+        // histogram gate reports an unresolvable bucket token itself, with a
+        // message naming the real cause, and duplicating it here would only
+        // obscure that.
+        var bucketed = !DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var declaredKind)
+            || declaredKind == DeclaredInstrumentKind.Histogram;
+
         // Counter: name + "_total"
         map[underscored + "_total"] = meterName;
 
         // Histogram (ms unit): name + "_milliseconds_{bucket|count|sum}"
-        map[underscored + "_milliseconds_bucket"] = meterName;
+        if (bucketed)
+        {
+            map[underscored + "_milliseconds_bucket"] = meterName;
+        }
+
         map[underscored + "_milliseconds_count"] = meterName;
         map[underscored + "_milliseconds_sum"] = meterName;
 
         // Histogram (s unit): name + "_seconds_{bucket|count|sum}"
-        map[underscored + "_seconds_bucket"] = meterName;
+        if (bucketed)
+        {
+            map[underscored + "_seconds_bucket"] = meterName;
+        }
+
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
 
-        // Histogram with no explicit unit (the .NET name itself encodes the unit,
-        // e.g. ".apply.dependency_wait_ms"): the exporter appends the suffix
+        // Histogram with no explicit unit: the exporter appends the suffix
         // directly to the underscored name without inserting a unit segment.
-        map[underscored + "_bucket"] = meterName;
+        //
+        // This arm is deliberately not illustrated with a name that merely
+        // looks unit-bearing. A .NET name ending in a unit alias (say "_ms")
+        // does not mean the declaration omitted the unit, and the exporter
+        // keys its suppression on the mapped form ("milliseconds"), never on
+        // the alias - so such a name takes the unit-segment arm above and
+        // doubles (issue #2920), rather than this one.
+        if (bucketed)
+        {
+            map[underscored + "_bucket"] = meterName;
+        }
+
         map[underscored + "_count"] = meterName;
         map[underscored + "_sum"] = meterName;
 
         // Counter / observable gauge with bytes unit ("By"): the exporter
         // appends "_bytes" (and "_bytes_total" for monotonic counters).
-        map[underscored + "_bytes"] = meterName;
-        map[underscored + "_bytes_total"] = meterName;
+        //
+        // Not when the .NET name already ends in "_bytes" (issue #2941). The
+        // exporter appends a unit suffix only if the name does not already carry
+        // it, so for `...stored_bytes` the emitted series are
+        // `..._stored_bytes` and `..._stored_bytes_total`, both of which this
+        // method already registers above - and `..._stored_bytes_bytes_total` is
+        // emitted by nothing. Registering it anyway is what let a panel read a
+        // permanently empty series and still pass this name check: the token
+        // resolved to a real instrument, so the drift guard vouched for a series
+        // no exporter produces. Measured against
+        // OpenTelemetry.Exporter.Prometheus.AspNetCore 1.15.3-beta.1, the version
+        // every host in this repository pins, with a control instrument whose
+        // name does NOT end in "_bytes" confirming the suffix is appended there -
+        // so the absence of the doubled form is a measurement and not a failed
+        // search.
+        if (!underscored.EndsWith("_bytes", StringComparison.Ordinal))
+        {
+            map[underscored + "_bytes"] = meterName;
+            map[underscored + "_bytes_total"] = meterName;
+        }
 
         // Gauge / observable / un-suffixed reference (some queries use the bare name)
         map[underscored] = meterName;
