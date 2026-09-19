@@ -327,6 +327,15 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     }
 
     /// <inheritdoc />
+    public Task EvaluateCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        return GetShard(treeId, shardIndex).EvaluateCompactionAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task ReconcileAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);

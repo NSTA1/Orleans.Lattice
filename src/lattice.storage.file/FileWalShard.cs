@@ -555,6 +555,48 @@ internal sealed class FileWalShard : IDisposable
     }
 
     /// <summary>
+    /// Evaluates this shard against the compaction policy without trimming
+    /// anything, and compacts if the policy admits.
+    /// <para>
+    /// <see cref="TrimAsync"/> already ends in the same evaluation, and it is
+    /// unconditional there - a trim that removes no entry still evaluates. So
+    /// the gate on every compaction threshold was never "did we trim", it was
+    /// "was <see cref="TrimAsync"/> called at all", and a shard the GC stops
+    /// scanning is a shard for which it is not. This method is the same
+    /// evaluation reached by a path that does not require a release to have
+    /// happened first, which is what makes dead bytes reclaimable while the
+    /// retention floor is held (issue #3207).
+    /// </para>
+    /// <para>
+    /// It moves no watermark and mutates no logical state: the offsets
+    /// readable before the call are exactly those readable after it, whether
+    /// or not a compaction ran. It is therefore safe to call on every pass.
+    /// Note that a threshold-gated evaluation is self-limiting and needs no
+    /// separate frequency bound, which is the reason it is preferred here over
+    /// the threshold-free <see cref="ReconcileAsync"/>: a compaction zeroes
+    /// <c>_deadBytes</c>, so every subsequent evaluation returns at the
+    /// minimum-dead floor until further trims accumulate, and an evaluation
+    /// that declines rewrites nothing. Calling <see cref="ReconcileAsync"/>
+    /// here instead would rewrite the whole shard file on every pass that
+    /// reached it, trading unbounded WAL growth for unbounded write
+    /// amplification.
+    /// </para>
+    /// </summary>
+    internal async Task EvaluateCompactionAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            CompactIfNeeded();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Activation-time recovery. Forces a load (which rolls forward every
     /// committed batch and discards any torn/uncommitted tail) and then
     /// reclaims trimmed on-disk space via compaction.
