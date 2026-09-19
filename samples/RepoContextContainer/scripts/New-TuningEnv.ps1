@@ -15,6 +15,18 @@
     transcription problem wearing a variable's name: an operator who does not know to
     override it is in exactly the state this script exists to prevent.
 
+    THAT DEPLOY-TIME SHAPE IS A KNOWN LIMITATION, NOT THE SETTLED ANSWER. This script
+    predicts a grant from constants fitted against one corpus on one host, which nobody
+    re-derives afterwards. It also goes stale in place: its only corpus input is the
+    indexed file count, so adding a repository to the workspace or removing one moves the
+    requirement without moving the grant, and nothing signals the drift. The fitted
+    constants further describe a steady-state plateau, which by construction excludes the
+    cost of the work needed to REACH it - a WAL reclamation burst measured 13.81 GiB
+    against the 13.26 GiB this script derived for the same corpus (issue #3252). Adapting
+    sizing to the granted resources AT RUNTIME, instead of predicting it here, is tracked
+    in issue #3255; it depends on issue #3133, because a runtime that cannot observe its
+    own approach to the ceiling cannot adapt to it.
+
     WHAT IS DERIVED FROM WHAT. The memory grant is CORPUS-derived and host-CLAMPED. It is
     deliberately NOT a fraction of host RAM: the requirement is a property of the indexed
     corpus, so a fixed fraction would grant far too much on a large machine and far too

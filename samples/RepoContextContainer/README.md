@@ -115,6 +115,19 @@ claims, and why you must not enable it in the middle of a measurement.
   thin margin over a measured failure is the reason to provision above it for a
   migration run - not the raw RSS comparison, which weighs a number produced
   under one cap against a different cap.
+- Memory: **everything above is deploy-time fitting, which is a known limitation
+  rather than the settled answer.** `New-TuningEnv.ps1` is host-specific by
+  construction - its constants were fitted against one corpus on one host and are
+  re-derived by nobody afterwards - and it goes stale in place, because its only
+  corpus input is the indexed file count, so adding a repository to the workspace
+  or removing one moves the requirement without moving the grant. Nothing signals
+  that drift. Adapting sizing to the granted resources **at runtime**, instead of
+  predicting it at deploy time, is tracked in issue #3255. That work depends on
+  issue #3133: the runtime's own high-load signal is published at 90% of the
+  cgroup limit while the GC hard limit binds at 75% of it, so the threshold sits
+  at 1.2x the limit at *every* grant and can never fire. It has been confirmed at
+  both 12 GiB and 18 GiB with byte-exact matching percentages, so it is
+  scale-invariant rather than a misconfiguration of one deployment.
 - Memory: under-provisioning does not present as memory pressure. A cgroup limit
   becomes the .NET GC heap hard limit, so the process is never OOM-killed and
   there is no restart, exit code or resource event. The visible symptom is a
@@ -128,7 +141,8 @@ claims, and why you must not enable it in the middle of a measurement.
   `lattice_repocontext_heap_committed_bytes /
   lattice_repocontext_heap_limit_bytes` for heap-ceiling adherence (check
   `lattice_repocontext_heap_high_load_threshold_reachable` first - a `0` means
-  the runtime's own pressure threshold can never fire, issue #3133),
+  the runtime's own pressure threshold can never fire at any grant, issue
+  #3133),
   `orleans.lattice.wal.replay.permit_adaptations` with
   `outcome=withheld, trigger=occupancy` for the proactive replay-concurrency
   backpressure, and `orleans.lattice.leaf.snapshot.hydration_admissions` with

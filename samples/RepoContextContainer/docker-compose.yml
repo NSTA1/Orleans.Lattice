@@ -435,6 +435,17 @@ services:
       # this file. Derive yours with scripts/New-TuningEnv.ps1 rather than
       # copying any figure from this comment.
       #
+      # THAT DERIVATION IS DEPLOY-TIME AND HOST-SPECIFIC BY CONSTRUCTION, SO IT
+      # IS THE BEST ADVICE AVAILABLE TODAY RATHER THAN A SETTLED ANSWER. Its
+      # constants were fitted against one corpus on one host and are re-derived
+      # by nobody afterwards. It also goes stale in place: its only corpus input
+      # is the indexed file count, so adding a repository to the workspace or
+      # removing one moves the requirement without moving the grant, and nothing
+      # signals the drift. Adapting sizing to the granted resources AT RUNTIME,
+      # instead of predicting it at deploy time, is tracked in issue #3255. That
+      # work depends on issue #3133 below, because a runtime that cannot observe
+      # its own approach to the ceiling cannot adapt to it.
+      #
       # The failure mode is why this is worth stating. A cgroup limit becomes the
       # .NET GC heap HARD limit, so the process is not OOM-killed: there is no
       # restart, no exit code and no resource event. Instead the allocation for a
@@ -456,7 +467,11 @@ services:
       #       lattice_repocontext_heap_high_load_threshold_reachable FIRST - a 0
       #       there means the runtime's own pressure threshold sits ABOVE the
       #       limit and can never fire (issue #3133), which makes this ratio the
-      #       only pressure reading you have.
+      #       only pressure reading you have. That 0 is not a misconfiguration
+      #       you can tune away: the threshold is published at 90% of the cgroup
+      #       limit while the GC hard limit binds at 75% of it, so the ratio is
+      #       1.2 at EVERY grant. It has been confirmed at 12 GiB and at 18 GiB
+      #       with byte-exact matching percentages, so it is scale-invariant.
       #
       #   orleans.lattice.wal.replay.permit_adaptations
       #     with outcome=withheld, trigger=occupancy
