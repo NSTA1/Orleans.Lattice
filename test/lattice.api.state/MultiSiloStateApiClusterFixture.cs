@@ -139,6 +139,15 @@ internal sealed class MultiSiloStateApiClusterFixture
     /// <paramref name="siloIndex"/>. The runtime view is recorded in the
     /// cluster-wide <c>IViewRegistryGrain</c>, so a facade served by a different
     /// silo must still observe it.
+    /// <para>
+    /// This uses the synchronous <c>ILatticeViewFactory.Create</c> overload, whose
+    /// documented contract is that it "persists and activates in the background" -
+    /// it publishes to this silo's local catalog and starts the cluster-wide
+    /// registry write fire-and-forget. Cross-silo visibility is therefore
+    /// <em>eventual</em>: a caller on another silo must poll to a bound rather
+    /// than read once. (<c>CreateAsync</c> is the overload that awaits the
+    /// registration; this helper deliberately exercises the synchronous path.)
+    /// </para>
     /// </summary>
     public ILatticeView CreateViewOnSilo(string sourceTreeId, string viewName, int siloIndex)
     {
