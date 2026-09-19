@@ -265,19 +265,26 @@ Test-Case 'a counter going backwards without a detected restart is REFUSED' {
 Write-Host ''
 Write-Host 'Timestamped log bucketing' -ForegroundColor Cyan
 
+# Every timeout body below carries the REAL Orleans request descriptor,
+# '[<silo> <source>]->[<silo> <target>] <Iface>[(<Iface>)<Impl>].<Member>(...)',
+# rather than a readable abbreviation. The abbreviation this fixture used
+# previously had no ']->[' separator and no bracketed implementation type, so it
+# exercised a shape the parser never meets in production and went on passing
+# while the parser reported the CALLER for every real timeout. A fixture is only
+# worth what its fidelity to the real input is, so these are copied verbatim.
 $script:SampleLog = @(
 	'2026-09-19T10:00:00.000Z info: Orleans.Lattice.Host[0]',
 	'      ready',
 	'2026-09-19T10:05:10.000Z fail: Orleans.Lattice.ShardHealingOrchestrator[0]',
-	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: 'Request latticeregistry/_lattice_trees ILatticeRegistry.ResolveAsync(...)'. About to break its promise.",
+	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: Request [S127.0.0.1:11111:1 shardhealingorchestrator/tree_a]->[S127.0.0.1:11111:1 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].ResolveAsync(System.String) #1. About to break its promise.",
 	'2026-09-19T10:05:20.000Z fail: Orleans.Lattice.HotShardMonitor[0]',
-	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: 'Request latticeregistry/_lattice_trees ILatticeRegistry.GetEntryAsync(...)'. Status: '[ok]'. About to break its promise.",
+	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: Request [S127.0.0.1:11111:1 hotshardmonitor/tree_a]->[S127.0.0.1:11111:1 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].GetEntryAsync(System.String) #2. Status: '[ok]'. About to break its promise.",
 	'2026-09-19T10:06:05.000Z fail: Orleans.Lattice.ViewMaintainer[0]',
-	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: 'Request latticeregistry/_lattice_trees ILatticeRegistry.GetShardMapAsync(...)'. About to break its promise.",
+	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: Request [S127.0.0.1:11111:1 viewmaintainer/tree_a]->[S127.0.0.1:11111:1 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].GetShardMapAsync(System.String) #3. About to break its promise.",
 	'2026-09-19T10:40:00.000Z info: Orleans.Lattice.Host[0]',
 	'      still fine',
 	'2026-09-19T11:00:00.000Z fail: Orleans.Lattice.Late[0]',
-	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: 'Request latticeregistry/_lattice_trees ILatticeRegistry.ResolveAsync(...)'. About to break its promise."
+	"      System.TimeoutException: Response did not arrive on time in '00:00:30' for message: Request [S127.0.0.1:11111:1 shardhealingorchestrator/tree_b]->[S127.0.0.1:11111:1 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].ResolveAsync(System.String) #4. About to break its promise."
 )
 
 Test-Case 'records split on the header, continuation lines attach to the record' {
@@ -366,6 +373,61 @@ Test-Case 'labelled series are parsed and filtered' {
 	$counters = ConvertFrom-FanInPrometheusText -Lines $lines -NameFilter 'orleans_lattice_registry'
 	Assert-Equal 2 $counters.Count 'filtered count'
 	Assert-Equal 42 $counters['orleans_lattice_registry_call_duration_milliseconds_count{operation="resolve"}'] 'value'
+}
+
+Write-Host ''
+Write-Host 'Timeout target attribution' -ForegroundColor Cyan
+
+# These three bodies are copied from a real container log. The first is the
+# shape that defeated the original parser: the SOURCE bracket also contains a
+# '<type>/<key>' grain id, so a loose first-match attributes the timeout to the
+# caller rather than to the registry.
+$script:RegistryTimeoutBody = 'System.TimeoutException: Response did not arrive on time in 00:00:30 for message: Request [S127.0.0.1:11111:148834760 sys.client/hosted-127.0.0.1:11111@148834760]->[S127.0.0.1:11111:148834760 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].RegisterAsync(System.String, Orleans.Lattice.BPlusTree.State.TreeRegistryEntry) #601AD52A5E9ACFB8. Last known status is IsExecuting: True'
+$script:ReminderTimeoutBody = 'System.TimeoutException: Response did not arrive on time in 00:00:30 for message: Request [S127.0.0.1:11111:148834760 sys.client/hosted-127.0.0.1:11111@148834760]->[S127.0.0.1:11111:148834760 hotshardmonitor/fanin_0075] Orleans.IRemindable.ReceiveReminder(System.String, Orleans.Runtime.TickStatus) #601AD52A5E9F0C1F.'
+$script:PointReadTimeoutBody = 'Request [S1:11111:1 sys.client/hosted-127.0.0.1:11111@1]->[S1:11111:1 latticeregistry/_lattice_trees] Orleans.Lattice.BPlusTree.ILatticeRegistry[(Orleans.Lattice.BPlusTree.ILatticeRegistry)Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain].ResolveAsync(System.String) #1.'
+
+Test-Case 'callee is taken from the right of the arrow, not the left' {
+	$t = Get-FanInTimeoutTarget -Body $script:RegistryTimeoutBody
+	Assert-Equal 'latticeregistry/_lattice_trees' $t.Grain 'grain is the callee'
+	Assert-Equal 'RegisterAsync' $t.Member 'member'
+	Assert-Equal 'ILatticeRegistry' $t.Interface 'interface'
+}
+
+Test-Case 'implementation type inside brackets is not mistaken for the member' {
+	$t = Get-FanInTimeoutTarget -Body $script:PointReadTimeoutBody
+	Assert-Equal 'latticeregistry/_lattice_trees' $t.Grain 'grain'
+	Assert-Equal 'ResolveAsync' $t.Member 'member'
+}
+
+Test-Case 'system interface member without an Async suffix is parsed' {
+	$t = Get-FanInTimeoutTarget -Body $script:ReminderTimeoutBody
+	Assert-Equal 'hotshardmonitor/fanin_0075' $t.Grain 'grain'
+	Assert-Equal 'ReceiveReminder' $t.Member 'member without Async suffix'
+	Assert-Equal 'IRemindable' $t.Interface 'interface'
+}
+
+Test-Case 'a body with no request descriptor yields empty fields, never a guess' {
+	$t = Get-FanInTimeoutTarget -Body 'System.TimeoutException: something else entirely on latticeregistry/_lattice_trees'
+	Assert-Equal '' $t.Grain 'no guessed grain'
+	Assert-Equal '' $t.Member 'no guessed member'
+}
+
+Test-Case 'census attributes every registry timeout to the registry' {
+	$ready = [datetime]::SpecifyKind([datetime]::Parse('2026-09-19T10:00:00', [cultureinfo]::InvariantCulture), [System.DateTimeKind]::Utc)
+	$lines = @(
+		"2026-09-19T10:00:10.0000000Z fail: Orleans.Lattice.BPlusTree.Grains.HotShardMonitorGrain[0]",
+		"      $($script:RegistryTimeoutBody)",
+		"2026-09-19T10:00:20.0000000Z fail: Orleans.Lattice.BPlusTree.Grains.ShardHealingOrchestratorGrain[0]",
+		"      $($script:RegistryTimeoutBody)",
+		"2026-09-19T10:00:30.0000000Z fail: Orleans.Runtime.ReminderService.LocalReminderService[0]",
+		"      $($script:ReminderTimeoutBody)"
+	)
+	$census = Measure-FanInTimeoutCensus -Lines $lines -ReadyAtUtc $ready -WindowSeconds 600 -BucketSeconds 30
+	Assert-Equal 3 $census.Total 'total'
+	$byGrain = @{}
+	foreach ($g in $census.ByGrain) { $byGrain[$g.Grain] = $g.Count }
+	Assert-Equal 2 $byGrain['latticeregistry/_lattice_trees'] 'registry timeouts attributed to the registry'
+	Assert-Equal 1 $byGrain['hotshardmonitor/fanin_0075'] 'collateral reminder tick'
 }
 
 Write-Host ''

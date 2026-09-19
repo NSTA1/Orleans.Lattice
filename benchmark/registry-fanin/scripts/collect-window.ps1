@@ -138,6 +138,12 @@ foreach ($key in $registry.Keys) {
 	$arms[$op][$field] = [double] $registry[$key]
 }
 
+# Resolved once, before any arm is judged, and deliberately NOT wrapped in a
+# try/catch. If the interleaving set cannot be read the whole collection is
+# void, because every attribution below depends on it and a failure here would
+# otherwise surface as plausible-looking output rather than as an error.
+$script:NonInterleavedOperations = Get-FanInNonInterleavedOperations
+
 $armRows = foreach ($op in ($arms.Keys | Sort-Object)) {
 	$a = $arms[$op]
 
@@ -147,7 +153,16 @@ $armRows = foreach ($op in ($arms.Keys | Sort-Object)) {
 	# grounds - admitting a mutator mid-scan could reshape the tree under the
 	# cursor and drop an already-registered id, which is a wrong answer rather
 	# than a slow one. That exclusion is therefore not removable by tuning.
-	$nonInterleaved = $op -in @('get_all_tree_ids', 'register', 'unregister')
+	#
+	# The set is READ FROM THE SOURCE DECLARATION rather than restated here. A
+	# copy would be correct on the day it was written and silently wrong the
+	# first time a member gained or lost [AlwaysInterleave], and the failure
+	# would be invisible: the collector would keep reporting a confident
+	# Interleaved flag that no longer described the binary under test, and every
+	# attribution downstream of it would inherit the error without any reading
+	# looking wrong. Deriving it means a drifted list fails loudly at parse time
+	# instead.
+	$nonInterleaved = $op -in $script:NonInterleavedOperations
 
 	$meanWidth = if ($a.InFlightCount -gt 0) { $a.InFlightSum / $a.InFlightCount } else { $null }
 

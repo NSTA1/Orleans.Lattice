@@ -519,7 +519,35 @@ function Split-FanInLogRecords {
 
 <#
 .SYNOPSIS
-	Extracts the grain target and interface member from an Orleans timeout body.
+	Extracts the CALLEE grain and interface member from an Orleans timeout body.
+
+.DESCRIPTION
+	Orleans renders a request descriptor as
+
+		Request [<silo> <source-id>]->[<silo> <target-id>] <Member-descriptor> #<id>
+
+	so the source and the target are structurally identical and are told apart
+	ONLY by which side of the ']->[' separator they fall on. An earlier revision
+	of this function matched the first '<type>/<key>' pair anywhere in the body,
+	which is the SOURCE, and it therefore attributed every registry timeout to
+	whichever caller happened to make it - reporting, for a storm that was
+	entirely on 'latticeregistry/_lattice_trees', a spread across
+	'sys.client/...', 'hotshardmonitor/...' and 'shardhealingorchestrator/...'.
+	That is worse than an unparsed line, because it is a confident, plausible,
+	wrong answer that inverts the very question the rig exists to settle. The
+	separator is therefore matched explicitly and a body that does not carry one
+	yields empty fields rather than a guess.
+
+	The member is read from the text AFTER the target bracket, which Orleans
+	renders in two shapes:
+
+		Ns.IFace[(Ns.IFace)Ns.Impl].MemberAsync(...)   <- grain interface call
+		Orleans.IRemindable.ReceiveReminder(...)       <- system interface call
+
+	Note the second has no 'Async' suffix. A previous revision required one, so
+	every reminder-tick timeout parsed as an empty member and vanished from the
+	by-member census - which matters here because those ticks are the collateral
+	damage of registry saturation and are the evidence that it cascades.
 #>
 function Get-FanInTimeoutTarget {
 	[CmdletBinding()]
@@ -527,22 +555,39 @@ function Get-FanInTimeoutTarget {
 
 	$text = "$Body"
 
-	# Orleans renders the message as a request descriptor that names the target
-	# grain id and the interface member. Both are matched loosely because the
-	# descriptor's exact punctuation has changed between Orleans versions and a
-	# brittle pattern would silently yield 'unknown' for every line rather than
-	# failing.
 	$grain = ''
-	$grainMatch = [regex]::Match($text, '(?<type>[A-Za-z0-9_.]+)/(?<key>[A-Za-z0-9_\-+%.]+)')
-	if ($grainMatch.Success) { $grain = $grainMatch.Value }
-
 	$member = ''
-	$memberMatch = [regex]::Match($text, '(?<iface>I[A-Za-z0-9_]+)\.(?<member>[A-Za-z0-9_]+Async)')
+	$iface = ''
+
+	# The callee is the bracket to the RIGHT of the arrow. Its contents are
+	# '<silo-address> <grain-id>', so the grain id is the last whitespace
+	# separated token.
+	$arrow = [regex]::Match($text, '\]\s*->\s*\[(?<target>[^\]]*)\]')
+	if (-not $arrow.Success) {
+		return [pscustomobject] @{ Grain = ''; Member = ''; Interface = '' }
+	}
+
+	$targetTokens = @(($arrow.Groups['target'].Value -split '\s+') | Where-Object { $_ })
+	if ($targetTokens.Count -gt 0) { $grain = $targetTokens[-1] }
+
+	$rest = $text.Substring($arrow.Index + $arrow.Length)
+
+	# Prefer the ']. Member(' shape so the implementation type inside the
+	# brackets can never be mistaken for the member, then fall back to the plain
+	# 'IFace.Member(' shape used by system interfaces.
+	$memberMatch = [regex]::Match($rest, '\]\.(?<member>[A-Za-z0-9_]+)\s*\(')
+	if (-not $memberMatch.Success) {
+		$memberMatch = [regex]::Match($rest, '\.(?<member>[A-Za-z0-9_]+)\s*\(')
+	}
 	if ($memberMatch.Success) { $member = $memberMatch.Groups['member'].Value }
 
+	$ifaceMatch = [regex]::Match($rest, '(?<iface>I[A-Za-z0-9_]+)')
+	if ($ifaceMatch.Success) { $iface = $ifaceMatch.Groups['iface'].Value }
+
 	return [pscustomobject] @{
-		Grain  = $grain
-		Member = $member
+		Grain     = $grain
+		Member    = $member
+		Interface = $iface
 	}
 }
 
@@ -812,4 +857,87 @@ function ConvertFrom-FanInPrometheusText {
 	}
 
 	return $counters
+}
+
+function Get-FanInNonInterleavedOperations {
+	<#
+	.SYNOPSIS
+		Reads the non-interleaved registry arms from the source declaration.
+
+	.DESCRIPTION
+		Which ILatticeRegistry members carry [AlwaysInterleave] is a static
+		property of the interface, so the collector must know it rather than
+		infer it. It cannot be inferred: the in-flight counter this rig emits is
+		GLOBAL across arms, so a non-interleaved member routinely reports a
+		width above zero and any test of the form "width > 0 therefore it
+		interleaved" fails in the permissive direction.
+
+		The obvious alternative is to restate the list in the collector, and
+		that is the option this function exists to avoid. A copy is correct the
+		day it is written and silently wrong the first time a member gains or
+		loses the attribute - and the wrongness never surfaces as a bad-looking
+		reading. The collector would keep printing a confident Interleaved flag
+		that no longer described the binary under test, and every attribution
+		downstream would inherit the error while continuing to look reasonable.
+
+		So the set is parsed from RegistryCallCensus.cs, and the parse is
+		strict: an unresolved identifier, an empty result, or a missing file all
+		throw. A collector that cannot establish which members interleave must
+		fail rather than fall back to a default, because the fallback would be
+		indistinguishable from a correct read in the output.
+	#>
+	[CmdletBinding()]
+	param(
+		[string] $CensusPath
+	)
+
+	if (-not $CensusPath) {
+		$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+		$CensusPath = Join-Path $repoRoot 'src/lattice/BPlusTree/Grains/RegistryCallCensus.cs'
+	}
+
+	if (-not (Test-Path $CensusPath)) {
+		throw "Cannot read the interleaving declaration: '$CensusPath' does not exist. The collector will not guess, because a guessed list produces confident output that silently misdescribes the binary."
+	}
+
+	$text = Get-Content -Raw $CensusPath
+
+	# Map the arm constants first. The list is declared with C# identifiers, not
+	# literals, so resolving it needs the constant table as well as the list.
+	$constants = @{}
+	foreach ($m in [regex]::Matches($text, 'const\s+string\s+(?<name>\w+)\s*=\s*"(?<value>[^"]+)"')) {
+		$constants[$m.Groups['name'].Value] = $m.Groups['value'].Value
+	}
+
+	$listMatch = [regex]::Match(
+		$text,
+		'NonInterleavedOperations\s*=\s*\[(?<body>[^\]]*)\]',
+		[System.Text.RegularExpressions.RegexOptions]::Singleline)
+
+	if (-not $listMatch.Success) {
+		throw "Could not find the NonInterleavedOperations declaration in '$CensusPath'. If it was renamed or reshaped, update this parser rather than restating the list in the collector."
+	}
+
+	$resolved = foreach ($token in ($listMatch.Groups['body'].Value -split ',')) {
+		$name = "$token".Trim()
+		if (-not $name) { continue }
+
+		if ($name -match '^"(?<literal>[^"]+)"$') {
+			$Matches['literal']
+			continue
+		}
+
+		if (-not $constants.ContainsKey($name)) {
+			throw "NonInterleavedOperations names '$name', which is not a const string in '$CensusPath'. Refusing to drop it silently: an arm missing from this set is reported as interleaved and its readings are then treated as attributable."
+		}
+
+		$constants[$name]
+	}
+
+	$resolved = @($resolved)
+	if ($resolved.Count -eq 0) {
+		throw "Parsed an EMPTY non-interleaved set from '$CensusPath'. That reads as 'every member interleaves', which would mark every arm attributable - the most permissive possible answer, reached by failure rather than by evidence."
+	}
+
+	, $resolved
 }
