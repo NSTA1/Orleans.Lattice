@@ -13,10 +13,32 @@ land red in CI and assert a conclusion the measurements do not yet support.
 finding rather than a failure of the rig.** Seven controlled cold-start cells,
 varying tree count 4x and host CPU 27x, produced **one** storm between them - at
 4.25x the live tree count and ~2x the live registry load, three of four K=80
-cold starts were entirely clean. The proposed
-`(trees) x (per-tree background services)` scaling law **is not supported**.
+cold starts were entirely clean.
 Full cells and dispersion are in [Results](#results-so-far); do not re-run them
 expecting a different answer without first reading Findings 4 and 5.
+
+### Two claims, and they must not be collapsed
+
+The fan-in *load* scales with tree count exactly as proposed. The *failure* does
+not follow it. Both were measured; they are separate results.
+
+| | claim | verdict |
+|---|---|---|
+| **A** | cold-start registry call volume rises proportionally with tree count | **confirmed** - linear at ~0.41 calls/s/tree with no decay: ~350 calls/30 s at K=20 against 1021-1196 at K=80. 3.4x the trees, ~3.1x the calls. No tree-count-independent bound exists in the path. |
+| **B** | that load currently produces timeouts | **not supported** - K vs timeouts shows no detectable relationship: {28, 0, 0, 0} at K=80 with offered load constant to within 10%. |
+
+So the one-line summary is **not** "no scaling law was found". It is: **the
+scaling law is real and measured, and there is no evidence it currently hurts.**
+Claim A is tracked as live work in issue #3240 and is **not** closed by claim B.
+
+This distinction has already been collapsed once, by a careful reader, against
+an acceptance criterion whose literal falsifier was claim A and which never
+mentioned timeouts. Anyone citing this rig for the proposition that registry
+fan-in does not scale is quoting claim B for claim A.
+
+**If you are measuring a fix for claim A, use the birth-curve arm, not a
+steady-state sweep.** Reminders disperse after ~t+95 s, so a warm sweep shows no
+fan-in at any tree count and would itself read as a false green.
 
 More useful than the negative: the one storm the rig **did** produce is a
 **different failure** from the production one, and there is a cheap test that
@@ -326,10 +348,12 @@ timeouts, with the rig's silo still at 0.13-0.64 cores - the host had headroom
 at 16 cores, so the silo was never genuinely starved. Finding 5 closes that gap
 and the answer is still negative.
 
-What can be said without qualification is the negative: **the
-`(trees) x (per-tree services)` scaling law is not supported by this rig.** At
-4.25x the live tree count and ~2x the live registry load, three of four cold
-starts were entirely clean.
+What can be said without qualification is the narrower negative: **tree count
+does not predict timeouts in this rig.** At 4.25x the live tree count and ~2x
+the live registry load, three of four cold starts were entirely clean. That is
+claim B only. The fan-in *load* does scale linearly with tree count - claim A,
+confirmed, see [Two claims](#two-claims-and-they-must-not-be-collapsed) - and
+that remains open work in issue #3240.
 
 ### Finding 5: scale and host CPU saturation, jointly, do not reproduce it either
 
