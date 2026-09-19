@@ -4246,6 +4246,42 @@ public static class LatticeMetrics
         new(TagOutcome, "no_checkpointed_uncovered_partition");
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="LeafSnapshotCoverageRepairs"/> for an evaluation that reached
+    /// the repairable population but was suppressed because a re-arm backoff
+    /// from an earlier budget exhaustion is still outstanding (issue #3194).
+    /// <para>
+    /// <b>Why this arm exists at all.</b> This exit previously returned in
+    /// silence, and it sits BELOW both entry guards, so it was a genuine
+    /// repairable-population invocation that no arm covered. That made the
+    /// documented partition false and, worse, made the documented lower bound
+    /// useless on exactly the leaves this repair is working hardest on: against
+    /// one <see cref="CoverageRepairExhausted"/> and one
+    /// <see cref="CoverageRepairRearmed"/> per cycle, a 300-second recheck
+    /// cadence puts roughly six silent invocations inside a 30-minute backoff
+    /// and roughly ninety-six inside the eight-hour ceiling, so the recorded
+    /// arms understated the real invocation count by one to two orders of
+    /// magnitude while reading as though they were complete.
+    /// </para>
+    /// <para>
+    /// <b>What it buys beyond restoring the partition.</b> Its rate is the rate
+    /// at which the coverage-lag timer spins against leaves it has already
+    /// abandoned, which is the direct cost signal for tuning
+    /// <c>LeafSnapshotMaxCoverageLagSeconds</c> against the backoff ceiling.
+    /// That cost was previously unobservable: the timer fired, did nothing, and
+    /// recorded nothing.
+    /// </para>
+    /// <para>
+    /// It is terminal and mutually exclusive with the other five terminal arms -
+    /// the branch records this and returns, reaching no capture and no other
+    /// recording site - which is what lets the six be read as a partition rather
+    /// than as a set that happens to include it.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CoverageRepairBackingOff =
+        new(TagOutcome, "backing_off");
+
+    /// <summary>
     /// Every <c>outcome</c> arm of <see cref="LeafSnapshotCoverageRepairs"/>, and
     /// the single source the zero-priming walk iterates.
     /// <para>
@@ -4265,8 +4301,17 @@ public static class LatticeMetrics
     /// These arms are <see cref="KeyValuePair{TKey,TValue}"/> statics rather than
     /// an enum, so the equivalent guarantee is supplied by a reflection test that
     /// asserts this array holds every <c>CoverageRepair*</c> arm declared on this
-    /// class. Add an arm and forget this array, and that test fails; there is no
-    /// shape in which an unarmed arm ships.
+    /// class. Add an arm and forget this array, and that test fails.
+    /// </para>
+    /// <para>
+    /// Be exact about where that stops, rather than importing the sibling's
+    /// stronger claim. What is closed is the declared-arm case: a new arm
+    /// declared the way every existing arm is declared cannot ship unprimed. A
+    /// recording site that inlined a tag pair instead of declaring a static
+    /// would evade both this array and the reflection test, so the sibling's
+    /// "an arm added later CANNOT ship unarmed" is true of an enum walked
+    /// through a throwing switch and is NOT true here. The guarantee is
+    /// enforced by a test rather than by the compiler.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?>[] CoverageRepairArms =
@@ -4276,6 +4321,7 @@ public static class LatticeMetrics
         CoverageRepairExhausted,
         CoverageRepairCaptureInFlight,
         CoverageRepairNoUncoveredPartition,
+        CoverageRepairBackingOff,
         CoverageRepairRearmed,
     ];
 

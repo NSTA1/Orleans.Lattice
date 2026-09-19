@@ -71,6 +71,7 @@ public partial class BPlusLeafGrainTests
         "exhausted",
         "capture_in_flight",
         "no_checkpointed_uncovered_partition",
+        "backing_off",
         "rearmed",
     };
 
@@ -389,18 +390,29 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
-    /// The three asks together, on one activation, plus the ONE documented
-    /// boundary on the arms: exhaustion is reported at most once per activation,
-    /// so repeat exhaustions record nothing.
+    /// The three asks together, on one activation, plus the boundary that used
+    /// to be the instrument's documented weak point: exhaustion is reported at
+    /// most once per activation, and every later evaluation inside the backoff
+    /// is armed rather than silent.
     /// <para>
-    /// This is stated as a property rather than hidden, because it is what makes
-    /// the sum across arms a LOWER BOUND on evaluations and never an over-count.
-    /// Forty-one evaluations produce ten recorded increments here, and the
-    /// thirty-one suppressed ones are the dedup, not a gap in the instrument.
+    /// This fixture previously recorded the opposite property, and its own
+    /// arithmetic is what disproved it. Forty-one evaluations produced ten
+    /// increments, and the thirty-one-increment gap was attributed to the
+    /// once-per-activation exhaustion dedup. That attribution was wrong: those
+    /// thirty-one evaluations never reached the dedup latch, they took the
+    /// backoff-suppression branch below both entry guards, which recorded
+    /// nothing at all. The dedup latch is unreachable in this flow.
+    /// </para>
+    /// <para>
+    /// With that branch armed as <c>backing_off</c>, forty-one evaluations
+    /// produce forty-one increments and the arms partition the path exactly, so
+    /// the sum is no longer a lower bound needing a caveat. The equality below
+    /// is kept deliberately tight because it is the only assertion in the suite
+    /// that would catch a new silent return added below the entry guards.
     /// </para>
     /// </summary>
     [Test]
-    public async Task Exhaustion_is_recorded_once_and_repeat_exhaustions_are_deliberately_deduplicated()
+    public async Task Exhaustion_is_recorded_once_and_every_later_evaluation_is_armed_as_backing_off()
     {
         var treeId = UniqueCoverageRepairTreeId("exhausted");
         using var recorder = new CoverageRepairArmRecorder(treeId);
@@ -431,19 +443,39 @@ public partial class BPlusLeafGrainTests
             Assert.That(recorder.Sum("exhausted"), Is.EqualTo(1L),
                 "recorded ONCE for thirty-two post-budget evaluations: the arm counts stuck "
                 + "activations, not retries");
+            Assert.That(recorder.Sum("backing_off"), Is.EqualTo(31L),
+                "the thirty-one post-budget evaluations after the one that abandoned. These "
+                + "used to return in silence below both entry guards, which is what made the "
+                + "documented partition false");
             Assert.That(recorder.Sum("repaired"), Is.Zero, "coverage never landed");
             Assert.That(recorder.Sum("capture_in_flight"), Is.Zero,
                 "every capture is awaited to completion here, so no turn interleaves one");
         });
 
-        // The boundary, asserted rather than described. 41 evaluations (1 at
-        // activation + 40 persists) produce 10 increments; the gap IS the dedup.
+        // The boundary, asserted rather than described - and this number is the
+        // whole point of the backing_off arm. 41 evaluations (1 at activation +
+        // 40 persists) now produce 41 increments, so the partition is EXACT on
+        // the path that previously under-counted it worst.
+        //
+        // Before the arm existed this asserted 10, and the 31-increment gap was
+        // attributed to the once-per-activation exhaustion dedup. That
+        // attribution was wrong on top of being incomplete: those 31
+        // evaluations never reached the dedup latch at all. They took the
+        // backoff-suppression branch, which recorded nothing. The dedup latch
+        // is in fact unreachable in this flow - it has one call site, guarded by
+        // a null re-arm deadline that the same branch immediately sets, and only
+        // the re-arm clears it, in the same step as the latch.
+        //
+        // Keep this as an equality rather than a lower bound. It is the only
+        // assertion in the suite that would catch a NEW silent return added
+        // below the entry guards, which is precisely the defect class this arm
+        // was added to close.
         var increments = CoverageRepairArms.Sum(recorder.Sum);
-        Assert.That(increments, Is.EqualTo(10L),
-            "the sum across arms is a LOWER BOUND on evaluations, never an over-count: "
-            + "41 evaluations, 10 increments, 31 suppressed by the once-per-activation "
-            + "exhaustion dedup. Any claim that every evaluation records exactly one arm is "
-            + "false and this number is why");
+        Assert.That(increments, Is.EqualTo(41L),
+            "41 evaluations, 41 increments: every evaluation below the entry guards now "
+            + "records exactly one terminal arm. A shortfall here means a return path was "
+            + "added without an arm and the documented partition has silently become false "
+            + "again");
     }
 
     /// <summary>
@@ -527,6 +559,83 @@ public partial class BPlusLeafGrainTests
             Assert.That(saved, Has.Count.EqualTo(spentAt + 8),
                 "a re-arm restores the full budget and no more - the ceiling still binds, so "
                 + "this is a bounded retry on a slow cadence and not an unbounded retry loop");
+        });
+    }
+
+    /// <summary>
+    /// Issue #3194 follow-up: an evaluation suppressed by an outstanding re-arm
+    /// backoff must record <c>backing_off</c> and NOTHING else.
+    /// <para>
+    /// Mutual exclusivity is the entire basis for calling the six terminal arms
+    /// a partition, so it is asserted rather than assumed. The sibling arm
+    /// <c>rearmed</c> is deliberately NOT mutually exclusive - it co-occurs with
+    /// a terminal arm on the same invocation - so "this arm is recorded" is not
+    /// on its own evidence that a partition holds. The property needed here is
+    /// the stronger one: exactly one arm moves, and it is this one.
+    /// </para>
+    /// <para>
+    /// Written as a before/after delta across EVERY documented arm rather than
+    /// as an assertion about <c>backing_off</c> alone. An assertion that only
+    /// inspects the arm under test cannot distinguish "this invocation recorded
+    /// exactly this arm" from "this invocation recorded this arm and also
+    /// something else", and the second is the failure that would quietly
+    /// invalidate the partition claim in both documentation files.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Evaluation_inside_an_outstanding_backoff_records_backing_off_and_no_other_arm()
+    {
+        var treeId = UniqueCoverageRepairTreeId("backing-off");
+        using var recorder = new CoverageRepairArmRecorder(treeId);
+
+        var (grain, _, _, saved) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: new InvalidOperationException("snapshot store is down"),
+            treeId: treeId);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        SeedRow(grain);
+
+        // Spend the budget so the next evaluation abandons and arms a backoff.
+        for (var i = 1; i <= 20; i++)
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(i, CancellationToken.None);
+        }
+
+        Assert.That(saved, Has.Count.EqualTo(8),
+            "the budget must be genuinely spent, or the evaluation below would take the "
+            + "repair path instead of the backoff-suppression path and prove nothing");
+        Assert.That(recorder.Sum("exhausted"), Is.EqualTo(1L),
+            "the abandoning evaluation must have happened, so the backoff deadline is set");
+
+        var before = CoverageRepairArms.ToDictionary(arm => arm, recorder.Sum);
+        var savedBefore = saved.Count;
+
+        // Exactly ONE further evaluation, inside the outstanding backoff.
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(21, CancellationToken.None);
+
+        var after = CoverageRepairArms.ToDictionary(arm => arm, recorder.Sum);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(after["backing_off"] - before["backing_off"], Is.EqualTo(1L),
+                "the suppressed evaluation must record exactly one backing_off. Zero is the "
+                + "pre-fix behaviour: a repairable-population invocation returning in silence "
+                + "below both entry guards");
+
+            foreach (var arm in CoverageRepairArms.Where(a => a != "backing_off"))
+            {
+                Assert.That(after[arm] - before[arm], Is.Zero,
+                    $"'{arm}' must not move on a backoff-suppressed evaluation. If it does, "
+                    + "backing_off is not mutually exclusive and the six arms are not a "
+                    + "partition, which would make the claim in metrics.md false");
+            }
+
+            Assert.That(saved.Count, Is.EqualTo(savedBefore),
+                "positive control on the mechanism rather than the counter: a suppressed "
+                + "evaluation must attempt no capture, which is what makes this branch "
+                + "terminal and is the reason it is safe to call it mutually exclusive");
         });
     }
 

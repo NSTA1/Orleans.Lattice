@@ -732,6 +732,27 @@ internal sealed partial class BPlusLeafGrain
 
             if (now < rearmAt)
             {
+                // Suppressed by an outstanding backoff (issue #3194 follow-up).
+                //
+                // This exit used to return in silence, and it sits BELOW both
+                // entry guards, so it was a repairable-population invocation
+                // that no arm covered - which made the documented five-arm
+                // partition false. The volume is the reason it mattered rather
+                // than being cosmetic: against one `exhausted` and one
+                // `rearmed` per cycle, a 300-second recheck cadence puts about
+                // six of these inside a 30-minute backoff and about ninety-six
+                // inside the eight-hour ceiling, so the arms understated real
+                // invocations by one to two orders of magnitude on exactly the
+                // leaves this repair exists to serve.
+                //
+                // Recording it is deliberately preferred over narrowing the
+                // prose to exclude it. This branch is genuinely terminal and
+                // mutually exclusive with the other five - it returns here,
+                // reaching no capture and no second recording site - so arming
+                // it restores a real partition instead of documenting a hole in
+                // one, and its rate is the only measure of what the coverage-lag
+                // timer costs while spinning against an abandoned leaf.
+                RecordCoverageRepairOutcome(LatticeMetrics.CoverageRepairBackingOff);
                 return false;
             }
 
@@ -789,6 +810,26 @@ internal sealed partial class BPlusLeafGrain
     /// Emits the budget-exhaustion observation at most once per activation, on
     /// both the counter and a warning carrying the leaf identity the counter
     /// deliberately does not tag.
+    /// <para>
+    /// <b>The latch is now defensive rather than load-bearing, and the docs
+    /// depend on that being stated precisely.</b> It has exactly one call site,
+    /// guarded by <c>_zeroCoverageRepairRearmAtUtc is null</c>, and that branch
+    /// sets the deadline non-null before calling here. The only code that
+    /// returns the deadline to null is the re-arm, which clears this latch in
+    /// the same step. So the early return below is unreachable in the current
+    /// flow: every invocation that reaches this method records.
+    /// </para>
+    /// <para>
+    /// That matters because the instrument's documented under-count was
+    /// attributed to this deduplication. It was true before issue #3194 added
+    /// the re-arm, when a spent budget sent every later invocation back through
+    /// here to be swallowed. It is not true now - those invocations take the
+    /// backoff-suppression branch instead, which is why that branch, and not
+    /// this latch, is the one that needed an arm. Do not re-describe this latch
+    /// as a live source of under-count; it is kept because the reachability
+    /// argument above is a property of two call-site guards rather than of this
+    /// method, and a third caller would silently reinstate the hazard.
+    /// </para>
     /// </summary>
     private void ReportZeroCoverageRepairExhaustion()
     {
