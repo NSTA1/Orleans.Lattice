@@ -1182,22 +1182,62 @@ internal sealed partial class BPlusLeafGrain
     {
         var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
 
-        // Advancing the checkpoint is only HALF of what the pin needs. An
-        // unusable pin at Zero is a leaf whose min(checkpoint, coverage) has
-        // no real offset, so a leaf that is now checkpointed but still
-        // uncovered keeps blocking exactly as before. The existing coverage
-        // repair cannot help a starved leaf on its own, because its
-        // predicate is "checkpointed WITHOUT coverage" and a starved leaf
-        // fails the first half: it was never checkpointed at all. Replay
-        // makes that predicate reachable, so the repair belongs here, driven
-        // in the same call rather than deferred to an activation that is not
-        // going to happen.
+        // Advancing the checkpoint is only HALF of what the pin needs. The pin
+        // is min(checkpoint, coverage), so a checkpoint that advances over
+        // coverage which does not move republishes the SAME offset and the leaf
+        // keeps holding the tree's WAL floor exactly as before.
+        //
+        // This drives the shared recheck rather than one coverage remedy,
+        // because the coverage can be deficient in two different ways and the
+        // drive needs both (issue #3185):
+        //
+        //   ABSENT  (covered < 0) - the starved leaf. Its pin has no real
+        //           offset at all, so it blocks on the cursor axis. The
+        //           zero-coverage repair is the remedy, and it needs the replay
+        //           above to be reachable: its predicate is "checkpointed
+        //           WITHOUT coverage" and a starved leaf fails the first half
+        //           until replay supplies a checkpoint.
+        //
+        //   STALE   (0 <= covered < checkpoint) - the dormant floor holder,
+        //           which is the population this issue is about. Its pin IS
+        //           usable, so every cursor-axis predicate correctly reports it
+        //           unblocked and the zero-coverage repair correctly declines
+        //           it - yet min(checkpoint, covered) == covered pins the
+        //           tree-wide materialiser offset floor at a stale offset and
+        //           the GC's trim scan stops on offset_floor while the durable
+        //           checkpoint sits thousands of entries ahead. Restamping
+        //           coverage from the checkpoint the leaf ALREADY has moves the
+        //           floor in one step; nothing else on this path can.
+        //
+        // Calling MaybeRunPeriodicSnapshotRecheckAsync rather than re-deriving a
+        // stale-coverage test here is deliberate, and is the same choice
+        // OnCoverageLagTimerTickAsync made for the same reason (issue #3195):
+        // that method holds all three coverage drivers - the #2220 deficit
+        // escape, the #2692 zero-coverage repair (still run first, and still
+        // short-circuiting the rest when it fires), and the per-partition
+        // stale-coverage capture - each behind the no-loss preconditions that
+        // already guard it. Re-deriving one of them here would repair a single
+        // case, leave the others as unreachable from a drive as they are today,
+        // and leave this path owning a second copy of the #1535 gate. Nothing
+        // is relaxed and no new route to stamping coverage is added; a route
+        // that already exists is simply made reachable on a leaf the collector
+        // recycles before any timer of its own can tick.
+        //
+        // fromCheckpointPersist is false because this is not a checkpoint
+        // persist. That skips the cadence gate - which a GC-driven leaf could
+        // never satisfy anyway, since _checkpointPersistCountSinceRecheck
+        // resets every activation and a drive persists about one checkpoint -
+        // and, just as importantly, leaves the counter untouched, so
+        // LeafSnapshotReClassifyEveryNCheckpoints keeps meaning exactly what it
+        // is documented to mean.
         //
         // Both awaits take the budget token rather than inheriting a bound from
         // the caller's belt. A belt abandons the wait and leaves the work
         // running; the token is what can actually stop it, and the second await
         // needs its own because the first may consume most of the budget.
-        await TryRepairZeroCoverageAsync(partitionCount, cancellationToken);
+        await MaybeRunPeriodicSnapshotRecheckAsync(
+            fromCheckpointPersist: false,
+            cancellationToken);
 
         // Republish the durable pin (issue #3103). Everything above repairs the
         // leaf so that the pin it ALREADY reported becomes usable; neither arm

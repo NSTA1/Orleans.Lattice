@@ -1929,7 +1929,21 @@ internal sealed partial class BPlusLeafGrain
         // (invariant b) while the coverage gate keeps it lossless
         // (invariant a). The single-flight guard above and the SaveAsync
         // best-effort try/catch bound the cost of a slow snapshot store.
-        await TryCaptureSnapshotForAdvisoryAsync();
+        //
+        // The caller's token is threaded rather than dropped (issue #3185).
+        // Both cancellable callers already intend it to reach here and neither
+        // did: OnCoverageLagTimerTickAsync passes Orleans' deactivation token
+        // and documents the capture it reaches as "strictly better contained"
+        // than the post-persist one, and the starvation drive passes a budget
+        // token whose whole purpose is to bound work done while the leaf holds
+        // a replay permit. Dropping it left the capture unbounded on both, so
+        // the drive could overrun StarvationDriveBudget inside a capture and be
+        // graded abandoned for work that was in fact progressing. Abandoning is
+        // safe because coverage advances only after a confirmed save, so a
+        // cancelled capture leaves coverage where it was and the pin
+        // conservative. The post-persist caller passes no token, so its
+        // behaviour is unchanged.
+        await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
     }
 
     /// <summary>
@@ -2160,16 +2174,30 @@ internal sealed partial class BPlusLeafGrain
     /// rather than re-deriving a deficit check of its own, and that choice is
     /// the substance of the fix rather than a convenience. That method holds
     /// THREE drivers - the #2220 coverage-deficit escape, the #2692
-    /// zero-coverage repair, and the ordinary per-partition capture - and it has
-    /// exactly ONE invocation in the whole of <c>src/</c>:
-    /// <c>BPlusLeafGrain.Projection.cs:392</c>, inside the checkpoint-persist
-    /// tail. Both escapes were deliberately placed ABOVE the cadence gate so
-    /// that no tuning knob could disable them, and both sit BELOW that single
-    /// call site, so on a leaf with no write traffic neither is reachable at
-    /// all. Re-deriving only the deficit check here would have repaired the
-    /// stale-coverage case and left the zero-coverage case - the one #2692
-    /// exists for, and the one the stuck partitions are actually in - as
-    /// unreachable as it is today.
+    /// zero-coverage repair, and the ordinary per-partition capture - and
+    /// before this timer existed it had exactly ONE invocation in the whole of
+    /// <c>src/</c>: the one in <c>BPlusLeafGrain.Projection.cs</c>, inside the
+    /// checkpoint-persist tail. Both escapes were deliberately placed ABOVE the
+    /// cadence gate so that no tuning knob could disable them, and both sat
+    /// BELOW that single call site, so on a leaf with no write traffic neither
+    /// was reachable at all. Re-deriving only the deficit check here would have
+    /// repaired the stale-coverage case and left the zero-coverage case - the
+    /// one #2692 exists for, and the one the stuck partitions were actually in -
+    /// as unreachable as it was then.
+    /// <para>
+    /// <b>That count is historical and must not be read as current.</b> This
+    /// method is itself the second invocation, and
+    /// <c>DriveStarvedCheckpointCoreAsync</c> is the third (issue #3185) - the
+    /// GC-driven dormant leaf being a population this timer cannot reach,
+    /// because a timer only ticks on a live activation and the collector
+    /// recycles such a leaf long before its first jittered tick is due. The
+    /// sentence is kept in the past tense rather than deleted because it is the
+    /// argument for routing every new driver through that one method instead of
+    /// re-deriving a check, and that argument is what both later drivers
+    /// followed. Left in the present tense it read as a live invariant, and it
+    /// cost real diagnostic time on #3185: the method it describes falsified it
+    /// the moment this one was added.
+    /// </para>
     /// </para>
     /// <para>
     /// The cadence counter is NOT advanced from here: the recheck is told this
