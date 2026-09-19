@@ -221,33 +221,55 @@ $FLOOR_BYTES = 6GB
 # cgroup limit and collects harder as it approaches it, so a grant at exactly the
 # requirement trades throughput for a cap that is technically sufficient.
 #
-# THE RECLAMATION TRANSIENT IS NOT IN THE MODEL ABOVE, AND THIS BAND IS THE ONLY THING
-# COVERING IT (issue #3252). FIXED_OVERHEAD_BYTES and PER_FILE_BYTES were fitted against
-# a STEADY-STATE plateau, which by construction excludes the cost of the work a box does
+# THE RECLAMATION TRANSIENT IS NOT IN THE MODEL ABOVE, AND THIS BAND DOES NOT COVER IT
+# (issue #3252). FIXED_OVERHEAD_BYTES and PER_FILE_BYTES were fitted against a
+# STEADY-STATE plateau, which by construction excludes the cost of the work a box does
 # to REACH steady state. The expensive instance of that work is the first WAL garbage
 # collection pass after a backlog of stuck WAL is released: measured at 450-590% CPU,
-# driving the container working set to 13.23 GiB on an 8,224-file corpus whose derived
-# grant is 13.26 GiB. It completed, and the working set turned over rather than
-# ratcheting, so the transient is bounded - but it consumed essentially the whole of
-# this 20% band, leaving about 30 MiB of the margin that exists so a grant is not
-# sitting at exactly its requirement.
+# driving the container working set to at least 13.81 GiB on an 8,224-file corpus whose
+# derived grant is 13.26 GiB. It completed, and the working set fell back to 10.55 GiB
+# rather than ratcheting, so the transient is BOUNDED - but its peak exceeded the grant
+# this script derives for that same corpus by about 568 MiB. The 20% band is the only
+# thing between a migration burst and the ceiling, and this burst was larger than it.
+#
+# 13.81 IS A FLOOR ON THE PEAK. It is the largest of 16 samples about 103 seconds apart,
+# so the true maximum is at least that and may be higher.
+#
+# WHAT THAT DOES AND DOES NOT ESTABLISH, because the obvious reading is wrong in one
+# direction and too weak in another. The peak was measured under an 18 GiB cap, and a
+# working set measured under a generous cap is an upper bound on need rather than a
+# requirement: .NET collects less eagerly the further it sits from its ceiling, so a
+# peak cannot be transported across caps. At 18 GiB the collector worked against a
+# 13.5 GiB managed ceiling; at 13.26 GiB it would work against 9.94 GiB and collect far
+# harder, far earlier. That trajectory was never run. Pulling the other way, peak RSS is
+# not the quantity a grant is tested against at all - the grant bounds RSS, while the GC
+# hard limit is what THROWS and binds first at about 75% of the grant - so "the peak
+# exceeded the grant" understates the exposure rather than overstating it.
+#
+# Stated on the plane that throws: a 12 GiB grant (9.00 GiB managed ceiling) crash-looped
+# twice in 16 minutes, an 18 GiB grant (13.5 GiB managed ceiling) ran clean, and NOTHING
+# has been measured at 13.26 GiB in either direction. The derived grant offers a managed
+# ceiling about 10% above one that demonstrably failed on this corpus.
 #
 # THE VALUE IS DELIBERATELY UNCHANGED, AND THAT IS A JUDGEMENT RATHER THAN AN OVERSIGHT.
-# Raising it on this evidence would repeat the error the two fitted constants above
-# already warn about at length: one corpus, one host, one run, and - decisively - no run
-# at the derived 13.26 GiB grant at all. The 13.23 GiB figure was measured under an 18
-# GiB cap, and a working set measured under a generous cap is an upper bound on need
-# rather than a requirement, because .NET collects less eagerly the further it sits from
-# its ceiling. Fitting a policy constant to it would be fitting to the cap.
+# A thin margin over a measured failure is a reason to WARN, and it is not a fitted
+# constant. Raising the band on this evidence would repeat the error the two fitted
+# constants above already warn about at length: one corpus, one host, one run, and -
+# decisively - no run at the derived grant at all. Fitting 20% up to clear 13.81 would be
+# fitting a policy constant to a number produced by an 18 GiB cap, which is fitting to
+# the cap. A better number is not a better argument.
 #
 # WHAT AN OPERATOR SHOULD DO MEANWHILE. The transient is a MIGRATION cost, paid once, on
-# the first run after upgrading into a WAL GC fix. Grant above the derived figure for
-# that run, then re-derive. A 12 GiB grant on the corpus above crash-looped twice in 16
-# minutes; an 18 GiB grant completed clean.
+# the first run after upgrading into a WAL GC fix. Grant ABOVE the derived figure for
+# that run, then re-derive. A 12 GiB grant on the corpus above crash-looped; an 18 GiB
+# grant completed clean.
 #
 # FALSIFIER, and it is the measurement that would settle whether this band is enough: a
 # run at exactly the derived grant, across a release of stuck WAL, on a corpus of known
-# size. A clean completion confirms 20%; an OutOfMemoryException wave refits it.
+# size. A clean completion confirms 20%; an OutOfMemoryException wave refits it. Note
+# what that run must report to be worth anything - the managed heap ceiling and
+# occupancy, not only container RSS, since RSS is what made this comparison ambiguous in
+# the first place.
 $HEADROOM_FRACTION = 0.20
 
 # ---------------------------------------------------------------------------

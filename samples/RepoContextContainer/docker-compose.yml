@@ -356,23 +356,71 @@ services:
       # made the withdrawn figure unsafe. On an 8,224-file index whose WAL
       # garbage collection had been blocked, the pass that finally released the
       # backlog ran at 450-590% CPU and drove the container working set to
-      # 13.23 GiB - above the 12 GiB that was being recommended - before turning
-      # over at 12.84 GiB (issue #3252). At a 12 GiB limit the same corpus
-      # crash-looped twice in 16 minutes (129 then 304 OutOfMemoryException,
-      # ExitCode=0, OOMKilled=false, /health/ready 503); at 18 GiB it completed
-      # clean with zero of either.
+      # 13.81 GiB - above the 12 GiB that was being recommended, and above the
+      # 13.26 GiB that scripts/New-TuningEnv.ps1 DERIVES for this same corpus -
+      # before falling back to 10.55 GiB (issue #3252). At a 12 GiB limit the
+      # same corpus crash-looped twice in 16 minutes (129 then 304
+      # OutOfMemoryException, ExitCode=0, OOMKilled=false, /health/ready 503);
+      # at 18 GiB it completed clean with zero of either.
+      #
+      # 13.81 IS A FLOOR ON THE PEAK, NOT THE PEAK. It is the largest of 16
+      # samples taken about 103 seconds apart, so the true maximum is at least
+      # this and may be higher; nothing was sampling between those points. Quote
+      # it as a lower bound. The fall to 10.55 GiB afterwards is the useful other
+      # half of the reading: a 3.26 GiB give-back is what distinguishes a bounded
+      # transient from a leak, which would not have receded.
       #
       # So an operator upgrading INTO a WAL GC fix needs more headroom than one
       # already running healthy, and needs it ONCE. The peak is a MIGRATION cost
       # paid the first time a backlog of stuck WAL is released, not a permanent
       # requirement: provision for it for that run, then re-derive.
       #
-      # READ THE TWO KINDS OF FIGURE CORRECTLY. A working set measured under a
-      # generous cap is an UPPER BOUND on need, not a requirement - .NET collects
-      # less eagerly the further it sits from its ceiling, so 13.23 GiB observed
-      # at an 18 GiB grant does not establish that 13.23 GiB is needed. What IS
-      # established is that 12 GiB is not enough for this corpus during
-      # reclamation, because that limit crash-looped rather than ran slowly.
+      # DO NOT ASSUME THE DERIVED GRANT COVERS THIS. It may not. On the corpus
+      # above the derivation yields 13.26 GiB and the observed peak exceeded it
+      # by about 568 MiB, so the script's 20% headroom band is the only thing
+      # standing between a migration burst and the ceiling, and this burst was
+      # larger than the band. Grant ABOVE the derived figure for the migration
+      # run specifically.
+      #
+      # THAT 568 MiB IS PINNED TO ONE CORPUS AND IS NOT A CONSTANT SHORTFALL.
+      # The derived grant is a function of file count, so it MOVES: the same
+      # repository measured at 8,239 files derives 13.26 GiB and at 8,846 files
+      # derives 13.97 GiB. Do not read a later derivation that happens to exceed
+      # 13.81 as evidence that the gap has closed - a larger corpus raises the
+      # reclamation peak too, and only the grant side of that comparison has
+      # been re-measured. Compare a peak and a grant only at the SAME corpus.
+
+      #
+      # READ THE TWO KINDS OF FIGURE CORRECTLY, BECAUSE THE COMPARISON JUST MADE
+      # IS WEAKER THAN IT LOOKS AND THE DIRECTION OF THE ERROR MATTERS.
+      #
+      # First, a working set measured under a generous cap is an UPPER BOUND on
+      # need, not a requirement - .NET collects less eagerly the further it sits
+      # from its ceiling, so 13.81 GiB observed at an 18 GiB grant does not
+      # establish that 13.81 GiB is NEEDED. A peak cannot be transported across
+      # caps: at 18 GiB the collector was working against a 13.5 GiB managed
+      # ceiling, and at 13.26 GiB it would be working against 9.94 GiB and
+      # collecting far harder, far earlier. The 13.26 GiB trajectory was never
+      # run and is not the one observed.
+      #
+      # Second, and pulling the OTHER way, peak RSS is not even the quantity a
+      # grant is tested against. The grant bounds RSS; the GC hard limit is what
+      # THROWS, and it binds FIRST at about 75% of the grant. A box at 13.26 GiB
+      # would fault against 9.94 GiB of managed heap long before RSS could reach
+      # 13.26, so "the peak exceeded the grant" UNDERSTATES the exposure rather
+      # than overstating it.
+      #
+      # WHAT IS ACTUALLY ESTABLISHED, stated on the plane that throws:
+      #
+      #   measured   12 GiB grant -> 9.00 GiB managed ceiling -> CRASH LOOP.
+      #   measured   18 GiB grant -> 13.5 GiB managed ceiling -> clean.
+      #   NOT measured, in either direction: anything at all at 13.26 GiB.
+      #
+      # The derived grant therefore offers a managed ceiling only about 10%
+      # above one that demonstrably crash-looped on this corpus. That is the
+      # reason to provision above it for a migration run - a thin margin over a
+      # measured failure - and NOT the raw RSS comparison, which compares a
+      # number produced under one cap against a different cap.
       #
       # THE GRANT IS NOT THE CEILING THAT THROWS, AND THAT IS WHY 12 LOOKED LIKE
       # ENOUGH. Under a container memory limit .NET applies its default
