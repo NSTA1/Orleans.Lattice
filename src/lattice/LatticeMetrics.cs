@@ -4050,7 +4050,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of zero-coverage leaf snapshot repair EVALUATIONS (issues #2692,
     /// #2940), tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
-    /// Five arms partition every invocation of
+    /// Six arms partition every invocation of
     /// <c>BPlusLeafGrain.TryRepairZeroCoverageAsync</c>:
     /// <list type="bullet">
     /// <item><description><see cref="CoverageRepairRepaired"/> - a capture gave
@@ -4058,13 +4058,19 @@ public static class LatticeMetrics
     /// <item><description><see cref="CoverageRepairUnsatisfied"/> - a capture ran
     /// and a checkpointed partition is STILL uncovered.</description></item>
     /// <item><description><see cref="CoverageRepairExhausted"/> - the
-    /// per-activation budget was spent with a partition still uncovered.</description></item>
+    /// attempt budget was spent with a partition still uncovered. Issue #3195
+    /// re-arms that budget in place after a doubling backoff, so this is once
+    /// per backoff cycle and NOT, as it was originally, once per activation.</description></item>
     /// <item><description><see cref="CoverageRepairCaptureInFlight"/> - declined
     /// because a capture was already running on this leaf.</description></item>
     /// <item><description><see cref="CoverageRepairNoUncoveredPartition"/> -
     /// declined because no checkpointed partition lacks coverage. The healthy
     /// majority, and the only positive observation that a leaf is NOT in the
     /// repairable population.</description></item>
+    /// <item><description><see cref="CoverageRepairBackingOff"/> - suppressed
+    /// because an earlier exhaustion armed a re-arm backoff that has not yet
+    /// elapsed. This arm sits BELOW both entry guards, so before issue #3194
+    /// armed it the invocation returned recording nothing at all.</description></item>
     /// </list>
     /// <para>
     /// <b>Why the arms share one instrument.</b> A counter publishes no series at
@@ -4073,7 +4079,7 @@ public static class LatticeMetrics
     /// never wired up. Sharing one instrument means any repair traffic whatsoever
     /// proves the series is live. That argument was load-bearing but CONDITIONAL -
     /// it held only for a tree that had already emitted some arm - so issue #2940
-    /// made it unconditional by zero-priming all five arms the first time a tree
+    /// made it unconditional by zero-priming all seven arms the first time a tree
     /// is seen in this process. An absent series now means the repair path never
     /// ran for that tree (or the build predates the instrument); a zero is a
     /// measured zero.
@@ -4096,16 +4102,35 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// <b>Boundary on the partition claim.</b> Every invocation records exactly
-    /// one arm EXCEPT a repeat exhaustion within one activation, which
-    /// <c>ReportZeroCoverageRepairExhaustion</c> deliberately deduplicates so that
-    /// <c>exhausted</c> counts stuck activations rather than retries. The sum
-    /// across arms is therefore an invocation count minus those suppressed
-    /// repeats, which is a lower bound and never an over-count.
+    /// one of the six terminal arms, with no exception, and the sum across those
+    /// six is therefore an EXACT invocation count rather than a lower bound. The
+    /// fixtures pin it as an equality (41 evaluations, 41 increments) so that a
+    /// new silent return added below the entry guards fails the build instead of
+    /// reappearing as a quiet under-count.
+    /// </para>
+    /// <para>
+    /// This previously claimed a lower bound, and attributed the shortfall to the
+    /// once-per-activation exhaustion dedup in
+    /// <c>ReportZeroCoverageRepairExhaustion</c>. That attribution was wrong as
+    /// well as incomplete: the suppressed invocations never reached that latch at
+    /// all - they took the backoff-suppression branch, which recorded nothing
+    /// until issue #3194 armed it as <see cref="CoverageRepairBackingOff"/>. The
+    /// latch is in fact unreachable in the present flow, because its one call site
+    /// is guarded by a null re-arm deadline that the same branch sets before
+    /// calling it, and only the re-arm clears it, in the same step. It is retained
+    /// as a defence because that reachability argument is a property of the
+    /// call-site guards rather than of the latch.
+    /// </para>
+    /// <para>
+    /// <c>rearmed</c> is a lifecycle transition rather than a terminal outcome and
+    /// is NOT one of the six: it co-occurs with a terminal arm instead of
+    /// excluding one, so summing all seven over-counts. Sum the six terminal arms
+    /// for an invocation tally and read <c>rearmed</c> separately as an event.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSnapshotCoverageRepairs =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.coverage_repairs", unit: "{evaluation}",
-            description: "Zero-coverage leaf snapshot repair evaluations (issues #2692, #2940), tagged by tree and outcome: 'repaired' (capture left every checkpointed partition covered), 'unsatisfied' (capture ran, a checkpointed partition is still uncovered), 'exhausted' (per-activation budget spent, recorded once per activation), 'capture_in_flight' (declined, a capture was already running) and 'no_checkpointed_uncovered_partition' (declined, nothing to repair - the healthy majority; recorded once per activation and once per checkpoint persist, so its magnitude tracks write volume rather than severity, and it is NOT comparable with 'orleans.lattice.wal.gc.blocking_pin_state' on that instrument's blocked arm, whose population of consumers with no live cursor is disjoint from this one by construction; on that instrument's floor-holder arm the two DO intersect by design, because issue #3164 drives the pins it classifies 'checkpointed_uncovered' into this very repair, and a 'checkpointed_uncovered' classification standing against a climbing 'no_checkpointed_uncovered_partition' for the same leaf is a direct contradiction rather than two unrelated readings - issue #3168, in which the leaf was right). All five arms are zero-primed the first time a tree is seen in this process, so an absent series means the path never ran for that tree and a zero is a measured zero. Every invocation records one arm except a repeat exhaustion within one activation, which is deduplicated on purpose.");
+            description: "Zero-coverage leaf snapshot repair evaluations (issues #2692, #2940), tagged by tree and outcome: 'repaired' (capture left every checkpointed partition covered), 'unsatisfied' (capture ran, a checkpointed partition is still uncovered - this includes a capture that THREW or timed out, because the advisory capture wrapper swallows every exception, so a leaf whose snapshot store is failing is counted here rather than going silent), 'exhausted' (attempt budget spent with a partition still uncovered, recorded once per backoff cycle rather than once per activation), 'capture_in_flight' (declined, a capture was already running), 'no_checkpointed_uncovered_partition' (declined, nothing to repair - the healthy majority; recorded once per activation and once per checkpoint persist, so its magnitude tracks write volume rather than severity, and it is NOT comparable with 'orleans.lattice.wal.gc.blocking_pin_state' on that instrument's blocked arm, whose population of consumers with no live cursor is disjoint from this one by construction; on that instrument's floor-holder arm the two DO intersect by design, because issue #3164 drives the pins it classifies 'checkpointed_uncovered' into this very repair, and a 'checkpointed_uncovered' classification standing against a climbing 'no_checkpointed_uncovered_partition' for the same leaf is a direct contradiction rather than two unrelated readings - issue #3168, in which the leaf was right) and 'backing_off' (suppressed, an earlier exhaustion armed a re-arm backoff that has not yet elapsed; this arm sits below both entry guards, so before issue #3194 armed it the invocation recorded nothing at all). Those six terminal arms partition every invocation; the seventh tag value 'rearmed' is a lifecycle transition that CO-OCCURS with a terminal arm, so sum the six for an invocation tally and read 'rearmed' separately. All seven arms are zero-primed the first time a tree is seen in this process, so an absent series means the path never ran for that tree and a zero is a measured zero. Every invocation records exactly one of the six terminal arms with no exception, so their sum is an EXACT invocation count rather than a lower bound; the earlier claim that repeat exhaustions were deduplicated away misattributed a shortfall that was in fact the unarmed backoff branch.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotCoverageRepairs"/>.</summary>
     public const string LeafSnapshotCoverageRepairsName = "orleans.lattice.leaf.snapshot.coverage_repairs";
@@ -4272,10 +4297,10 @@ public static class LatticeMetrics
     /// recorded nothing.
     /// </para>
     /// <para>
-    /// It is terminal and mutually exclusive with the other five terminal arms -
-    /// the branch records this and returns, reaching no capture and no other
-    /// recording site - which is what lets the six be read as a partition rather
-    /// than as a set that happens to include it.
+    /// It is terminal and mutually exclusive with every other terminal arm - the
+    /// branch records this and returns, reaching no capture and no other
+    /// recording site - which is what lets the terminal arms be read as a
+    /// partition rather than as a set that happens to include it.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> CoverageRepairBackingOff =
