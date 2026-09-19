@@ -273,23 +273,45 @@ services:
       # never disarms either, leaving a permanently armed advisory alarm that
       # cannot distinguish pathological growth from normal size.
       #
-      # 4 GiB against a measured 1,077 MiB logical on repo-context-vector-index:
-      # steady state lands near 2.1 GiB and the 3.2 GiB disarm point sits above
-      # it, so the hysteresis band works. Every other tree is under 40 MB, so the
-      # ceiling is inert on them, which is correct for a disaster backstop; they
-      # still pay one physical-size probe per partition per GC pass.
+      # 8 GiB against a measured 2,226 MB logical on repo-context-vector-index:
+      # designed steady state lands near 4.4 GiB and the 6.4 GiB disarm point
+      # sits above it, so the hysteresis band works. Every other tree is under
+      # 40 MB, so the ceiling is inert on them, which is correct for a disaster
+      # backstop; they still pay one physical-size probe per partition per GC
+      # pass. The volume has ~598 GB free, so this is not disk-constrained.
       #
-      # The previous value, 1 GiB, was sized from occupancy measured WHILE the
-      # #3229 starvation defect was active (it cited vector-index 1710 MB and
-      # vector-payload 1097 MB). Post-fix vector-payload is 17 MiB, so that
-      # calibration described the faulted state, not the healthy one, and 1 GiB
-      # had fallen below index's live payload alone. See #3234.
+      # THIS VALUE HAS BEEN WRONG TWICE, FOR TWO DIFFERENT REASONS. Read both
+      # before changing it, because the rule above is easy to satisfy on the day
+      # and hard to keep satisfied.
+      #
+      # 1 GiB was sized from occupancy measured WHILE the #3229 starvation
+      # defect was active (it cited vector-index 1710 MB and vector-payload
+      # 1097 MB). Post-fix vector-payload is 17 MiB, so that calibration
+      # described the faulted state, not the healthy one, and 1 GiB had fallen
+      # below index's live payload alone. See #3234.
+      #
+      # 4 GiB was correct when written and was outgrown within hours. It was
+      # calibrated against 1,077 MiB logical; the same tree measured 2,226 MB
+      # logical the same day - 2.07x - which put 2x logical at 4,451 MB, i.e.
+      # 355 MB ABOVE the ceiling meant to contain it. The tree was at 71% of a
+      # designed steady state that sat above its own ceiling, so it was headed
+      # for a breach-while-healthy and a permanently-armed alarm. Nothing
+      # reported this: a tree in that state emits wal_gc_passes_total
+      # {outcome="stranded"}, which says "could not reclaim" and does not
+      # distinguish lagging consumers from an arithmetically unreachable
+      # ceiling. See #3242, which adds the missing in-band signal.
+      #
+      # THE LESSON, WHICH IS THE ONLY DURABLE PART: this ceiling is expressed as
+      # a multiple of a MEASURED quantity, so it acquires an expiry date the
+      # moment the workload can grow. Re-measure logical retained per tree
+      # before trusting the current value - do not assume the last calibration
+      # still holds because it was right when it was made.
       #
       # It cannot lose data and cannot block a write: it only lowers the trim
       # frontier WITHIN the frontier that was already safe, never past a live
       # consumer cursor. Setting it to "0" restores the library default and is a
       # safe rollback that over-retains rather than over-trims.
-      LATTICE_WAL_MAX_RETAINED_BYTES: "4294967296"
+      LATTICE_WAL_MAX_RETAINED_BYTES: "8589934592"
       # Per-silo ceiling on concurrent activation-time leaf WAL replays. Left
       # UNSET here deliberately, so this sample behaves identically on every
       # host: unset defers to the library, which sizes the gate from
