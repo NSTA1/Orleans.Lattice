@@ -898,6 +898,58 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.leaf.commit.in_flight", unit: "{commit}",
             description: "In-flight commit count snapshot at the moment a BPlusLeafGrain commit enters the commit path.");
 
+    // --- Tree-registry fan-in instruments (ILatticeRegistry) ---------------------
+
+    /// <summary>
+    /// Histogram of how long the tree-registry singleton took to SERVE one
+    /// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/> read, measured
+    /// inside the grain body and tagged with <see cref="TagOperation"/>
+    /// (<c>exists</c>, <c>get_entry</c>, <c>resolve</c>, <c>get_shard_map</c>,
+    /// <c>get_all_tree_ids</c>).
+    /// <para>
+    /// The registry is a cluster singleton that every per-tree background
+    /// service addresses, so a cold start fans a whole estate onto one
+    /// activation. Callers then see only a response-deadline
+    /// <c>TimeoutException</c>, which is the same observation whether the call
+    /// was served slowly or never served at all - and those have opposite
+    /// remedies. Because this histogram records only calls the grain actually
+    /// admitted, reading its tail and its count against the caller-side timeout
+    /// population separates them: a short tail with a call count far below the
+    /// offered load means the calls never reached the body (blocked upstream, in
+    /// activation or in the turn queue), whereas a tail approaching the caller's
+    /// deadline with a matching count means they were admitted and the time went
+    /// on the awaited hop to the backing <c>_lattice_trees</c> tree.
+    /// </para>
+    /// <para>
+    /// Deliberately not derived from <c>orleans-storage-read-latency</c>: that
+    /// instrument's <c>state_name</c> tag comes from a grain's
+    /// <c>[PersistentState]</c> declaration, and the registry grain declares
+    /// none, so no <c>state_name</c> series for it can exist.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> RegistryCallDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.registry.call.duration", unit: "ms",
+            description: "Service time of one ILatticeRegistry read, measured inside the registry singleton's grain body.");
+
+    /// <summary>
+    /// Histogram of the concurrent registry-call count observed at the moment a
+    /// new <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/> read is
+    /// admitted to the grain body, tagged with <see cref="TagOperation"/>. The
+    /// recorded value excludes the arriving call, so it is zero on the first
+    /// concurrent call, one on the second, and so on - the same convention as
+    /// <see cref="LeafCommitInFlight"/>.
+    /// <para>
+    /// This is the fan-in width the singleton is actually carrying, and it is
+    /// the half of the picture the duration histogram cannot supply: a long tail
+    /// with a flat-zero width is a slow backing hop, while a long tail whose
+    /// width climbs with estate size is the (trees x per-tree background
+    /// services) scaling law saturating one activation.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> RegistryCallInFlight =
+        Meter.CreateHistogram<int>("orleans.lattice.registry.call.in_flight", unit: "{call}",
+            description: "Concurrent ILatticeRegistry reads in flight on the registry singleton at the moment a new read is admitted.");
+
     // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
 
     /// <summary>

@@ -264,15 +264,35 @@ internal sealed class LatticeRegistryGrain(
         await Registry.DeleteAsync(treeId);
     }
 
-    public async Task<bool> ExistsAsync(string treeId)
+    public Task<bool> ExistsAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        return await Registry.ExistsAsync(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Exists,
+            () => Registry.ExistsAsync(treeId));
     }
 
-    public async Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
+    public Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetEntry,
+            () => GetEntryCoreAsync(treeId));
+    }
+
+    /// <summary>
+    /// The entry read itself, uninstrumented.
+    /// <para>
+    /// Every in-grain caller goes through this rather than through
+    /// <see cref="GetEntryAsync"/>, so the <c>get_entry</c> arm of the registry
+    /// census counts inbound grain calls only. Routing an internal caller through
+    /// the public member instead would attribute that caller's read to
+    /// <c>get_entry</c> as well as to its own arm, double-counting one admitted
+    /// call and nesting one duration inside another.
+    /// </para>
+    /// </summary>
+    private async Task<TreeRegistryEntry?> GetEntryCoreAsync(string treeId)
+    {
         var bytes = await Registry.GetAsync(treeId);
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
@@ -332,7 +352,12 @@ internal sealed class LatticeRegistryGrain(
 
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
 
-    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix)
+    public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) =>
+        RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetAllTreeIds,
+            () => GetAllTreeIdsCoreAsync(prefix));
+
+    private async Task<IReadOnlyList<string>> GetAllTreeIdsCoreAsync(string? prefix)
     {
         // The registry tree is ordinally sorted, so a prefix is one contiguous key
         // range: scanning [prefix, PrefixUpperBound(prefix)) stops the walk
@@ -416,13 +441,13 @@ internal sealed class LatticeRegistryGrain(
         await EnsureAliasTargetIsControlledAsync(physicalTreeId);
 
         // Enforce single-level indirection: the target must not itself be aliased.
-        var targetEntry = await GetEntryAsync(physicalTreeId);
+        var targetEntry = await GetEntryCoreAsync(physicalTreeId);
         if (targetEntry?.PhysicalTreeId is not null)
             throw new InvalidOperationException(
                 $"Cannot set alias: target tree '{physicalTreeId}' is itself aliased to '{targetEntry.PhysicalTreeId}'. " +
                 "Only a single level of indirection is supported.");
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PhysicalTreeId = physicalTreeId };
         await UpdateAsync(treeId, updated);
 
@@ -448,7 +473,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId);
+        var existing = await GetEntryCoreAsync(treeId);
         if (existing?.PhysicalTreeId is null) return;
 
         var oldPhysical = existing.PhysicalTreeId;
@@ -470,19 +495,26 @@ internal sealed class LatticeRegistryGrain(
         }
     }
 
-    public async Task<string> ResolveAsync(string treeId)
+    public Task<string> ResolveAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var entry = await GetEntryAsync(treeId);
-        return entry?.PhysicalTreeId ?? treeId;
+        return RegistryCallCensus.MeasureAsync(RegistryCallCensus.Resolve, async () =>
+        {
+            var entry = await GetEntryCoreAsync(treeId);
+            return entry?.PhysicalTreeId ?? treeId;
+        });
     }
 
-    public async Task<ShardMap?> GetShardMapAsync(string treeId)
+    public Task<ShardMap?> GetShardMapAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var entry = await GetEntryAsync(treeId);
-        return entry?.ShardMap;
+
+        return RegistryCallCensus.MeasureAsync(RegistryCallCensus.GetShardMap, async () =>
+        {
+            var entry = await GetEntryCoreAsync(treeId);
+            return entry?.ShardMap;
+        });
     }
 
     public async Task SetShardMapAsync(string treeId, ShardMap map)
@@ -490,7 +522,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(map);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         // Bump the map version on every persist so strongly-consistent scans
         // can detect topology changes via a single long comparison.
         //
@@ -528,7 +560,7 @@ internal sealed class LatticeRegistryGrain(
         // that is harmless, because the entry is rewritten by the single
         // terminal SetAsync below, so a reader sees it wholly before or wholly
         // after.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in slots)
@@ -562,7 +594,7 @@ internal sealed class LatticeRegistryGrain(
         // entire method body runs without another mutator interleaving,
         // guaranteeing each split coordinator receives a distinct target shard
         // index.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
         var allocated = floor + 1;
         var updated = existing with { NextShardIndex = allocated };
@@ -574,7 +606,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PublishEvents = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -584,7 +616,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         HistoryRetentionValidator.Validate(mode, window);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with
         {
             HistoryRetentionMode = mode,
@@ -597,7 +629,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { MaintainProjectionDigest = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -614,7 +646,7 @@ internal sealed class LatticeRegistryGrain(
                 + "value-payload bytes per cache activation with LRU payload eviction).");
         }
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { MaxCacheValueBytes = maxCacheValueBytes };
         await UpdateAsync(treeId, updated);
     }
@@ -623,7 +655,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         if (existing.ProjectionDigestPermanentlyDisabled == true)
         {
             // Idempotent: latch is one-way and re-stamping is a no-op.
@@ -638,7 +670,7 @@ internal sealed class LatticeRegistryGrain(
     public async Task<WalPlacementPin> GetWalPlacementAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var entry = await GetEntryAsync(treeId);
+        var entry = await GetEntryCoreAsync(treeId);
         return entry?.WalPlacement ?? WalPlacementPin.Create();
     }
 
@@ -650,7 +682,7 @@ internal sealed class LatticeRegistryGrain(
         // Atomic read-validate-write: the registry grain is singleton-keyed and
         // this method carries no [AlwaysInterleave], so the compare-and-swap
         // below cannot interleave with a concurrent placement change.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {
@@ -681,7 +713,7 @@ internal sealed class LatticeRegistryGrain(
         // this method carries no [AlwaysInterleave], so the compare-and-swap
         // below applies every move under one version bump with no intermediate
         // placement observable.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {

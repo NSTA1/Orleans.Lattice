@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Benchmark.RegistryFanIn</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Benchmark.RegistryFanIn</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      The driver is a measuring instrument, so it must not become a source of
+      the very latency it reports. Server GC matches the silo it measures, and
+      invariant globalization keeps the published output runnable on the
+      chiseled runtime base image the sidecar is packaged into.
+    -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      A project reference rather than a package reference, because the driver
+      addresses ILatticeRegistry - which is internal to the core library and
+      reached through the InternalsVisibleTo grant on its csproj. Addressing the
+      registry through its own grain interface is the whole point: an MCP or
+      HTTP hop would put an unrelated queue in front of the seam being measured.
+
+      It also means the driver's grain-interface proxies are generated from the
+      SAME commit as the silo under test. Orleans matches a grain interface by
+      its declared [Alias], so a driver built from a different commit would
+      still bind, but any interface change between the two would surface as an
+      unexplained transport fault in the middle of a measurement. Build both
+      from one commit and record it (scripts/build-driver.ps1 does).
+    -->
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>

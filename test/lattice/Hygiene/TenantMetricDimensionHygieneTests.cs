@@ -156,6 +156,8 @@ public sealed class TenantMetricDimensionHygieneTests
         "ProjectionDuration",
         "ProviderRetryAttempts",
         "ProviderRetryShortCircuited",
+        "RegistryCallDuration",
+        "RegistryCallInFlight",
         "ResolutionCacheHits",
         "ResolutionCacheMisses",
         "RestoreDuration",

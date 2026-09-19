@@ -76,6 +76,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.LeafCacheGrowth" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.RegistryFanIn" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
