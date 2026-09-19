@@ -247,14 +247,15 @@ public sealed class FileWalPhysicalByteAccountingTests
         // comparison at all. The case where the shard HAS cleared the floor
         // is the opposite result and is pinned by the test below.
         //
-        // Note the pair below is rejected at startup by
-        // FileWalStorageOptionsValidator and cannot exist in a configured
+        // Note the pair below is rejected by the registration-time validator
+        // (FileWalStorageOptionsValidator) and cannot reach a DI-configured
         // host. It is constructible here only because CreateProvider uses
         // Options.Create, which wraps the value in OptionsWrapper<T> and
-        // never runs IValidateOptions<T>. The fixture is kept deliberately:
-        // it pins the ordering semantics against the validator ever being
-        // relaxed, and must not be read as evidence that the configuration
-        // is supported.
+        // never runs IValidateOptions<T>, so this fixture deliberately
+        // exercises the one path that remains outside the guard. It is kept
+        // deliberately: it pins the ordering semantics against the validator
+        // ever being relaxed, and must not be read as evidence that the
+        // configuration is supported.
         using var sut = CreateProvider(
             compactionMinimumDeadBytes: 1024 * 1024,
             compactionMaximumDeadBytes: 1);
@@ -286,11 +287,11 @@ public sealed class FileWalPhysicalByteAccountingTests
         // have come from the ceiling. That isolation is the point: it is what
         // separates "the clamp fired" from "the ratio happened to fire".
         //
-        // As above, this pair is rejected at startup by the validator and is
-        // constructible here only because Options.Create bypasses
+        // As above, this pair is rejected by the registration-time validator
+        // and is constructible here only because Options.Create bypasses
         // IValidateOptions<T>. It pins the clamp semantics against the
         // validator ever being relaxed; it is not a statement that the
-        // configuration is reachable.
+        // configuration is reachable through a DI-configured host.
         const int Floor = 2 * PayloadBytes;
         using var sut = CreateProvider(
             compactionMinimumDeadBytes: Floor,

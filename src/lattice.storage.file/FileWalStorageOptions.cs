@@ -122,8 +122,10 @@ public sealed class FileWalStorageOptions
     /// <see cref="CompactionMinimumDeadBytes"/> of dead space, which on a
     /// large shard is the highest write amplification this option can
     /// produce. The only value that disables the ceiling is <c>0</c>. A
-    /// configuration with a non-zero ceiling below the floor is rejected at
-    /// startup rather than silently relocated.
+    /// configuration with a non-zero ceiling below the floor is rejected by
+    /// the registration-time validator rather than silently relocated. A host
+    /// that builds the provider directly from <c>Options.Create</c> never runs
+    /// that validator and is outside the guard.
     /// </para>
     /// </summary>
     public long CompactionMaximumDeadBytes { get; set; } = DefaultCompactionMaximumDeadBytes;
