@@ -70,11 +70,15 @@ public sealed class LatticeWalGcCompactionReachabilityTests
 
     private static async Task<LatticeWalGc> CollectorAsync(
         IWalStorageProvider provider,
-        long? checkpointOffset)
+        long? checkpointOffset,
+        bool withCursors = true)
     {
         var registry = new InMemoryWalCursorRegistry();
-        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
-        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+        if (withCursors)
+        {
+            await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+            await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+        }
 
         var sc = new ServiceCollection();
         sc.AddSingleton(provider);
@@ -83,7 +87,9 @@ public sealed class LatticeWalGcCompactionReachabilityTests
         pinGrain
             .GetPinsAsync()
             .Returns(Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
-                new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [LeafConsumer] = Hlc(20) }));
+                withCursors
+                    ? new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [LeafConsumer] = Hlc(20) }
+                    : new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)));
         if (checkpointOffset is { } offset)
         {
             pinGrain
@@ -172,6 +178,52 @@ public sealed class LatticeWalGcCompactionReachabilityTests
             Assert.That(provider.Evaluated, Is.EqualTo(new[] { (Tree, 0) }),
                 "Reclamation of already-dead bytes has nothing to do with why live entries could not be "
                 + "released, so keying it to one stop reason would leave every other stop stranded.");
+        });
+    }
+
+    /// <summary>
+    /// The second unreachable site, and the one that governs a tree whose
+    /// durable materialiser pins are unusable.
+    /// <para>
+    /// When no partition holds a usable cursor floor and no TTL is configured,
+    /// the collector returns <b>above</b> the partition loop, so the per-shard
+    /// scan is never entered and the evaluation carried on that path is not
+    /// reached either. This is the state an unusable pin produces, it can
+    /// persist indefinitely, and a tree in it reports no trim-stop series at
+    /// all rather than a zero one - the signature of a pass that returned
+    /// before the loop.
+    /// </para>
+    /// <para>
+    /// Reclaiming bytes already classified as dead does not need a trim
+    /// predicate: they stopped being live on some earlier pass, under whatever
+    /// predicate then applied. Conditioning their reclamation on the tree's
+    /// present ability to trim <em>more</em> is exactly what strands them, and
+    /// it strands them hardest on the trees that are most stuck.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task RunOnceAsync_evaluates_compaction_when_the_tree_has_no_usable_trim_predicate_at_all()
+    {
+        var inner = new InMemoryWalStorageProvider();
+        await inner.AppendBatchAsync(
+            Tree,
+            0,
+            new[] { Entry(0, Hlc(10)), Entry(1, Hlc(11)) },
+            CancellationToken.None);
+        var provider = new RecordingWalStorageProvider(inner);
+
+        var sut = await CollectorAsync(provider, checkpointOffset: null, withCursors: false);
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.EntriesTrimmed, Is.Zero);
+            Assert.That(provider.Trimmed, Is.Empty,
+                "Control on the fixture: with no cursor floor and no TTL the pass returns above the partition "
+                + "loop, so neither the trim nor the evaluation it carries is reached.");
+            Assert.That(provider.Evaluated, Is.EqualTo(new[] { (Tree, 0) }),
+                "A tree that cannot trim is the one whose already-dead bytes most need reclaiming, and it is "
+                + "precisely the one this early return used to skip.");
         });
     }
 

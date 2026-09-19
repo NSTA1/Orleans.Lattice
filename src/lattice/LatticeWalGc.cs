@@ -395,6 +395,38 @@ public sealed class LatticeWalGc(
 
         if (!anyPartitionHasCursorPredicate && !hasTtlPredicate)
         {
+            // The second site at which compaction evaluation is unreachable,
+            // and the one that governs a tree whose durable pins are unusable
+            // (issue #3207). This early return is taken before the partition
+            // loop below, so TrimShardAsync is never entered for any partition
+            // and the evaluation added there is never reached either. Field
+            // measurement on a tree in this state shows the trim-stop series
+            // absent entirely rather than zero, which is exactly the signature
+            // of a pass that returned above the loop.
+            //
+            // The guard is not the blocked state - that is explicitly
+            // diagnostic and leaves the trim predicate unchanged - it is the
+            // absence of any usable trim predicate at all. A tree reaches it
+            // whenever no partition holds a cursor floor and no TTL is
+            // configured, which is precisely the condition an unusable durable
+            // pin produces, and which can persist indefinitely.
+            //
+            // Reclaiming space already classified as dead does not require a
+            // trim predicate: the bytes stopped being live when they were
+            // trimmed, on some earlier pass, under whatever predicate then
+            // applied. Conditioning their reclamation on the tree's present
+            // ability to trim *more* is what strands them.
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ResolvePartitionProvider(partition) is { } idleProvider)
+                {
+                    await idleProvider
+                        .EvaluateCompactionAsync(treeName, partition, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
             // Nothing to do: no partition has a usable cursor floor and no
             // TTL is configured. Return early so the run is observably
             // a no-op (counter is zero, ShipDuration is unaffected).
