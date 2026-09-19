@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
@@ -59,10 +60,12 @@ public partial class BPlusLeafGrainTests
         => $"tree-zero-coverage-repair-{discriminator}-{Guid.NewGuid():N}";
 
     /// <summary>
-    /// The six outcome tag values <c>TryRepairZeroCoverageAsync</c> can record,
-    /// spelled out here rather than read back off <c>LatticeMetrics</c> so that a
-    /// rename or a silent drop of an arm reddens these fixtures instead of being
-    /// carried along by them.
+    /// The seven tag values <c>TryRepairZeroCoverageAsync</c> can record - the six
+    /// terminal arms that partition every invocation, plus <c>rearmed</c>, a
+    /// lifecycle transition that co-occurs with a terminal arm rather than
+    /// excluding one. Spelled out here rather than read back off
+    /// <c>LatticeMetrics</c> so that a rename or a silent drop of an arm reddens
+    /// these fixtures instead of being carried along by them.
     /// </summary>
     private static readonly string[] CoverageRepairArms =
     {
@@ -843,6 +846,93 @@ public partial class BPlusLeafGrainTests
                 + "rather than zero on a tree that never recorded it - and absent is documented "
                 + "to mean 'the repair path never ran', which is the opposite of the truth and "
                 + "is read on exactly the trees under diagnosis - issue #3194");
+        });
+    }
+
+    /// <summary>
+    /// The instrument's own <c>description</c> must name every armed arm, and any
+    /// arity claim it makes must match the armed count.
+    /// <para>
+    /// <b>This closes a SCOPE gap, not a regex gap, and the distinction is the
+    /// point.</b> <c>MetricDocArmArityTests</c> is the arity guard for this
+    /// repository, but it scans exactly two paths -
+    /// <c>docs/lattice/metrics.md</c> and
+    /// <c>docs/lattice.dashboards/metrics-to-panel-map.md</c>. <c>LatticeMetrics.cs</c>
+    /// is outside its range entirely, so the <c>description:</c> string could -
+    /// and did - keep asserting "All five arms are zero-primed" for a seven-arm
+    /// instrument while both documentation files were correct and the build was
+    /// green.
+    /// </para>
+    /// <para>
+    /// That surface is not a derivative. A counter's description is published as
+    /// the HELP text on the Prometheus endpoint, so it is what an operator reads
+    /// while diagnosing a pinned WAL at 3am - ahead of either markdown file. The
+    /// guard protecting the copy while leaving the original unguarded is exactly
+    /// backwards, and the remedy is scope rather than diligence: this test lives
+    /// beside the arm set it pins, so it cannot be outrun by a new documentation
+    /// path or a renamed file.
+    /// </para>
+    /// <para>
+    /// Deliberately asserted against <see cref="LatticeMetrics.CoverageRepairArms"/>
+    /// rather than the local <see cref="CoverageRepairArms"/> literal: the class
+    /// array is itself pinned to every declared <c>CoverageRepair*</c> field by
+    /// <see cref="Zero_priming_walks_every_declared_coverage_repair_arm"/>, so a
+    /// new arm reaches this assertion automatically instead of waiting for
+    /// somebody to remember the fixture list.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Coverage_repair_description_names_every_armed_arm_and_claims_the_right_arity()
+    {
+        var description = LatticeMetrics.LeafSnapshotCoverageRepairs.Description;
+
+        var armed = LatticeMetrics.CoverageRepairArms
+            .Select(static a => a.Value?.ToString())
+            .Where(static v => !string.IsNullOrEmpty(v))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Is.Not.Null.And.Not.Empty,
+                "the coverage_repairs instrument published no description at all, so this "
+                + "guard would pass vacuously. Fix the instrument, not this assertion");
+
+            Assert.That(armed, Is.Not.Empty,
+                "no armed arms were found, so the enumeration check below would pass "
+                + "vacuously - issue #3194");
+
+            foreach (var arm in armed)
+            {
+                Assert.That(description, Does.Contain(arm!),
+                    $"the coverage_repairs description does not name the '{arm}' arm. That "
+                    + "string is the HELP text on /metrics, so an operator reading it sees an "
+                    + "enumeration that silently omits an arm the instrument actually records");
+            }
+
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["three"] = 3, ["four"] = 4, ["five"] = 5, ["six"] = 6,
+                ["seven"] = 7, ["eight"] = 8, ["nine"] = 9, ["ten"] = 10,
+            };
+
+            var claim = Regex.Match(
+                description!,
+                @"\bAll (three|four|five|six|seven|eight|nine|ten) arms\b",
+                RegexOptions.IgnoreCase);
+
+            Assert.That(claim.Success, Is.True,
+                "the description no longer makes an 'All N arms' zero-priming claim. That "
+                + "claim is what tells an operator an absent series means the path never ran, "
+                + "so if it was deliberately reworded, update this guard rather than deleting "
+                + "it - a silently dropped claim is how the arity went stale in the first place");
+
+            if (claim.Success)
+            {
+                Assert.That(counts[claim.Groups[1].Value], Is.EqualTo(armed.Length),
+                    $"the description claims '{claim.Value}' but {armed.Length} arms are armed. "
+                    + "This is the exact defect MetricDocArmArityTests would have caught had "
+                    + "LatticeMetrics.cs been in its scan scope - issue #3194");
+            }
         });
     }
 
