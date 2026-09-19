@@ -1688,6 +1688,18 @@
       ]
     },
     {
+      "id": 76,
+      "title": "Tree-registry fan-in gate - admission wait",
+      "description": "Time a tree id waited for a fan-in permit before its batched registry read was dispatched (orleans_lattice_registry_admission_wait, issue #3240). Cold-start fan-in onto the registry singleton is bounded by RegistryFanInGate, and bounding fan-in does not remove work - it queues it. That matters for reading every other panel on this dashboard: once concurrent reads are capped, a saturated registry stops producing registry-side symptoms and starts producing caller-side waiting instead, so registry.call.duration, registry.call.in_flight and the caller-side timeout count all fall toward zero and the estate reads as recovered. This panel is the only place that relocated wait is visible. Read it AGAINST the service-time panel: a rising wait together with a rising registry.call.duration is a slow registry, which is the expected shape under genuine load, whereas a rising wait with registry.call.duration flat means the GATE is what callers are queueing on rather than the registry. Admission is deliberately uncapped and untimed - shedding a cold-start options resolution would turn latency into a correctness failure, since the caller cannot proceed without its entry - so unbounded waiting is a reachable state and nothing else would reveal it. Recorded on every dequeue including a zero wait, so the rate is the gated-read rate and a flat-zero mean is the healthy steady state rather than a gap. A platform-tenant series: the registry spans every tenant, so there is no per-tree breakdown to filter.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1042 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "mean admission wait (ms)" },
+        { "refId": "R", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "gated reads/s (secondary)" }
+      ]
+    },    {
       "id": 74,
       "title": "Deployed build (version / commit)",
       "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",
