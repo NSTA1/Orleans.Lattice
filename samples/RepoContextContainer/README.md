@@ -69,22 +69,65 @@ claims, and why you must not enable it in the middle of a measurement.
   *The reclamation peak* is what a box costs to **reach** that steady state, and
   it is higher: on an 8,224-file index whose WAL garbage collection had been
   blocked, releasing the backlog ran at 450-590% CPU and drove the working set to
-  13.23 GiB before turning over at 12.84 GiB, while a 12 GiB limit crash-looped
-  twice in 16 minutes (issue #3252). An earlier revision of this list recommended
-  "at least 12 GiB" against a 10.2 GiB steady state; **both figures are
-  withdrawn.** The peak is a *migration* cost paid once, the first time a backlog
-  of stuck WAL is released, so an operator upgrading into a WAL GC fix needs more
-  headroom than one already running healthy.
-- Memory, two reading notes that decide whether the numbers above mean anything.
-  A working set measured under a generous cap is an **upper bound on need, not a
-  requirement** - .NET collects less eagerly the further it is from its ceiling,
-  so 13.23 GiB observed at an 18 GiB grant does not establish that 13.23 GiB is
-  needed; what is established is that 12 GiB is not enough for that corpus during
-  reclamation, because it crash-looped rather than ran slowly. And **the grant is
-  not the ceiling that throws**: .NET applies its default
-  `GCHeapHardLimitPercent` to a container limit, so the managed heap ceiling is
-  about 75% of the grant - 12 GiB grants 9 GiB, 18 GiB grants 13.5 GiB. That
-  conversion is why 12 looked sufficient.
+  **at least 13.81 GiB** before it fell back to 10.55 GiB, while a 12 GiB limit
+  crash-looped twice in 16 minutes (issue #3252). An earlier revision of this
+  list recommended "at least 12 GiB" against a 10.2 GiB steady state; **both
+  figures are withdrawn.** The peak is a *migration* cost paid once, the first
+  time a backlog of stuck WAL is released, so an operator upgrading into a WAL GC
+  fix needs more headroom than one already running healthy.
+- Memory: **13.81 GiB is a floor on the peak, not the peak.** It is the largest
+  of 16 samples about 103 seconds apart, so the true maximum is at least that and
+  may be higher - nothing observed the gaps. Quote it as a lower bound. The fall
+  to 10.55 GiB afterwards is the other half of the reading, and the useful half:
+  a 3.26 GiB give-back is what distinguishes a bounded transient from a leak,
+  which would not have receded.
+- Memory: **do not assume the derived grant covers the migration burst.** On the
+  corpus above `New-TuningEnv.ps1` derives 13.26 GiB and the observed peak
+  exceeded it by about 568 MiB, so the script's 20% headroom band is all that
+  stands between a reclamation burst and the ceiling, and this burst was larger
+  than the band. Grant **above** the derived figure for the migration run
+  specifically, then re-derive once the estate is healthy. That 568 MiB is
+  **pinned to one corpus and is not a constant shortfall** - the derived grant is
+  a function of file count and moves with it, so the same repository derives
+  13.26 GiB at 8,239 files and 13.97 GiB at 8,846. Do not read a later derivation
+  that happens to exceed 13.81 as evidence the gap has closed: a larger corpus
+  raises the peak too, and only the grant side of that comparison was
+  re-measured. Compare a peak against a grant only at the *same* corpus.
+- Memory, and this decides whether the comparison just made means anything,
+  because it is weaker than it looks in one direction and stronger in another.
+  First, a working set measured under a generous cap is an **upper bound on need,
+  not a requirement** - .NET collects less eagerly the further it is from its
+  ceiling, so 13.81 GiB observed at an 18 GiB grant does not establish that
+  13.81 GiB is *needed*. A peak cannot be transported across caps: at 18 GiB the
+  collector worked against a 13.5 GiB managed ceiling, whereas at 13.26 GiB it
+  would work against 9.94 GiB and collect far harder, far earlier. That
+  trajectory was never run. Second, pulling the **other** way, peak RSS is not
+  the quantity a grant is tested against at all: **the grant bounds RSS, but the
+  GC hard limit is what throws**, and it binds first at about 75% of the grant
+  (12 GiB grants 9 GiB, 18 GiB grants 13.5 GiB). A box at 13.26 GiB would fault
+  against 9.94 GiB of managed heap long before RSS could reach 13.26, so "the
+  peak exceeded the grant" *understates* the exposure rather than overstating it.
+- Memory, what is actually established, stated on the plane that throws: a 12 GiB
+  grant (9.00 GiB managed ceiling) **crash-looped**, and an 18 GiB grant
+  (13.5 GiB managed ceiling) ran **clean**. Nothing has been measured at 13.26 GiB
+  in either direction. The derived grant therefore offers a managed ceiling only
+  about **10% above one that demonstrably crash-looped** on this corpus. That
+  thin margin over a measured failure is the reason to provision above it for a
+  migration run - not the raw RSS comparison, which weighs a number produced
+  under one cap against a different cap.
+- Memory: **everything above is deploy-time fitting, which is a known limitation
+  rather than the settled answer.** `New-TuningEnv.ps1` is host-specific by
+  construction - its constants were fitted against one corpus on one host and are
+  re-derived by nobody afterwards - and it goes stale in place, because its only
+  corpus input is the indexed file count, so adding a repository to the workspace
+  or removing one moves the requirement without moving the grant. Nothing signals
+  that drift. Adapting sizing to the granted resources **at runtime**, instead of
+  predicting it at deploy time, is tracked in issue #3255. That work depends on
+  issue #3133: the runtime's own high-load signal is published at 90% of the
+  cgroup limit while the GC hard limit binds at 75% of it, so the threshold sits
+  at 1.2x the limit at *every* grant and can never fire. It has been confirmed at
+  both 12 GiB and 18 GiB with byte-exact matching percentages, so it is
+  scale-invariant rather than a misconfiguration of one deployment.
 - Memory: under-provisioning does not present as memory pressure. A cgroup limit
   becomes the .NET GC heap hard limit, so the process is never OOM-killed and
   there is no restart, exit code or resource event. The visible symptom is a
@@ -98,7 +141,8 @@ claims, and why you must not enable it in the middle of a measurement.
   `lattice_repocontext_heap_committed_bytes /
   lattice_repocontext_heap_limit_bytes` for heap-ceiling adherence (check
   `lattice_repocontext_heap_high_load_threshold_reachable` first - a `0` means
-  the runtime's own pressure threshold can never fire, issue #3133),
+  the runtime's own pressure threshold can never fire at any grant, issue
+  #3133),
   `orleans.lattice.wal.replay.permit_adaptations` with
   `outcome=withheld, trigger=occupancy` for the proactive replay-concurrency
   backpressure, and `orleans.lattice.leaf.snapshot.hydration_admissions` with
