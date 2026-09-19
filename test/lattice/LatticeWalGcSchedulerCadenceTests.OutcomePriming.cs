@@ -36,11 +36,19 @@ namespace Orleans.Lattice.Tests;
 /// <c>WalMaxRetainedBytes</c> behind a pinned frontier reports a usable floor
 /// and trims nothing, and so claimed the one arm that asserts the tree is fine.
 /// </para>
+/// <para>
+/// Issue #3213 widened it to eight, splitting out <c>stranded</c>, because
+/// <c>over_ceiling</c> could only ever reach a deployment that had set
+/// <c>WalMaxRetainedBytes</c> - an option with no default. A tree that
+/// reclaims nothing while its trim scan keeps stopping on WAL it may not touch
+/// is in the identical condition with or without that option set, and without
+/// it the pass still landed on <c>idle</c>.
+/// </para>
 /// </summary>
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private static readonly string[] EveryOutcome =
-        ["reclaimed", "idle", "blocked", "no_consumer", "over_ceiling", "unclassified", "failed"];
+        ["reclaimed", "idle", "blocked", "no_consumer", "over_ceiling", "stranded", "unclassified", "failed"];
 
     /// <summary>
     /// Configures the collaborator so a single pass lands on <paramref name="outcome"/>.
@@ -72,6 +80,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(_ => Task.FromResult(OverCeilingReport()));
                 break;
+            case "stranded":
+                gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(StrandedReport()));
+                break;
             case "unclassified":
                 // A floor state this build does not name. The cast is the whole
                 // point of the case: it stands in for the enum member a future
@@ -98,6 +110,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("blocked")]
     [TestCase("no_consumer")]
     [TestCase("over_ceiling")]
+    [TestCase("stranded")]
     [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task Every_pass_outcome_is_primed_so_an_absent_arm_is_never_a_healthy_reading(string reached)
@@ -201,6 +214,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("blocked")]
     [TestCase("no_consumer")]
     [TestCase("over_ceiling")]
+    [TestCase("stranded")]
     [TestCase("unclassified")]
     [TestCase("failed")]
     public async Task A_completed_pass_advances_exactly_one_outcome_arm_by_one(string expected)

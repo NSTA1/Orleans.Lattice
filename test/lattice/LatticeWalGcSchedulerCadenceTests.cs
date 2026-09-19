@@ -86,9 +86,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         long? retainedBytesAfter = null,
         long? byteCeiling = null,
         WalGcCursorFloorState cursorFloorState = WalGcCursorFloorState.Available,
-        bool bytePressureOverThreshold = false) =>
+        bool bytePressureOverThreshold = false,
+        bool retainedBacklog = false) =>
         new("tree", null, null, null, null, 1, entriesTrimmed, byteCeiling, null, retainedBytesAfter,
-            false, bytePressureOverThreshold, cursorFloorState);
+            false, bytePressureOverThreshold, cursorFloorState, null, null, retainedBacklog);
 
     /// <summary>
     /// A pass that reclaimed nothing because an unusable durable materialiser

@@ -415,6 +415,7 @@ public sealed class LatticeWalGc(
         }
 
         long totalTrimmed = 0;
+        var retainedBacklog = false;
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName);
         var tenantTag = LatticeTenantLabel.ForTree(treeName);
         for (var partition = 0; partition < partitions; partition++)
@@ -429,6 +430,7 @@ public sealed class LatticeWalGc(
             }
             var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, offsetFloor, PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
+            retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, shardScan.StopReason);
             RecordEntriesTrimmed(treeTag, tenantTag, partition, shardScan.EligibleCount);
         }
@@ -440,8 +442,43 @@ public sealed class LatticeWalGc(
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
             ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
-            blockingConsumerIds);
+            blockingConsumerIds, retainedBacklog);
     }
+
+    /// <summary>
+    /// Whether a shard scan's stop reason means the scan met an entry it had to
+    /// <i>retain</i>, and therefore that WAL outlived the pass (issue #3213).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The trim scan walks ascending offsets and stops at the first entry it may
+    /// not trim, so every reason other than the two terminal ones is by
+    /// construction a stop <i>at</i> a retained entry: the shard holds at least
+    /// that entry and every entry above it. <see cref="WalGcTrimStopReason.Exhausted"/>
+    /// means the scan consumed the whole log without meeting such an entry and
+    /// <see cref="WalGcTrimStopReason.Empty"/> means there was no log to consume,
+    /// so those two - and only those two - leave nothing behind.
+    /// </para>
+    /// <para>
+    /// This is the backlog evidence that survives a default deployment.
+    /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/> is the obvious
+    /// quantity to reach for and it is <see langword="null"/> whenever
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> is unset, because
+    /// <c>SampleRetainedBytesAsync</c> returns early for zero hot-path cost when
+    /// the policy is disabled - which is exactly the deployment shape in which a
+    /// stranded tree had no corrective signal at all. The stop reason is decided
+    /// by the scan itself on every pass, so it costs nothing extra and is never
+    /// gated behind an opt-in.
+    /// </para>
+    /// <para>
+    /// Written as an explicit two-member exclusion rather than a list of the four
+    /// retention reasons so that a stop reason added later is treated as
+    /// retention - the conservative reading - instead of silently joining the
+    /// "nothing left behind" set and re-opening the defect.
+    /// </para>
+    /// </remarks>
+    private static bool IsRetentionStop(WalGcTrimStopReason reason)
+        => reason is not (WalGcTrimStopReason.Exhausted or WalGcTrimStopReason.Empty);
 
     /// <summary>
     /// Lowers <paramref name="registryMin"/> to account for durable

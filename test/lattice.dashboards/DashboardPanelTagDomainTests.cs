@@ -137,13 +137,16 @@ public sealed class DashboardPanelTagDomainTests
 
             // Panel 135 charts reclaiming passes only; the blocked arm is
             // charted on the replication dashboard (panel 70) and the remaining
-            // arms are diagnostic rather than operational.
+            // arms are diagnostic rather than operational. `stranded` (issue
+            // #3213) joins that diagnostic set: it is drawn on the unfiltered
+            // by-outcome panel, and this panel's question is narrower - whether
+            // reclamation is happening at all.
             ["CommitPath|135|orleans.lattice.wal.gc.passes|outcome"] =
-                ["blocked", "failed", "idle", "no_consumer", "over_ceiling", "unclassified"],
+                ["blocked", "failed", "idle", "no_consumer", "over_ceiling", "stranded", "unclassified"],
 
             // Panel 70 is the blocked-pass panel, the mirror of panel 135.
             ["Replication|70|orleans.lattice.wal.gc.passes|outcome"] =
-                ["failed", "idle", "no_consumer", "over_ceiling", "reclaimed", "unclassified"],
+                ["failed", "idle", "no_consumer", "over_ceiling", "reclaimed", "stranded", "unclassified"],
 
             // Panel 143 charts both arms on its unfiltered target, and adds a
             // second target narrowed to outcome="withheld" so the withheld arm
