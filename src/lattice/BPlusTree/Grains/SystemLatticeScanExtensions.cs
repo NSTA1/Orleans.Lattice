@@ -30,9 +30,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// aborts. <see cref="LatticeGrain"/> - which backs every system tree - is
 /// <c>[StatelessWorker]</c>, so this is a steady-state background rate on any
 /// system-tree scan, not a rare failover event, and it rises with concurrency
-/// rather than with scan duration. A single-page scan is fully exposed to it.
-/// That is why these wrappers are the default for system-tree scans of any
-/// length, and not merely an insurance policy for long ones.
+/// rather than with scan duration.
+/// </para>
+/// <para>
+/// The exposure begins at the first <c>MoveNext</c>, not at the first element.
+/// Orleans' server extension returns <c>MissingEnumeratorError</c> from
+/// <c>MoveNext</c> alone - <c>StartEnumeration</c> creates the entry and cannot
+/// miss it - so an enumeration that the consumer abandons after its first
+/// element, or that the server completes inside the initial response, issues a
+/// single RPC and cannot abort. A tree scan drained to its end does not enjoy
+/// that: the server closes a batch at the first element its own iterator cannot
+/// produce synchronously, and a Lattice scan awaits shard grain calls, so
+/// completion is normally learned from a later <c>MoveNext</c> however few keys
+/// the range holds. A short range is therefore not thereby exempt, though a
+/// probe that stops at one element genuinely is. That is why these wrappers are
+/// the default for system-tree scans of any length, and not merely an insurance
+/// policy for long ones.
 /// </para>
 /// </summary>
 internal static class SystemLatticeScanExtensions
@@ -98,6 +111,7 @@ internal static class SystemLatticeScanExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this IS the wrapper that recovers the abort.
             var enumerator = tree.KeysAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;
@@ -222,6 +236,7 @@ internal static class SystemLatticeScanExtensions
             using var credentialScope = reassertCredential is { } entryCredential
                 ? LatticeCredentialContext.With(entryCredential)
                 : null;
+            // raw-enumeration-ok: this IS the wrapper that recovers the abort.
             var enumerator = tree.EntriesAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator(cancellationToken);
             var completedNormally = false;
             var shouldReopen = false;

@@ -33,8 +33,15 @@ internal sealed class GrainFactoryTreeContentProbe(IGrainFactory grainFactory)
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // ScanKeysAsync, though this probe is not itself exposed to the
+            // abort it recovers from: returning on the first element issues
+            // exactly one RPC, and the abort arises only from a subsequent
+            // MoveNext. The wrapper is here so that an edit which drains
+            // further does not silently acquire the exposure - a false negative
+            // would report a populated tree as empty and let an operator enable
+            // replication over live content.
             await foreach (var _ in tree
-                .KeysAsync(cancellationToken: cancellationToken)
+                .ScanKeysAsync(cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 // The first key settles it; disposing the enumerator here stops

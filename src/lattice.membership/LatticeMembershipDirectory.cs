@@ -163,8 +163,13 @@ internal sealed class LatticeMembershipDirectory(
         {
             var current = frontier.Dequeue();
             var prefix = ForwardPrefix(current);
+            // ScanKeysAsync: the edges tree is a [StatelessWorker] LatticeGrain,
+            // so a MoveNext can land on a worker with no record of the
+            // enumerator. A truncated edge walk silently under-reports group
+            // membership, which a fail-closed authorization check then reads as
+            // a legitimate deny.
             await foreach (var key in Edges
-                .KeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ScanKeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 var groupId = ThirdField(key);
@@ -191,8 +196,10 @@ internal sealed class LatticeMembershipDirectory(
         var prefix = ReversePrefix(groupId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // ScanKeysAsync: see WalkForwardClosureAsync. A truncated member list
+            // is indistinguishable from a smaller group.
             await foreach (var key in Edges
-                .KeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ScanKeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 var memberId = ThirdField(key);

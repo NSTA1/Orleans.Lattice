@@ -152,9 +152,15 @@ internal sealed class GrainIndexEnrollmentStore : IGrainIndexEnrollmentStore
         // The scope has to span the whole enumeration rather than only its
         // first page, for the same reason the outbox scan's does: each
         // continuation is a fresh grain call.
+        //
+        // ScanKeysAsync rather than KeysAsync for the same reason: the registry
+        // is a [StatelessWorker] LatticeGrain, so each of those continuations is
+        // routed independently and can land on a worker that has no record of
+        // the enumerator. The wrapper re-asserts the system-origin scope on every
+        // reopen, which a hand-rolled resume would silently drop.
         using var scope = EnterSystemOrigin();
 
-        var keys = _registry.KeysAsync(
+        var keys = _registry.ScanKeysAsync(
             startInclusive,
             endExclusive,
             cancellationToken: cancellationToken);
@@ -171,9 +177,11 @@ internal sealed class GrainIndexEnrollmentStore : IGrainIndexEnrollmentStore
         // the tree is walked lazily, so each continuation is a fresh grain call
         // that the access gate would otherwise see without the system-origin
         // marker.
+        //
+        // ScanEntriesAsync rather than EntriesAsync: see ScanSeenKeysAsync above.
         using var scope = EnterSystemOrigin();
 
-        var entries = _registry.EntriesAsync(
+        var entries = _registry.ScanEntriesAsync(
             GrainIndexRegistryKeys.PendingPrefix(),
             GrainIndexRegistryKeys.PendingPrefixEnd(),
             cancellationToken: cancellationToken);
