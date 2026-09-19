@@ -236,8 +236,14 @@ public sealed class FileWalPhysicalByteAccountingTests
     [Test]
     public async Task Absolute_ceiling_does_not_override_the_minimum_dead_byte_floor()
     {
-        // A ceiling below the floor must not turn every trim into a rewrite.
-        // Ordering the two checks the other way round would do precisely that.
+        // Scope this precisely, because the obvious generalisation of it is
+        // false. What is pinned here is only that a shard holding LESS dead
+        // space than the floor is not compacted, whatever the ceiling says:
+        // 4 KB of dead payload against a 1 MB floor. It does NOT establish
+        // that a sub-floor ceiling is harmless in general, and it cannot,
+        // because it never reaches the ceiling comparison at all. The case
+        // where the shard HAS cleared the floor is the opposite result and is
+        // pinned by the test below.
         using var sut = CreateProvider(
             compactionMinimumDeadBytes: 1024 * 1024,
             compactionMaximumDeadBytes: 1);
@@ -251,6 +257,40 @@ public sealed class FileWalPhysicalByteAccountingTests
             Is.GreaterThanOrEqualTo(before),
             "The minimum-dead-bytes floor still suppresses churn, whatever the ceiling says, "
             + "so the file must not have been rewritten.");
+    }
+
+    [Test]
+    public async Task A_ceiling_below_the_floor_compacts_once_the_floor_is_cleared()
+    {
+        // The behaviour the option's documentation described as "no effect",
+        // and the reason a non-zero ceiling below the floor is now rejected by
+        // the validator. The floor is evaluated first and returns early, so
+        // every shard that reaches the ceiling comparison already holds
+        // dead >= floor; with ceiling < floor the comparison dead >= ceiling
+        // is then unconditionally true. The ceiling is not ignored, it is
+        // relocated to the floor.
+        //
+        // The dead fraction here is 3/20 = 0.15, far below the 0.5 ratio
+        // default, so the ratio arm provably declines and a rewrite can only
+        // have come from the ceiling. That isolation is the point: it is what
+        // separates "the clamp fired" from "the ratio happened to fire".
+        const int Floor = 2 * PayloadBytes;
+        using var sut = CreateProvider(
+            compactionMinimumDeadBytes: Floor,
+            compactionMaximumDeadBytes: 1);
+        await AppendAsync(sut, count: 20);
+
+        var before = LogLength();
+        await sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 2, CancellationToken.None);
+        var physical = await sut.GetPhysicalByteSizeAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(
+            physical,
+            Is.LessThan(before),
+            "Three dead payloads clear the two-payload floor, so the ceiling comparison is "
+            + "reached and 1 <= dead is trivially true. The shard is rewritten at a dead "
+            + "fraction of 0.15, which the ratio trigger would have declined: a sub-floor "
+            + "ceiling is the most aggressive setting available, not an inert one.");
     }
 
     [Test]
@@ -327,6 +367,55 @@ public sealed class FileWalPhysicalByteAccountingTests
                 + "for bounded disk on every existing deployment without asking.");
             Assert.That(result.Succeeded, Is.True);
         });
+    }
+
+    [Test]
+    public void Validator_rejects_a_ceiling_below_the_floor()
+    {
+        // The two bounds are individually valid and jointly unsatisfiable.
+        // Accepting this pair does not give the operator a 1-byte ceiling; it
+        // gives them a 65536-byte one, because the floor is evaluated first.
+        // Rejecting is the fail-closed reading: the provider cannot honour
+        // what was configured, and what it would substitute is the worst
+        // write-amplification setting the option can express.
+        var result = new FileWalStorageOptionsValidator().Validate(null, new FileWalStorageOptions
+        {
+            RootDirectory = "/tmp",
+            CompactionMaximumDeadBytes = 1,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                FileWalStorageOptions.DefaultCompactionMinimumDeadBytes,
+                Is.GreaterThan(1),
+                "The case only exists while the default floor is above the configured ceiling.");
+            Assert.That(result.Failed, Is.True,
+                "A non-zero ceiling beneath the floor must not start the host.");
+            Assert.That(
+                result.FailureMessage,
+                Does.Contain(nameof(FileWalStorageOptions.CompactionMaximumDeadBytes))
+                    .And.Contain(nameof(FileWalStorageOptions.CompactionMinimumDeadBytes)),
+                "The message must name both bounds: the fault is the relationship between them, "
+                + "so naming either one alone sends the operator to the wrong knob.");
+        });
+    }
+
+    [Test]
+    public void Validator_accepts_a_ceiling_equal_to_the_floor()
+    {
+        // The boundary, and the supported way to express "compact as soon as
+        // there is enough dead space to be worth it". The rule is strictly
+        // below, so equality must pass: it is the one sub-ratio setting whose
+        // effective bound is the value the operator actually wrote.
+        var result = new FileWalStorageOptionsValidator().Validate(null, new FileWalStorageOptions
+        {
+            RootDirectory = "/tmp",
+            CompactionMinimumDeadBytes = 4096,
+            CompactionMaximumDeadBytes = 4096,
+        });
+
+        Assert.That(result.Succeeded, Is.True);
     }
 
     // --- helpers ------------------------------------------------------------

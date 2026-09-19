@@ -112,9 +112,18 @@ public sealed class FileWalStorageOptions
     /// amplification.
     /// </para>
     /// <para>
-    /// <see cref="CompactionMinimumDeadBytes"/> still applies: a shard below
-    /// that floor is never compacted by either trigger, so a ceiling set
-    /// below the floor has no effect.
+    /// <see cref="CompactionMinimumDeadBytes"/> still applies, and it is
+    /// evaluated <i>first</i>: a shard below that floor is never compacted by
+    /// either trigger. A ceiling below the floor is therefore not honoured as
+    /// written, and it is <b>not</b> inert. Every shard that reaches the
+    /// ceiling comparison has already cleared the floor, so the comparison is
+    /// unconditionally true and the ceiling behaves exactly as if set to the
+    /// floor: the shard is rewritten on every trim that accumulates
+    /// <see cref="CompactionMinimumDeadBytes"/> of dead space, which on a
+    /// large shard is the highest write amplification this option can
+    /// produce. The only value that disables the ceiling is <c>0</c>. A
+    /// configuration with a non-zero ceiling below the floor is rejected at
+    /// startup rather than silently relocated.
     /// </para>
     /// </summary>
     public long CompactionMaximumDeadBytes { get; set; } = DefaultCompactionMaximumDeadBytes;
