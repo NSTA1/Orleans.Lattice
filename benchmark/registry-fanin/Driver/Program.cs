@@ -247,11 +247,34 @@ internal static class Program
     }
 
     /// <summary>
-    /// Drives registry point reads in the member mix observed in the live storm
+    /// Drives registry reads in the member mix observed in the live storm
     /// (<c>ResolveAsync</c> and <c>GetEntryAsync</c> dominant, <c>GetShardMapAsync</c>
     /// a minority), so the client-side census is comparable with the server-side
     /// timeout population.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The storm mix is made up entirely of point reads, and every point read on
+    /// <c>ILatticeRegistry</c> carries <c>[AlwaysInterleave]</c>. Replaying that
+    /// mix alone therefore exercises only the interleaved half of the surface and
+    /// cannot reach the members most likely to be the wall.
+    /// </para>
+    /// <para>
+    /// <see cref="DriverOptions.EnumeratePercent"/> injects
+    /// <c>GetAllTreeIdsAsync</c> into the mix. That member is the one read here
+    /// which is not a point lookup but a multi-hop range traversal of the
+    /// registry's own backing tree, and it is excluded from interleaving on
+    /// correctness grounds rather than by oversight - so it holds the singleton's
+    /// turn token for the whole traversal. Its cost grows with the number of
+    /// entries traversed and with the depth of the activations it descends into,
+    /// which is exactly the product this rig is trying to separate.
+    /// </para>
+    /// <para>
+    /// It defaults to zero so the storm-replica mix stays a faithful replica.
+    /// Raising it is a deliberate change of question, from "does the observed mix
+    /// reproduce the storm" to "does the non-interleaved member saturate first".
+    /// </para>
+    /// </remarks>
     private static async Task<string> RunProbeAsync(
         IGrainFactory grains,
         TreeFleet fleet,
@@ -260,6 +283,7 @@ internal static class Program
         CancellationToken cancellationToken)
     {
         var targets = fleet.TreeIds(options.Trees);
+        var enumerateShare = Math.Clamp(options.EnumeratePercent, 0, 100);
 
         var issued = await RateDriver.RunAsync(
             options.Rate,
@@ -268,9 +292,35 @@ internal static class Program
             sequence =>
             {
                 var registry = grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                var roll = (int)(sequence % 100);
+
+                // The enumeration branch is taken BEFORE any target is resolved.
+                // GetAllTreeIdsAsync addresses no particular tree, so requiring
+                // one would make an enumeration-only probe (--trees 0) divide by
+                // zero on an empty target list - and that is exactly the probe
+                // shape needed to measure the range scan against a bare estate.
+                if (roll < enumerateShare)
+                {
+                    return census.MeasureAsync(
+                        "ILatticeRegistry.GetAllTreeIdsAsync",
+                        () => registry.GetAllTreeIdsAsync());
+                }
+
+                if (targets.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "the point-read mix needs at least one target tree; pass --trees N, or --enumerate-pct 100 to probe the range scan alone.");
+                }
+
                 var treeId = targets[(int)(sequence % targets.Count)];
 
-                return (sequence % 100) switch
+                // Re-roll the remainder across the storm mix so the point-read
+                // proportions among themselves are preserved whatever share
+                // enumeration takes. Scaling the original thresholds instead
+                // would quietly change the mix being replayed as the share rose.
+                var point = (roll - enumerateShare) * 100 / (100 - enumerateShare);
+
+                return point switch
                 {
                     < 48 => census.MeasureAsync(
                         "ILatticeRegistry.ResolveAsync",
@@ -285,7 +335,11 @@ internal static class Program
             },
             cancellationToken).ConfigureAwait(false);
 
-        return $"issued {issued} registry point reads at {options.Rate}/s for {options.Duration.TotalSeconds}s";
+        var mix = enumerateShare > 0
+            ? $"{enumerateShare}% enumeration, {100 - enumerateShare}% point reads"
+            : "point reads only";
+
+        return $"issued {issued} registry reads ({mix}) at {options.Rate}/s for {options.Duration.TotalSeconds}s";
     }
 
     private static void Emit(DriverReport report, string? outputPath)

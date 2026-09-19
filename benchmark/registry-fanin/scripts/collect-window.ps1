@@ -151,31 +151,44 @@ $armRows = foreach ($op in ($arms.Keys | Sort-Object)) {
 
 	$meanWidth = if ($a.InFlightCount -gt 0) { $a.InFlightSum / $a.InFlightCount } else { $null }
 
-	# The width count EXCLUDES the arriving call, so a member that never has two
-	# calls in its body at once reads as exactly 0. On a non-interleaved member
-	# that is pinned by construction and carries no information about admission.
+	# CAREFUL: the in-flight counter is GLOBAL across every registry arm, not
+	# per-member. It answers "how many registry calls of any kind were in the
+	# grain body when this one was admitted", which is the fan-in width worth
+	# having - but it is NOT a measure of this member's own concurrency.
+	#
+	# So a non-interleaved member can and does report a width above zero: an
+	# [AlwaysInterleave] read admitted earlier and now awaiting its downstream
+	# hop is still counted as in flight, and Orleans can start a new turn once
+	# the running turn yields at an await. Observed directly here - register is
+	# non-interleaved yet reported a mean width of 1.44.
+	#
+	# An earlier revision of this script used width > 0 as evidence that a
+	# member was genuinely interleaving, and that inference is simply wrong for
+	# this counter. Interleaving is a property of the member's attribute, which
+	# is known statically, so it is read from the declared list rather than
+	# guessed from a reading that cannot carry it.
 	$widthObserved = ($null -ne $meanWidth) -and ($meanWidth -gt 0)
 
-	# The precondition. On a non-interleaved member a slow downstream hop yields a
-	# SHORT per-call service time and a LOW admitted count - the same signature
-	# admission failure produces - so the duration arm alone cannot separate them
-	# and no (a)/(b) attribution may be made from it.
-	$attributable = $widthObserved
+	# The precondition. On a non-interleaved member a slow downstream hop yields
+	# a SHORT per-call service time and a LOW admitted count - the same signature
+	# admission failure produces - so the duration arm alone cannot separate
+	# them, whatever the global width happened to be.
+	$attributable = (-not $nonInterleaved) -and $widthObserved
 
 	[pscustomobject] @{
 		Operation            = $op
 		Interleaved          = (-not $nonInterleaved)
 		AdmittedCalls        = [long] $a.DurationCount
 		MeanServiceMs        = if ($a.DurationCount -gt 0) { [math]::Round($a.DurationSum / $a.DurationCount, 4) } else { $null }
-		MeanFanInWidth       = if ($null -ne $meanWidth) { [math]::Round($meanWidth, 4) } else { $null }
-		WidthEverExceededOne = $widthObserved
+		MeanGlobalFanInWidth = if ($null -ne $meanWidth) { [math]::Round($meanWidth, 4) } else { $null }
+		ConcurrencyObserved  = $widthObserved
 		AttributionValid     = $attributable
 		AttributionNote      = if ($attributable) {
-			'width rose above one under load, so the duration arm carries admission information'
+			'interleaved member, and registry concurrency was observed, so the duration arm carries admission information'
 		} elseif ($nonInterleaved) {
-			'NOT ATTRIBUTABLE: member is not [AlwaysInterleave], so width is pinned by construction and a short service time cannot be distinguished from a call that was never admitted'
+			'NOT ATTRIBUTABLE: member is not [AlwaysInterleave], so callers serialise behind the singleton turn token and a short service time cannot be distinguished from a call that was never admitted. The global width does not rescue this, because it does not measure THIS member concurrency.'
 		} else {
-			'NOT ATTRIBUTABLE: member is interleaved but width never rose above one, so the offered load did not exercise concurrency and the reading is not a saturation measurement'
+			'NOT ATTRIBUTABLE: member is interleaved but no registry concurrency was observed at all, so the offered load did not exercise the seam and this is not a saturation measurement'
 		}
 		TotalServiceMs       = [math]::Round($a.DurationSum, 2)
 	}
@@ -205,6 +218,18 @@ $result = [pscustomobject] @{
 	TimeoutCensus    = $census
 	RegistryArms     = @($armRows)
 	StorageSeries    = $storage
+
+	# Co-tenancy, observed rather than assumed. Taken at the end of the window;
+	# run-cell takes the opening sample and passes it through, so the pair
+	# brackets the window.
+	HostLoadAtEnd    = @(Get-FanInHostLoad)
+
+	# A scheduled compaction on a co-tenant rewrites several hundred MB of WAL
+	# in a burst. A window straddling it will show a disk-I/O spike that does not
+	# belong to this system, so windows are timestamped to let that be excluded
+	# afterwards rather than contorting the schedule around a rough estimate.
+	CoTenancyNote    = 'Windows are timestamped so a co-tenant compaction burst can be excluded afterwards. Treat an anomalous window against a materially different load profile as suspect until cleared, rather than averaging it in.'
+
 	Method           = 'Timeouts bucketed by log timestamp, never by counter scrape. A single scrape of a cumulative counter reads as an active fault and a short delta of the same counter reads as healthy; both are wrong, in opposite directions.'
 }
 

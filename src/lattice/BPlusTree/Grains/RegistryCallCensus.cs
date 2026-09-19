@@ -100,12 +100,26 @@ internal static class RegistryCallCensus
     /// </para>
     /// <para>
     /// <see cref="LatticeMetrics.RegistryCallInFlight"/> is what separates them,
-    /// and it is a precondition rather than a supporting signal: the width on a
-    /// non-interleaved member is pinned to zero by construction, because the
-    /// count excludes the arriving call and no second call can be in the body at
-    /// the same time. Observing a width that never rises above zero is therefore
-    /// the tell that a duration reading on that member carries no admission
-    /// information, and no attribution should be made from it.
+    /// but read it for what it actually counts: the in-flight total is GLOBAL
+    /// across every arm, so it answers "how many registry calls of any kind were
+    /// in the grain body when this one was admitted" - the fan-in width - and
+    /// <b>not</b> "was this member interleaving".
+    /// </para>
+    /// <para>
+    /// Those are easy to conflate, and the conflation fails in the permissive
+    /// direction. A non-interleaved member can report a width well above zero:
+    /// an <c>[AlwaysInterleave]</c> read admitted earlier and still awaiting its
+    /// downstream hop counts as in flight, and Orleans may start a new turn once
+    /// the running turn yields at an await. Measured directly on this surface,
+    /// <see cref="Register"/> reported a mean width of 1.44 while being
+    /// non-interleaved throughout. Treating that as evidence of interleaving
+    /// would license exactly the attribution this list exists to forbid.
+    /// </para>
+    /// <para>
+    /// Which members interleave is therefore taken from the attribute, which is
+    /// known statically and recorded in this list, rather than inferred from a
+    /// reading that cannot carry it. No (a)/(b) attribution may be made from the
+    /// duration arm of a member named here, whatever its observed width.
     /// </para>
     /// </remarks>
     internal static readonly IReadOnlyList<string> NonInterleavedOperations =

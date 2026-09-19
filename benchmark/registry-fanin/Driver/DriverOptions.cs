@@ -62,6 +62,19 @@ internal sealed class DriverOptions
     public int MaxInFlight { get; private set; }
 
     /// <summary>
+    /// The percentage of probe calls issued as <c>GetAllTreeIdsAsync</c> rather
+    /// than as point reads. Defaults to zero.
+    /// </summary>
+    /// <remarks>
+    /// Zero keeps the probe a faithful replica of the observed storm mix, which
+    /// is entirely point reads. Raising it deliberately changes the question
+    /// being asked, because unlike every point read on the interface this member
+    /// is not <c>[AlwaysInterleave]</c> and holds the registry singleton's turn
+    /// token for a whole multi-hop traversal of the backing tree.
+    /// </remarks>
+    public int EnumeratePercent { get; private set; }
+
+    /// <summary>
     /// The target leaf count per tree for the <c>populate</c> verb - the DEPTH
     /// axis, varied independently of tree count.
     /// </summary>
@@ -148,6 +161,7 @@ internal sealed class DriverOptions
                 case "--connect-timeout": options.ConnectTimeout = TimeSpan.FromSeconds(double.Parse(Value(), CultureInfo.InvariantCulture)); break;
                 case "--parallelism": options.Parallelism = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--max-in-flight": options.MaxInFlight = int.Parse(Value(), CultureInfo.InvariantCulture); break;
+            case "--enumerate-pct": options.EnumeratePercent = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--leaves-per-tree": options.LeavesPerTree = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--keys-per-leaf": options.KeysPerLeaf = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--value-bytes": options.ValueBytes = int.Parse(Value(), CultureInfo.InvariantCulture); break;
@@ -201,6 +215,11 @@ internal sealed class DriverOptions
           --connect-timeout S  how long to retry the initial join (default 300)
           --parallelism N      concurrent create/teardown operations (default 8)
           --max-in-flight N    in-flight ceiling for load, 0 = none (default 0)
+          --enumerate-pct N  share of probe calls issued as GetAllTreeIdsAsync (default 0).
+                             Zero replays the observed storm mix, which is entirely
+                             point reads and so entirely [AlwaysInterleave] members.
+                             Raising it reaches the non-interleaved range scan, which
+                             holds the registry singleton turn token throughout.
           --leaves-per-tree N  populate target, leaves per tree (default 64)
           --keys-per-leaf N    tree leaf capacity (default 128)
           --value-bytes N      populated value size (default 1600)

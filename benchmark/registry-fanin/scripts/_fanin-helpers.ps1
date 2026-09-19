@@ -744,6 +744,49 @@ function Get-FanInDispersion {
 .SYNOPSIS
 	Parses a Prometheus text-exposition scrape into a counter hashtable.
 #>
+function Get-FanInHostLoad {
+	<#
+	.SYNOPSIS
+		A docker stats snapshot across every running container.
+
+	.DESCRIPTION
+		Captured at both ends of a measurement window so that co-tenancy becomes
+		OBSERVED rather than assumed absent. This rig shares a host with other
+		containers, and while their combined load is far too small to manufacture
+		a 30-second timeout, it is a meaningful fraction of a sub-millisecond
+		point-read baseline - which is precisely the figure being quoted.
+
+		Two samples bracketing the window are enough to settle afterwards whether
+		a spike was contention, instead of having to argue it without data.
+	#>
+	[CmdletBinding()]
+	param()
+
+	$raw = & docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.BlockIO}}' 2>$null
+	if ($LASTEXITCODE -ne 0) { return @() }
+
+	$rows = foreach ($line in @($raw)) {
+		$parts = "$line" -split "`t"
+		if ($parts.Count -lt 4) { continue }
+
+		$cpu = 0.0
+		$null = [double]::TryParse(($parts[1] -replace '%', ''), [System.Globalization.NumberStyles]::Float, [cultureinfo]::InvariantCulture, [ref] $cpu)
+
+		[pscustomobject] @{
+			Name       = $parts[0]
+			CpuPercent = $cpu
+			# CPUPerc is cores-normalised, so on a 16-CPU host 1600% is full
+			# utilisation. Recording the derived core count avoids that being
+			# misread as near-saturation.
+			Cores      = [math]::Round($cpu / 100.0, 3)
+			Memory     = $parts[2]
+			BlockIO    = $parts[3]
+		}
+	}
+
+	return @($rows)
+}
+
 function ConvertFrom-FanInPrometheusText {
 	[CmdletBinding()]
 	param(
