@@ -600,6 +600,36 @@ public sealed class LatticeWalGc(
                 continue;
             }
 
+            // The durable OFFSET floor already speaks for this consumer, so its
+            // Zero frontier is not evidence of an unprotected prefix (issue
+            // #3094). A consumer lands in the coverage set only by reporting a
+            // real checkpoint offset (>= 0); ComputeMaterialiserOffsetFloorAsync
+            // folds exactly those into the floor and deliberately excludes "-1"
+            // reporters. TrimShardAsync then refuses to trim any entry ABOVE
+            // that floor EVEN WHEN IT IS HLC-ELIGIBLE, so everything this pin
+            // exists to retain is retained on the offset axis without the
+            // frontier branch having to act.
+            //
+            // Why this is a removal of redundancy and not a relaxation: the
+            // block-pin branch does not gate one partition, it disables the
+            // cursor trim for the entire tree. A newborn leaf's keys hash across
+            // every WAL partition, and splits admit newborns continuously, so
+            // under the old "-1" seed a growing tree always held at least one
+            // Zero-frontier pin and therefore never scanned a single shard. The
+            // pins that genuinely have no offset cover - a never-checkpointed
+            // leaf that reported "-1", the case this branch was written for -
+            // are absent from the coverage set and still block below, unchanged.
+            //
+            // This is the same entitlement #3172 established for the offset
+            // axis, and it is safe for the same reason: the consumers the offset
+            // floor does NOT speak for are separately folded into UncoveredCursor
+            // above, so granting on coverage here cannot skip a retention holder
+            // the HLC floor can see.
+            if (coveredConsumerIds is not null && coveredConsumerIds.Contains(consumerId))
+            {
+                continue;
+            }
+
             if (pin <= HybridLogicalClock.Zero)
             {
                 // Pin carries no usable offset: block the cursor branch for the

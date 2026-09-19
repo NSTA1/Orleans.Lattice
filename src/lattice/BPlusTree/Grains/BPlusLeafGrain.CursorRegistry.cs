@@ -342,8 +342,40 @@ internal sealed partial class BPlusLeafGrain
     /// checkpoint and advances the pin past Zero. Idempotent and never throws
     /// (the awaited seam swallows transient failures); a no-op when the host has
     /// no cursor reporter (pre-WAL) or the tree id is unset.
+    /// <para>
+    /// <b>The offset half is not a sentinel when the caller knows the birth
+    /// frontier (issue #3094).</b> A pin reporting the "-1" no-offset sentinel
+    /// is deliberately excluded from the WAL GC's offset coverage set, so it is
+    /// protected <i>only</i> by the Zero-HLC block-pin branch - and that branch
+    /// does not block one partition, it disables the cursor trim for the whole
+    /// tree. Leaf keys hash across every WAL partition
+    /// (<see cref="WalPartitionHash"/> is FNV-1a over the entire key), so one
+    /// newborn leaf blocks all of them; and splits admit newborns continuously,
+    /// so a growing tree never stops having one. The measured consequence is a
+    /// WAL that grows monotonically while every trim pass short-circuits before
+    /// a single shard is scanned.
+    /// </para>
+    /// <para>
+    /// When <paramref name="walHeadsAtBirth"/> is supplied - the split path,
+    /// where the donor captured the per-partition heads before handing the rows
+    /// over - each partition's pin carries that head as a real checkpoint
+    /// offset instead. This is <b>not</b> a relaxation of the retention
+    /// guarantee: the sibling's rows are appended at or above the captured head,
+    /// and the WAL GC's offset floor refuses to trim any entry ABOVE the floor
+    /// even when it is HLC-eligible, so the rows the seed exists to protect stay
+    /// protected on the offset axis. What changes is that the pin now sits
+    /// inside the offset coverage set, so it no longer has to disable the cursor
+    /// branch tree-wide to be safe.
+    /// </para>
+    /// <para>
+    /// A head of <c>0</c> or less is not a usable checkpoint offset and falls
+    /// back to the sentinel, mirroring the <c>donorHead &gt; 0</c> guard
+    /// <c>CompleteSplitAsync</c> applies to the same array. The root/bulk-load
+    /// seam passes nothing and keeps the sentinel: it is a one-time bounded
+    /// event at tree creation rather than a continuous admission source.
+    /// </para>
     /// </summary>
-    private async Task SeedDurableMaterialiserBlockPinAsync()
+    private async Task SeedDurableMaterialiserBlockPinAsync(long[]? walHeadsAtBirth = null)
     {
         var reporter = ResolveCursorReporter();
         if (reporter is null)
@@ -364,7 +396,18 @@ internal sealed partial class BPlusLeafGrain
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero, -1);
+
+            // Only a head the donor actually captured for THIS partition is
+            // usable. A short array (a donor configured with fewer partitions
+            // than this leaf resolves) contributes nothing rather than reading
+            // another partition's offset space.
+            var offset = walHeadsAtBirth is { } heads
+                && partition < heads.Length
+                && heads[partition] > 0
+                    ? heads[partition]
+                    : -1;
+
+            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero, offset);
         }
 
         await reporter.SeedDurableMaterialiserBlockManyAsync(
