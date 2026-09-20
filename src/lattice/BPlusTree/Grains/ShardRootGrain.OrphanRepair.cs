@@ -490,12 +490,21 @@ internal sealed partial class ShardRootGrain
             // and materialise every record in it twice.
             //
             // Passing the predecessor's own high bound makes the widen a
-            // provable no-op in both of TryUnlinkSuccessorAsync's branches: it
-            // widens only when `prevHigh is null || absorb > prevHigh`, and
-            // here absorb IS prevHigh, so a null high bound skips the widen and
-            // a non-null one fails the strict comparison. Passing null would
-            // widen the predecessor to unbounded, which is the worst available
-            // outcome.
+            // provable no-op in both of TryUnlinkSuccessorAsync's branches. The
+            // guard there is:
+            //
+            //     prevHigh is not null
+            //     && (absorb is null || CompareOrdinal(absorb, prevHigh) > 0)
+            //
+            // and here absorb IS prevHigh. A null prevHigh fails the first
+            // conjunct, so no widen. A non-null prevHigh makes absorb non-null
+            // too, and CompareOrdinal(prevHigh, prevHigh) > 0 is false, so
+            // again no widen.
+            //
+            // Note which clause forbids null. Passing null would leave the
+            // first conjunct satisfied whenever prevHigh is non-null and would
+            // then satisfy `absorb is null`, widening the predecessor to
+            // unbounded - the worst available outcome.
             //
             // Reading a possibly-stale prevProbe is safe: the same call's
             // compare-and-swap on NextSibling declines the whole unsplice if
