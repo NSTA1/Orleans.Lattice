@@ -49,7 +49,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     public void A_queue_draining_inside_the_configured_wait_is_not_refused()
     {
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            TimeSpan.FromMilliseconds(3), sinceLastAcquisition: TimeSpan.FromMilliseconds(12));
+            TimeSpan.FromMilliseconds(3), sinceLastProgress: TimeSpan.FromMilliseconds(12));
 
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
@@ -67,7 +67,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     public void A_queue_whose_mean_wait_reaches_the_maximum_is_refused()
     {
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            MaxQueueWait, sinceLastAcquisition: TimeSpan.Zero);
+            MaxQueueWait, sinceLastProgress: TimeSpan.Zero);
 
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
@@ -91,7 +91,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     public void A_gate_that_has_not_acquired_for_longer_than_the_maximum_is_refused()
     {
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            TimeSpan.FromMilliseconds(1), sinceLastAcquisition: MaxQueueWait + TimeSpan.FromSeconds(1));
+            TimeSpan.FromMilliseconds(1), sinceLastProgress: MaxQueueWait + TimeSpan.FromSeconds(1));
 
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
@@ -113,7 +113,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     [Test]
     public void A_cold_gate_with_no_completed_waits_is_admitted()
     {
-        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastAcquisition: null);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastProgress: null);
 
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
@@ -129,7 +129,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     public void A_non_positive_maximum_disables_the_drain_half()
     {
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            TimeSpan.FromHours(1), sinceLastAcquisition: TimeSpan.FromHours(1));
+            TimeSpan.FromHours(1), sinceLastProgress: TimeSpan.FromHours(1));
 
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(TimeSpan.Zero),
@@ -148,7 +148,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     [Test]
     public void The_mean_smooths_rather_than_tracking_the_last_sample()
     {
-        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastAcquisition: TimeSpan.Zero);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastProgress: TimeSpan.Zero);
         BPlusLeafGrain.NoteReplayPermitQueueWaitForTest(TimeSpan.FromSeconds(80), acquired: true);
 
         var afterOneOutlier = BPlusLeafGrain.ReplayPermitWaitMeanForTest;
@@ -184,7 +184,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
     [Test]
     public void A_cancelled_wait_informs_the_mean_but_is_not_an_acquisition()
     {
-        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastAcquisition: null);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastProgress: null);
         BPlusLeafGrain.NoteReplayPermitQueueWaitForTest(TimeSpan.FromSeconds(30), acquired: false);
 
         Assert.That(
@@ -219,7 +219,7 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
         // ... and the measured healthy fan-out at that exact depth is admitted,
         // because the queue is draining. This pair is the whole fix.
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            TimeSpan.FromMilliseconds(2), sinceLastAcquisition: TimeSpan.FromMilliseconds(5));
+            TimeSpan.FromMilliseconds(2), sinceLastProgress: TimeSpan.FromMilliseconds(5));
         Assert.That(
             BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
             Is.False,
@@ -254,5 +254,118 @@ public sealed class BPlusLeafGrainReplayDrainAdmissionTests
             new LatticeOptions().WalReplayPermitMaxQueueWait,
             Is.EqualTo(LatticeOptions.DefaultWalReplayPermitMaxQueueWait),
             "the option must default to the documented value.");
+    }
+
+    /// <summary>
+    /// <b>The idle-versus-wedged discrimination (issue #3290, review finding).</b>
+    /// A gate that has simply been quiet for longer than the maximum, with every
+    /// permit free, must admit the burst that ends the quiet period.
+    /// <para>
+    /// Time since the last <i>acquisition</i> is long in two states: a gate
+    /// wedged with every permit held, and a gate idle with every permit free.
+    /// The first is the harm; the second is the healthiest state the system has,
+    /// and a quiet period longer than the maximum is entirely ordinary. Stamping
+    /// the start of the queueing epoch is what separates them, because an idle
+    /// gate's queue reached zero and a wedged gate's never does.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_burst_arriving_after_an_idle_period_is_admitted()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 4, queued: 0);
+
+        // The gate has been quiet far longer than the maximum, so the progress
+        // reading is stale for the healthiest possible reason. The mean is the
+        // sub-second one the last healthy drain left behind.
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+            TimeSpan.FromMilliseconds(4), sinceLastProgress: MaxQueueWait + TimeSpan.FromSeconds(30));
+
+        // The first arrival of the new burst makes the queue non-empty.
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest();
+
+        Assert.That(
+            BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
+            Is.False,
+            "a burst that merely follows a quiet period must not be judged against a timestamp "
+                + "that the quietness itself made stale - nothing was holding the gate up.");
+    }
+
+    /// <summary>
+    /// The counterpart, and the arm that stops the fix above from becoming a
+    /// hole: a queue that has been occupied for longer than the maximum without
+    /// any acquisition is wedged, and must still be refused.
+    /// <para>
+    /// This is what rules out the obvious alternative repair of clearing the
+    /// progress reading when the queue drains to zero. A wedged queue never
+    /// returns to zero, so that variant would leave the field reading <i>cold</i>
+    /// - which admits - for the whole duration of a wedge that began after an
+    /// idle period, while no terminating wait moved the mean either. Both arms
+    /// would fall silent together in exactly the regime they exist for.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void A_queue_occupied_past_the_maximum_without_progress_is_refused()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 4, queued: 0);
+
+        // A queueing epoch that began longer ago than the maximum, and no
+        // acquisition since: the queue never drained, so this is a wedge.
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest(
+            epochAge: MaxQueueWait + TimeSpan.FromSeconds(1));
+
+        Assert.That(
+            BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
+            Is.True,
+            "a queue that has been occupied past the maximum with nothing acquiring is wedged.");
+    }
+
+    /// <summary>
+    /// Only the empty-to-non-empty transition stamps the epoch. A later arrival
+    /// joining an already-occupied queue must not refresh it, or a wedge fed by
+    /// continuous arrivals would renew its own timestamp forever.
+    /// </summary>
+    [Test]
+    public void A_later_arrival_joining_an_occupied_queue_does_not_refresh_the_epoch()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 4, queued: 0);
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest(
+            epochAge: MaxQueueWait + TimeSpan.FromSeconds(1));
+
+        // Arrivals keep landing on the wedged queue, as they do in a real storm.
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest();
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest();
+
+        Assert.That(
+            BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
+            Is.True,
+            "arrivals joining an occupied queue must not renew the epoch, or a wedge fed by "
+                + "continuous arrivals would never be detected.");
+    }
+
+    /// <summary>
+    /// A queue that genuinely drains and then refills starts a fresh epoch, so
+    /// the second burst is judged on its own waiting rather than on how long ago
+    /// the first one happened to be.
+    /// </summary>
+    [Test]
+    public void A_queue_that_drains_and_refills_starts_a_fresh_epoch()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 4, queued: 0);
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest(
+            epochAge: MaxQueueWait + TimeSpan.FromSeconds(1));
+        Assert.That(
+            BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
+            Is.True,
+            "precondition: the first epoch reads as wedged.");
+
+        // The queue drains completely, then a new burst arrives.
+        BPlusLeafGrain.NoteReplayPermitDepartureForTest();
+        BPlusLeafGrain.NoteReplayPermitArrivalForTest();
+
+        Assert.That(
+            BPlusLeafGrain.IsReplayPermitQueueNotDraining(MaxQueueWait),
+            Is.False,
+            "a queue that reached zero has demonstrably drained, so the next burst must be "
+                + "judged on its own epoch.");
     }
 }

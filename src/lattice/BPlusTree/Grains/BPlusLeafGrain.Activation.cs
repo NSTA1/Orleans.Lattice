@@ -230,13 +230,43 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> reading of the most recent
-    /// <b>acquisition</b> from <see cref="_replayConcurrencyGate"/>, or <c>0</c>
-    /// before the first. Distinguishes a deep queue that is draining from one
-    /// that is not: <see cref="_replayPermitWaitEwmaTicks"/> is updated only as
-    /// waits terminate, so a fully stalled gate produces no new samples and
-    /// would otherwise keep reporting the healthy mean it last observed.
+    /// <b>progress</b> on <see cref="_replayConcurrencyGate"/>, or <c>0</c>
+    /// before any. Distinguishes a deep queue that is draining from one that is
+    /// not: <see cref="_replayPermitWaitEwmaTicks"/> is updated only as waits
+    /// terminate, so a fully stalled gate produces no new samples and would
+    /// otherwise keep reporting the healthy mean it last observed.
+    /// <para>
+    /// <b>Progress is an acquisition OR the start of a queueing epoch</b> - the
+    /// moment <see cref="_queuedReplayPermitWaiters"/> rises from zero. Issue
+    /// #3290 originally stamped acquisitions only, which conflated the two
+    /// states a long silence can mean: a gate <b>wedged</b> with every permit
+    /// held by a stuck replay, and a gate simply <b>idle</b> with every permit
+    /// free. The first is the harm; the second is the healthiest state the
+    /// system has, and it is the common one - a quiet period longer than
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/> is ordinary.
+    /// A burst arriving after one would then be judged against a timestamp made
+    /// stale by the very quietness that proves the gate is free, and refused
+    /// while nothing whatsoever was holding it up.
+    /// </para>
+    /// <para>
+    /// Stamping the epoch start closes that without weakening the wedge signal,
+    /// because the two states differ in exactly this: an idle gate's queue
+    /// reached zero, and a wedged gate's queue never does. <b>Resetting to
+    /// <c>0</c> on drain instead would be strictly wrong</b>, and the trap is
+    /// worth stating because it is the obvious repair. A wedged queue never
+    /// returns to zero, so once a wedge began after an idle period the field
+    /// would sit at <c>0</c> - reading as <i>cold</i>, which admits - for as
+    /// long as the wedge lasted, and no wait would ever terminate to move the
+    /// mean either. Both arms would fall silent together in precisely the
+    /// 87-waiter regime of issue #3284 that they exist to catch.
+    /// </para>
+    /// <para>
+    /// Only the <b>empty-to-non-empty</b> transition stamps. A later arrival
+    /// joining an already-occupied queue must not, or a wedge fed by continuous
+    /// arrivals would refresh its own timestamp forever and never be detected.
+    /// </para>
     /// </summary>
-    private static long _lastReplayPermitAcquisition;
+    private static long _lastReplayPermitProgress;
 
     /// <summary>
     /// Count of permits currently <b>withheld</b> from
@@ -474,7 +504,7 @@ internal sealed partial class BPlusLeafGrain
             Volatile.Write(ref _withheldReplayPermits, 0);
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
-            Volatile.Write(ref _lastReplayPermitAcquisition, 0);
+            Volatile.Write(ref _lastReplayPermitProgress, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
     }
@@ -1080,8 +1110,45 @@ internal sealed partial class BPlusLeafGrain
         Volatile.Write(ref _replayPermitWaitEwmaTicks, previous + ((ticks - previous) / 8));
 
         if (acquired)
-            Volatile.Write(ref _lastReplayPermitAcquisition, Stopwatch.GetTimestamp());
+            Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
     }
+
+    /// <summary>
+    /// Registers one arrival at the replay permit queue, stamping
+    /// <see cref="_lastReplayPermitProgress"/> when this arrival is the one that
+    /// makes the queue non-empty.
+    /// </summary>
+    /// <remarks>
+    /// The stamp is deliberately conditional on the empty-to-non-empty
+    /// transition. Stamping every arrival would let a wedge that is fed by
+    /// continuous arrivals refresh its own progress timestamp indefinitely, so
+    /// the stall arm would never fire in the one regime it exists for.
+    /// <para>
+    /// The read-modify-write is not atomic with the stamp, so an acquisition
+    /// landing between them can be overwritten by a slightly older epoch
+    /// reading. That costs at most one <c>maxQueueWait</c> of extra patience on
+    /// the stall arm - it resolves toward <b>admitting</b>, which is the
+    /// direction every unknown at this seam resolves.
+    /// </para>
+    /// </remarks>
+    private static void NoteReplayPermitArrival()
+    {
+        if (Interlocked.Increment(ref _queuedReplayPermitWaiters) == 1)
+            Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
+    }
+
+    /// <summary>
+    /// Registers the departure of one arrival from the replay permit queue, by
+    /// either terminal route.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately does <b>not</b> clear
+    /// <see cref="_lastReplayPermitProgress"/> when the queue empties. See that
+    /// field for why clearing on drain would silence the stall arm exactly when
+    /// it is needed.
+    /// </remarks>
+    private static void NoteReplayPermitDeparture()
+        => Interlocked.Decrement(ref _queuedReplayPermitWaiters);
 
     /// <summary>
     /// Whether the replay permit queue is <b>failing to drain</b>, which is the
@@ -1110,7 +1177,14 @@ internal sealed partial class BPlusLeafGrain
     /// waits <b>terminate</b>, so a gate whose permits are all held by wedged
     /// replays produces no new samples at all and would keep reporting the
     /// healthy mean it last observed, indefinitely. Time since the last
-    /// acquisition is the only signal that survives a total stall.
+    /// progress is the only signal that survives a total stall.
+    /// </para>
+    /// <para>
+    /// <b>Progress</b> means an acquisition or the start of the current queueing
+    /// epoch, never a bare acquisition - see
+    /// <see cref="_lastReplayPermitProgress"/>. Reading it as an acquisition
+    /// alone would refuse a burst that merely followed a quiet period, because
+    /// an idle gate and a wedged one both go a long time without acquiring.
     /// </para>
     /// </remarks>
     internal static bool IsReplayPermitQueueNotDraining(TimeSpan maxQueueWait)
@@ -1121,8 +1195,8 @@ internal sealed partial class BPlusLeafGrain
         if (Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
             return true;
 
-        var lastAcquisition = Volatile.Read(ref _lastReplayPermitAcquisition);
-        return lastAcquisition != 0 && Stopwatch.GetElapsedTime(lastAcquisition) >= maxQueueWait;
+        var lastProgress = Volatile.Read(ref _lastReplayPermitProgress);
+        return lastProgress != 0 && Stopwatch.GetElapsedTime(lastProgress) >= maxQueueWait;
     }
 
     /// <summary>
@@ -1137,17 +1211,54 @@ internal sealed partial class BPlusLeafGrain
     /// rather than by racing a real storm.
     /// </summary>
     /// <param name="mean">The smoothed queue wait to publish.</param>
-    /// <param name="sinceLastAcquisition">Time to backdate the last acquisition
-    /// by, or <see langword="null"/> to report that nothing has ever acquired.</param>
-    internal static void SeedReplayPermitWaitStateForTest(TimeSpan mean, TimeSpan? sinceLastAcquisition)
+    /// <param name="sinceLastProgress">Time to backdate the last progress
+    /// reading by, or <see langword="null"/> to report that no progress has ever
+    /// been made.</param>
+    internal static void SeedReplayPermitWaitStateForTest(TimeSpan mean, TimeSpan? sinceLastProgress)
     {
         Volatile.Write(ref _replayPermitWaitEwmaTicks, mean.Ticks);
         Volatile.Write(
-            ref _lastReplayPermitAcquisition,
-            sinceLastAcquisition is null
+            ref _lastReplayPermitProgress,
+            sinceLastProgress is null
                 ? 0
-                : Stopwatch.GetTimestamp() - (long)(sinceLastAcquisition.Value.TotalSeconds * Stopwatch.Frequency));
+                : Stopwatch.GetTimestamp() - (long)(sinceLastProgress.Value.TotalSeconds * Stopwatch.Frequency));
     }
+
+    /// <summary>
+    /// Test-only entry to <see cref="NoteReplayPermitArrival"/>, so the
+    /// queueing-epoch stamp is assertable without racing a real storm.
+    /// </summary>
+    /// <param name="epochAge">When supplied, shift whatever epoch this arrival
+    /// stamped further into the past by this much, so a queue that began filling
+    /// some time ago is expressible without sleeping.
+    /// <para>
+    /// It <b>shifts</b> the production stamp rather than writing one of its own,
+    /// deliberately. A hook that wrote the timestamp itself would reproduce the
+    /// behaviour under test and would keep passing with the stamp removed from
+    /// the production path, which is the precise shape of a test that proves
+    /// nothing. When nothing was stamped, nothing is shifted.
+    /// </para>
+    /// </param>
+    internal static void NoteReplayPermitArrivalForTest(TimeSpan? epochAge = null)
+    {
+        NoteReplayPermitArrival();
+
+        if (epochAge is null)
+            return;
+
+        var stamped = Volatile.Read(ref _lastReplayPermitProgress);
+        if (stamped != 0)
+        {
+            Volatile.Write(
+                ref _lastReplayPermitProgress,
+                stamped - (long)(epochAge.Value.TotalSeconds * Stopwatch.Frequency));
+        }
+    }
+
+    /// <summary>
+    /// Test-only entry to <see cref="NoteReplayPermitDeparture"/>.
+    /// </summary>
+    internal static void NoteReplayPermitDepartureForTest() => NoteReplayPermitDeparture();
 
     /// <summary>
     /// Test-only entry to <see cref="NoteReplayPermitQueueWait"/>, so the
@@ -1277,7 +1388,12 @@ internal sealed partial class BPlusLeafGrain
         // OperationCanceledException only, so a decrement mirrored onto the two
         // recording sites would leak on any other exception, permanently, on a
         // static that is never rebuilt.
-        Interlocked.Increment(ref _queuedReplayPermitWaiters);
+        // Issue #3290. The arrival is registered through a helper rather than a
+        // bare Interlocked.Increment because the empty-to-non-empty transition
+        // also stamps the queueing epoch, which is what stops a burst arriving
+        // after a quiet period from being judged against a timestamp the
+        // quietness itself made stale.
+        NoteReplayPermitArrival();
         try
         {
             // Issue #3044. Both recording sites below are terminal, so a wait that
@@ -1317,7 +1433,7 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            Interlocked.Decrement(ref _queuedReplayPermitWaiters);
+            NoteReplayPermitDeparture();
         }
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
