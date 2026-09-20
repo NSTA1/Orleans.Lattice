@@ -2959,6 +2959,47 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> PermitQueueWaitCanceled = new(TagOutcome, "canceled");
 
     /// <summary>
+    /// Explicit bucket boundaries for <see cref="WalReplayPermitQueueWait"/>
+    /// (issue #3044), in milliseconds.
+    /// <para>
+    /// Without them the histogram is exported with no bucket series at all, so
+    /// the only readable statistic is a mean - and a mean over a handful of
+    /// samples cannot distinguish a gate that is uniformly slow from one that is
+    /// fast except for a few pathological holds. Those two have different causes
+    /// and different remedies, so collapsing them loses the distinction the
+    /// instrument exists to draw.
+    /// </para>
+    /// <para>
+    /// The boundaries span sub-millisecond to half an hour because the observed
+    /// range genuinely does: a warm resume on an idle gate returns in under a
+    /// millisecond, while a real queue wait has been measured in minutes. Two
+    /// boundaries are chosen rather than merely spaced - <c>30000</c> is the
+    /// Orleans response deadline, so the bucket above it isolates waits that
+    /// outlived the caller that was waiting on them, and <c>1000</c> separates
+    /// "queued behind someone" from "queued behind a replay".
+    /// </para>
+    /// <para>
+    /// <b>Declared above the histogram that consumes it, and that ordering is
+    /// load-bearing.</b> Static field initialisers run in declaration order, and
+    /// the <c>advice</c> parameter is nullable, so an advice field declared
+    /// below its histogram is read as <c>null</c> and the histogram is built
+    /// with no buckets at all. Nothing throws and every test that does not
+    /// inspect bucket boundaries still passes - the failure is silent and
+    /// presents as the exact bucketless export this field exists to fix. This is
+    /// the same ordering hazard the <c>Meter</c>-above-instruments rule guards,
+    /// arriving through a different field.
+    /// </para>
+    /// </summary>
+    private static readonly InstrumentAdvice<double> WalReplayPermitQueueWaitAdvice = new()
+    {
+        HistogramBucketBoundaries =
+        [
+            1d, 5d, 10d, 50d, 100d, 500d, 1_000d, 5_000d,
+            15_000d, 30_000d, 60_000d, 300_000d, 900_000d, 1_800_000d,
+        ],
+    };
+
+    /// <summary>
     /// Wall-clock ms an activation spent queued on the per-silo WAL replay
     /// concurrency gate, tagged with <see cref="TagTree"/>,
     /// <see cref="TagOutcome"/> (<see cref="PermitQueueWaitAcquired"/> or
@@ -3011,47 +3052,6 @@ public static class LatticeMetrics
     /// never as evidence that no activation waited.
     /// </para>
     /// </summary>
-    /// <summary>
-    /// Explicit bucket boundaries for <see cref="WalReplayPermitQueueWait"/>
-    /// (issue #3044), in milliseconds.
-    /// <para>
-    /// Without them the histogram is exported with no bucket series at all, so
-    /// the only readable statistic is a mean - and a mean over a handful of
-    /// samples cannot distinguish a gate that is uniformly slow from one that is
-    /// fast except for a few pathological holds. Those two have different causes
-    /// and different remedies, so collapsing them loses the distinction the
-    /// instrument exists to draw.
-    /// </para>
-    /// <para>
-    /// The boundaries span sub-millisecond to half an hour because the observed
-    /// range genuinely does: a warm resume on an idle gate returns in under a
-    /// millisecond, while a real queue wait has been measured in minutes. Two
-    /// boundaries are chosen rather than merely spaced - <c>30000</c> is the
-    /// Orleans response deadline, so the bucket above it isolates waits that
-    /// outlived the caller that was waiting on them, and <c>1000</c> separates
-    /// "queued behind someone" from "queued behind a replay".
-    /// </para>
-    /// <para>
-    /// <b>Declared above the histogram that consumes it, and that ordering is
-    /// load-bearing.</b> Static field initialisers run in declaration order, and
-    /// the <c>advice</c> parameter is nullable, so an advice field declared
-    /// below its histogram is read as <c>null</c> and the histogram is built
-    /// with no buckets at all. Nothing throws and every test that does not
-    /// inspect bucket boundaries still passes - the failure is silent and
-    /// presents as the exact bucketless export this field exists to fix. This is
-    /// the same ordering hazard the <c>Meter</c>-above-instruments rule guards,
-    /// arriving through a different field.
-    /// </para>
-    /// </summary>
-    private static readonly InstrumentAdvice<double> WalReplayPermitQueueWaitAdvice = new()
-    {
-        HistogramBucketBoundaries =
-        [
-            1d, 5d, 10d, 50d, 100d, 500d, 1_000d, 5_000d,
-            15_000d, 30_000d, 60_000d, 300_000d, 900_000d, 1_800_000d,
-        ],
-    };
-
     public static readonly Histogram<double> WalReplayPermitQueueWait =
         Meter.CreateHistogram<double>("orleans.lattice.wal.replay.permit_queue_wait", unit: "ms",
             description: "Wall-clock ms an activation spent queued on the per-silo WAL replay concurrency gate, tagged by tree and by outcome (acquired or canceled).",

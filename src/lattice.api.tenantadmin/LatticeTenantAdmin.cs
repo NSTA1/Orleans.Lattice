@@ -405,15 +405,6 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     }
 
     /// <summary>
-    /// Rejects a new tenant id that shadows a reserved namespace. A tenant id
-    /// appears in tree ids (<c>t/{tenant}/{name}</c>), metric labels, and log
-    /// messages alongside real tree ids, so one beginning with the reserved
-    /// <c>sys-</c> system-data prefix or the <c>_lattice_</c> system prefix is an
-    /// avoidable confusion trap. Applied only on the create path: an existing
-    /// tenant registered before this guard must still be readable and deletable,
-    /// so the shared <see cref="ParseTenant"/> grammar is deliberately unchanged.
-    /// </summary>
-    /// <summary>
     /// The reserved system-data tree prefix (<c>sys-</c>) and system tree prefix
     /// (<c>_lattice_</c>), kept as local literals because the core constants class
     /// is internal - mirroring how the core keeps the all-trees sentinel local to
@@ -423,6 +414,15 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
 
     private const string ReservedSystemPrefix = "_lattice_";
 
+    /// <summary>
+    /// Rejects a new tenant id that shadows a reserved namespace. A tenant id
+    /// appears in tree ids (<c>t/{tenant}/{name}</c>), metric labels, and log
+    /// messages alongside real tree ids, so one beginning with the reserved
+    /// <c>sys-</c> system-data prefix or the <c>_lattice_</c> system prefix is an
+    /// avoidable confusion trap. Applied only on the create path: an existing
+    /// tenant registered before this guard must still be readable and deletable,
+    /// so the shared <see cref="ParseTenant"/> grammar is deliberately unchanged.
+    /// </summary>
     private static void ThrowIfReservedTenantId(TenantId tenant)
     {
         var value = tenant.Value;
