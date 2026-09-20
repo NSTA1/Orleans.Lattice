@@ -324,6 +324,33 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> ActivationFailureFaulted = new(TagReason, "faulted");
 
     /// <summary>
+    /// <see cref="TagReason"/> = <c>refused_replay_admission</c> on
+    /// <see cref="LeafActivationFailures"/>: the activation was refused a place
+    /// in the WAL replay permit queue because the admitted-waiter bound derived
+    /// from <see cref="LatticeOptions.WalReplayPermitQueueDepthPerPermit"/> was
+    /// already reached. Issue #3284.
+    /// <para>
+    /// <b>Distinct from <see cref="ActivationFailureCanceledAwaitingPermit"/>,
+    /// and the pair is the whole point of the arm.</b> That value means an
+    /// activation was admitted, waited, and ran out of request budget while
+    /// waiting - the gate was contended and it lost. This value means the
+    /// activation was never admitted at all, because the queue in front of the
+    /// gate was already deeper than could be served in time. Before admission
+    /// control the second population did not exist: every arrival was admitted
+    /// and the whole backlog surfaced under the first value, which made a queue
+    /// nobody was bounding indistinguishable from a gate that was merely busy.
+    /// </para>
+    /// <para>
+    /// This arm rising is <b>the bound working</b>, not a fault, and it is the
+    /// cheap failure: a refusal is immediate and the caller retries after a
+    /// backoff, where an admitted-but-doomed waiter holds an activation for the
+    /// whole request deadline and then enqueues its replacement.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ActivationFailureRefusedReplayAdmission =
+        new(TagReason, "refused_replay_admission");
+
+    /// <summary>
     /// Tag key for the storage-provider commit phase
     /// (e.g. <c>phase1</c> = per-batch partition transaction,
     /// <c>phase2</c> = manifest partition transaction). Emitted on

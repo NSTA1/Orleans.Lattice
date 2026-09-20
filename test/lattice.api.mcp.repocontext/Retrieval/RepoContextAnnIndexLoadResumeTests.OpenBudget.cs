@@ -32,7 +32,8 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
 {
     private static readonly TimeSpan OpenBudget = TimeSpan.FromSeconds(5);
 
-    private static RepoContextAnnOptions BudgetedOptions(TimeProvider clock, TimeSpan budget) => new()
+    private static RepoContextAnnOptions BudgetedOptions(
+        TimeProvider clock, TimeSpan budget, int maxExtensions = DefaultMaxOpenSliceExtensions) => new()
     {
         MinimumTrainingCount = 8,
         PartitionCount = 4,
@@ -41,8 +42,41 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         IngestBatchSize = 16,
         MaxItemsPerChunk = 8,
         OpenSliceBudget = budget,
+        MaxOpenSliceExtensions = maxExtensions,
         TimeProvider = clock,
     };
+
+    /// <summary>
+    /// The shipped <see cref="RepoContextAnnOptions.MaxOpenSliceExtensions"/>.
+    /// Restated rather than read from the type so that changing the default is a
+    /// deliberate two-place edit: these fixtures drive the clock a fixed number of
+    /// times per slice, and a silently raised default would leave them advancing
+    /// too few times and asserting against a slice that had not yet expired.
+    /// </summary>
+    private const int DefaultMaxOpenSliceExtensions = 6;
+
+    /// <summary>
+    /// Drives the clock past every extension an unproductive slice may be granted,
+    /// so the slice's deadline has certainly fired when this returns.
+    /// </summary>
+    /// <remarks>
+    /// <b>One <c>Advance</c> is no longer enough for a slice that banks nothing,
+    /// and that is the change of issue #3284 rather than a harness detail.</b> The
+    /// deadline is armed on progress: at each boundary it fires only if the slice
+    /// banked something, and otherwise grants a further period. A fixture that
+    /// advanced once would therefore observe a slice still in flight and read it
+    /// as a hang. <see cref="ManualTimeProvider"/> fires a periodic timer at most
+    /// once per <c>Advance</c> and rearms it, so the periods have to be walked
+    /// rather than jumped over in one large step.
+    /// </remarks>
+    private static void AdvancePastEmptySlice(
+        ManualTimeProvider clock, TimeSpan budget, int maxExtensions = DefaultMaxOpenSliceExtensions)
+    {
+        for (var tick = 0; tick <= maxExtensions; tick++)
+        {
+            clock.Advance(budget + TimeSpan.FromMilliseconds(1));
+        }
+    }
 
     [Test]
     public async Task An_open_that_reaches_its_budget_yields_without_faulting()
@@ -299,22 +333,24 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             store.ArmBlockedSignal();
             var advancing = handle.AdvanceAsync(Ct);
             await store.BlockedAsync();
-            clock.Advance(OpenBudget + TimeSpan.FromMilliseconds(1));
+            AdvancePastEmptySlice(clock, OpenBudget);
             await advancing;
         }
 
         store.ArmBlockedSignal();
         var last = handle.AdvanceAsync(Ct);
         await store.BlockedAsync();
-        clock.Advance(OpenBudget + TimeSpan.FromMilliseconds(1));
+        AdvancePastEmptySlice(clock, OpenBudget);
 
         Assert.That(
             async () => await last,
             Throws.InstanceOf<InvalidOperationException>()
-                .With.Message.Contains(nameof(RepoContextAnnOptions.OpenSliceBudget)),
+                .With.Message.Contains(RepoContextAnnOptions.OpenSliceBudgetSecondsVariable),
             "A budget too small to read one record can never be waited out, so retrying is not "
-            + "recovery. It must name the option to raise, because the operator cannot infer the cause "
-            + "from a plane that simply never opens.");
+            + "recovery. It must name the ENVIRONMENT VARIABLE to raise rather than the property, "
+            + "because the operator reading this has a container to reconfigure and no access to the "
+            + "property name - which, before issue #3284 gave this type a configuration surface, was "
+            + "not settable from outside the library at all.");
 
         var snapshot = reporter.Snapshot();
         Assert.Multiple(() =>
@@ -355,7 +391,7 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             store.ArmBlockedSignal();
             var advancing = handle.AdvanceAsync(Ct);
             await store.BlockedAsync();
-            clock.Advance(OpenBudget + TimeSpan.FromMilliseconds(1));
+            AdvancePastEmptySlice(clock, OpenBudget);
 
             Assert.That(async () => await advancing, Throws.Nothing,
                 "No slice here may fail. The one that banked progress resets the counter, so the two "
@@ -502,6 +538,13 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         private int _blockAfter;
         private bool _blocking;
         private string? _blockReadKey;
+        private int _refuseAfter = -1;
+
+        /// <summary>
+        /// How many times the scan refused, so a test can assert that the walk
+        /// actually reached the refusal rather than passing because it never ran.
+        /// </summary>
+        public int Refusals { get; private set; }
 
         public int ServedUnderWatchedPrefix { get; private set; }
 
@@ -514,6 +557,17 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         /// propagation and need a sleep.
         /// </summary>
         public CancellationToken CapturedReadToken { get; private set; }
+
+        /// <summary>
+        /// The token the parked <b>scan</b> was handed, which is the key-walk token
+        /// the open-slice deadline governs. Captured for the same reason
+        /// <see cref="CapturedReadToken"/> is: the manual clock fires its callbacks
+        /// inside <c>Advance</c>, so reading this immediately afterwards is a
+        /// deterministic statement about whether that tick cancelled the slice,
+        /// where asserting that a task has not completed would race the
+        /// propagation and need a sleep to be meaningful.
+        /// </summary>
+        public CancellationToken CapturedScanToken { get; private set; }
 
         /// <summary>
         /// Re-arms the parked-scan signal so a later attempt waits for ITS OWN
@@ -544,6 +598,27 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             _blockAfter = serveBeforeBlocking;
             _blocking = true;
         }
+
+        /// <summary>
+        /// Throws <see cref="LatticeSaturatedException"/> from the watched scan
+        /// after serving <paramref name="serveBeforeRefusing"/> records, which is
+        /// what a refused WAL replay permit looks like from the walk: the leaf the
+        /// scan reached declined admission rather than queueing.
+        /// </summary>
+        /// <remarks>
+        /// It throws rather than parking because a refusal is precisely NOT a slow
+        /// read - that distinction is the whole point of the arm under test, and a
+        /// harness that parked would exercise the deferral path instead.
+        /// </remarks>
+        public void RefuseAfter(string prefix, int serveBeforeRefusing)
+        {
+            _watchPrefix = prefix;
+            _refuseAfter = serveBeforeRefusing;
+            _blocking = false;
+        }
+
+        /// <summary>Stops refusing, so a later attempt can complete.</summary>
+        public void StopRefusing() => _refuseAfter = -1;
 
         /// <summary>
         /// Stops parking but keeps counting. Counting has to outlive the block, or
@@ -629,8 +704,17 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
 
                 if (watched)
                 {
+                    if (_refuseAfter >= 0 && servedThisCall >= _refuseAfter)
+                    {
+                        Refusals++;
+                        throw new LatticeSaturatedException(
+                            "harness: the per-silo WAL replay permit queue refused this waiter.",
+                            "harness-tree");
+                    }
+
                     if (_blocking && servedThisCall >= _blockAfter)
                     {
+                        CapturedScanToken = cancellationToken;
                         Volatile.Read(ref _blocked).TrySetResult();
 
                         // Parks until cancelled, which is what a slow store looks

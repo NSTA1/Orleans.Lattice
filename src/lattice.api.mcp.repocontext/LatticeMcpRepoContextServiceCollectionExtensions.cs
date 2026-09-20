@@ -226,7 +226,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // queries without measuring them is not constructible - an unmeasured box
         // cannot masquerade as an idle one.
         services.TryAddSingleton<RepoContextRetrievalLatencyReporter>();
-        services.TryAddSingleton<RepoContextAnnOptions>();
+
+        // Resolved from the environment rather than constructed bare (issue #3284).
+        // A TryAddSingleton<RepoContextAnnOptions>() binds the parameterless
+        // constructor, which made every value a compile-time constant no operator
+        // could move - so the open-slice budget that wedged the plane could only be
+        // changed by redeploying the library.
+        services.TryAddSingleton(RepoContextAnnOptions.FromEnvironment());
         services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
         services.TryAddSingleton<IRepoContextAnnIndex>(
