@@ -189,9 +189,12 @@ public sealed class LatticeWalGc(
         var partitions = resolved.WalPartitions;
 
         // Prime the trim-stop arms before any early return below, so a tree whose
-        // pass returns without reaching the trim loop still publishes four
-        // measured zeros rather than nothing at all (issue #3149).
-        PrimeTrimStopSeries(treeName);
+        // pass returns without reaching the trim loop still publishes
+        // measured zeros rather than nothing at all (issue #3149). Primed per
+        // partition, because the arm is shard-attributed (issue #3207) and a
+        // tree-wide prime would leave the shard dimension absent on exactly
+        // the early-return passes a reader is investigating.
+        PrimeTrimStopSeries(treeName, partitions);
 
         // Resolve a provider per partition from the durable WAL placement pin so
         // a partition that was moved to a named storage backend is sampled and
@@ -483,7 +486,7 @@ public sealed class LatticeWalGc(
             var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, PartitionOffsetFloor(partition), PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
-            RecordTrimStop(treeName, shardScan.StopReason);
+            RecordTrimStop(treeName, partition, shardScan.StopReason);
             RecordEntriesTrimmed(treeTag, tenantTag, partition, shardScan.EligibleCount);
         }
 
@@ -1848,15 +1851,32 @@ public sealed class LatticeWalGc(
             // Deliberately NOT conditioned on why the scan stopped. Keying it
             // to OffsetFloor would rebuild the same unreachable-site defect
             // one level along: the floor advances by a single entry, the arm
-            // becomes Exhausted, and reclamation silently stops again. The
-            // quantity that matters is "this shard holds dead bytes", which is
-            // the provider's to judge and is independent of every stop reason.
+            // becomes Exhausted, and reclamation silently stops again.
             //
-            // This is a reachability repair and not a threshold change. The
-            // provider evaluates exactly the policy it already applies after a
-            // trim, so a shard below its thresholds still declines - it now
-            // declines visibly, having been asked, rather than never being
-            // asked at all.
+            // SCOPE - stated exactly, because an earlier revision of this
+            // comment overstated it and claimed the dead-byte quantity "is
+            // independent of every stop reason". It is not: it is causally
+            // downstream of one. This call reaches the evaluation; it cannot
+            // create the quantity the evaluation tests. Dead bytes rise only
+            // inside the provider's trim, or on the replay of a marker that
+            // trim wrote, so a shard that has released nothing since its very
+            // first entry holds no dead bytes at all, and every arm correctly
+            // declines on an operand pinned at zero. Its retained bytes are
+            // LIVE, not dead, so no threshold and no rewrite would return one
+            // of them - only the floor advancing does. What this call
+            // completes is the other population: a shard that HAS trimmed
+            // before and is floored now, whose accumulated dead bytes were
+            // previously measured against no threshold at all and are now
+            // measured against the same policy a trim would have applied.
+            //
+            // The never-released population is instead made nameable one
+            // level up, by the shard-attributed trim-stop arm the caller
+            // records: a stop arm advancing for a shard whose entries-trimmed
+            // counter stays flat is a shard asked on every pass that releases
+            // nothing. That is the signal which does not read through the
+            // dead-byte accounting, and it is the only kind that can work
+            // here, because every dead-byte arm reads a quantity this stop
+            // prevents from ever being written.
             await provider.EvaluateCompactionAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
             return (0, stopReason);
         }
@@ -1917,35 +1937,64 @@ public sealed class LatticeWalGc(
             tenantTag);
 
     /// <summary>
-    /// Records one trim-scan stop for <paramref name="treeName"/>. Called with
-    /// <paramref name="delta"/> zero to prime an arm, and with one to report an
-    /// actual scan.
+    /// Records one trim-scan stop for partition <paramref name="shardIndex"/> of
+    /// <paramref name="treeName"/>. Called with <paramref name="delta"/> zero to
+    /// prime an arm, and with one to report an actual scan.
+    /// <para>
+    /// The shard dimension is what makes the arm joinable against the equally
+    /// shard-attributed <see cref="LatticeMetrics.WalEntriesTrimmed"/>, and that
+    /// join is the only signal that names a shard which is asked on every pass
+    /// and releases nothing (issue #3207). Summed to the tree the arm cannot
+    /// distinguish the two estates: a shard that trims thousands of entries and
+    /// then stops at the floor publishes the same <c>offset_floor</c> arm as a
+    /// shard that has never released an entry in its life, so the healthy tree
+    /// and the wedged one are indistinguishable on it. Per shard they separate
+    /// exactly - a stop arm advancing while that shard's entries-trimmed counter
+    /// stays flat is a shard releasing nothing - and no dead-byte arm can report
+    /// that state, because dead bytes only rise as a consequence of the release
+    /// that is not happening.
+    /// </para>
     /// </summary>
-    private static void RecordTrimStop(string treeName, WalGcTrimStopReason reason, long delta = 1)
+    private static void RecordTrimStop(
+        string treeName, int shardIndex, WalGcTrimStopReason reason, long delta = 1)
         => LatticeMetrics.WalGcTrimStops.Add(
             delta,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex),
             ClassifyTrimStop(reason),
             LatticeTenantLabel.ForTree(treeName));
 
     /// <summary>
-    /// Zero-primes every <see cref="WalGcTrimStopReason"/> arm for
-    /// <paramref name="treeName"/>, so an absent series means WAL GC is not
-    /// running for this tree on this silo rather than that no scan ever stopped.
+    /// Zero-primes every <see cref="WalGcTrimStopReason"/> arm for every one of
+    /// <paramref name="treeName"/>'s <paramref name="partitions"/> partitions, so
+    /// an absent series means WAL GC is not running for this tree on this silo
+    /// rather than that no scan ever stopped.
     /// <para>
     /// Called above every early return in <see cref="RunOnceAsync"/>, because the
     /// pass that reclaims nothing is exactly the pass a reader is investigating
     /// and it is the one most likely to return before reaching the trim loop.
     /// </para>
+    /// <para>
+    /// Primed across the whole partition range rather than only the partitions
+    /// this silo resolves a provider for, because a partition pinned to a
+    /// provider key this silo cannot resolve is skipped inside the loop and
+    /// would otherwise publish no arm at all. Primed, it publishes six flat
+    /// zeros and no entries-trimmed series, which is a distinguishable and
+    /// honest reading; a shard this silo does scan and cannot release advances
+    /// an arm instead.
+    /// </para>
     /// </summary>
-    private static void PrimeTrimStopSeries(string treeName)
+    private static void PrimeTrimStopSeries(string treeName, int partitions)
     {
-        RecordTrimStop(treeName, WalGcTrimStopReason.Exhausted, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.Empty, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.OffsetFloor, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.CursorFloor, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.CausalFrontier, 0);
-        RecordTrimStop(treeName, WalGcTrimStopReason.BlockPin, 0);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.Exhausted, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.Empty, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.OffsetFloor, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.CursorFloor, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.CausalFrontier, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.BlockPin, 0);
+        }
     }
 
     /// <summary>

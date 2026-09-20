@@ -2097,9 +2097,11 @@ public static class LatticeMetrics
             description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
 
     /// <summary>
-    /// Counter of WAL GC per-shard trim scans, tagged with <see cref="TagTree"/>
-    /// and with <see cref="TagReason"/> carrying the
-    /// <see cref="WalGcTrimStopReason"/> that stopped the scan (issue #3149).
+    /// Counter of WAL GC per-shard trim scans, tagged with <see cref="TagTree"/>,
+    /// with <see cref="TagShard"/> carrying the partition the scan covered, and
+    /// with <see cref="TagReason"/> carrying the
+    /// <see cref="WalGcTrimStopReason"/> that stopped the scan (issues #3149,
+    /// #3207).
     /// <para>
     /// This is the series that says <b>why</b> a pass reclaimed nothing. Before
     /// it, a tree could sit permanently over its byte ceiling with a healthy
@@ -2128,13 +2130,34 @@ public static class LatticeMetrics
     /// floor covers none of its retained range.
     /// </para>
     /// <para>
+    /// <b>The shard dimension is what separates a slow tree from a wedged one
+    /// (issue #3207).</b> A stop arm on its own does not indict: a perfectly
+    /// healthy shard releases thousands of entries and then stops at the first
+    /// one it must retain, so it reports <c>offset_floor</c> exactly like a
+    /// shard that has never released an entry in its life. Summed to the tree
+    /// those two estates are indistinguishable. Per shard they separate
+    /// exactly, by reading this arm against the equally shard-attributed
+    /// <see cref="WalEntriesTrimmed"/>: an arm advancing for a shard whose
+    /// entries-trimmed counter stays flat over the window is a shard that is
+    /// asked on every pass and releases nothing. That shard is invisible on
+    /// every other arm it publishes, because all of them are derived from the
+    /// provider's dead-byte accounting and dead bytes only rise as a
+    /// consequence of the release that is not happening - so it reports zero
+    /// dead bytes, a zero dead ratio, zero compactions and zero reclaimed
+    /// bytes, which is the best score in the fleet on all four.
+    /// </para>
+    /// <para>
     /// Every arm - <c>exhausted</c>, <c>empty</c>, <c>offset_floor</c>,
     /// <c>cursor_floor</c>, <c>causal_frontier</c> and <c>block_pin</c> - is
-    /// zero-primed per tree on every pass, so an absent series
+    /// zero-primed per shard per tree on every pass, so an absent series
     /// means this silo is not running WAL GC for the tree rather than that the
     /// tree never stopped a scan. That priming is what lets a reader treat a flat
     /// <c>offset_floor</c> zero as a measured absence, which is precisely the
-    /// inference that was unavailable before this instrument existed.
+    /// inference that was unavailable before this instrument existed. Priming
+    /// covers the whole partition range rather than only the partitions this
+    /// silo resolves a provider for, so a partition pinned elsewhere publishes
+    /// six flat zeros and no entries-trimmed series, which is a distinguishable
+    /// reading rather than an absent one.
     /// </para>
     /// <para>
     /// Recorded once per shard per pass, so a tree with eight shards contributes
@@ -2144,7 +2167,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
-            description: "WAL GC per-shard trim scans tagged by tree and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, exhausted or empty.");
+            description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, exhausted or empty.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
