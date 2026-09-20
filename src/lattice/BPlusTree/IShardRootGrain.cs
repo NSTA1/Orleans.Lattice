@@ -460,6 +460,64 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> ReclaimEmptyLeavesAsync(int maxLeaves);
 
     /// <summary>
+    /// Examines one work-bounded batch of this shard's leaf chain for leaves
+    /// that are spliced into it but unreachable by descent from the shard
+    /// root, and - unless <paramref name="dryRun"/> is set - unsplices the ones
+    /// it can prove safe to remove.
+    /// <para>
+    /// An orphaned leaf is not cosmetic. Nothing routes writes to it, so it
+    /// never checkpoints, so the WAL materialiser pin it published at birth can
+    /// never advance - yet that pin is still counted in the trim floor. The WAL
+    /// therefore never trims, and because compaction is strictly downstream of
+    /// trim it never compacts either: one orphan removes every bound on a
+    /// tree's WAL growth, permanently, and no amount of ordinary maintenance
+    /// recovers it (issue 3269). The empty-leaf reclaim pass cannot help,
+    /// because <c>IsReclaimCandidate</c> rejects on its first line for any leaf
+    /// holding rows and an orphan characteristically holds a shadow copy of a
+    /// live leaf's range.
+    /// </para>
+    /// <para>
+    /// <b>It fails closed.</b> Before unsplicing anything it proves, key by
+    /// key, that every row the orphan holds is readable from the
+    /// descent-reachable leaf that owns it. A leaf that fails any check is
+    /// left exactly as it was found and reported as a refusal. Nothing is
+    /// assumed about duplication: the one orphan pair ever measured did hold
+    /// duplicated keys, but that is a sample of one and the mechanism that
+    /// mints an orphan guarantees nothing of the kind.
+    /// </para>
+    /// <para>
+    /// The walk is bounded and resumable for the same reason every other
+    /// chain walk on this grain is: probing a leaf activates it, and this
+    /// method holds the shard root's non-reentrant activation turn while it
+    /// runs. Drive batches until
+    /// <see cref="OrphanedLeafRepairPage.ResumeFromInclusive"/> is
+    /// <see langword="null"/>.
+    /// </para>
+    /// <para>
+    /// Returns an empty page, rather than throwing, when the shard has not
+    /// been initialised, is a single-leaf tree, or is mid-way through a
+    /// shard-level split.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The previous page's resume key, or <see langword="null"/> to start at
+    /// the head of the chain.
+    /// </param>
+    /// <param name="dryRun">
+    /// When <see langword="true"/>, detects and verifies but mutates nothing,
+    /// reporting <see cref="OrphanedLeafDisposition.Repairable"/> where a
+    /// repair would report <see cref="OrphanedLeafDisposition.Repaired"/>. The
+    /// detection and verification code is shared with the repair path rather
+    /// than duplicated, so an inspection cannot disagree with the repair it
+    /// predicts.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk before the next leaf.</param>
+    Task<OrphanedLeafRepairPage> RepairOrphanedLeavesAsync(
+        string? resumeFromInclusive,
+        bool dryRun,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the <see cref="GrainId"/> of the leaf a chain walk should start
     /// at, honouring an optional resume key, or <c>null</c> if the shard's tree
     /// has not been initialised yet.

@@ -1102,6 +1102,65 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="cancellationToken">Cancels the per-shard fan-out before the next shard.</param>
     Task<long> GetMaterialiserLagAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Reports every leaf in this tree that is spliced into a shard's sibling
+    /// chain but unreachable by descent from that shard's root, without
+    /// changing anything.
+    /// <para>
+    /// Such a leaf - an <i>orphan</i> - is left behind by a split interrupted
+    /// after it linked the new sibling into the chain but before its parent
+    /// learned about it. It is not cosmetic. Every leaf publishes a
+    /// write-ahead-log materialiser pin and the trim floor is the minimum over
+    /// all of them, so a leaf nothing routes to never checkpoints, its pin
+    /// never advances, and the floor never rises. The WAL then never trims,
+    /// and because compaction runs strictly downstream of trim it never
+    /// compacts: <b>one orphan removes every bound on the tree's WAL
+    /// growth</b>, permanently, and no amount of ordinary maintenance recovers
+    /// it. The cause was fixed in issue 3265; this pair of verbs is the repair
+    /// path for a tree that had already acquired one (issue 3269).
+    /// </para>
+    /// <para>
+    /// This verb reaches its verdict with the same code
+    /// <see cref="RepairOrphanedLeavesAsync"/> uses, so a leaf reported
+    /// <see cref="OrphanedLeafDisposition.Repairable"/> here is one the repair
+    /// would act on, and a refusal here is the refusal the repair would make.
+    /// Run it first.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
+    Task<OrphanedLeafRepairReport> InspectOrphanedLeavesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Unsplices the descent-unreachable leaves of this tree that can be
+    /// proven safe to remove, retiring the write-ahead-log materialiser pins
+    /// that were gating the trim floor, and reports what it did.
+    /// <para>
+    /// See <see cref="InspectOrphanedLeavesAsync"/> for what an orphaned leaf
+    /// is and why one is worth an operator's attention. Run that verb first:
+    /// it makes the same decisions this one does and mutates nothing.
+    /// </para>
+    /// <para>
+    /// <b>It fails closed, and that is the load-bearing property.</b> A leaf
+    /// is removed only once this has proven that no descent reaches it - which
+    /// makes its rows frozen, because routing is a total function and nothing
+    /// can be routed there - and, key by key, that every row it holds is
+    /// readable from the descent-reachable leaf that owns that key. A leaf
+    /// that fails any check is left exactly as it was found and reported with
+    /// a <see cref="OrphanedLeafDisposition"/> saying which check it failed.
+    /// Nothing is assumed about whether an orphan's keys are duplicated
+    /// elsewhere; they are checked.
+    /// </para>
+    /// <para>
+    /// Safe to re-run. A leaf already removed is gone from the chain, a leaf
+    /// refused is refused again on the same evidence, and an interrupted
+    /// removal is completed by the next pass.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
+    Task<OrphanedLeafRepairReport> RepairOrphanedLeavesAsync(
+        CancellationToken cancellationToken = default);
+
     // ── Stateful cursors ────────────────────────────────
 
     /// <summary>

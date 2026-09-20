@@ -1255,6 +1255,74 @@ See [Projection Rebuild](projection-rebuild.md#operator-tooling-rebuild-and-lag)
 for the rebuild semantics, the topology-preservation guarantees, and
 the recommended monitoring shape for lag.
 
+## Operator tooling: orphaned-leaf repair
+
+An **orphaned leaf** is a leaf that is present in a shard's doubly
+linked sibling chain but is not reachable by descent from the shard
+root - no routing entry points at it. Such a leaf can only arise from
+an interrupted split that spliced a new sibling into the chain before
+publishing its routing entry. The immediate cause of that window is
+fixed, but a tree that already acquired an orphan before the fix has
+no self-healing path: empty-leaf reclaim rejects a candidate on
+`LiveRowCount != 0` before it ever evaluates descent reachability, and
+an orphan is rarely empty - activation-time WAL replay admits records
+by `(ShardIndex, LowKeyInclusive, HighKeyExclusive)` and never by leaf
+identity, so an orphan sharing bounds with a live leaf materialises a
+shadow copy of that range. The orphan's projection checkpoint then
+pins the WAL trim floor indefinitely, and because compaction is
+downstream of trim, the WAL grows without bound.
+
+Two `ILattice` methods provide the operator path.
+
+| Method | Description |
+|--------|-------------|
+| `InspectOrphanedLeavesAsync(CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
+| `RepairOrphanedLeavesAsync(CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
+
+The verification in step two **fails closed**. If the orphan holds any
+key that the routed live leaf does not hold, the leaf is left exactly
+as it was and reported `RefusedUnverifiedKeys` with the offending key;
+unsplicing it would lose data. Key *values* are deliberately not
+compared, because an orphan and a live leaf replay the same WAL
+records on independent horizons and a benign version difference must
+not produce a spurious refusal. Other refusal dispositions -
+`RefusedKeyCountExceeded`, `RefusedBlockingState`, `RefusedChainRace`,
+`RefusedRoutingContradiction` - are likewise no-ops on the tree.
+
+The unsplice deliberately does **not** widen the surviving predecessor
+to absorb the orphan's key range, which is where it diverges from
+empty-leaf reclaim. A reclaimed leaf is routed, so its range must be
+re-homed; an orphan is not routed, so the routed leaves already tile
+the keyspace and widening a neighbour over the orphan's bounds would
+create an overlap - and therefore a second materialisation of that
+range.
+
+```csharp verify
+// Dry run first: see what would be repaired, and why anything is refused.
+OrphanedLeafRepairReport survey =
+    await tree.InspectOrphanedLeavesAsync(cancellationToken);
+
+foreach (OrphanedLeafFinding finding in survey.Findings)
+{
+    if (finding.IsRefusal)
+    {
+        // Investigate before escalating - a refusal means repair is unsafe.
+        _ = (finding.ShardIndex, finding.LeafId, finding.Disposition, finding.UnverifiedKey);
+    }
+}
+
+if (survey.Findings.Count > 0 && survey.RefusedCount == 0)
+{
+    OrphanedLeafRepairReport repaired =
+        await tree.RepairOrphanedLeavesAsync(cancellationToken);
+    _ = (repaired.LeavesWalked, repaired.RepairedCount);
+}
+```
+
+Both calls are batched internally and safe to run against a live tree
+under load. A single invocation walks a bounded number of leaves per
+shard; re-invoke until `LeavesWalked` reports no further findings.
+
 ## Metrics
 
 Orleans.Lattice publishes `System.Diagnostics.Metrics` instruments on

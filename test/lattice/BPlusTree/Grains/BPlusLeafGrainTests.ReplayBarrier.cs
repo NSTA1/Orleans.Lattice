@@ -122,6 +122,7 @@ public partial class BPlusLeafGrainTests
         // Maintenance that reads the projection.
         "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
+        "TryBeginOrphanRetirementAsync",
         "AbsorbSuccessorRangeAsync",
         // Slot ownership, which is applied to the projection.
         "MarkSlotsMovedAwayAsync", "UnmarkSlotsMovedAwayAsync",
