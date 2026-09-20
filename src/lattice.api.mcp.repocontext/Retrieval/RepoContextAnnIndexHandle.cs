@@ -645,9 +645,21 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // actually sees, so a caller cancelling still cancels. Both are skipped
         // entirely when the bound is disabled, so the unbounded configuration pays
         // nothing for a feature it declined.
+        //
+        // THE DEADLINE IS ARMED ON PROGRESS, NOT ON ELAPSED TIME ALONE, AND THAT IS
+        // ISSUE #3284. A bare timer measured wall-clock that includes queueing for a
+        // WAL replay permit - time in which the walk can bank nothing, since it banks
+        // position per entry and an entry cannot be read before its leaf activates -
+        // so under permit saturation every slice was guaranteed to expire having
+        // banked zero, and each expiry enqueued another waiter behind the queue that
+        // caused it. See RepoContextAnnOpenSliceDeadline.
         var budget = _options.OpenSliceBudget;
         using var deadline = budget > TimeSpan.Zero
-            ? new CancellationTokenSource(budget, _options.TimeProvider)
+            ? new RepoContextAnnOpenSliceDeadline(
+                budget,
+                _options.MaxOpenSliceExtensions,
+                () => _loading?.LoadedKeyCount ?? 0,
+                _options.TimeProvider)
             : null;
         using var linked = deadline is null
             ? null
@@ -655,6 +667,16 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
         try
         {
+            // CLASSIFIED BULK FOR THE WHOLE WALK (issue #3284). The key walk is an
+            // O(corpus) fan-out that activates cold leaves in bulk, which is exactly
+            // the load that filled the replay permit queue measured on the incident.
+            // The class flows ambiently on RequestContext, so every leaf the walk
+            // reaches inherits it without knowing the seam exists, and a saturated
+            // gate turns this walk away one full ceiling's worth of queue before it
+            // starts refusing foreground reads. It can only ever make this caller
+            // MORE likely to be refused; it is never a priority boost.
+            using var admission = LatticeReplayAdmissionContext.BeginBulkScope();
+
             // The deadline reaches the RESUMABLE key walk only; the caller's token
             // governs the load as a whole. Passing the deadline to both would bound
             // the restore too, and the restore banks nothing when interrupted - so
@@ -713,10 +735,13 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 throw new InvalidOperationException(
                     $"The repository-context approximate index for '{_repoId}' in space "
                     + $"{_space.ModelId}/{_space.Dimension} reached its {budget} open budget "
-                    + $"{MaxEmptyOpenDeferrals} times in succession without loading a single identifier "
-                    + "mapping, so the open cannot make progress and would retry for ever. Raise "
-                    + $"{nameof(RepoContextAnnOptions)}.{nameof(RepoContextAnnOptions.OpenSliceBudget)} "
-                    + "above the time one store read takes, or set it to zero to open unbounded.");
+                    + $"(extended up to {_options.MaxOpenSliceExtensions} further period(s) whenever a "
+                    + $"slice banked nothing) {MaxEmptyOpenDeferrals} times in succession without loading "
+                    + "a single identifier mapping, so the open cannot make progress and would retry for "
+                    + $"ever. Raise {RepoContextAnnOptions.OpenSliceBudgetSecondsVariable} above the time "
+                    + $"one store read takes, raise {RepoContextAnnOptions.MaxOpenSliceExtensionsVariable} "
+                    + "if the leaves this walk activates are merely slow, or set the budget to zero to "
+                    + "open unbounded.");
             }
 
             _load?.Record(RepoContextAnnIndexLoadOutcome.Deferred);

@@ -2130,6 +2130,49 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
 
     /// <summary>
+    /// How many activations may be <b>queued</b> for a WAL replay permit, per
+    /// permit the gate was sized to. The admitted-waiter bound is this figure
+    /// multiplied by the resolved ceiling, so it scales with the deployment's
+    /// own CPU grant and needs no retuning between a 2-vCPU box and a 64-vCPU
+    /// one. Defaults to
+    /// <see cref="DefaultWalReplayPermitQueueDepthPerPermit"/> (4). Set to
+    /// <c>0</c> to admit an unbounded queue, which is the historical shape.
+    /// <para>
+    /// <b>Why a queue needs a bound at all (issue #3284).</b> The gate bounds
+    /// how many replays run at once; nothing bounded how many activations could
+    /// line up behind it. A measured 87 waiters against a ceiling of 6 is not a
+    /// queue but a backlog: every one of those activations was going to exhaust
+    /// its request deadline before reaching the head, and each expiry enqueued a
+    /// replacement, so the queue length was self-sustaining. Refusing admission
+    /// converts that into fast, attributable back-pressure
+    /// (<see cref="LatticeSaturatedException"/>) which the caller retries after
+    /// a backoff rather than a silent wait that cannot succeed.
+    /// </para>
+    /// <para>
+    /// <b>Derived from the ceiling on purpose, and from nothing else.</b> Silo
+    /// count is deliberately <i>not</i> an input: the gate is a process-wide
+    /// static, so scaling out adds pools rather than dividing one, and scaling
+    /// this bound by cluster size would shrink aggregate replay capacity exactly
+    /// as capacity was being added. The resources the gate protects - CPU at
+    /// sizing time, the local managed heap at runtime - are strictly local, so
+    /// there is no cluster-wide term for it to be adaptive to.
+    /// </para>
+    /// </summary>
+    public int WalReplayPermitQueueDepthPerPermit { get; set; } =
+        DefaultWalReplayPermitQueueDepthPerPermit;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplayPermitQueueDepthPerPermit"/> (4).
+    /// <para>
+    /// Four deep is a queue a waiter can plausibly clear inside an Orleans
+    /// request deadline at any realistic per-replay service time, and it leaves
+    /// the gate fully saturated for as long as work exists - the bound refuses
+    /// only waiters that were not going to be served in time anyway.
+    /// </para>
+    /// </summary>
+    public const int DefaultWalReplayPermitQueueDepthPerPermit = 4;
+
+    /// <summary>
     /// Maximum number of WAL records the activation-time leaf replay applies in
     /// one scheduler turn before yielding cooperatively
     /// (<c>await Task.Yield()</c>). A long-tailed WAL would otherwise let a

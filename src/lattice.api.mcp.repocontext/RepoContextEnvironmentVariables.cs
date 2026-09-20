@@ -88,9 +88,27 @@ public static class RepoContextEnvironmentVariables
     ];
 
     /// <summary>
+    /// The approximate-index slice-bound variables, resolved by
+    /// <c>RepoContextAnnOptions</c> and consumed by the approximate index handle.
+    /// </summary>
+    /// <remarks>
+    /// Published from issue #3284, which added the configuration surface. Before it the
+    /// type was registered bare and had none, so the budget that could wedge the plane
+    /// open was unmovable without a redeploy - and, being unnamed, was also invisible to
+    /// the effective-configuration report this registry feeds.
+    /// </remarks>
+    public static IReadOnlyList<string> AnnKeys { get; } =
+    [
+        RepoContextAnnOptions.OpenSliceBudgetSecondsVariable,
+        RepoContextAnnOptions.MaxOpenSliceExtensionsVariable,
+        RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
+    ];
+
+    /// <summary>
     /// Every exactly-named environment variable this package resolves.
     /// </summary>
-    public static IReadOnlyList<string> All { get; } = [.. IndexingKeys, .. GitSourceKeys, .. MemoryArchiveKeys];
+    public static IReadOnlyList<string> All { get; } =
+        [.. IndexingKeys, .. GitSourceKeys, .. MemoryArchiveKeys, .. AnnKeys];
 
     /// <summary>
     /// Every prefix under which this package resolves a family of variables whose full
@@ -116,6 +134,8 @@ public static class RepoContextEnvironmentVariables
         var gitResolved = RepoContextGitSourceRegistry.FromEnvironment();
         var archiveResolved = RepoContextMemoryArchiveOptions.FromEnvironment();
         var archiveDefaults = new RepoContextMemoryArchiveOptions();
+        var annResolved = RepoContextAnnOptions.FromEnvironment();
+        var annDefaults = new RepoContextAnnOptions();
 
         return
         [
@@ -222,6 +242,25 @@ public static class RepoContextEnvironmentVariables
                 RepoContextMemoryArchiveOptions.StopTimeoutSecondsKey,
                 Seconds(archiveResolved.EffectiveStopTimeout),
                 Seconds(archiveDefaults.EffectiveStopTimeout)),
+
+            // The approximate-index slice bounds (issue #3284). The open budget is
+            // reported alongside its extension cap deliberately: the budget alone no
+            // longer states how long one attempt can run, so an operator shown only the
+            // budget would read a five-second figure for a bound that admits seven
+            // periods, which is the same "value that nothing applied" failure this
+            // report exists to prevent.
+            Snapshot(
+                RepoContextAnnOptions.OpenSliceBudgetSecondsVariable,
+                Seconds(annResolved.OpenSliceBudget),
+                Seconds(annDefaults.OpenSliceBudget)),
+            Snapshot(
+                RepoContextAnnOptions.MaxOpenSliceExtensionsVariable,
+                Extensions(annResolved.MaxOpenSliceExtensions),
+                Extensions(annDefaults.MaxOpenSliceExtensions)),
+            Snapshot(
+                RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
+                Seconds(annResolved.IngestSliceBudget),
+                Seconds(annDefaults.IngestSliceBudget)),
         ];
 
         static RepoContextSettingSnapshot Snapshot(string name, string resolved, string @default)
@@ -239,6 +278,9 @@ public static class RepoContextEnvironmentVariables
 
         static string Count(int value)
             => string.Create(CultureInfo.InvariantCulture, $"{value} repository(ies)");
+
+        static string Extensions(int value)
+            => string.Create(CultureInfo.InvariantCulture, $"{value} extension(s)");
     }
 
     /// <summary>

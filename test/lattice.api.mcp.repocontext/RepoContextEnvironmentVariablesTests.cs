@@ -83,7 +83,8 @@ public sealed class RepoContextEnvironmentVariablesTests
             RepoContextEnvironmentVariables.All,
             Is.EqualTo(RepoContextEnvironmentVariables.IndexingKeys
                 .Concat(RepoContextEnvironmentVariables.GitSourceKeys)
-                .Concat(RepoContextEnvironmentVariables.MemoryArchiveKeys)),
+                .Concat(RepoContextEnvironmentVariables.MemoryArchiveKeys)
+                .Concat(RepoContextEnvironmentVariables.AnnKeys)),
             "All is what a host consumes, so it must not be a separate hand-maintained list "
             + "that can disagree with the groups it is built from");
 

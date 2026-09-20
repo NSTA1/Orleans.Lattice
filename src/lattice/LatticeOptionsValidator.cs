@@ -434,6 +434,13 @@ if (options.WalMaterialiserMaxConcurrentReplays < 0)
         + "Environment.ProcessorCount and the enforced container CPU grant; a positive "
         + "value pins it explicitly).");
 }
+if (options.WalReplayPermitQueueDepthPerPermit < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} must be greater than or equal to 0 "
+        + "(zero admits an unbounded replay-permit queue, the historical shape; a positive value bounds "
+        + "the admitted waiters at that many per resolved permit).");
+}
 if (options.WalReplayMaxRecordsPerTurn < 0)
 {
     return ValidateOptionsResult.Fail(

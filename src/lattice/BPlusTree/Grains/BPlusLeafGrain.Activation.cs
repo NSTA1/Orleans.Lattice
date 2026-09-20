@@ -408,6 +408,25 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Sets the resolved ceiling and admitted-waiter count directly. Test-only:
+    /// the admission bound of issue #3284 is a pure function of those two
+    /// process-wide statics, and a fixture that had to reach the interesting state
+    /// by activating dozens of real leaves would be measuring the harness rather
+    /// than the bound - and would be unable to reach the saturated state at all on
+    /// a machine whose CPU grant sized the ceiling high.
+    /// </summary>
+    /// <param name="ceiling">The resolved permit ceiling to simulate.</param>
+    /// <param name="queued">The admitted-waiter count to simulate.</param>
+    internal static void SeedReplayAdmissionStateForTest(int ceiling, int queued)
+    {
+        lock (_replayConcurrencyGateLock)
+        {
+            _replayConcurrencyCeiling = ceiling;
+            Volatile.Write(ref _queuedReplayPermitWaiters, queued);
+        }
+    }
+
+    /// <summary>
     /// Decides whether the caller's replay permit should be <b>withheld</b> rather
     /// than returned, because the heap cannot currently afford the concurrency the
     /// gate is configured for (issues #2781 and #2862).
@@ -897,6 +916,75 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Decides whether an activation may <b>join</b> the replay permit queue at
+    /// all (issue #3284), and reports the bound it was judged against.
+    /// </summary>
+    /// <param name="queueDepthPerPermit">
+    /// <see cref="LatticeOptions.WalReplayPermitQueueDepthPerPermit"/>. Zero or
+    /// negative admits an unbounded queue, the historical shape.
+    /// </param>
+    /// <param name="admissionClass">The caller's ambient admission class.</param>
+    /// <param name="admitted">The admitted-waiter count the decision was taken against.</param>
+    /// <param name="bound">The bound applied, or <c>0</c> when the queue is unbounded.</param>
+    /// <returns><see langword="true"/> when the caller may queue.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>The bound is derived from the resolved ceiling and from nothing else.</b>
+    /// The gate is a process-wide static sized from this silo's own CPU grant, so
+    /// a bound expressed as "N per permit" needs no retuning between a 2-vCPU box
+    /// and a 64-vCPU one. Silo count is deliberately not an input: scaling out
+    /// adds pools rather than dividing one, so scaling this bound by cluster size
+    /// would shrink aggregate replay capacity exactly as capacity was being added,
+    /// and the resources the gate protects - local CPU, the local managed heap -
+    /// have no cluster-wide term at all.
+    /// </para>
+    /// <para>
+    /// <b>Bulk is refused one whole ceiling's worth of queue earlier than
+    /// interactive, and that reservation is what makes this a priority and not
+    /// merely a cap.</b> A bound that refused both classes at the same depth would
+    /// refuse the interactive read as readily as the <c>O(corpus)</c> walk that
+    /// filled the queue - the walk would simply win the race more often, because
+    /// it arrives in bulk. Reserving the last <c>ceiling</c> slots for interactive
+    /// work means a saturated gate still admits a full ceiling of foreground reads
+    /// while background fan-out is turned away.
+    /// </para>
+    /// <para>
+    /// <b>The read-then-decide is deliberately not atomic with the increment that
+    /// follows it.</b> This is back-pressure, not a correctness invariant: a race
+    /// can admit a few waiters past the bound, which costs nothing, while a lock
+    /// on the arrival path of a reactivation storm would be a new contention point
+    /// in exactly the regime the bound exists to relieve.
+    /// </para>
+    /// <para>
+    /// An unsized gate (<c>ceiling == 0</c>) admits unconditionally. Nothing has
+    /// queued yet by definition, so there is no backlog to refuse, and refusing
+    /// the very activation that is about to size the gate would be a deadlock.
+    /// </para>
+    /// </remarks>
+    internal static bool TryAdmitReplayPermitWaiter(
+        int queueDepthPerPermit,
+        LatticeReplayAdmissionClass admissionClass,
+        out int admitted,
+        out int bound)
+    {
+        admitted = Volatile.Read(ref _queuedReplayPermitWaiters);
+        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+
+        if (queueDepthPerPermit <= 0 || ceiling <= 0)
+        {
+            bound = 0;
+            return true;
+        }
+
+        var interactive = (int)Math.Min(int.MaxValue, (long)ceiling * queueDepthPerPermit);
+        bound = admissionClass == LatticeReplayAdmissionClass.Bulk
+            ? Math.Max(1, interactive - ceiling)
+            : interactive;
+
+        return admitted < bound;
+    }
+
+    /// <summary>
     /// Acquires a permit from the per-silo replay concurrency gate, returning
     /// the semaphore so the caller can release it once the replay completes.
     /// Returns <c>null</c> for a leaf with no tree id (a no-op activation that
@@ -911,6 +999,24 @@ internal sealed partial class BPlusLeafGrain
     /// silent wait rather than a fault (issue #2256).
     /// </remarks>
     private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
+        => await AcquireReplayPermitAsync(enforceAdmissionBound: true, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with the
+    /// admission bound of issue #3284 optionally suppressed.
+    /// </summary>
+    /// <param name="enforceAdmissionBound">
+    /// <see langword="false"/> for the WAL GC starvation drive, which is
+    /// <b>exempt</b>. The drive is already bounded upstream - one in flight per
+    /// activation, and a handful of touches per GC pass - so it cannot be the
+    /// source of an unbounded queue, and in the incident that produced issue
+    /// #3284 the GC drives were what <i>cleared</i> the wedge. Refusing them
+    /// would throttle the remedy rather than the load.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
+    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(
+        bool enforceAdmissionBound, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
             return null;
@@ -925,6 +1031,39 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
+        // incremented and before the wait is entered, because the whole point is
+        // to keep this activation out of a queue it cannot reach the head of: 87
+        // waiters were measured against a ceiling of 6, and every one of them was
+        // going to burn its request deadline and enqueue a replacement.
+        //
+        // The class is ambient and flows on RequestContext, so the ANN key walk
+        // that provoked the measured backlog is classified at the top of its own
+        // fan-out and every leaf it reaches inherits the classification without
+        // knowing the seam exists.
+        var admissionClass = LatticeReplayAdmissionContext.Current;
+        if (enforceAdmissionBound
+            && !TryAdmitReplayPermitWaiter(
+                options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound))
+        {
+            _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+
+            // A typed, retryable back-pressure refusal rather than a bespoke
+            // exception: the caller contract is identical to every other
+            // saturation refusal in this library - back off and retry, the regime
+            // clears - and a second type carrying the same contract would only
+            // fragment the catch sites that already honour it.
+            throw new LatticeSaturatedException(
+                $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
+                + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
+                + $"{Volatile.Read(ref _replayConcurrencyCeiling)} permit(s), so this activation was "
+                + "refused admission rather than queued behind work it could not outlast. Retry after a "
+                + "backoff, or raise "
+                + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
+                + "(zero restores an unbounded queue).",
+                state.State.TreeId!);
+        }
 
         _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
 
@@ -1066,7 +1205,7 @@ internal sealed partial class BPlusLeafGrain
             // that is held by nobody and released by nothing. That is this very
             // defect recreated in a narrower window, which is why the belt stops
             // at the line below.
-            replayPermit = await AcquireReplayPermitAsync(driveCts.Token);
+            replayPermit = await AcquireReplayPermitAsync(enforceAdmissionBound: false, driveCts.Token);
 
             // The permit is acquired and released in THIS frame, and the work
             // runs in an inner task. That split is the fix.
@@ -1365,6 +1504,13 @@ internal sealed partial class BPlusLeafGrain
         /// </para>
         /// </summary>
         RehydratingSnapshot,
+
+        /// <summary>
+        /// Refused admission to the permit queue before ever entering it
+        /// (issue #3284). Terminal: the activation never contended for a permit
+        /// and never held one.
+        /// </summary>
+        RefusedAdmission,
     }
 
     /// <summary>
@@ -1751,7 +1897,10 @@ internal sealed partial class BPlusLeafGrain
                 // itself did not return - and a null permit cannot mean "no
                 // tree id" here, because that case is excluded by the guard
                 // above.
-                var reason = ex is not OperationCanceledException
+                var reason = ex is LatticeSaturatedException
+                        && _replayAdmissionPhase == ReplayAdmissionPhase.RefusedAdmission
+                    ? LatticeMetrics.ActivationFailureRefusedReplayAdmission
+                    : ex is not OperationCanceledException
                     ? LatticeMetrics.ActivationFailureFaulted
                     : _replayAdmissionPhase switch
                     {

@@ -87,6 +87,132 @@ internal sealed class RepoContextAnnOptions
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     /// <summary>
+    /// How many further <see cref="OpenSliceBudget"/> periods an open slice that
+    /// has banked <b>nothing</b> may be granted before the budget fires anyway.
+    /// Zero reproduces the historical elapsed-only bound exactly.
+    /// <para>
+    /// <b>This exists because the budget above measures wall-clock that includes
+    /// time in which progress is impossible, and that is issue #3284.</b> The open
+    /// walks the identifier key map, which activates cold leaves, which queue for a
+    /// per-silo WAL replay permit. The walk banks position per entry, so a slice
+    /// that cannot complete one entry banks nothing at all. With a measured mean
+    /// permit wait of twelve seconds against a five second budget, every slice was
+    /// guaranteed to expire having banked zero - and because each expiry re-enqueued
+    /// a waiter, the budget lengthened the very queue that caused it. It was
+    /// regenerative, not merely ineffective.
+    /// </para>
+    /// <para>
+    /// <b>The cap is what keeps the loud failure reachable, and removing it would be
+    /// the opposite error.</b> An open extended without limit is an unbounded open,
+    /// which is the thirty-minute coordinator wedge issue #3130 removed. With the
+    /// cap, storage that genuinely answers nothing still exhausts its extensions,
+    /// still banks zero, and still trips the empty-deferral escalation. The default
+    /// of six bounds one attempt at roughly seven budget periods - about thirty-five
+    /// seconds at the default budget - which is two orders of magnitude below the
+    /// wedge and comfortably above the worst permit wait measured on the incident.
+    /// </para>
+    /// </summary>
+    public int MaxOpenSliceExtensions { get; init; } = 6;
+
+    /// <summary>
+    /// Environment variable that overrides <see cref="OpenSliceBudget"/>, in
+    /// seconds. Zero removes the bound.
+    /// </summary>
+    internal const string OpenSliceBudgetSecondsVariable =
+        "LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_BUDGET_SECONDS";
+
+    /// <summary>
+    /// Environment variable that overrides <see cref="MaxOpenSliceExtensions"/>.
+    /// </summary>
+    internal const string MaxOpenSliceExtensionsVariable =
+        "LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_MAX_EXTENSIONS";
+
+    /// <summary>
+    /// Environment variable that overrides <see cref="IngestSliceBudget"/>, in
+    /// seconds.
+    /// </summary>
+    internal const string IngestSliceBudgetSecondsVariable =
+        "LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS";
+
+    /// <summary>
+    /// Resolves the open-slice bounds from the environment, falling back to the
+    /// defaults for any variable that is absent or malformed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This type had no configuration surface at all until issue #3284</b>, and
+    /// the absence was not an oversight so much as an unexamined consequence: the
+    /// container registration was a bare
+    /// <c>TryAddSingleton&lt;RepoContextAnnOptions&gt;()</c>, which binds the
+    /// parameterless constructor, so every value was a compile-time constant and no
+    /// operator could move any of them. That is tolerable while every default is
+    /// right and intolerable the moment one is wrong, because the only remedy left
+    /// is a redeploy of the library.
+    /// </para>
+    /// <para>
+    /// Deliberately narrow: only the bounds an operator might have to move during
+    /// an incident are exposed. The shape parameters below stay fixed, because a
+    /// wrong partition count degrades recall silently rather than wedging a plane,
+    /// and an environment surface invites exactly the fixed-partition-count
+    /// misconfiguration those defaults exist to prevent.
+    /// </para>
+    /// </remarks>
+    /// <returns>The resolved options.</returns>
+    internal static RepoContextAnnOptions FromEnvironment()
+    {
+        var defaults = new RepoContextAnnOptions();
+        return new RepoContextAnnOptions
+        {
+            OpenSliceBudget = ReadSeconds(OpenSliceBudgetSecondsVariable, defaults.OpenSliceBudget),
+            IngestSliceBudget = ReadSeconds(IngestSliceBudgetSecondsVariable, defaults.IngestSliceBudget),
+            MaxOpenSliceExtensions = ReadCount(
+                MaxOpenSliceExtensionsVariable, defaults.MaxOpenSliceExtensions),
+        };
+    }
+
+    /// <summary>
+    /// Reads a non-negative seconds value, falling back for anything absent,
+    /// malformed, or negative - so a typo can never remove a bound silently.
+    /// </summary>
+    private static TimeSpan ReadSeconds(string key, TimeSpan fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (!string.IsNullOrWhiteSpace(raw)
+            && double.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var seconds)
+            && seconds >= 0)
+        {
+            return TimeSpan.FromSeconds(seconds);
+        }
+
+        return fallback;
+    }
+
+    /// <summary>
+    /// Reads a non-negative count, falling back for anything absent, malformed, or
+    /// negative.
+    /// </summary>
+    private static int ReadCount(string key, int fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (!string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var count)
+            && count >= 0)
+        {
+            return count;
+        }
+
+        return fallback;
+    }
+
+    /// <summary>
     /// The largest number of centroids or vectors one persisted record carries,
     /// so no record grows with the corpus.
     /// </summary>
