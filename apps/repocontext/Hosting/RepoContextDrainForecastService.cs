@@ -333,6 +333,27 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
                     (_forecast.RequiredStopGracePeriod ?? TimeSpan.Zero).TotalSeconds);
                 return;
 
+            case RepoContextDrainForecastVerdict.Unproven:
+                _logger.LogWarning(
+                    "RepoContext's last drain was ABANDONED after {DrainSeconds:F1}s, under a "
+                    + "{PreviousBudgetSeconds:F0}s budget that was smaller than this process's "
+                    + "{BudgetSeconds:F0}s one. That duration is therefore a FLOOR on what a complete drain "
+                    + "costs here and not a measurement of one, because the drain was cut short before it "
+                    + "finished. The floor is {ConsumedPercent:F0}% of this budget, so the next stop is NOT "
+                    + "predicted to be abandoned - but this budget stays unproven until a drain completes "
+                    + "inside it. The grant the budget was derived from is {Provenance}. The floor alone needs "
+                    + "a grant of {RequiredSeconds:F0}s, which the {GrantSeconds:F0}s declared here already "
+                    + "covers, so nothing needs raising on this evidence. The next clean stop measures the real "
+                    + "requirement and replaces this line with it.",
+                    (_forecast.Last?.Duration ?? TimeSpan.Zero).TotalSeconds,
+                    (_forecast.Last?.Budget ?? TimeSpan.Zero).TotalSeconds,
+                    _resolution.ShutdownBudget.TotalSeconds,
+                    (_forecast.ConsumedFraction ?? 0d) * 100d,
+                    _resolution.GrantWasDeclared ? "DECLARED" : "ASSUMED and unverified",
+                    (_forecast.RequiredStopGracePeriod ?? TimeSpan.Zero).TotalSeconds,
+                    _resolution.StopGracePeriod.TotalSeconds);
+                return;
+
             case RepoContextDrainForecastVerdict.Thin:
                 _logger.LogWarning(
                     "RepoContext's last drain took {DrainSeconds:F1}s, consuming {ConsumedPercent:F0}% of this "

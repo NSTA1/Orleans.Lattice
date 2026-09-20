@@ -211,27 +211,72 @@ public sealed class RepoContextComposeShutdownBudgetTests
         Assert.That(grants.ContainsKey("repocontext"), Is.True);
 
         // Pins the end-to-end derivation, not just its inputs: what this sample
-        // compose file declares must still produce the 90s the container has run with
-        // since it shipped. A change to the fraction, the reserve, or the declared
-        // grant that silently moved the deployed budget fails here.
+        // compose file declares must still produce the budget the container actually
+        // runs on. A change to the fraction, the reserve, or the declared grant that
+        // silently moved the deployed budget fails here.
+        //
+        // 180s since issue #3304, from a 240s declared grant. It was 90s from 120s,
+        // and that pair was below the measured requirement rather than near it: two
+        // consecutive real drains of this deployment took 89.7s and 91.9s, which is
+        // 99.7% and 102% of 90s. This assertion is what made that move deliberate -
+        // it failed the moment the compose value changed, which is the entire point
+        // of pinning a derived value rather than its inputs. Update the expectation
+        // when the budget is meant to move; never relax the derivation to absorb it.
         Assert.That(
             RepoContextShutdownBudget.Derive(
                 RepoContextShutdownBudget.ParseStopGracePeriod(grants["repocontext"])),
-            Is.EqualTo(TimeSpan.FromSeconds(90)));
+            Is.EqualTo(TimeSpan.FromSeconds(180)));
     }
 
     [Test]
     public void The_host_shutdown_budget_is_the_value_the_host_actually_configures()
     {
         // Guards the constant against being edited to satisfy the assertion above
-        // rather than to describe the host. 90s is the value the container has run
-        // with since it shipped; it is now the DEFAULT, applied when a deployment
-        // declares no grant, and changing it is a deliberate act that should also
-        // move the compose value, which the test above then re-checks.
+        // rather than to describe the host. 90s is the DEFAULT, applied when a
+        // deployment declares no grant at all.
+        //
+        // It deliberately did NOT move with the sample in issue #3304, and the two
+        // are no longer equal. The default is handed to a deployment that declared
+        // nothing, which may be running under Docker's own 10s grace period; raising
+        // it would raise that deployment's budget without raising its grant by one
+        // second, arming the overrun alarm for an instant the process never reaches
+        // and silencing the drain-ABANDONED line. That is the silent teardown of
+        // issue #2389, reintroduced by the change meant to prevent it. A deployment
+        // raises its own budget by declaring its grant, which the sample does.
         Assert.That(RepoContextHostBuilder.ShutdownBudget, Is.EqualTo(TimeSpan.FromSeconds(90)));
         Assert.That(
             RepoContextShutdownBudget.DefaultShutdownBudget,
             Is.EqualTo(RepoContextHostBuilder.ShutdownBudget));
+    }
+
+    [Test]
+    public void The_shipped_compose_budget_never_falls_below_the_default_it_no_longer_equals()
+    {
+        // The invariant that survives the split of issue #3304. The sample's derived
+        // budget and the library default were equal until that change and are now
+        // free to differ, so asserting equality would be wrong - but so would
+        // asserting nothing, which is what an unreplaced equality check decays into.
+        //
+        // The direction is the whole content. A sample declaring LESS than the
+        // default assumes would mean the default overstates what an undeclared
+        // deployment is granted, which is exactly the dangerous direction this
+        // component cannot detect at run time: a budget above its real grant silences
+        // the only evidence a drain was cut short (issue #2389). Above the default is
+        // a deployment that considered its grant and granted more. Below it is a
+        // regression.
+        var grants = ReadDeclaredGrants();
+
+        Assert.That(grants.ContainsKey("repocontext"), Is.True);
+
+        var shipped = RepoContextShutdownBudget.Derive(
+            RepoContextShutdownBudget.ParseStopGracePeriod(grants["repocontext"]));
+
+        Assert.That(
+            shipped,
+            Is.GreaterThanOrEqualTo(RepoContextShutdownBudget.DefaultShutdownBudget),
+            $"the sample's derived budget ({shipped.TotalSeconds}s) must not fall below the default "
+            + $"({RepoContextShutdownBudget.DefaultShutdownBudget.TotalSeconds}s) that a deployment "
+            + "declaring nothing is given, or the default overstates the grant it assumes");
     }
 
     [Test]
