@@ -253,6 +253,13 @@ internal static class TypeAliases
     internal const string LeafReclaimProbe = "ol.lrb";
     internal const string LeafRetired = "ol.lrt";
 
+    // Operator-invoked repair of a tree that already holds an orphaned leaf -
+    // one spliced into the sibling chain but unreachable by descent (issue 3269).
+    internal const string OrphanedLeafDisposition = "ol.old";
+    internal const string OrphanedLeafFinding = "ol.olf";
+    internal const string OrphanedLeafRepairPage = "ol.olp";
+    internal const string OrphanedLeafRepairReport = "ol.olr";
+
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
 

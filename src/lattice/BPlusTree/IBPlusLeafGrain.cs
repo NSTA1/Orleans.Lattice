@@ -383,6 +383,46 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task AbandonRetirementAsync();
 
     /// <summary>
+    /// Latches this leaf closed so an operator-invoked orphan repair can
+    /// unsplice it, and returns whether the latch was taken. Reopened by
+    /// <see cref="AbandonRetirementAsync"/>, exactly like
+    /// <see cref="TryBeginRetirementAsync"/>.
+    /// <para>
+    /// This is the same latch <see cref="TryBeginRetirementAsync"/> takes,
+    /// under a <b>different safety argument</b>, and the difference is the
+    /// only reason it is a separate method.
+    /// <see cref="TryBeginRetirementAsync"/> derives its safety from the leaf
+    /// being empty - what it measures is what gets destroyed - and refuses
+    /// anything holding a row. An orphaned leaf is characteristically not
+    /// empty, because rows materialise at activation by WAL replay through a
+    /// predicate keyed on the leaf's shard and declared bounds and never on
+    /// its identity, so an orphan sharing bounds with a live leaf materialises
+    /// a full shadow copy of that leaf's range. The emptiness gate therefore
+    /// refuses precisely the leaves that need retiring, which is why the
+    /// empty-leaf reclaim pass has never been able to dispose of one
+    /// (issue 3269).
+    /// </para>
+    /// <para>
+    /// <b>The replacement argument is the caller's to make, and this method
+    /// cannot check it.</b> A leaf sees only itself, and unreachability is a
+    /// property of the tree. Before calling this, the shard root must have
+    /// proven that no descent from the root reaches this leaf, and that every
+    /// key this leaf holds is readable from the descent-reachable leaf that
+    /// owns it. The first makes the row set frozen - no write can be routed
+    /// here - and the second makes clearing the leaf lossless. Calling this
+    /// without both proofs destroys data.
+    /// </para>
+    /// <para>
+    /// What it does still check: no mutation in flight, and no split, seal or
+    /// prepared-transaction state that could resurrect rows after the
+    /// caller's proof was taken. A mutation in flight is reported as a
+    /// refusal rather than waited out, because on a leaf no descent reaches it
+    /// is evidence the unreachability finding is wrong.
+    /// </para>
+    /// </summary>
+    Task<bool> TryBeginOrphanRetirementAsync();
+
+    /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
