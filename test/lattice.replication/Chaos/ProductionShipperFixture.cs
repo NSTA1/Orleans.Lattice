@@ -440,22 +440,57 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
 }
 
 /// <summary>
-/// <see cref="IReplicationApplier"/> decorator that injects a
-/// caller-controlled failure rate on the receiver-side apply path so
+/// <see cref="IReplicationApplier"/> decorator that injects
+/// caller-controlled failures on the receiver-side apply path so
 /// chaos tests can drive the inbound-error recording path (the receiver-side complement of the outbound success counter)
 /// (<see cref="ReplicationPeerStats.RecordInboundError(string, string)"/>).
 /// The inner applier is the canonical <see cref="ReplicationApplier"/>
 /// constructed by <see cref="ProductionShipperFixture"/>; the decorator
-/// throws <see cref="InvalidOperationException"/> on every Nth call
-/// when the fault rate is non-zero, otherwise delegates.
+/// throws <see cref="InvalidOperationException"/> when a fault is due,
+/// otherwise delegates.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Two injection modes are offered, and they differ in whether the
+/// resulting failure count depends on shipper batching:
+/// </para>
+/// <list type="bullet">
+///   <item><description><see cref="FailEveryNthCall"/> - a one-in-N
+///   rate over observed calls. The number of failures it produces is a
+///   function of how many times the shipper calls the applier, which is
+///   a function of how it packs the WAL into batches. A test that needs
+///   <c>k</c> failures from a rate of <c>N</c> is therefore asserting on
+///   batch packing it does not control, and fails if the shipper
+///   coalesces. Only safe with <c>N == 1</c> ("fail everything for a
+///   window"), which needs no assumption about call
+///   counts.</description></item>
+///   <item><description><see cref="InjectFaults"/> - a deterministic
+///   fault budget drained one per entry-carrying apply call, and
+///   therefore <b>independent of batching</b>. A thrown batch is retried
+///   by the shipper's backoff path, and each retry is another call, so
+///   the budget drains against a single coalesced batch exactly as it
+///   does against many small ones. Because an entry cannot appear on the
+///   receiver until some entry-carrying batch applied successfully, and
+///   no such call can succeed while budget remains, <b>convergence of
+///   the shipped keys entails that the budget drained in full</b> - the
+///   precondition is carried by the convergence assertion rather than by
+///   a wall-clock sleep. This is the mode to reach for.</description></item>
+/// </list>
+/// <para>
+/// Empty liveness-probe batches never consume budget: they carry no
+/// entries, so failing one would burn a fault that cannot stamp the
+/// inbound-error counter (which is keyed on the entries' origin).
+/// </para>
+/// </remarks>
 internal sealed class FaultInjectingReplicationApplier : IReplicationApplier
 {
     private readonly IReplicationApplier _inner;
     private readonly ReplicationPeerStats _peerStats;
     private readonly string _localClusterId;
     private int _callCount;
+    private int _entryCarryingCallCount;
     private int _injectedFailures;
+    private int _faultBudget;
 
     public FaultInjectingReplicationApplier(IReplicationApplier inner, ReplicationPeerStats peerStats, string localClusterId)
     {
@@ -467,6 +502,8 @@ internal sealed class FaultInjectingReplicationApplier : IReplicationApplier
     /// <summary>
     /// One-in-N fault rate. <c>0</c> disables; <c>3</c> means every 3rd
     /// call throws (counts the call before deciding). Defaults to <c>0</c>.
+    /// Batching-sensitive - see the remarks on the class; prefer
+    /// <see cref="InjectFaults"/> unless the rate is <c>1</c>.
     /// </summary>
     public int FailEveryNthCall { get; set; }
 
@@ -476,14 +513,47 @@ internal sealed class FaultInjectingReplicationApplier : IReplicationApplier
     /// <summary>Total inbound apply-batch calls observed (including those that threw).</summary>
     public int TotalCalls => Volatile.Read(ref _callCount);
 
+    /// <summary>
+    /// Inbound apply-batch calls that carried at least one entry
+    /// (i.e. excluding empty liveness-probe batches), including those
+    /// that threw. This is the population the fault budget drains from.
+    /// </summary>
+    public int EntryCarryingCalls => Volatile.Read(ref _entryCarryingCallCount);
+
+    /// <summary>
+    /// Faults still owed by <see cref="InjectFaults"/> and not yet
+    /// injected. Zero means the budget drained in full.
+    /// </summary>
+    public int RemainingFaultBudget => Volatile.Read(ref _faultBudget);
+
+    /// <summary>
+    /// Arms a deterministic budget of <paramref name="count"/> failures,
+    /// replacing any budget still outstanding. Each subsequent
+    /// entry-carrying <see cref="ApplyBatchAsync"/> call consumes one
+    /// unit and throws; once drained, calls delegate to the inner
+    /// applier again. Independent of how the shipper packs batches.
+    /// </summary>
+    public void InjectFaults(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        Interlocked.Exchange(ref _faultBudget, count);
+    }
+
     public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
         => _inner.ApplyAsync(entry, cancellationToken);
 
     public async Task<ApplyResult> ApplyBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
     {
         var n = Interlocked.Increment(ref _callCount);
+        var carriesEntries = entries is { Count: > 0 };
+        if (carriesEntries)
+        {
+            Interlocked.Increment(ref _entryCarryingCallCount);
+        }
+
         var rate = FailEveryNthCall;
-        if (rate > 0 && n % rate == 0)
+        var fail = (carriesEntries && TryConsumeFaultBudget()) || (rate > 0 && n % rate == 0);
+        if (fail)
         {
             Interlocked.Increment(ref _injectedFailures);
             // Stamp the inbound-error counter the production applier
@@ -492,7 +562,7 @@ internal sealed class FaultInjectingReplicationApplier : IReplicationApplier
             // recording. The inner applier is bypassed so it never
             // sees this batch - inbound success on the same origin
             // would otherwise leak through and skew the counter.
-            if (entries is { Count: > 0 }
+            if (carriesEntries
                 && !string.IsNullOrEmpty(entries[0].OriginClusterId)
                 && !string.Equals(entries[0].OriginClusterId, _localClusterId, StringComparison.Ordinal)
                 && !string.IsNullOrEmpty(entries[0].TreeId))
@@ -502,5 +572,21 @@ internal sealed class FaultInjectingReplicationApplier : IReplicationApplier
             throw new InvalidOperationException("Injected fixture-side receiver fault");
         }
         return await _inner.ApplyBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool TryConsumeFaultBudget()
+    {
+        while (true)
+        {
+            var remaining = Volatile.Read(ref _faultBudget);
+            if (remaining <= 0)
+            {
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref _faultBudget, remaining - 1, remaining) == remaining)
+            {
+                return true;
+            }
+        }
     }
 }
