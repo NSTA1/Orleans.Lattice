@@ -648,7 +648,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind_bytes{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
           "legendFormat": "{{peer}}"
         }
       ]
