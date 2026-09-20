@@ -94,6 +94,7 @@ public partial class BPlusLeafGrainTests
         state.State.SplitSiblingId = firstMintedSibling;
         state.State.OldNextSibling = downstreamNeighbour;
         state.State.NextSibling = firstMintedSibling;
+        state.State.SplitInFlight = true;
 
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
 
@@ -172,6 +173,116 @@ public partial class BPlusLeafGrainTests
             Is.EqualTo(siblingId),
             "Widening the recovery predicate must not regress the first-division case it "
             + "already covered.");
+    }
+
+    /// <summary>
+    /// The rightmost-leaf shape. A leaf whose division is outstanding while it
+    /// has no successor must still be detected as interrupted, and must not
+    /// mint a second sibling.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the shape that defeated the first repair of issue #3265. That
+    /// predicate inferred an outstanding division from
+    /// <c>OldNextSibling is not null AND SplitSiblingId is not null</c>, and
+    /// both terms have reachable nulls during a genuine division:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <c>OldNextSibling</c> is assigned as a verbatim copy of
+    /// <c>NextSibling</c> at the intent site, so a leaf with no successor
+    /// writes null and the in-flight state becomes byte-identical to the
+    /// settled one. A leaf reaches that shape by splitting - which ratchets
+    /// <c>SplitState</c> to <c>SplitComplete</c> permanently, disarming the
+    /// other disjunct - and later absorbing its rightmost successor through
+    /// the reclaim widen path, which assigns a nullable successor and never
+    /// touches the split fields.
+    /// </description></item>
+    /// <item><description>
+    /// <c>SplitSiblingId</c> is nulled by the absorbed-boundary clear on that
+    /// same reclaim path.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// Conjoining two overloaded terms inherits both blind spots rather than
+    /// cancelling either, so a single null defeated the whole predicate - and
+    /// the failure reproduced the original defect exactly: recovery declined,
+    /// the next overflow minted a fresh sibling, and the previous one was
+    /// stranded in the chain holding the pin that gates the trim floor.
+    /// </para>
+    /// <para>
+    /// It is worse than a missed detection. The converted guard in
+    /// <c>TryClearAbsorbedSplitBoundary</c> asks this same predicate before
+    /// nulling <c>SplitKey</c> and <c>SplitSiblingId</c>, so a blind predicate
+    /// authorises destruction of the very evidence a later recovery would need.
+    /// A leaf can leave the in-flight window with all three fields null while
+    /// its abandoned sibling sits durable in the chain, which no predicate over
+    /// those fields could ever recover.
+    /// </para>
+    /// <para>
+    /// The fix is an explicit durable marker that no other concern writes, so
+    /// there is nothing left to infer and nothing left to overload.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task Interrupted_split_of_a_leaf_with_no_successor_is_still_detected()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, maxLeafKeys: 4);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+
+        var firstMintedSibling = GrainId.Create("leaf", Guid.NewGuid().ToString());
+
+        state.State.TreeId = "test-tree";
+
+        // The leaf has split before, so the ratchet is spent and the legacy
+        // disjunct is dead on it.
+        state.State.SplitState = SplitState.SplitComplete;
+
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = firstMintedSibling;
+        state.State.NextSibling = firstMintedSibling;
+
+        // The hole. The leaf absorbed its rightmost successor before this
+        // division began, so the intent site copied a null NextSibling into
+        // OldNextSibling. Against the inferred predicate this single null made
+        // an in-flight division indistinguishable from a settled leaf.
+        state.State.OldNextSibling = null;
+
+        // The explicit marker the intent site now persists. This is the field
+        // under test: it is the only thing left that says a division is
+        // outstanding on a leaf in this shape.
+        state.State.SplitInFlight = true;
+
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        // Past capacity, for the same reason as the fixture above: without a
+        // real overflow SplitAsync is never reached and the assertion is
+        // vacuous. See the comment there before trimming this loop.
+        try
+        {
+            for (var i = 0; i < 12; i++)
+            {
+                await grain.SetAsync($"n{i:D2}", Encoding.UTF8.GetBytes("v"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Assert.Fail(
+                "The overflow re-entered the split mint instead of resuming the outstanding "
+                + "division on a leaf with no successor. Underlying failure: " + ex.Message);
+        }
+
+        Assert.That(
+            state.State.SplitSiblingId,
+            Is.EqualTo(firstMintedSibling),
+            "A leaf with no successor must still resume its outstanding division. Inferring "
+            + "the division from OldNextSibling cannot see this leaf, because the intent site "
+            + "copies a null NextSibling into it - so the predicate reads settled, recovery "
+            + "declines, and the next overflow mints a second sibling and strands the first.");
     }
 
     /// <summary>

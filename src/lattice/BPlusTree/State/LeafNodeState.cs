@@ -110,6 +110,52 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(9)] public GrainId? OldNextSibling { get; set; }
 
     /// <summary>
+    /// Whether a division of this leaf has published durable intent but has
+    /// not yet completed (issue #3265). Written at exactly two places: set
+    /// beside the split intent in <c>BPlusLeafGrain.SplitAsync</c>, and
+    /// cleared in <c>BPlusLeafGrain.CompleteSplitAsync</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This field exists because every other candidate for the question "is a
+    /// division outstanding?" is overloaded, and each overload silently maps
+    /// an in-flight split onto the same value as no split at all.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="SplitState"/> is a monotone max lattice, so
+    /// <c>SplitComplete</c> absorbs the <c>Merge(SplitInProgress)</c> that
+    /// opens every later division. It reads "complete" for the rest of a
+    /// leaf's life after its first split. That was the original defect.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="OldNextSibling"/> is assigned as a verbatim copy of
+    /// <see cref="NextSibling"/>, so on a leaf whose successor is null it is
+    /// itself null, and "split in flight" becomes byte-identical to "no split
+    /// in flight". A leaf reaches that shape by splitting and later absorbing
+    /// its rightmost successor through the reclaim widen path, which assigns a
+    /// nullable successor and does not touch this state.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="SplitSiblingId"/> and <see cref="SplitKey"/> are nulled by
+    /// the absorbed-boundary clear on the reclaim path, so neither survives as
+    /// a witness either.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// Conjoining the overloaded candidates does not cancel the overloads, it
+    /// inherits all of them: any single blind term makes the conjunction
+    /// blind. Hence a dedicated marker no other concern writes.
+    /// </para>
+    /// <para>
+    /// <b>Do not write this field from any other path.</b> Its entire value is
+    /// that its meaning cannot be overloaded, and a second writer would end
+    /// that in one commit.
+    /// </para>
+    /// </remarks>
+    [Id(24)] public bool SplitInFlight { get; set; }
+
+    /// <summary>
     /// Highest write-ahead-log offset this leaf's activation-time replay
     /// has SCANNED. Not "applied": replay advances this over entries it
     /// skips as belonging to another leaf's key range or shard, because

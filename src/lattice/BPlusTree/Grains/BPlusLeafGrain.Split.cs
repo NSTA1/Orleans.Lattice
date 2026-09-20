@@ -614,15 +614,21 @@ internal sealed partial class BPlusLeafGrain
     /// remaining sites rather than routing around them again.
     /// </para>
     /// <para>
-    /// <see cref="LeafNodeState.OldNextSibling"/> is the honest discriminator.
-    /// It is assigned beside the split intent and cleared only by
-    /// <c>CompleteSplitAsync</c>, so it is non-null exactly while a division is
-    /// outstanding - on the first division and on every one after it.
+    /// <see cref="LeafNodeState.SplitInFlight"/> is the discriminator, and it
+    /// is a dedicated field rather than an inference because every field that
+    /// could have been inferred from is overloaded. <c>OldNextSibling</c> is a
+    /// verbatim copy of <c>NextSibling</c>, so it is null during a division of
+    /// a leaf with no successor; <c>SplitSiblingId</c> and <c>SplitKey</c> are
+    /// nulled by the absorbed-boundary clear on the reclaim path. Conjoining
+    /// overloaded terms inherits every overload rather than cancelling any, so
+    /// only a field no other concern writes can answer this question. The
+    /// legacy marker is still honoured so a division already in flight at
+    /// upgrade time is recovered rather than stranded by the fix.
     /// </para>
     /// </remarks>
     private bool HasInterruptedSplit
-        => state.State.SplitState == Primitives.SplitState.SplitInProgress
-            || (state.State.OldNextSibling is not null && state.State.SplitSiblingId is not null);
+        => state.State.SplitInFlight
+            || state.State.SplitState == Primitives.SplitState.SplitInProgress;
 
     private async Task<SplitResult?> SplitAsync()
     {
@@ -653,16 +659,24 @@ internal sealed partial class BPlusLeafGrain
         // which is why the observed damage was several unparented leaves all
         // claiming one range.
         //
-        // OldNextSibling is the discriminator, and it has to be. SplitState
-        // cannot serve: it is a monotone max lattice (Unsplit < SplitInProgress
-        // < SplitComplete), so once a leaf has completed any split it reads
-        // SplitComplete for the rest of its life and Merge(SplitInProgress)
-        // cannot move it back. A guard on SplitState would therefore be dead
-        // after the first split - precisely for the long-lived, frequently
-        // splitting leaves that accumulate this damage. OldNextSibling is set
-        // beside the intent below and cleared only by CompleteSplitAsync, so it
-        // is non-null exactly while a division is in flight.
-        if (state.State.OldNextSibling is not null && state.State.SplitSiblingId is not null)
+        // The discriminator is LeafNodeState.SplitInFlight, an explicit durable
+        // marker, and it has to be explicit. SplitState cannot serve: it is a
+        // monotone max lattice (Unsplit < SplitInProgress < SplitComplete), so
+        // once a leaf has completed any split it reads SplitComplete for the
+        // rest of its life and Merge(SplitInProgress) cannot move it back. A
+        // guard on SplitState would therefore be dead after the first split -
+        // precisely for the long-lived, frequently splitting leaves that
+        // accumulate this damage.
+        //
+        // Nor can it be inferred from the fields written beside the intent.
+        // OldNextSibling is a verbatim copy of NextSibling, so it is null
+        // during a division of a leaf that has no successor - reachable by
+        // splitting and then absorbing the rightmost successor through the
+        // reclaim widen path. SplitSiblingId and SplitKey are nulled by the
+        // absorbed-boundary clear on that same path. Conjoining those terms
+        // inherits both blind spots instead of cancelling either, so the marker
+        // is a field no other concern writes. See LeafNodeState.SplitInFlight.
+        if (HasInterruptedSplit)
         {
             ResolveLogger()?.LogWarning(
                 "Leaf {LeafId} was asked to split again while a previous division to sibling {SiblingId} at key "
@@ -768,6 +782,16 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
         state.State.OldNextSibling = state.State.NextSibling;
         state.State.NextSibling = state.State.SplitSiblingId;
+
+        // Issue #3265. The unambiguous record that a division is outstanding.
+        // It is set here and cleared only in CompleteSplitAsync, in the SAME
+        // persist as the intent above - a marker written in a later write
+        // would leave a window whose crash is exactly the case it exists to
+        // survive. Every other field on these four lines is overloaded: the
+        // ratchet cannot move on a leaf that has split before, and both
+        // OldNextSibling and SplitSiblingId have reachable nulls during an
+        // in-flight division. See LeafNodeState.SplitInFlight.
+        state.State.SplitInFlight = true;
         await PersistAsync();
 
         LatticeMetrics.LeafSplits.Add(1,
@@ -1050,6 +1074,7 @@ internal sealed partial class BPlusLeafGrain
 
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
+        state.State.SplitInFlight = false;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         // Advance the donor's per-partition projection checkpoints to
