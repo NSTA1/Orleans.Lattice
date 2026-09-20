@@ -497,7 +497,8 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         IVectorIndexStore store,
         string prefix,
         RepoContextAnnIndexLoadReporter? load,
-        RepoContextAnnOptions options) => new(
+        RepoContextAnnOptions options,
+        RepoContextRetrievalReadinessState? readiness = null) => new(
             RepoId,
             Space,
             source,
@@ -506,7 +507,8 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             prefix,
             NullLogger.Instance,
             partitioning: null,
-            load: load);
+            load: load,
+            readiness: readiness);
 
     /// <summary>
     /// A store that can be told to stop serving a watched prefix partway and park

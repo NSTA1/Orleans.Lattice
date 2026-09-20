@@ -50,7 +50,7 @@ internal static class RepoContextToolHandlers
         // the hold-down boundary and report the self-contradictory pair
         // "ready = true, phase = building".
         var phase = readiness.Phase;
-        var ready = phase != RepoContextRetrievalReadinessPhase.Building;
+        var ready = RepoContextRetrievalReadinessState.IsReadyPhase(phase);
 
         return new RepoContextHealthResult
         {
@@ -85,6 +85,13 @@ internal static class RepoContextToolHandlers
             "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
             + "but semantic retrieval is NOT serving: searches are answered by degraded keyword "
             + "recall. Treat retrieval results as incomplete until this clears.",
+        RepoContextRetrievalReadinessPhase.SaturatedUnavailable =>
+            "The Orleans.Lattice repository-context MCP surface is registered and reachable, "
+            + "but semantic retrieval is NOT serving and is NOT expected to start at the present "
+            + "capacity: an admission gate has refused the vector plane's open past its declared "
+            + "bound. Searches are answered by degraded keyword recall. The open keeps retrying "
+            + "and this clears by itself once admission recovers, so the remedy is capacity rather "
+            + "than a restart.",
         _ => throw new ArgumentOutOfRangeException(
             nameof(phase), phase, "No status line is declared for this readiness phase."),
     };

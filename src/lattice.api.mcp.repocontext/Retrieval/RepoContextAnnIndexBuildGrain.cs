@@ -474,6 +474,24 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// <see cref="EmbeddingSpaceMismatchException"/> both derive from
     /// <see cref="InvalidOperationException"/>, which is why no arm matches that base
     /// type: an arm that did would capture whichever of the two is tested after it.
+    /// <see cref="LatticeSaturatedException"/> derives from it as well, which is why
+    /// its arm is FIRST rather than appended: an admission refusal reaching either of
+    /// the two arms above would be reported as an unrecoverable projection or a
+    /// misconfigured plane, both of which send an operator to a rebuild or a
+    /// reconfiguration for what is retryable back-pressure.
+    /// </para>
+    /// <para>
+    /// <b>The saturation arm exists because two instruments booked one event
+    /// differently (issue #3286).</b> A refused WAL replay permit is already counted
+    /// by <see cref="RepoContextAnnIndexLoadReporter"/> as
+    /// <see cref="RepoContextAnnIndexLoadOutcome.Refused"/> - deliberately NOT as a
+    /// fault, because folding it in would make the fault arm rise whenever the
+    /// admission bound started working. The escalating refusal then rethrows the
+    /// original saturation type, reaches this seam, and matched no arm, so the same
+    /// event was simultaneously benign on one counter and
+    /// <see cref="RepoContextAnnBuildFaultCause.Unexpected"/> - the arm that pages -
+    /// on the other. Live, that read as 61 refusals against 44 faults where the two
+    /// had previously tracked 1:1.
     /// </para>
     /// <para>
     /// Silo churn is matched by type name rather than by type, because one of the two
@@ -491,6 +509,21 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     {
         for (var e = exception; e is not null; e = e.InnerException)
         {
+            // FIRST, deliberately. This type derives from InvalidOperationException,
+            // as do LeafProjectionStaleException and EmbeddingSpaceMismatchException
+            // below it. No arm below matches that base class TODAY, so the position
+            // is not currently load-bearing and a perturbation that demotes it is
+            // not detectable - which is exactly why it is stated here rather than
+            // left to a guard that cannot see it. Any future arm matching
+            // InvalidOperationException, or any widening of the two arms that
+            // already match its subtypes, would swallow a benign, correctly-bounded
+            // refusal into a cause whose remedy is an operator rebuild. Keep it
+            // first and this cannot happen; move it and nothing will tell you.
+            if (e is LatticeSaturatedException)
+            {
+                return RepoContextAnnBuildFaultCause.Saturated;
+            }
+
             if (e is ScanPageStalledException)
             {
                 return RepoContextAnnBuildFaultCause.ScanPageStalled;

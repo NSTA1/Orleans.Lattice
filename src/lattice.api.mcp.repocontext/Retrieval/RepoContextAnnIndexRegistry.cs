@@ -46,17 +46,25 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     // that happens to fault.
     private readonly RepoContextAnnIndexLoadReporter _load = new();
 
+    // Injected rather than owned, because this one is genuinely shared: the health
+    // tool and the /health/ready endpoint read the same instance. Optional so a test
+    // can construct the registry without a readiness state, in which case a terminal
+    // saturation episode is logged and metered but reaches no readiness surface.
+    private readonly RepoContextRetrievalReadinessState? _readiness;
+
     private bool _disposed;
 
     /// <summary>Creates the registry.</summary>
     /// <param name="backing">The factory binding each index to its store of record and its durable store. Must not be <see langword="null"/>.</param>
     /// <param name="options">The plane's shaping and maintenance options. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the build-state report is written to. Must not be <see langword="null"/>.</param>
+    /// <param name="readiness">The shared retrieval readiness state a terminal saturation episode is reported to, or <see langword="null"/> to report to none.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexRegistry(
         IRepoContextAnnBackingFactory backing,
         RepoContextAnnOptions options,
-        ILogger<RepoContextAnnIndexRegistry> logger)
+        ILogger<RepoContextAnnIndexRegistry> logger,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(backing);
         ArgumentNullException.ThrowIfNull(options);
@@ -64,6 +72,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         _backing = backing;
         _options = options;
         _logger = logger;
+        _readiness = readiness;
     }
 
     /// <inheritdoc />
@@ -291,7 +300,8 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
             LatticeRepoContextAnnBackingFactory.KeyPrefix(repoId, space),
             _logger,
             _partitioning,
-            _load);
+            _load,
+            _readiness);
 
         var winner = _entries.GetOrAdd(key, created);
         if (!ReferenceEquals(winner, created))

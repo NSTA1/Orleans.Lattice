@@ -115,6 +115,54 @@ internal sealed class RepoContextAnnOptions
     public int MaxOpenSliceExtensions { get; init; } = 6;
 
     /// <summary>
+    /// How many <b>consecutive</b> admission refusals an open may take before the
+    /// handle declares itself terminally saturated. Zero removes the count bound,
+    /// leaving <see cref="OpenRefusalTerminalPeriod"/> as the only one.
+    /// <para>
+    /// <b>This exists because a refusal loop had no terminal state at all, and that
+    /// is issue #3286.</b> Measured live: <c>ann.index.load{outcome="refused"}</c>
+    /// climbing at 0.66 per minute while <c>fresh</c> and <c>resumed</c> stayed at
+    /// zero indefinitely, <c>ann.build.step.in_flight_seconds{phase="opening"}</c>
+    /// pinned at 273 seconds with every later phase at zero, and
+    /// <c>/health/ready</c> returning 503 with nothing anywhere distinguishing
+    /// "still arming" from "will never arm". Those two readings need different
+    /// actions - wait, versus add capacity - and the plane emitted the same thing
+    /// for both.
+    /// </para>
+    /// <para>
+    /// <b>The bound is on DECLARING, not on trying.</b> Reaching it makes the state
+    /// readable and does not stop the open, so a plane whose saturation clears
+    /// still self-heals with no operator action. A terminal state that also stopped
+    /// retrying would turn a transient heap excursion into a permanent outage
+    /// requiring a restart, which is a worse failure than the silence it replaces.
+    /// </para>
+    /// <para>
+    /// The default of twelve is derived from that measured refusal rate: at roughly
+    /// one refusal every ninety seconds the state is reached in about a quarter of
+    /// an hour, which is long enough that an ordinary cold open over a large plane
+    /// can never reach it (such an open banks progress, which clears the counter)
+    /// and short enough that an operator watching a deploy is not left guessing.
+    /// </para>
+    /// </summary>
+    public int MaxConsecutiveOpenRefusals { get; init; } = 12;
+
+    /// <summary>
+    /// How long an unbroken run of admission refusals may persist before the handle
+    /// declares itself terminally saturated, whichever bound is reached first.
+    /// <see cref="TimeSpan.Zero"/> removes the elapsed bound, leaving
+    /// <see cref="MaxConsecutiveOpenRefusals"/> as the only one.
+    /// <para>
+    /// <b>Both bounds exist because either alone is reachable only on some
+    /// deployments.</b> A count bound alone is never reached by a host whose
+    /// coordinator ticks slowly, which is exactly the host that most needs the
+    /// signal; an elapsed bound alone is reached by a host that took two refusals
+    /// during a long, slow, healthy startup. The counter is cleared by any open
+    /// that banks progress, so neither bound is reachable by a converging walk.
+    /// </para>
+    /// </summary>
+    public TimeSpan OpenRefusalTerminalPeriod { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Environment variable that overrides <see cref="OpenSliceBudget"/>, in
     /// seconds. Zero removes the bound.
     /// </summary>
@@ -133,6 +181,20 @@ internal sealed class RepoContextAnnOptions
     /// </summary>
     internal const string IngestSliceBudgetSecondsVariable =
         "LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS";
+
+    /// <summary>
+    /// Environment variable that overrides <see cref="MaxConsecutiveOpenRefusals"/>.
+    /// Zero removes the count bound.
+    /// </summary>
+    internal const string MaxConsecutiveOpenRefusalsVariable =
+        "LATTICE_REPOCONTEXT_ANN_OPEN_MAX_CONSECUTIVE_REFUSALS";
+
+    /// <summary>
+    /// Environment variable that overrides <see cref="OpenRefusalTerminalPeriod"/>,
+    /// in seconds. Zero removes the elapsed bound.
+    /// </summary>
+    internal const string OpenRefusalTerminalPeriodSecondsVariable =
+        "LATTICE_REPOCONTEXT_ANN_OPEN_REFUSAL_TERMINAL_SECONDS";
 
     /// <summary>
     /// Resolves the open-slice bounds from the environment, falling back to the
@@ -167,6 +229,10 @@ internal sealed class RepoContextAnnOptions
             IngestSliceBudget = ReadSeconds(IngestSliceBudgetSecondsVariable, defaults.IngestSliceBudget),
             MaxOpenSliceExtensions = ReadCount(
                 MaxOpenSliceExtensionsVariable, defaults.MaxOpenSliceExtensions),
+            MaxConsecutiveOpenRefusals = ReadCount(
+                MaxConsecutiveOpenRefusalsVariable, defaults.MaxConsecutiveOpenRefusals),
+            OpenRefusalTerminalPeriod = ReadSeconds(
+                OpenRefusalTerminalPeriodSecondsVariable, defaults.OpenRefusalTerminalPeriod),
         };
     }
 

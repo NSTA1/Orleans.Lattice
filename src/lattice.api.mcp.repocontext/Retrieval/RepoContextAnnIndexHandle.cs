@@ -87,6 +87,21 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private const int MaxEmptyOpenDeferrals = 3;
 
     /// <summary>
+    /// Bounds an unbroken run of admission refusals so the open has a state a reader
+    /// can act on, rather than only a counter that rises. See
+    /// <see cref="RepoContextAnnOpenSaturationLatch"/> for why a rising refusal count
+    /// alone cannot distinguish a slow cold open from a plane that will not arm.
+    /// </summary>
+    private readonly RepoContextAnnOpenSaturationLatch _openSaturation;
+
+    /// <summary>
+    /// The host's shared readiness state, so a terminal saturation episode reaches
+    /// <c>/health/ready</c> and the health tool rather than only the log. Null when a
+    /// test drives the handle directly.
+    /// </summary>
+    private readonly RepoContextRetrievalReadinessState? _readiness;
+
+    /// <summary>
     /// The smallest corpus at which another threshold-crossing training may be
     /// attempted, or <c>0</c> when none has been declined yet.
     /// <para>
@@ -131,6 +146,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// to publish nothing. Null is for a test driving the handle directly; the
     /// registry always supplies one, so no deployment runs without the instrument.
     /// </param>
+    /// <param name="readiness">
+    /// The shared retrieval readiness state this handle reports a terminal
+    /// saturation episode to, or <see langword="null"/> to report nothing. Null is
+    /// for a test driving the handle directly; the registry supplies the host's
+    /// singleton.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexHandle(
         string repoId,
@@ -141,7 +162,8 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         string keyPrefix,
         ILogger logger,
         RepoContextAnnPartitioningReporter? partitioning = null,
-        RepoContextAnnIndexLoadReporter? load = null)
+        RepoContextAnnIndexLoadReporter? load = null,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(source);
@@ -159,7 +181,28 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _logger = logger;
         _partitioning = partitioning;
         _load = load;
+        _readiness = readiness;
+        _openSaturation = new RepoContextAnnOpenSaturationLatch(
+            options.TimeProvider,
+            options.MaxConsecutiveOpenRefusals,
+            options.OpenRefusalTerminalPeriod);
     }
+
+    /// <summary>
+    /// What the open has most recently observed about admission:
+    /// <see cref="RepoContextAnnOpenSaturationState.Clear"/> when no unbroken run of
+    /// refusals is in progress, <see cref="RepoContextAnnOpenSaturationState.Refusing"/>
+    /// while one is inside its bounds, and
+    /// <see cref="RepoContextAnnOpenSaturationState.Unavailable"/> once it has passed
+    /// them. Read without taking the turn.
+    /// </summary>
+    public RepoContextAnnOpenSaturationState OpenSaturation => _openSaturation.State;
+
+    /// <summary>
+    /// How many admission refusals the open has taken in an unbroken run. Zero once
+    /// any attempt banks progress, so it measures a stall rather than a lifetime.
+    /// </summary>
+    public int ConsecutiveOpenRefusals => _openSaturation.ConsecutiveRefusals;
 
     /// <summary>
     /// Whether the index can answer a query right now. Read without taking the
@@ -763,6 +806,39 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // is never touched by a refusal on any path through this clause.
             _load?.Record(RepoContextAnnIndexLoadOutcome.Refused);
 
+            // THE REFUSAL LOOP NOW HAS A TERMINAL STATE (issue #3286). The
+            // escalation above bounds ONE ATTEMPT; it does not bound the loop,
+            // because EnsureBuiltAsync catches nothing and the coordinator simply
+            // ticks again. Under sustained saturation that produced a refusal
+            // count rising for ever against successful opens pinned at zero, with
+            // every reading of it equally consistent with a large, healthy, slow
+            // cold open. The latch turns that into a state, and the state reaches
+            // readiness, so "still arming" and "will not arm at this capacity"
+            // stop being the same observation.
+            if (_openSaturation.RecordRefusal() == RepoContextAnnOpenSaturationState.Unavailable
+                && _readiness?.MarkSaturationUnavailable() == true)
+            {
+                // Once per episode entered, not once per refusal: the transition is
+                // the event, and logging every refusal at Warning would bury it
+                // under the noise it exists to summarise.
+                _logger.LogWarning(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} has "
+                    + "been refused admission on {Refusals} consecutive open attempts over {RefusedFor} "
+                    + "without banking a single identifier mapping, so semantic retrieval is reported "
+                    + "UNAVAILABLE-SATURATED rather than arming: at the present capacity this plane will "
+                    + "not arm, and the remedy is capacity rather than patience. The open keeps retrying "
+                    + "and this clears by itself once admission recovers. Bounds are "
+                    + "{CountVariable} and {PeriodVariable}.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    _openSaturation.ConsecutiveRefusals,
+                    _openSaturation.RefusedFor,
+                    RepoContextAnnOptions.MaxConsecutiveOpenRefusalsVariable,
+                    RepoContextAnnOptions.OpenRefusalTerminalPeriodSecondsVariable);
+            }
+
             if (RecordEmptyOpenSliceAndShouldEscalate())
             {
                 _logger.LogWarning(
@@ -803,6 +879,13 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _load?.Record(resuming
             ? RepoContextAnnIndexLoadOutcome.Resumed
             : RepoContextAnnIndexLoadOutcome.Fresh);
+
+        // The open completed, so whatever admission refusals preceded it are behind
+        // a walk that finished. Clearing on success as well as on progress matters
+        // for the plane that was refused every slice and then admitted on the last
+        // one: that walk banks its remaining mappings and completes in a single
+        // attempt, so the progress path above is never reached for it.
+        ClearOpenSaturation();
 
         _index = _loading;
         _loading = null;
@@ -859,10 +942,41 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         {
             _lastOpenKeyCount = loaded;
             _emptyOpenDeferrals = 0;
+
+            // AN ATTEMPT THAT BANKED SOMETHING PROVES ADMISSION IS WORKING, so the
+            // refusal run ends here too. Without this a walk that advances on every
+            // attempt and is refused on every attempt - which is converging, not
+            // wedged - would accumulate refusals until it declared an outage it was
+            // in the middle of recovering from.
+            ClearOpenSaturation();
             return false;
         }
 
         return ++_emptyOpenDeferrals >= MaxEmptyOpenDeferrals;
+    }
+
+    /// <summary>
+    /// Ends any open refusal run and, if a terminal saturation episode was open,
+    /// returns readiness to arming. Called from every path that demonstrates the
+    /// open is progressing again.
+    /// </summary>
+    private void ClearOpenSaturation()
+    {
+        if (!_openSaturation.Clear())
+        {
+            return;
+        }
+
+        if (_readiness?.ClearSaturationUnavailable() == true)
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is being "
+                + "admitted again, so semantic retrieval is reported as arming rather than "
+                + "unavailable-saturated.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
+        }
     }
 
     private async Task CatchUpAsync(

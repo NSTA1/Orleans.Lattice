@@ -80,7 +80,7 @@ internal enum RepoContextAnnBuildSliceOutcome
 internal enum RepoContextAnnBuildFaultCause
 {
     /// <summary>
-    /// Something outside the four classified causes. The only value that should
+    /// Something outside the five classified causes. The only value that should
     /// page: it means a step faulted in a way nobody has classified, so the
     /// vocabulary itself is behind the code. Every unrecognised type fails open
     /// onto this arm rather than onto one with a benign explanation.
@@ -124,6 +124,34 @@ internal enum RepoContextAnnBuildFaultCause
     /// not clear on retry and the build is wrongly configured rather than unlucky.
     /// </summary>
     PlaneRejected = 4,
+
+    /// <summary>
+    /// A <see cref="LatticeSaturatedException"/>: an admission gate declined the
+    /// work rather than failing it - the per-silo WAL replay permit queue was at
+    /// its bound, or the heap was at its withholding floor. The work was never
+    /// attempted, the refusal is retryable back-pressure, and the remedy is
+    /// capacity rather than code.
+    /// <para>
+    /// <b>This arm exists because the sibling instrument already had one and the
+    /// two disagreed about a single event.</b> Issue #3284 gave
+    /// <c>repocontext.ann.index.load</c> its own <c>refused</c> outcome precisely
+    /// so a working admission bound could not be read as a fault; the escalating
+    /// refusal then rethrows, reaches the tick-wide fault seam, and was booked
+    /// here as <see cref="Unexpected"/> - so the same refusal read as benign on one
+    /// counter and as the paging arm on the other. A measured 61 refusals against
+    /// 44 faults is that disagreement, not two conditions.
+    /// </para>
+    /// <para>
+    /// <b>It must be classified ahead of every arm that matches an
+    /// <see cref="InvalidOperationException"/>.</b>
+    /// <see cref="LatticeSaturatedException"/> derives from it, as do
+    /// <see cref="LeafProjectionStaleException"/> and
+    /// <see cref="EmbeddingSpaceMismatchException"/>, so an arm ordered after
+    /// either of those would swallow a refusal into a cause whose remedy is an
+    /// operator rebuild or a reconfiguration - both wrong, and both expensive.
+    /// </para>
+    /// </summary>
+    Saturated = 5,
 }
 
 /// <summary>
@@ -134,16 +162,18 @@ internal enum RepoContextAnnBuildFaultCause
 /// <param name="ProjectionStale">Faults whose projection checkpoint is unrecoverable.</param>
 /// <param name="DependencyUnavailable">Faults that could not reach a dependency.</param>
 /// <param name="PlaneRejected">Faults the plane refused deterministically.</param>
+/// <param name="Saturated">Refusals by an admission gate at its bound, which are retryable back-pressure rather than faults.</param>
 internal readonly record struct RepoContextAnnBuildFaultTally(
     long Unexpected,
     long ScanPageStalled,
     long ProjectionStale,
     long DependencyUnavailable,
-    long PlaneRejected)
+    long PlaneRejected,
+    long Saturated)
 {
-    /// <summary>Every fault counted, across all five causes.</summary>
+    /// <summary>Every fault counted, across all six causes.</summary>
     public long Total
-        => Unexpected + ScanPageStalled + ProjectionStale + DependencyUnavailable + PlaneRejected;
+        => Unexpected + ScanPageStalled + ProjectionStale + DependencyUnavailable + PlaneRejected + Saturated;
 }
 
 /// <summary>
@@ -400,6 +430,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// <summary>The tag value for work the plane refused deterministically.</summary>
     internal const string CausePlaneRejectedTag = "plane-rejected";
 
+    /// <summary>The tag value for work an admission gate declined at its bound.</summary>
+    internal const string CauseSaturatedTag = "saturated";
+
     /// <summary>
     /// The tag key naming the repository whose approximate index the step was
     /// building. Bounded by the number of repositories onboarded on this host, one
@@ -493,6 +526,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _faultedProjectionStale;
     private long _faultedDependencyUnavailable;
     private long _faultedPlaneRejected;
+    private long _faultedSaturated;
     private long _faultedCoordinating;
     private long _faultedOpening;
     private long _faultedIngesting;
@@ -554,7 +588,13 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 + "will not clear on retry and needs an operator-driven rebuild), 'dependency-unavailable' (a grain "
                 + "call timed out, the transport failed, or the cluster rejected the message, which is expected to "
                 + "clear once the cluster settles), 'plane-rejected' (the embedding space did not match or an "
-                + "argument was refused, which is deterministic and will not clear on retry), or 'unexpected' "
+                + "argument was refused, which is deterministic and will not clear on retry), 'saturated' (an "
+                + "ADMISSION GATE DECLINED THE WORK AT ITS BOUND - the per-silo WAL replay permit queue was "
+                + "full, or the heap was at its withholding floor - so the work was never attempted, the "
+                + "refusal is retryable back-pressure, and the remedy is capacity rather than code; this is "
+                + "the same single event the sibling 'repocontext.ann.index.load' counter books as "
+                + "outcome='refused', and until issue #3286 the two disagreed about it, one arm calling it "
+                + "benign while the other called it unclassified), or 'unexpected' "
                 + "(unclassified - the only value that should page). The cause values are deliberately NOT "
                 + "pre-minted: they partition 'faulted' rather than the whole population, so a zero on a cause is "
                 + "uninterpretable until 'faulted' is itself non-zero, at which point the faults have minted their "
@@ -1150,6 +1190,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 case RepoContextAnnBuildFaultCause.PlaneRejected:
                     _faultedPlaneRejected++;
                     break;
+                case RepoContextAnnBuildFaultCause.Saturated:
+                    _faultedSaturated++;
+                    break;
                 default:
                     // Fails open onto the arm that pages, matching the tag
                     // DescribeCause resolves for the same value, so the tally can
@@ -1178,7 +1221,8 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                     _faultedScanPageStalled,
                     _faultedProjectionStale,
                     _faultedDependencyUnavailable,
-                    _faultedPlaneRejected),
+                    _faultedPlaneRejected,
+                    _faultedSaturated),
                 new RepoContextAnnBuildPhaseTally(
                     _faultedCoordinating,
                     _faultedOpening,
@@ -1222,6 +1266,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         RepoContextAnnBuildFaultCause.ProjectionStale => CauseProjectionStaleTag,
         RepoContextAnnBuildFaultCause.DependencyUnavailable => CauseDependencyUnavailableTag,
         RepoContextAnnBuildFaultCause.PlaneRejected => CausePlaneRejectedTag,
+        RepoContextAnnBuildFaultCause.Saturated => CauseSaturatedTag,
         _ => CauseUnexpectedTag,
     };
 
