@@ -90,6 +90,176 @@ public sealed class RepoContextDrainForecastTests
     }
 
     [Test]
+    public void The_verdict_and_the_fraction_printed_beside_it_are_computed_from_the_same_budget()
+    {
+        // The regression pin for issue #3305, stated as the equivalence that defect
+        // violated: a live container reported "took 91.9s and does not fit this
+        // process's 180s shutdown budget (51% of it)". Both figures were correct;
+        // only the boolean was computed against a different budget from the
+        // percentage, because a recorded Abandoned outcome - a fact about the
+        // PREVIOUS process's budget - was replayed unconditionally against this one.
+        //
+        // Asserting the two agree across a matrix is what makes them unable to
+        // diverge again. Asserting the one scenario below would not: it would pass
+        // against any implementation that special-cased that scenario.
+        foreach (var recordedBudget in new[] { 30d, 90d, 180d })
+        {
+            foreach (var outcome in new[] { RepoContextDrainOutcome.Completed, RepoContextDrainOutcome.Abandoned })
+            {
+                foreach (var duration in new[] { 0.5d, 20d, 63d, 89.7d, 91.9d, 102.1d, 400d })
+                {
+                    foreach (var currentBudget in new[] { 30d, 90d, 180d, 240d })
+                    {
+                        var forecast = RepoContextDrainForecast.Evaluate(
+                            new RepoContextDrainObservation(
+                                Observed,
+                                outcome,
+                                TimeSpan.FromSeconds(recordedBudget),
+                                TimeSpan.FromSeconds(duration),
+                                10_000),
+                            TimeSpan.FromSeconds(currentBudget));
+
+                        var context = $"{outcome} drain of {duration}s recorded under {recordedBudget}s, "
+                            + $"evaluated against {currentBudget}s";
+
+                        Assert.That(forecast.ConsumedFraction, Is.Not.Null, context);
+
+                        // The equivalence, in both directions. "Does not fit" is
+                        // exactly "consumed the whole budget", so a verdict of
+                        // Exceeded beside a sub-100% percentage - the shape #3305
+                        // reported - is unrepresentable.
+                        Assert.That(
+                            forecast.Verdict == RepoContextDrainForecastVerdict.Exceeded,
+                            Is.EqualTo(forecast.ConsumedFraction >= 1.0d),
+                            $"the verdict must agree with the fraction printed beside it: {context}");
+                    }
+                }
+            }
+        }
+    }
+
+    [Test]
+    public void The_remediation_for_an_exceeded_budget_is_never_below_the_grant_already_declared()
+    {
+        // The second half of the #3305 complaint: the message advised raising the
+        // grant "to at least 123s" to a deployment already declaring 240s, so
+        // following it would have been a reduction. That was a symptom of the verdict
+        // firing when it should not have, and it cannot recur once Exceeded means
+        // the drain genuinely overran - but the property is worth asserting directly,
+        // because it is the one an operator acts on.
+        foreach (var grantSeconds in new[] { 30d, 120d, 240d, 600d })
+        {
+            var grant = TimeSpan.FromSeconds(grantSeconds);
+            var budget = RepoContextShutdownBudget.Derive(grant);
+
+            // Any drain that overruns this budget, including one that only just does.
+            foreach (var duration in new[] { budget, budget + TimeSpan.FromSeconds(1), budget * 3 })
+            {
+                var forecast = RepoContextDrainForecast.Evaluate(
+                    new RepoContextDrainObservation(
+                        Observed,
+                        RepoContextDrainOutcome.Abandoned,
+                        budget,
+                        duration,
+                        10_000),
+                    budget);
+
+                Assert.That(forecast.Verdict, Is.EqualTo(RepoContextDrainForecastVerdict.Exceeded));
+                Assert.That(
+                    forecast.RequiredStopGracePeriod!.Value,
+                    Is.GreaterThanOrEqualTo(grant),
+                    $"advising a grant below the {grantSeconds}s already declared would ask an operator "
+                    + "to reduce it in order to fix an overrun");
+            }
+        }
+    }
+
+    [Test]
+    public void A_drain_abandoned_under_a_smaller_budget_is_unproven_against_a_larger_one_rather_than_exceeded()
+    {
+        // The verbatim scenario from issue #3305. The previous process abandoned a
+        // drain at 91.9s under a 90s budget; the grant was then raised to 240s, so
+        // this process derives 180s. The old code replayed the recorded abandonment
+        // and announced "does not fit ... (51% of it)".
+        var forecast = RepoContextDrainForecast.Evaluate(
+            new RepoContextDrainObservation(
+                Observed,
+                RepoContextDrainOutcome.Abandoned,
+                TimeSpan.FromSeconds(90),
+                TimeSpan.FromSeconds(91.9),
+                3334),
+            TimeSpan.FromSeconds(180));
+
+        Assert.Multiple(() =>
+        {
+            // Not Exceeded: 91.9s fits 180s, and saying otherwise beside "51%" is the
+            // defect. Not Fits either: the drain was CUT SHORT, so 91.9s is a floor
+            // on what a complete drain costs and not a measurement of one. Reporting
+            // it as fitting would replace a false alarm with a false all-clear.
+            Assert.That(forecast.Verdict, Is.EqualTo(RepoContextDrainForecastVerdict.Unproven));
+            Assert.That(
+                forecast.IsFailing,
+                Is.False,
+                "an operator who has just performed the remediation must not still be told the next "
+                + "stop will be abandoned");
+            Assert.That(forecast.ConsumedFraction, Is.EqualTo(91.9 / 180.0).Within(1e-9));
+            Assert.That(
+                forecast.RequiredStopGracePeriod!.Value,
+                Is.LessThan(TimeSpan.FromSeconds(240)),
+                "the floor the truncated drain implies is already covered by the declared grant, which is "
+                + "why the report must not present it as a value to raise to");
+        });
+    }
+
+    [Test]
+    public void The_same_abandoned_drain_against_an_unchanged_budget_is_still_reported_as_exceeding()
+    {
+        // The control that stops the #3305 fix from becoming a suppression. Nothing
+        // about the deployment changed here, so the abandonment is still a live
+        // prediction and must still be reported as one.
+        var forecast = RepoContextDrainForecast.Evaluate(
+            new RepoContextDrainObservation(
+                Observed,
+                RepoContextDrainOutcome.Abandoned,
+                TimeSpan.FromSeconds(90),
+                TimeSpan.FromSeconds(91.9),
+                3334),
+            TimeSpan.FromSeconds(90));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forecast.Verdict, Is.EqualTo(RepoContextDrainForecastVerdict.Exceeded));
+            Assert.That(forecast.IsFailing, Is.True);
+            Assert.That(forecast.ConsumedFraction, Is.GreaterThanOrEqualTo(1.0d));
+        });
+    }
+
+    [Test]
+    public void An_unproven_verdict_still_carries_the_per_activation_cost_the_truncated_drain_measured()
+    {
+        // The projection is the mechanism that reports growth while the container
+        // runs, and it is the only live signal left once the startup verdict stops
+        // claiming an overrun. Losing it here would trade #3305's false alarm for
+        // silence, which is a worse outcome than the defect.
+        var forecast = RepoContextDrainForecast.Evaluate(
+            new RepoContextDrainObservation(
+                Observed,
+                RepoContextDrainOutcome.Abandoned,
+                TimeSpan.FromSeconds(90),
+                TimeSpan.FromSeconds(91.9),
+                3334),
+            TimeSpan.FromSeconds(180));
+
+        Assert.That(forecast.PerActivationCost, Is.Not.Null);
+        Assert.That(forecast.TryProject(8000, out var projection), Is.True);
+        Assert.That(
+            projection.ExceedsBudget,
+            Is.True,
+            "8000 activations at the cost this drain measured does not fit 180s, and the running poll "
+            + "must still say so");
+    }
+
+    [Test]
     public void The_gate_run_two_measurement_yields_the_grant_that_would_actually_have_covered_it()
     {
         // The measurement from the gate run that motivated issue #2598: a 102.1s

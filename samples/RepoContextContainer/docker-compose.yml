@@ -564,9 +564,19 @@ services:
       LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "300"
       # The container's stop_grace_period, DECLARED to the process that has to fit
       # inside it. The host derives its own shutdown budget from this (issue #2402)
-      # instead of holding a second, independent constant: 120s here yields the 90s
-      # budget the container has always run with, and the remainder is reserve for
-      # the host to unwind and report a cut-short drain before SIGKILL.
+      # instead of holding a second, independent constant: 240s here yields a 180s
+      # budget, and the remainder is reserve for the host to unwind and report a
+      # cut-short drain before SIGKILL.
+      #
+      # 240s replaces the 120s this file shipped with, which derived a 90s budget
+      # (issue #3304). That budget was below the measured requirement, not near it:
+      # two consecutive real drains of this deployment took 89.7s and 91.9s, which
+      # is 99.7% and 102% of 90s, so a stop was expected to be abandoned and to exit
+      # 70. The host said so itself before the first of them, projecting a 112.2s
+      # drain from 3334 resident activations at the 33.7ms each the previous drain
+      # had measured. 240s is roughly 2x the 91.9s observed, because the host's own
+      # "at least 150s" advice is explicitly a no-headroom figure and the resident
+      # set grows.
       #
       # It must EQUAL the stop_grace_period set on this same service below, and
       # RepoContextComposeShutdownBudgetTests asserts exactly that. The adjacency is
@@ -576,7 +586,15 @@ services:
       # direction - declaring MORE than the container actually grants - is
       # undetectable at run time and reintroduces the silent kill of issue #2389.
       # Change the two together, always.
-      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
+      #
+      # This is a SAMPLE DEPLOYMENT'S DECLARATION and not the library default. The
+      # default behind RepoContextShutdownBudget.DefaultStopGracePeriod stays at
+      # 120s deliberately: it applies to a deployment that declares nothing, which
+      # may well be running under Docker's own 10s grace period, and a budget above
+      # the real grant is strictly worse than a small one - it arms the overrun
+      # alarm for an instant the process never reaches, so the drain-ABANDONED line
+      # is never emitted. The two numbers are free to differ and now do.
+      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "240s"
       # --------------------------------------------------------------------
       # Durable agent-memory backup (issue #2602).
       #
@@ -767,28 +785,35 @@ services:
     # sitting above a PID 1 that was not an init process.
     init: true
     # How long Docker waits between SIGTERM and SIGKILL. This MUST exceed the
-    # host's own shutdown budget (RepoContextHostBuilder.ShutdownBudget, 90s) or
-    # that budget is dead configuration: the host asks for 90s to deactivate the
+    # host's own shutdown budget or that budget is dead configuration: the host
+    # asks for the budget it derives from the declaration above to deactivate the
     # silo and flush the WAL commit-log, and Docker's default grants 10s, so
     # every `docker compose stop` / `restart` / `down` is a crash teardown and
     # the graceful deactivation path never completes. That was issue #2389, and
     # it was invisible because a SIGKILLed container reports only an exit code
     # that the next start overwrites.
     #
-    # 120s = the 90s the host is entitled to, plus 30s of headroom for process
-    # exit after the last hosted service stops. Measured, not guessed - and the
-    # measurements are the reason the bound to clear is the HOST budget rather
-    # than any one corpus's drain time. A rig holding a 400-file synthetic index
-    # spent 67.2s in Orleans' GrainDeactivation stage alone, and the same rig
-    # earlier drained the same corpus in 33.9s before its vector trees had
-    # landed. Drain time scales with resident state; the 90s ceiling does not.
+    # 240s derives a 180s budget. It replaces the 120s / 90s pair this file
+    # shipped with, which was below the measured requirement rather than near it:
+    # two consecutive real drains took 89.7s and 91.9s against that 90s budget
+    # (issue #3304). The earlier reasoning for 120s was that it cleared the host
+    # budget with 30s to spare, and that reasoning is intact - what was wrong was
+    # the budget it cleared, not the margin above it.
+    #
+    # The bound to clear is still the HOST budget rather than any one corpus's
+    # drain time, and the measurements are why. A rig holding a 400-file
+    # synthetic index spent 67.2s in Orleans' GrainDeactivation stage alone, and
+    # the same rig earlier drained the same corpus in 33.9s before its vector
+    # trees had landed. Drain time scales with resident state.
     #
     # Note what that pair implies, because it is the trap this value has to
     # survive: a `stop_grace_period` tuned to an observed drain would have been
     # set to something like 45s after the first measurement and would then have
     # started killing teardowns as the index grew, reintroducing #2389 silently
     # and with a number that looked carefully chosen. Clearing the host budget is
-    # what makes the value stable as the corpus grows.
+    # what makes the value stable as the corpus grows. 240s is set at roughly 2x
+    # the 91.9s observed for the same reason: the smallest grant that admits a
+    # measured drain grants no headroom, and the host says so when it prints one.
     #
     # THIS IS NOW THE ONLY NUMBER TO CHANGE. The host derives its own budget from
     # the grant declared in LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD above (issue
@@ -802,7 +827,7 @@ services:
     # so `docker logs` after a stop tells you the measured requirement directly;
     # if that line is ABSENT, the container was killed mid-drain and this value is
     # too small.
-    stop_grace_period: 120s
+    stop_grace_period: 240s
     # OPT-IN CPU PINNING - UNSET BY DEFAULT, AND DELIBERATELY SO (issue #2623).
     #
     # DO NOT SWITCH THIS ON IN THE MIDDLE OF A MEASUREMENT. Epic #2368 adopted a

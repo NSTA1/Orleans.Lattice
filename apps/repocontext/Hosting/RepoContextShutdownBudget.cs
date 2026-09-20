@@ -84,12 +84,19 @@ public static class RepoContextShutdownBudget
     /// short.
     /// <para>
     /// <b>The value is calibrated, not measured, and that is stated rather than
-    /// dressed up.</b> 0.75 is chosen so the shipped pair is reproduced exactly -
-    /// the sample deployment's 120s grant yields the 90s budget the container has
-    /// run with since it shipped - so this class changes no deployed behaviour and
-    /// moves no number. What it buys is structural: an operator now sets one value
-    /// instead of two independent ones, and a budget above the grant becomes
-    /// unrepresentable rather than merely discouraged.
+    /// dressed up.</b> 0.75 was chosen so that the pair this repository shipped was
+    /// reproduced exactly - a 120s grant yields a 90s budget - so introducing this
+    /// class changed no deployed behaviour and moved no number. What it buys is
+    /// structural: an operator now sets one value instead of two independent ones,
+    /// and a budget above the grant becomes unrepresentable rather than merely
+    /// discouraged.
+    /// </para>
+    /// <para>
+    /// The sample deployment has since moved off that pair - it declares 240s and so
+    /// derives 180s (issue #3304) - but the fraction is unchanged, because what it
+    /// was calibrated against was the <i>relationship</i> between a grant and its
+    /// budget and not either number. The relationship is what has to hold at any
+    /// grant.
     /// </para>
     /// </remarks>
     public const double BudgetFractionOfGrant = 0.75;
@@ -120,14 +127,29 @@ public static class RepoContextShutdownBudget
     public static readonly TimeSpan UnwindReserve = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// The grant assumed when <see cref="StopGracePeriodKey"/> is not declared: the
-    /// value the sample compose file has always set.
+    /// The grant assumed when <see cref="StopGracePeriodKey"/> is not declared.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Defaulting rather than refusing to start keeps this wiring inert for every
     /// deployment that has not opted in, which is what makes it safe to land: an
     /// existing container that sets no new variable derives exactly the budget it
     /// already ran with.
+    /// </para>
+    /// <para>
+    /// <b>This tracks the unopinionated case, not the sample.</b> It was once also
+    /// the value the sample compose file set, and issue #3304 separated the two by
+    /// raising the sample to 240s against measured drains of 89.7s and 91.9s that
+    /// did not fit the 90s budget a 120s grant derives. This default deliberately
+    /// stayed where it is, and the reason is the argument this whole class rests on,
+    /// applied to itself: it is handed to a deployment that <b>declared nothing</b>,
+    /// which may well be running under Docker's own 10s grace period. Raising it
+    /// would raise that deployment's budget without raising its grant by one second,
+    /// arming the overrun alarm for an instant the process never lives to reach and
+    /// so silencing the <c>drain ABANDONED</c> line - reintroducing the silent
+    /// teardown of issue #2389 by way of a change meant to prevent it. Raise a
+    /// deployment's grant by declaring it, which is what the variable is for.
+    /// </para>
     /// </remarks>
     public static readonly TimeSpan DefaultStopGracePeriod = TimeSpan.FromSeconds(120);
 
@@ -139,13 +161,15 @@ public static class RepoContextShutdownBudget
     public static readonly TimeSpan MaxStopGracePeriod = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// The budget derived from <see cref="DefaultStopGracePeriod"/>: 90 seconds, the
-    /// value the container has run with since it shipped.
+    /// The budget derived from <see cref="DefaultStopGracePeriod"/>: 90 seconds, for
+    /// a deployment that declares no grant of its own.
     /// </summary>
     /// <remarks>
     /// Computed from the derivation rather than written as a literal, so the claim
-    /// that the derivation reproduces the shipped pair is enforced by the code
-    /// rather than asserted in a comment beside it.
+    /// that the derivation reproduces the pair is enforced by the code rather than
+    /// asserted in a comment beside it. It is <b>not</b> the budget the sample
+    /// deployment runs on, which declares its own grant - see
+    /// <see cref="DefaultStopGracePeriod"/> for why the two were separated.
     /// </remarks>
     public static readonly TimeSpan DefaultShutdownBudget = Derive(DefaultStopGracePeriod);
 

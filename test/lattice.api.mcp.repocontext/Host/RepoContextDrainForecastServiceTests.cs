@@ -1,4 +1,6 @@
 using System.Diagnostics.Metrics;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -88,6 +90,101 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(message, Does.Contain("137s"), "the required grant, derived from the measured drain");
             Assert.That(message, Does.Contain("70"), "the exit code the next stop is expected to produce");
             Assert.That(message, Does.Contain(RepoContextShutdownBudget.StopGracePeriodKey));
+        });
+    }
+
+    [Test]
+    public void The_percentage_printed_on_a_does_not_fit_line_is_never_below_a_hundred()
+    {
+        // The regression pin for issue #3305 at the surface an operator actually
+        // reads. The live container printed, verbatim: "RepoContext's last drain took
+        // 91.9s and does not fit this process's 180s shutdown budget (51% of it)".
+        // Each number was right on its own; the sentence was self-contradictory,
+        // because the fit boolean and the percentage were computed against different
+        // budgets. Extracting the percentage from the rendered line and checking it
+        // against the claim in the same line is the only assertion that cannot be
+        // satisfied by a message that disagrees with itself.
+        foreach (var (recordedBudget, currentBudget, seconds) in new[]
+                 {
+                     (90d, 90d, 91.9d),
+                     (90d, 90d, 102.1d),
+                     (180d, 180d, 240d),
+                     (90d, 30d, 91.9d),
+                 })
+        {
+            var logger = new LevelLogger();
+            using var service = new RepoContextDrainForecastService(
+                logger,
+                new RepoContextShutdownBudgetResolution(
+                    RepoContextShutdownBudget.RequiredGrantFor(TimeSpan.FromSeconds(currentBudget)),
+                    TimeSpan.FromSeconds(currentBudget),
+                    GrantWasDeclared: true),
+                new RepoContextDrainObservation(
+                    Observed,
+                    RepoContextDrainOutcome.Abandoned,
+                    TimeSpan.FromSeconds(recordedBudget),
+                    TimeSpan.FromSeconds(seconds),
+                    10_000),
+                () => null);
+
+            service.ReportForecast();
+
+            var message = logger.Lines[0].Message;
+            Assert.That(message, Does.Contain("does not fit"), message);
+
+            var percent = Regex.Match(message, @"\((\d+)% of it\)");
+            Assert.That(percent.Success, Is.True, message);
+            Assert.That(
+                int.Parse(percent.Groups[1].Value, CultureInfo.InvariantCulture),
+                Is.GreaterThanOrEqualTo(100),
+                $"a line that says the drain does not fit must not print a percentage below 100: {message}");
+        }
+    }
+
+    [Test]
+    public void A_drain_abandoned_under_a_smaller_budget_is_reported_as_unproven_rather_than_as_a_predicted_failure()
+    {
+        // The scenario from issue #3305, end to end: the previous process abandoned a
+        // drain at 91.9s under a 90s budget, the operator raised the grant to 240s,
+        // and this process derives 180s. The old report told that operator the
+        // remediation they had just performed was still required, and advised a grant
+        // of 123s - below the 240s they had already declared, so following it would
+        // have been a reduction.
+        var logger = new LevelLogger();
+        using var service = new RepoContextDrainForecastService(
+            logger,
+            new RepoContextShutdownBudgetResolution(
+                TimeSpan.FromSeconds(240),
+                TimeSpan.FromSeconds(180),
+                GrantWasDeclared: true),
+            new RepoContextDrainObservation(
+                Observed,
+                RepoContextDrainOutcome.Abandoned,
+                TimeSpan.FromSeconds(90),
+                TimeSpan.FromSeconds(91.9),
+                3334),
+            () => null);
+
+        service.ReportForecast();
+
+        Assert.That(logger.Lines, Has.Count.EqualTo(1));
+        var (level, message) = logger.Lines[0];
+        Assert.Multiple(() =>
+        {
+            // Warning, not Error: something IS unknown here, but nothing is predicted
+            // to fail, and an Error that clears itself only after a successful stop
+            // trains an operator to ignore the channel.
+            Assert.That(level, Is.EqualTo(LogLevel.Warning), message);
+            Assert.That(message, Does.Not.Contain("does not fit"), message);
+            Assert.That(
+                message,
+                Does.Not.Contain("expected to be abandoned"),
+                "the deployment already carries the grant that covers this drain");
+            Assert.That(message, Does.Contain("91.9s"), message);
+            Assert.That(message, Does.Contain("FLOOR"), "the duration is a lower bound, not a measurement");
+            Assert.That(message, Does.Contain("180s"), "this process's budget");
+            Assert.That(message, Does.Contain("240s"), "the grant already declared, which covers the floor");
+            Assert.That(message, Does.Contain("51%"), message);
         });
     }
 

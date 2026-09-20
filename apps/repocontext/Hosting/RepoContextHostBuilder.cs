@@ -120,6 +120,17 @@ public static class RepoContextHostBuilder
     /// that declares nothing gets exactly this value, so nothing moves for a
     /// container that does not opt in.
     /// </para>
+    /// <para>
+    /// <b>The sample deployment declares more than this, and that is not a drift.</b>
+    /// Since issue #3304 <c>samples/RepoContextContainer/docker-compose.yml</c>
+    /// declares a 240s grant and so runs on a 180s budget, because its measured
+    /// drains did not fit 90s. This default deliberately did not follow it: it
+    /// applies to a deployment that declared nothing, which may be running under
+    /// Docker's 10s default, and a budget above the real grant arms the overrun
+    /// alarm for an instant the process never reaches - silencing the one line that
+    /// reports a cut-short drain. The two numbers answer different questions and are
+    /// free to differ.
+    /// </para>
     /// </remarks>
     public static readonly TimeSpan ShutdownBudget = RepoContextShutdownBudget.DefaultShutdownBudget;
 
