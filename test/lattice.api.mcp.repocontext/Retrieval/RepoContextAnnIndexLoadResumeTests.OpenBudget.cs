@@ -538,6 +538,13 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         private int _blockAfter;
         private bool _blocking;
         private string? _blockReadKey;
+        private int _refuseAfter = -1;
+
+        /// <summary>
+        /// How many times the scan refused, so a test can assert that the walk
+        /// actually reached the refusal rather than passing because it never ran.
+        /// </summary>
+        public int Refusals { get; private set; }
 
         public int ServedUnderWatchedPrefix { get; private set; }
 
@@ -591,6 +598,27 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             _blockAfter = serveBeforeBlocking;
             _blocking = true;
         }
+
+        /// <summary>
+        /// Throws <see cref="LatticeSaturatedException"/> from the watched scan
+        /// after serving <paramref name="serveBeforeRefusing"/> records, which is
+        /// what a refused WAL replay permit looks like from the walk: the leaf the
+        /// scan reached declined admission rather than queueing.
+        /// </summary>
+        /// <remarks>
+        /// It throws rather than parking because a refusal is precisely NOT a slow
+        /// read - that distinction is the whole point of the arm under test, and a
+        /// harness that parked would exercise the deferral path instead.
+        /// </remarks>
+        public void RefuseAfter(string prefix, int serveBeforeRefusing)
+        {
+            _watchPrefix = prefix;
+            _refuseAfter = serveBeforeRefusing;
+            _blocking = false;
+        }
+
+        /// <summary>Stops refusing, so a later attempt can complete.</summary>
+        public void StopRefusing() => _refuseAfter = -1;
 
         /// <summary>
         /// Stops parking but keeps counting. Counting has to outlive the block, or
@@ -676,6 +704,14 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
 
                 if (watched)
                 {
+                    if (_refuseAfter >= 0 && servedThisCall >= _refuseAfter)
+                    {
+                        Refusals++;
+                        throw new LatticeSaturatedException(
+                            "harness: the per-silo WAL replay permit queue refused this waiter.",
+                            "harness-tree");
+                    }
+
                     if (_blocking && servedThisCall >= _blockAfter)
                     {
                         CapturedScanToken = cancellationToken;

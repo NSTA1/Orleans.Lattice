@@ -701,31 +701,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // ONE ARM IS RECORDED PER ATTEMPT, SO THE DECISION COMES FIRST.
             // Recording Deferred here and then escalating would count a single
             // attempt under two arms and break the partition the snapshot claims.
-            //
-            // A DEFERRAL THAT BANKED NOTHING IS THE ONE WAY THIS BOUND CAN WEDGE,
-            // so it is counted and escalated rather than retried for ever.
-            //
-            // EnsureBuiltAsync loops until the handle serves. Every slice that
-            // banks at least one mapping makes that loop terminate, which is the
-            // normal case and why a cold open over a large plane is merely sliced.
-            // A budget too small to read a single record banks nothing on every
-            // slice, and the loop then spins for ever having reproduced exactly
-            // the wedge this issue exists to remove - a bounded open being, in
-            // that configuration, strictly worse than an unbounded one.
-            //
-            // The counter is PRESENT-TENSE and is cleared by any slice that
-            // advances, deliberately mirroring
-            // VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance. A lifetime
-            // tally would be the wrong shape for the same reason documented there:
-            // a plane that took a few empty slices early and then advanced
-            // perfectly would go on reporting a wedge for ever.
-            var loaded = _loading.LoadedKeyCount;
-            if (loaded > _lastOpenKeyCount)
-            {
-                _lastOpenKeyCount = loaded;
-                _emptyOpenDeferrals = 0;
-            }
-            else if (++_emptyOpenDeferrals >= MaxEmptyOpenDeferrals)
+            if (RecordEmptyOpenSliceAndShouldEscalate())
             {
                 // Recorded HERE and not by the fault arm below, which cannot see
                 // this: an exception thrown from inside a catch clause is not
@@ -753,6 +729,64 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 _space.ModelId,
                 _space.Dimension,
                 budget);
+
+            return null;
+        }
+        catch (LatticeSaturatedException ex)
+        {
+            // THE ADMISSION BOUND REFUSED THIS WALK, WHICH IS NOT A FAULT AND MUST
+            // NOT BE COUNTED AS ONE (issue #3284). Without this arm the refusal is
+            // not an OperationCanceledException, so it falls through to the fault
+            // arm below and is recorded as Faulted - which is precisely the
+            // misattribution the reason-value split at the leaf activation counter
+            // exists to prevent, left unapplied one layer up. The consequence is
+            // not cosmetic: it makes the load counter's faulted arm rise BECAUSE
+            // the admission bound started working, so a rise, a fall, and no
+            // change would each be consistent with the fix having worked and with
+            // it having made things worse.
+            //
+            // The instance is deliberately kept. A refused walk banked whatever it
+            // had already read, exactly as a deferred one does, and the next tick
+            // resumes past it.
+            //
+            // THE REFUSAL STILL COUNTS TOWARD THE EMPTY-SLICE ESCALATION, and that
+            // is load-bearing rather than tidy. EnsureBuiltAsync loops until the
+            // handle serves, so a walk refused on every attempt banks nothing on
+            // every attempt and would retry for ever - reintroducing, inside the
+            // fix for the bound, exactly the unbounded retry issue #3130 removed.
+            // Sharing one counter with the deferral arm is what makes that
+            // impossible to regress independently.
+            //
+            // One arm per attempt either way: the escalation rethrows the original
+            // saturation rather than recording a different outcome, so the type
+            // (and any upstream backoff keyed to it) survives and the faulted arm
+            // is never touched by a refusal on any path through this clause.
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Refused);
+
+            if (RecordEmptyOpenSliceAndShouldEscalate())
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} was "
+                    + "refused admission to the WAL replay permit queue {Attempts} times in succession "
+                    + "without banking a single identifier mapping. The silo has been saturated for the "
+                    + "whole of that window; the open is abandoning this attempt rather than retrying for "
+                    + "ever.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    MaxEmptyOpenDeferrals);
+                throw;
+            }
+
+            _logger.LogDebug(
+                ex,
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} was refused "
+                + "admission to the WAL replay permit queue and yielded; the progress it banked is resumed on "
+                + "the next tick.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
 
             return null;
         }
@@ -787,6 +821,48 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             resuming);
 
         return _index;
+    }
+
+    /// <summary>
+    /// Accounts one open attempt that yielded without completing, and reports
+    /// whether the handle has now yielded <see cref="MaxEmptyOpenDeferrals"/> times
+    /// in succession having banked nothing - which is the one way a bounded open
+    /// can wedge, and so must escalate rather than retry for ever.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Deliberately shared by every yielding arm</b> - the slice-budget deferral
+    /// and the admission refusal alike. <c>EnsureBuiltAsync</c> loops until the
+    /// handle serves, so every yield that banks at least one mapping makes that
+    /// loop terminate, which is the normal case and why a cold open over a large
+    /// plane is merely sliced. A yield that can never bank anything - a budget too
+    /// small to read a single record, or a silo that refuses admission on every
+    /// attempt - makes the loop spin for ever, having reproduced exactly the wedge
+    /// issue #3130 exists to remove. An arm that returned without passing through
+    /// here would reintroduce that unbounded retry silently, so there is one
+    /// counter and one place that advances it.
+    /// </para>
+    /// <para>
+    /// The counter is PRESENT-TENSE and is cleared by any attempt that advances,
+    /// deliberately mirroring
+    /// <c>VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance</c>. A lifetime
+    /// tally would be the wrong shape for the same reason documented there: a plane
+    /// that took a few empty slices early and then advanced perfectly would go on
+    /// reporting a wedge for ever.
+    /// </para>
+    /// </remarks>
+    /// <returns><see langword="true"/> when the caller must escalate.</returns>
+    private bool RecordEmptyOpenSliceAndShouldEscalate()
+    {
+        var loaded = _loading?.LoadedKeyCount ?? 0;
+        if (loaded > _lastOpenKeyCount)
+        {
+            _lastOpenKeyCount = loaded;
+            _emptyOpenDeferrals = 0;
+            return false;
+        }
+
+        return ++_emptyOpenDeferrals >= MaxEmptyOpenDeferrals;
     }
 
     private async Task CatchUpAsync(

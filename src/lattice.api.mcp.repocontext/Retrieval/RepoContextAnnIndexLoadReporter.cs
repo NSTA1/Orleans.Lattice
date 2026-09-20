@@ -3,9 +3,9 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// How one attempt to load the durable approximate index ended. The four values
+/// How one attempt to load the durable approximate index ended. The five values
 /// are exhaustive over an attempt that was made, which is what lets them be
-/// counted as a partition rather than as four unrelated tallies.
+/// counted as a partition rather than as five unrelated tallies.
 /// </summary>
 internal enum RepoContextAnnIndexLoadOutcome
 {
@@ -41,6 +41,34 @@ internal enum RepoContextAnnIndexLoadOutcome
     /// </para>
     /// </summary>
     Deferred = 3,
+
+    /// <summary>
+    /// The attempt was refused admission to the per-silo WAL replay permit queue
+    /// and yielded, banking whatever progress it had already made.
+    /// <para>
+    /// <b>This is a healthy outcome and must never be folded into
+    /// <see cref="Faulted"/>.</b> It is the same argument as
+    /// <see cref="Deferred"/>, one layer up from where issue #3284 first made it.
+    /// The refusal is the admission bound <i>working</i>: the walk is bulk-classed
+    /// and a saturated silo turns it away rather than letting it join a queue it
+    /// cannot reach the head of. Counting that as a fault would make
+    /// <c>repocontext.ann.index.load_total{outcome="faulted"}</c> rise precisely
+    /// because the change that was supposed to lower it started working, so a
+    /// rise, a fall, and no change would all be consistent with both "the fix
+    /// worked" and "the fix made it worse" - destroying the only clean falsifier
+    /// available for the fix. These counters are process-scoped and reset at the
+    /// deploy boundary, so that reading cannot be reconstructed afterwards.
+    /// </para>
+    /// <para>
+    /// <b>It is its own arm rather than folded into <see cref="Deferred"/>.</b>
+    /// Both are healthy yields, but they yield for opposite reasons and have
+    /// opposite remedies: a deferral means this walk ran and needs more time,
+    /// whereas a refusal means this walk never started because the silo is
+    /// saturated. Merging them would make refusals invisible rather than
+    /// misattributed, which is quieter but no more informative.
+    /// </para>
+    /// </summary>
+    Refused = 4,
 }
 
 /// <summary>
@@ -115,6 +143,12 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     /// <summary>The tag value for an attempt that yielded on its wall-clock budget, banking its progress.</summary>
     internal const string OutcomeDeferredTag = "deferred";
 
+    /// <summary>
+    /// The tag value for an attempt refused admission to the WAL replay permit
+    /// queue, which yielded and banked whatever progress it had made.
+    /// </summary>
+    internal const string OutcomeRefusedTag = "refused";
+
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than
     // publishing an instrument against a null meter. See the metrics conventions in
@@ -127,6 +161,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     private long _resumed;
     private long _faulted;
     private long _deferred;
+    private long _refused;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnIndexLoadReporter()
@@ -137,7 +172,8 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
             unit: "{attempt}",
             description:
                 "Durable approximate-index load attempts, partitioned by whether the attempt started fresh, "
-                + "resumed progress banked by an earlier faulted attempt, or faulted itself.");
+                + "resumed progress banked by an earlier faulted attempt, faulted itself, yielded on its open "
+                + "slice budget, or was refused admission to the WAL replay permit queue.");
 
         // Pre-minted so that every arm is PRESENT and reads zero on a host that has
         // simply not faulted yet. An arm that appears only once it is non-zero
@@ -158,6 +194,10 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
             LatticeTenantLabel.Platform);
+        _loads.Add(
+            0,
+            new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeRefusedTag),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records one load attempt.</summary>
@@ -176,6 +216,9 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                     break;
                 case RepoContextAnnIndexLoadOutcome.Deferred:
                     _deferred++;
+                    break;
+                case RepoContextAnnIndexLoadOutcome.Refused:
+                    _refused++;
                     break;
                 default:
                     _faulted++;
@@ -210,6 +253,12 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
                     LatticeTenantLabel.Platform);
                 break;
+            case RepoContextAnnIndexLoadOutcome.Refused:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeRefusedTag),
+                    LatticeTenantLabel.Platform);
+                break;
             default:
                 _loads.Add(
                     1,
@@ -227,7 +276,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted, _deferred);
+            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted, _deferred, _refused);
         }
     }
 
@@ -242,8 +291,10 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
 /// <param name="Resumed">Attempts that continued banked progress and completed.</param>
 /// <param name="Faulted">Attempts that faulted partway, banking their progress.</param>
 /// <param name="Deferred">Attempts that yielded on their wall-clock budget, banking their progress.</param>
+/// <param name="Refused">Attempts refused admission to the WAL replay permit queue, banking their progress.</param>
 internal readonly record struct RepoContextAnnIndexLoadSnapshot(
     long Fresh,
     long Resumed,
     long Faulted,
-    long Deferred);
+    long Deferred,
+    long Refused);

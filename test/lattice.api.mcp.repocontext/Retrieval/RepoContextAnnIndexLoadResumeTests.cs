@@ -96,6 +96,7 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
                     RepoContextAnnIndexLoadReporter.OutcomeResumedTag,
                     RepoContextAnnIndexLoadReporter.OutcomeFaultedTag,
                     RepoContextAnnIndexLoadReporter.OutcomeDeferredTag,
+                    RepoContextAnnIndexLoadReporter.OutcomeRefusedTag,
                 }),
                 "Every arm has to be PRESENT on a host that has simply never faulted. An arm that appears "
                 + "only once it is non-zero cannot distinguish a healthy plane from a build that never "
