@@ -5,8 +5,13 @@ namespace Orleans.Lattice;
 /// shard of a tree. See <see cref="ILattice.InspectOrphanedLeavesAsync"/> and
 /// <see cref="ILattice.RepairOrphanedLeavesAsync"/>.
 /// <para>
-/// A report with an empty <see cref="Findings"/> list is the healthy answer:
-/// every leaf in every shard's sibling chain was reachable by descent.
+/// A report with an empty <see cref="Findings"/> list is the healthy answer
+/// <b>only when <see cref="VerdictComplete"/> is also
+/// <see langword="true"/></b>: every leaf in every shard's sibling chain was
+/// reached and every one of them was reachable by descent. When
+/// <see cref="Gaps"/> is non-empty the pass did not examine the whole tree,
+/// and an empty findings list says nothing about the part it did not reach
+/// (issue 3301).
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -31,6 +36,32 @@ public readonly record struct OrphanedLeafRepairReport
     /// and shard order across the tree.
     /// </summary>
     [Id(2)] public IReadOnlyList<OrphanedLeafFinding> Findings { get; init; }
+
+    /// <summary>
+    /// Every region of the tree the pass could not establish a verdict over,
+    /// in shard order (issue 3301).
+    /// <para>
+    /// A gap is not a finding and not an error - it is the pass reporting
+    /// where it did not look, which is the one thing an empty findings list
+    /// could not previously express. Read it before reading
+    /// <see cref="Findings"/>: a shard that declined, or a sibling chain
+    /// severed part-way across the keyspace, contributes zero findings by
+    /// construction, and on a tree wide enough to matter that zero is
+    /// indistinguishable from health unless the gap is surfaced.
+    /// </para>
+    /// </summary>
+    [Id(3)] public IReadOnlyList<OrphanedLeafAuditGap> Gaps { get; init; }
+
+    /// <summary>
+    /// Whether the pass examined the whole tree, and so whether
+    /// <see cref="Findings"/> may be read as a verdict over it.
+    /// <para>
+    /// <b>An operator deciding that a tree needs no attention must check this
+    /// before checking <see cref="Findings"/>.</b> False means the answer is
+    /// "I could not establish this", not "there is nothing here".
+    /// </para>
+    /// </summary>
+    public bool VerdictComplete => Gaps is null or { Count: 0 };
 
     /// <summary>
     /// How many orphans were unspliced and had their materialiser pins

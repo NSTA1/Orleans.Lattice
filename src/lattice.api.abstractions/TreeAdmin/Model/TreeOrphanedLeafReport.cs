@@ -20,8 +20,11 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// </para>
 /// <para>
 /// An empty <see cref="Findings"/> with a non-zero <see cref="LeavesWalked"/> is a
-/// clean bill of health for the tree, and is as useful an answer as a finding: it
-/// rules the orphaned-leaf defect out as the cause of an unbounded WAL.
+/// clean bill of health for the tree <b>only when <see cref="VerdictComplete"/> is
+/// also <see langword="true"/></b>, and is then as useful an answer as a finding:
+/// it rules the orphaned-leaf defect out as the cause of an unbounded WAL. When
+/// <see cref="Gaps"/> is non-empty the pass did not examine the whole tree, so an
+/// empty findings list says nothing about the part it did not reach (issue 3301).
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -46,6 +49,29 @@ public sealed record TreeOrphanedLeafReport
     /// orphaned leaves.
     /// </summary>
     [Id(3)] public ImmutableArray<TreeOrphanedLeafFinding> Findings { get; init; } = [];
+
+    /// <summary>
+    /// Every region of the tree the pass could not establish a verdict over, in
+    /// shard order (issue 3301). Empty is the healthy answer.
+    /// <para>
+    /// Read this before reading <see cref="Findings"/>. A shard that declined, or a
+    /// sibling chain severed part-way across the keyspace, contributes zero
+    /// findings by construction, and on a tree wide enough to matter that zero is
+    /// indistinguishable from health unless the gap is surfaced.
+    /// </para>
+    /// </summary>
+    [Id(4)] public ImmutableArray<TreeOrphanedLeafGap> Gaps { get; init; } = [];
+
+    /// <summary>
+    /// Whether the pass examined the whole tree, and so whether
+    /// <see cref="Findings"/> may be read as a verdict over it.
+    /// <para>
+    /// <b>An operator deciding that a tree needs no attention must check this
+    /// before checking <see cref="Findings"/>.</b> False means the answer is "I
+    /// could not establish this", not "there is nothing here".
+    /// </para>
+    /// </summary>
+    public bool VerdictComplete => Gaps.IsDefaultOrEmpty;
 
     /// <summary>
     /// How many leaves the repair unspliced. Always zero for an audit, whose

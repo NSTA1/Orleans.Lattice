@@ -142,6 +142,74 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     }
 
     [Test]
+    public async Task AuditOrphanedLeavesAsync_carries_the_gaps_out_to_the_operator()
+    {
+        // The gap channel is only worth anything if it survives the facade.
+        // A tree-level report whose gaps were dropped here would present the
+        // same false clean bill of health the core now refuses to give
+        // (issue 3301).
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+            .Returns(new OrphanedLeafRepairReport
+            {
+                DryRun = true,
+                LeavesWalked = 2588,
+                Findings = Array.Empty<OrphanedLeafFinding>(),
+                Gaps = new[]
+                {
+                    new OrphanedLeafAuditGap
+                    {
+                        ShardIndex = 17,
+                        Reason = OrphanedLeafAuditGapReason.ChainTruncated,
+                        LeafId = "leaf-9",
+                        KeyHint = "m",
+                    },
+                },
+            });
+        var facade = Create(factory);
+
+        var report = await facade.AuditOrphanedLeavesAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Findings, Is.Empty);
+            Assert.That(report.Gaps, Has.Length.EqualTo(1));
+            Assert.That(report.Gaps[0].ShardIndex, Is.EqualTo(17));
+            Assert.That(report.Gaps[0].Reason,
+                Is.EqualTo(TreeOrphanedLeafGapReason.ChainTruncated));
+            Assert.That(report.Gaps[0].LeafId, Is.EqualTo("leaf-9"));
+            Assert.That(report.Gaps[0].KeyHint, Is.EqualTo("m"));
+            Assert.That(report.VerdictComplete, Is.False,
+                "2588 leaves walked and no findings is not a clean tree when part of it was never reached");
+        });
+    }
+
+    [Test]
+    public async Task AuditOrphanedLeavesAsync_tolerates_a_null_gap_list()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+            .Returns(new OrphanedLeafRepairReport
+            {
+                DryRun = true,
+                LeavesWalked = 2,
+                Findings = Array.Empty<OrphanedLeafFinding>(),
+                Gaps = null!,
+            });
+        var facade = Create(factory);
+
+        var report = await facade.AuditOrphanedLeavesAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Gaps, Is.Empty);
+            Assert.That(report.VerdictComplete, Is.True);
+        });
+    }
+
+    [Test]
     public void AuditOrphanedLeavesAsync_denied_by_read_gate_throws_and_does_not_dial()
     {
         var factory = Substitute.For<IGrainFactory>();

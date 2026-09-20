@@ -1343,12 +1343,29 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             }
         }
 
+        var gapSource = report.Gaps;
+        var gaps = ImmutableArray.CreateBuilder<TreeOrphanedLeafGap>(gapSource?.Count ?? 0);
+        if (gapSource is not null)
+        {
+            foreach (var gap in gapSource)
+            {
+                gaps.Add(new TreeOrphanedLeafGap
+                {
+                    ShardIndex = gap.ShardIndex,
+                    Reason = (TreeOrphanedLeafGapReason)gap.Reason,
+                    LeafId = gap.LeafId,
+                    KeyHint = gap.KeyHint,
+                });
+            }
+        }
+
         return new TreeOrphanedLeafReport
         {
             TreeId = treeId,
             DryRun = report.DryRun,
             LeavesWalked = report.LeavesWalked,
             Findings = findings.MoveToImmutable(),
+            Gaps = gaps.MoveToImmutable(),
         };
     }
 

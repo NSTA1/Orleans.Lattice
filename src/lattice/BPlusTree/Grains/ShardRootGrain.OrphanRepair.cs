@@ -122,11 +122,16 @@ internal sealed partial class ShardRootGrain
         // read as unreachability. Yield rather than interleave: a repair pass
         // is operator-initiated and can be re-run, and a false positive here
         // deletes a live leaf.
-        if (state.State.SplitInProgress is not null) return OrphanedLeafRepairPage.Empty;
+        if (state.State.SplitInProgress is not null)
+        {
+            return OrphanedLeafRepairPage.Declined(
+                MyShardIndex, OrphanedLeafAuditGapReason.ShardSplitInProgress);
+        }
 
         if (Interlocked.CompareExchange(ref _orphanRepairInProgress, 1, 0) != 0)
         {
-            return OrphanedLeafRepairPage.Empty;
+            return OrphanedLeafRepairPage.Declined(
+                MyShardIndex, OrphanedLeafAuditGapReason.ShardPassAlreadyRunning);
         }
 
         try
@@ -168,6 +173,7 @@ internal sealed partial class ShardRootGrain
         var (prevId, prevProbe) = await StartOrphanRepairWalkAsync(resumeFromInclusive, path);
 
         var findings = new List<OrphanedLeafFinding>();
+        var gaps = new List<OrphanedLeafAuditGap>();
 
         // Where the NEXT page resumes. It is deliberately the low bound of the
         // last leaf this pass proved DESCENT-REACHABLE, not the predecessor's
@@ -182,13 +188,49 @@ internal sealed partial class ShardRootGrain
         //
         // Null until the pass proves some leaf reachable, which also makes the
         // head's unbounded low bound a non-case rather than a special case.
-        var resumeFrom = prevProbe.LowKeyInclusive is not null
-            && await IsDescentReachableAsync(prevId, prevProbe, path)
-                ? prevProbe.LowKeyInclusive
-                : null;
+        var resumeFrom = await AdmitWalkEntryAsync(prevId, prevProbe, gaps, path);
 
-        while (prevProbe.NextSibling is { } currentId && !budget.ShouldYield())
+        // The furthest key this page has re-entered the chain on. A severed
+        // pointer is re-entered by descending on the severed leaf's high
+        // bound, and a descent is only trustworthy here if it advances: the
+        // keyspace is consumed monotonically, so a re-entry that lands at or
+        // behind the last one is a topology that would drive the walk in a
+        // circle rather than past the break.
+        string? lastReEntryKey = null;
+
+        var reachedEnd = false;
+
+        while (!budget.ShouldYield())
         {
+            if (prevProbe.NextSibling is not { } currentId)
+            {
+                // The chain says it ends here. That is believed only after it
+                // is checked against a descent to the shard's rightmost leaf,
+                // because an unvalidated null successor is exactly how this
+                // walk used to report a whole shard clean while range scans -
+                // which enter the chain by descent rather than from its head -
+                // kept finding orphans past the break (issue 3301).
+                var reEntry = await TryReEnterChainPastBreakAsync(
+                    prevId, prevProbe, lastReEntryKey, gaps, path);
+
+                if (reEntry is not { } resumed)
+                {
+                    reachedEnd = true;
+                    break;
+                }
+
+                lastReEntryKey = resumed.ReEntryKey;
+                prevId = resumed.Id;
+                prevProbe = resumed.Probe;
+
+                // A re-entry leaf that is itself reachable becomes the resume
+                // position, so the next page starts past the break instead of
+                // re-walking the whole prefix to reach it again. One that is
+                // not leaves the position where it was, which costs a repeated
+                // prefix and never a skipped leaf.
+                resumeFrom = await AdmitWalkEntryAsync(prevId, prevProbe, gaps, path) ?? resumeFrom;
+                continue;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             budget.RecordLeafVisited();
 
@@ -201,6 +243,22 @@ internal sealed partial class ShardRootGrain
                 // walk can reach it only on a topology it does not model;
                 // either way, declining to judge is free and the alternative
                 // is judging without evidence.
+                //
+                // Declining is NOT free to leave unsaid, though. The
+                // range-scan chain guard judges this same population the other
+                // way - a leaf declaring a trailing edge with no leading edge
+                // claims the keyspace from the unbounded end, and it is
+                // treated as a regression - so a silent skip here is the audit
+                // disagreeing with the running system in the one direction
+                // that causes no action (issue 3301).
+                gaps.Add(new OrphanedLeafAuditGap
+                {
+                    ShardIndex = MyShardIndex,
+                    Reason = OrphanedLeafAuditGapReason.LeafBoundsUndecidable,
+                    LeafId = currentId.ToString(),
+                    KeyHint = currentProbe.HighKeyExclusive,
+                });
+
                 prevId = currentId;
                 prevProbe = currentProbe;
                 continue;
@@ -242,10 +300,12 @@ internal sealed partial class ShardRootGrain
             prevProbe = currentProbe;
         }
 
-        var reachedEnd = prevProbe.NextSibling is null;
+        var truncated = gaps.Exists(
+            g => g.Reason == OrphanedLeafAuditGapReason.ChainTruncatedUnrecoverable);
 
         var stopReason =
-            reachedEnd ? "end-of-chain"
+            truncated ? "chain-truncated"
+            : reachedEnd ? "end-of-chain"
             : budget.LeavesVisited >= MaxOrphanRepairWalk ? "walk-budget"
             : "deadline";
 
@@ -259,6 +319,20 @@ internal sealed partial class ShardRootGrain
             // consecutive unreachable or unbounded leaves is not a topology
             // this pass models, and an operator needs to see that rather than
             // watch a drain spin.
+            //
+            // Saying it loudly in the LOG was not enough. The drive reads the
+            // null resume position as completion, so the report this feeds was
+            // a clean one - the log and the returned verdict disagreed, and
+            // only the log was right (issue 3301). The gap puts the same fact
+            // where the caller actually reads it.
+            gaps.Add(new OrphanedLeafAuditGap
+            {
+                ShardIndex = MyShardIndex,
+                Reason = OrphanedLeafAuditGapReason.WalkBudgetExhaustedWithoutResumePosition,
+                LeafId = prevId.ToString(),
+                KeyHint = prevProbe.HighKeyExclusive,
+            });
+
             logger.LogWarning(
                 "Shard {ShardIndex} of tree '{TreeId}' stopped its orphaned-leaf repair walk after {Visited} leaves without "
                 + "finding a descent-reachable leaf to resume from, so the remainder of the chain was not examined.",
@@ -274,7 +348,8 @@ internal sealed partial class ShardRootGrain
         // anti-correlated with cost.
         logger.LogInformation(
             "Shard {ShardIndex} of tree '{TreeId}' finished an orphaned-leaf {Mode} pass in {ElapsedMs}ms: "
-            + "walked {Visited} leaves, repaired {Repaired}, refused {Refused}, stopped on {StopReason}.",
+            + "walked {Visited} leaves, repaired {Repaired}, refused {Refused}, unexamined regions {Gaps}, "
+            + "stopped on {StopReason}.",
             MyShardIndex,
             TreeId,
             dryRun ? "inspection" : "repair",
@@ -282,14 +357,166 @@ internal sealed partial class ShardRootGrain
             budget.LeavesVisited,
             findings.Count(f => f.Disposition == OrphanedLeafDisposition.Repaired),
             findings.Count(f => f.IsRefusal),
+            gaps.Count,
             stopReason);
 
         return new OrphanedLeafRepairPage
         {
             LeavesWalked = budget.LeavesVisited,
             Findings = findings,
+            Gaps = gaps,
             ResumeFromInclusive = reachedEnd ? null : resumeFrom,
         };
+    }
+
+    /// <summary>
+    /// Admits the leaf a walk segment starts on - the chain head, a resume
+    /// position, or a re-entry past a break - and returns the key the next
+    /// page may resume from, or <see langword="null"/> when this leaf gives
+    /// the walk no position to name.
+    /// <para>
+    /// The walk only ever examines a leaf's SUCCESSOR, because an unsplice
+    /// swings a live predecessor's pointer and an entry leaf has no
+    /// predecessor within reach. An entry leaf that is itself unreachable by
+    /// descent is therefore an orphan the pass can see and cannot act on, and
+    /// before issue 3301 it was neither reported nor repaired. It is reported
+    /// as a gap rather than a finding because a finding asserts a disposition
+    /// the pass never reached.
+    /// </para>
+    /// <para>
+    /// A null low bound is the chain head's ordinary shape - it owns the
+    /// keyspace from the unbounded end - so it is not judged and not reported.
+    /// </para>
+    /// </summary>
+    private async Task<string?> AdmitWalkEntryAsync(
+        GrainId entryId,
+        LeafReclaimProbe entryProbe,
+        List<OrphanedLeafAuditGap> gaps,
+        Stack<GrainId> path)
+    {
+        if (entryProbe.LowKeyInclusive is not { } low) return null;
+
+        if (await IsDescentReachableAsync(entryId, entryProbe, path)) return low;
+
+        gaps.Add(new OrphanedLeafAuditGap
+        {
+            ShardIndex = MyShardIndex,
+            Reason = OrphanedLeafAuditGapReason.EntryLeafUnreachable,
+            LeafId = entryId.ToString(),
+            KeyHint = low,
+        });
+
+        return null;
+    }
+
+    /// <summary>
+    /// Decides whether a null successor really is the end of the shard's leaf
+    /// chain, and when it is not, finds a way back into the chain past the
+    /// break (issue 3301).
+    /// <para>
+    /// <b>Why an unvalidated null successor was the defect.</b> This walk
+    /// enumerates candidates from the head of the sibling chain, which is the
+    /// same structure an orphan damages. A pointer severed part-way across the
+    /// keyspace therefore ends the walk, and because the drive reads a null
+    /// resume position as completion, the shard was reported examined and
+    /// clean. Range scans are not anchored that way - they enter the chain by
+    /// descending on their own lower bound - so they reach the segment past
+    /// the break and keep reporting the orphans in it. That is how an audit
+    /// returning no findings and a tree emitting thousands of chain-repair
+    /// warnings a minute were both telling the truth about the same shard.
+    /// </para>
+    /// <para>
+    /// <b>The check is invariant-free.</b> Rather than assume the terminal
+    /// leaf must declare an unbounded high bound, it descends to the shard's
+    /// rightmost leaf and compares identities. That asks the tree where the
+    /// keyspace ends instead of asking the chain, which is the half of the
+    /// topology that is not in question.
+    /// </para>
+    /// <para>
+    /// <b>Re-entry advances or it does not happen.</b> The way back in is a
+    /// descent on the severed leaf's high bound. A descent that lands on the
+    /// severed leaf itself, or on a key at or behind a previous re-entry, is
+    /// a topology that would drive the walk in a circle rather than past the
+    /// break, so it is refused and reported. A refused re-entry leaves the
+    /// remainder of the shard unexamined, which is exactly what the gap says.
+    /// </para>
+    /// </summary>
+    private async Task<(GrainId Id, LeafReclaimProbe Probe, string ReEntryKey)?> TryReEnterChainPastBreakAsync(
+        GrainId terminalId,
+        LeafReclaimProbe terminalProbe,
+        string? lastReEntryKey,
+        List<OrphanedLeafAuditGap> gaps,
+        Stack<GrainId> path)
+    {
+        var rightmostId = await TraverseToRightmostLeafAsync();
+
+        // The chain ended on the leaf the tree itself ends on. Nothing is
+        // missing, and this is the healthy path that must stay free of gaps.
+        if (rightmostId == terminalId) return null;
+
+        void ReportUnrecoverable(string? keyHint) => gaps.Add(new OrphanedLeafAuditGap
+        {
+            ShardIndex = MyShardIndex,
+            Reason = OrphanedLeafAuditGapReason.ChainTruncatedUnrecoverable,
+            LeafId = terminalId.ToString(),
+            KeyHint = keyHint,
+        });
+
+        if (!await IsDescentReachableAsync(terminalId, terminalProbe, path))
+        {
+            // The chain ended on a leaf nothing routes to, so its declared
+            // high bound is not a trustworthy key to descend on - it is the
+            // orphan's own idea of where it ends, and the orphan is precisely
+            // the thing whose bounds disagree with the tree.
+            //
+            // This arm also stops the re-entry from looping. On an inspection
+            // the orphan is still spliced when the walk steps over it, so a
+            // re-entry taken from it would land back on its live predecessor
+            // and re-examine it, reporting the same leaf twice. A repair
+            // removes the orphan first, so its predecessor becomes the
+            // terminal leaf and the ordinary reachable path applies.
+            ReportUnrecoverable(terminalProbe.HighKeyExclusive);
+            return null;
+        }
+
+        if (terminalProbe.HighKeyExclusive is not { } reEntryKey)
+        {
+            // A severed leaf claiming the keyspace to the unbounded end gives
+            // no key to descend on, so there is no way back in.
+            ReportUnrecoverable(null);
+            return null;
+        }
+
+        if (lastReEntryKey is not null
+            && string.CompareOrdinal(reEntryKey, lastReEntryKey) <= 0)
+        {
+            ReportUnrecoverable(reEntryKey);
+            return null;
+        }
+
+        path.Clear();
+        var nextId = await ResolveWriteLeafAsync(reEntryKey, path);
+
+        if (nextId == terminalId)
+        {
+            ReportUnrecoverable(reEntryKey);
+            return null;
+        }
+
+        var nextProbe = await ResolveLeafGrain(nextId).GetReclaimProbeAsync();
+
+        // Re-entry succeeded, and the severed pointer is still a defect the
+        // operator has to know about: this pass does not repair it, it walks
+        // around it.
+        gaps.Add(new OrphanedLeafAuditGap
+        {
+            ShardIndex = MyShardIndex,
+            Reason = OrphanedLeafAuditGapReason.ChainTruncated,
+            LeafId = terminalId.ToString(),
+            KeyHint = reEntryKey,
+        });
+
+        return (nextId, nextProbe, reEntryKey);
     }
 
     /// <summary>

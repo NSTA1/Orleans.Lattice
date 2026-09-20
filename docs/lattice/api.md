@@ -1297,10 +1297,42 @@ the keyspace and widening a neighbour over the orphan's bounds would
 create an overlap - and therefore a second materialisation of that
 range.
 
+### Read `VerdictComplete` before reading `Findings`
+
+A report also carries `Gaps`: every region of the tree the pass could
+not establish a verdict over. A shard that declined because it was
+mid-split or already draining, a sibling chain severed part-way across
+the keyspace, a leaf whose declared bounds make reachability
+undecidable, and a budget exhausted with no position to resume from
+are all reported here rather than silently folded into an empty
+findings list.
+
+This matters because the enumeration walks each shard's sibling chain
+from its head, and the chain is the same structure an orphan damages.
+Before issue 3301 a pointer severed mid-keyspace ended the walk, the
+drive read the resulting null resume position as completion, and the
+shard was reported examined and clean - while range scans, which enter
+the chain by descending on their own lower bound, kept reaching the
+segment past the break and reporting orphans in it. Both were telling
+the truth about the same shard.
+
+`VerdictComplete` is true only when `Gaps` is empty. **An empty
+`Findings` list is a clean bill of health only when `VerdictComplete`
+is also true.** When it is false the answer is "this could not be
+established", not "there is nothing here", and it does not rule an
+orphan out as the cause of an unbounded WAL.
+
 ```csharp verify
 // Dry run first: see what would be repaired, and why anything is refused.
 OrphanedLeafRepairReport survey =
     await tree.InspectOrphanedLeavesAsync(cancellationToken);
+
+foreach (OrphanedLeafAuditGap gap in survey.Gaps)
+{
+    // Read this BEFORE the findings: a region that was never examined
+    // contributes no findings by construction.
+    _ = (gap.ShardIndex, gap.Reason, gap.LeafId, gap.KeyHint);
+}
 
 foreach (OrphanedLeafFinding finding in survey.Findings)
 {
@@ -1309,6 +1341,12 @@ foreach (OrphanedLeafFinding finding in survey.Findings)
         // Investigate before escalating - a refusal means repair is unsafe.
         _ = (finding.ShardIndex, finding.LeafId, finding.Disposition, finding.UnverifiedKey);
     }
+}
+
+if (survey.VerdictComplete && survey.Findings.Count == 0)
+{
+    // The only reading that actually rules the defect out.
+    _ = survey.LeavesWalked;
 }
 
 if (survey.Findings.Count > 0 && survey.RefusedCount == 0)

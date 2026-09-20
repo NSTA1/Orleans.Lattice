@@ -73,7 +73,58 @@ public sealed class TreeOrphanedLeafModelTests
             Assert.That(report.RepairedCount, Is.Zero);
             Assert.That(report.RefusedCount, Is.Zero,
                 "A tree with no orphans is a verdict in its own right, not a failure.");
+            Assert.That(report.VerdictComplete, Is.True,
+                "and it is only a verdict at all because nothing went unexamined.");
         });
+    }
+
+    [Test]
+    public void A_report_carrying_a_gap_is_not_a_complete_verdict()
+    {
+        // The false-green this whole model exists to make impossible: a
+        // report assembled from shards that declined, or from chains severed
+        // part-way across the keyspace, carries zero findings by
+        // construction. An operator reading RefusedCount and RepairedCount
+        // alone sees a clean tree (issue 3301).
+        var report = new TreeOrphanedLeafReport
+        {
+            TreeId = "orders",
+            DryRun = true,
+            LeavesWalked = 40,
+            Gaps = ImmutableArray.Create(new TreeOrphanedLeafGap
+            {
+                ShardIndex = 17,
+                Reason = TreeOrphanedLeafGapReason.ChainTruncatedUnrecoverable,
+                LeafId = "leaf-9",
+            }),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Findings, Is.Empty);
+            Assert.That(report.RepairedCount, Is.Zero);
+            Assert.That(report.RefusedCount, Is.Zero);
+            Assert.That(report.VerdictComplete, Is.False,
+                "an empty finding list says nothing about the part of the tree the pass never reached");
+        });
+    }
+
+    [Test]
+    public void Every_core_gap_reason_has_a_mirror_with_the_same_ordinal()
+    {
+        // The control-API mirror is mapped from the core enum by a plain
+        // cast, so a reason added on one side and not the other would be
+        // reported to an operator as whichever reason happens to share its
+        // ordinal.
+        var mirrored = Enum.GetValues<TreeOrphanedLeafGapReason>()
+            .Select(r => ((int)r, r.ToString()))
+            .ToArray();
+
+        var core = Enum.GetValues<Orleans.Lattice.OrphanedLeafAuditGapReason>()
+            .Select(r => ((int)r, r.ToString()))
+            .ToArray();
+
+        Assert.That(mirrored, Is.EqualTo(core));
     }
 
     [Test]

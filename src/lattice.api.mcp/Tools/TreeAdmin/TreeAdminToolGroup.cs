@@ -216,9 +216,15 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "routes to never checkpoints, so its write-ahead-log materialiser pin never advances, the trim "
                 + "floor never rises, and the WAL never trims or compacts again. Reports every leaf walked, each "
                 + "orphan's shard, key range and key count, and a disposition saying whether the repair would "
-                + "unsplice it or refuse. An empty finding list is a clean bill of health and rules this defect out "
-                + "as the cause of an unbounded WAL. Run this before the repair verb, which reaches its verdict with "
-                + "the same code. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
+                + "unsplice it or refuse. Read verdict_complete BEFORE the finding list: the pass also reports every "
+                + "region it could NOT establish a verdict over - a shard that declined because it was mid-split or "
+                + "already draining, a sibling chain severed part-way across the keyspace, a leaf whose declared "
+                + "bounds make reachability undecidable - and a shard that did not look contributes zero findings by "
+                + "construction. An empty finding list is a clean bill of health only when verdict_complete is true; "
+                + "when it is false the answer is 'this could not be established', not 'there is nothing here', and "
+                + "it does not rule this defect out as the cause of an unbounded WAL. Run this before the repair "
+                + "verb, which reaches its verdict with the same code. A pure read with no side effects. Requires "
+                + "whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
                 "Preview a WAL partition move",
                 "Computes a read-only preview of moving a WAL partition to a target storage provider key: the offset "

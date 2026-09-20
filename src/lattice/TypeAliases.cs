@@ -260,6 +260,11 @@ internal static class TypeAliases
     internal const string OrphanedLeafRepairPage = "ol.olp";
     internal const string OrphanedLeafRepairReport = "ol.olr";
 
+    // Regions an orphaned-leaf pass could not establish a verdict over, so an
+    // empty findings list is never mistaken for a clean tree (issue 3301).
+    internal const string OrphanedLeafAuditGap = "ol.olg";
+    internal const string OrphanedLeafAuditGapReason = "ol.ogr";
+
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
 

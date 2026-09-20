@@ -47,6 +47,7 @@ internal sealed partial class LatticeGrain
 
         var leavesWalked = 0;
         var findings = new List<OrphanedLeafFinding>();
+        var gaps = new List<OrphanedLeafAuditGap>();
 
         // Sequential across shards, not concurrent, and deliberately unlike
         // GetMaterialiserLagAsync next door. That verb reads; this one walks
@@ -71,6 +72,7 @@ internal sealed partial class LatticeGrain
 
                 leavesWalked += page.LeavesWalked;
                 if (page.Findings is { Count: > 0 }) findings.AddRange(page.Findings);
+                if (page.Gaps is { Count: > 0 }) gaps.AddRange(page.Gaps);
 
                 if (page.ResumeFromInclusive is not { } next) break;
                 cursor = next;
@@ -82,6 +84,7 @@ internal sealed partial class LatticeGrain
             DryRun = dryRun,
             LeavesWalked = leavesWalked,
             Findings = findings,
+            Gaps = gaps,
         };
     }
 }
