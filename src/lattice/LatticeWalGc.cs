@@ -387,10 +387,16 @@ public sealed class LatticeWalGc(
         // Why the cursor branch is in the state it is. A null minCursor is
         // ambiguous between "nobody is consuming this tree" (benign, and the
         // scheduler should back off) and "an unusable durable pin short-circuited
-        // the floor" (a defect state in which the tree cannot reclaim at all and
-        // its WAL grows without bound). Collapsing the two is issue #2702; the
-        // scheduler reads this to schedule them differently. Purely diagnostic -
-        // the trim predicate below is unchanged.
+        // the floor" (a defect state in which the tree cannot reclaim at all, so
+        // the WAL it already holds is permanently unreleasable and no retention
+        // or compaction setting can release it). Collapsing the two is issue
+        // #2702; the scheduler reads this to schedule them differently.
+        //
+        // This value is the discriminator. Growth, absence of growth, byte count
+        // and growth stopping are all unusable for it, because a tree only grows
+        // while it is being written to and a blocked tree is flat the rest of the
+        // time, so each of them reads benign on a tree that can never release a
+        // byte. Purely diagnostic - the trim predicate below is unchanged.
         var cursorFloorState = cursorBlocked
             ? WalGcCursorFloorState.BlockedByUnusablePin
             : hasCursorPredicate

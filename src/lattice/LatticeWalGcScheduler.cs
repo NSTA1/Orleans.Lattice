@@ -1974,10 +1974,20 @@ internal sealed class LatticeWalGcScheduler(
             // may have been quiet - nothing above the trim floor, which is the
             // healthy steady state - or the cursor branch may have been disabled
             // outright by an unusable durable materialiser pin, in which case the
-            // tree cannot reclaim at all and its WAL is growing without bound
-            // (issue #2702), or no consumer may have reported a cursor at all, in
-            // which case the pass evaluated nothing and says nothing about the
-            // tree's backlog (issue #2850).
+            // tree cannot reclaim at all and every byte it retains is permanently
+            // unreleasable (issue #2702), or no consumer may have reported a
+            // cursor at all, in which case the pass evaluated nothing and says
+            // nothing about the tree's backlog (issue #2850).
+            //
+            // The floor state is what separates those, and it is the only thing
+            // that can. Growth, absence of growth, byte count and growth stopping
+            // are all unusable for telling the blocked case from the quiet one,
+            // because a tree only grows while it is being written to and a
+            // blocked tree is flat the rest of the time -
+            // repo-context-vector-payload has zero lifetime trimming and measured
+            // flat for 5.5 minutes of an 8-minute window, so every size-based
+            // reading of it resolves to the benign arm. This predicate reads the
+            // measured classification instead, and needs no size reading at all.
             var blocked = !reclaimed
                 && report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 

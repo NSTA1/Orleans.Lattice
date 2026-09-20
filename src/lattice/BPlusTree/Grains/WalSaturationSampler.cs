@@ -127,7 +127,10 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     // in-memory cursor registry, which keeps advancing perfectly well while the
     // durable pin store is stalled. The floor the WAL GC actually trims against
     // is the durable one, so a stalled pin store is invisible to every other
-    // input and the signal reads Healthy while the WAL grows without bound.
+    // input and the signal reads Healthy while the tree's retained WAL is
+    // permanently unreleasable. Do not read that condition off the footprint:
+    // a tree only grows while it is being written to, so a stalled tree is flat
+    // the rest of the time and its bytes stay unreleasable either way.
     // That is issue #2015, and this counter is what closes it.
     private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorPinLatencyTripCounts
         = new();

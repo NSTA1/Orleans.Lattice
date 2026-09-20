@@ -7,9 +7,20 @@ namespace Orleans.Lattice;
 /// <see langword="null"/> both when no consumer has ever reported a cursor and
 /// when an unusable durable materialiser pin short-circuited the floor,
 /// and those two states call for opposite responses: the first is an ordinary
-/// quiet tree, the second is a tree that <i>cannot reclaim at all</i> and whose
-/// WAL therefore grows without bound. Collapsing them is what let a stranded
+/// quiet tree, the second is a tree that <i>cannot reclaim at all</i>, so every
+/// byte its WAL already holds is permanently unreleasable and no retention or
+/// compaction setting can release it. Collapsing them is what let a stranded
 /// tree and a healthy one present identically in telemetry (issue #2702).
+/// </para>
+/// <para>
+/// <b>Do not use growth, absence of growth, or byte count to tell those two
+/// apart.</b> A tree only grows while it is being written to, so a tree that can
+/// never release a byte is flat whenever nothing is writing to it:
+/// <c>repo-context-vector-payload</c>, which has zero lifetime trimming, measured
+/// flat for 5.5 minutes of an 8-minute window. Every size-based reading of it
+/// returns the benign answer at exactly the moment it should not. This value is
+/// the discriminator - it is a measured classification of the floor and needs no
+/// size reading at all.
 /// </para>
 /// <para>
 /// This discriminator is diagnostic and scheduling-facing only. It never widens
@@ -69,11 +80,18 @@ public enum WalGcCursorFloorState
     /// </para>
     /// <para>
     /// This is a defect state, not a quiet one. The tree retains its entire WAL
-    /// head and keeps growing, and one leaf with an unusable pin is enough to
-    /// strand every other leaf in the same tree. A pass that ends here reclaimed
-    /// nothing because it was <i>blocked</i>, which is the opposite of having
-    /// had nothing to do - so the scheduler must not treat it as quiescent and
-    /// must not relax its cadence. See
+    /// head and can release none of it - the retention is permanently
+    /// unreleasable rather than merely large - and one leaf with an unusable pin
+    /// is enough to strand every other leaf in the same tree. A pass that ends
+    /// here reclaimed nothing because it was <i>blocked</i>, which is the
+    /// opposite of having had nothing to do - so the scheduler must not treat it
+    /// as quiescent and must not relax its cadence.
+    /// </para>
+    /// <para>
+    /// Read this value, not the footprint. Growth, absence of growth, byte count
+    /// and growth stopping are all unusable for telling this state from a quiet
+    /// tree, because a tree in this state is flat whenever nothing is writing to
+    /// it and the bytes stay unreleasable either way. See
     /// <see cref="LatticeMetrics.OutcomeBlocked"/>.
     /// </para>
     /// </summary>
