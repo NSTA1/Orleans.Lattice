@@ -2129,6 +2129,50 @@ public static class LatticeMetrics
         new(TagReason, "unmeasurable_footprint");
 
     /// <summary>
+    /// Counter of WAL garbage-collection passes on which the durability hold
+    /// actually engaged and retained a scan, tagged with <see cref="TagTree"/>
+    /// and with <see cref="TagReason"/> = <c>never_pinned</c> or
+    /// <c>pin_regressed</c> (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Distinct from <see cref="WalGcDurabilityHoldForced"/>, which counts the
+    /// hold <i>yielding</i>. This counts it <i>working</i>, and exists because
+    /// the <see cref="WalGcTrimStopReason.DurabilityHold"/> stop reason cannot
+    /// say which of two very different conditions produced it.
+    /// </para>
+    /// <para>
+    /// <c>never_pinned</c> is a tree on which no durable materialiser offset
+    /// floor has ever been observed in this process: it is stalled, it will hold
+    /// until its ceiling forces it, and it needs an operator to wire or repair a
+    /// materialiser. <c>pin_regressed</c> is a tree whose floor existed and is
+    /// currently absent - a rolling upgrade or leaf churn - which resolves
+    /// without intervention as the leaves re-pin. Reporting both on one arm
+    /// would tell an operator mid-upgrade that they had an outage.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> WalGcDurabilityHoldEngaged =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.durability_hold_engaged",
+            description: "WAL garbage-collection passes on which the durability hold engaged and retained the scan, tagged by tree and by reason: never_pinned or pin_regressed.");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>never_pinned</c> - the durability hold
+    /// engaged on a tree for which no durable materialiser offset floor has ever
+    /// been observed. Stalled; it will not clear without intervention.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldEngagedNeverPinned =
+        new(TagReason, "never_pinned");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>pin_regressed</c> - the durability hold
+    /// engaged on a tree whose durable materialiser offset floor was observed
+    /// earlier in this process and is absent now. A bounded transient (rolling
+    /// upgrade, leaf churn) that clears itself when the leaves re-pin.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldEngagedPinRegressed =
+        new(TagReason, "pin_regressed");
+
+    /// <summary>
     /// <see cref="TagStatus"/> = <c>advanced</c> (the durable materialiser offset
     /// floor moved on this pass).
     /// </summary>

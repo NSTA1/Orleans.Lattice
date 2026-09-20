@@ -31,6 +31,14 @@ public class LatticeReplicationGcTests
             WalPartitions = options.ReplogPartitions,
             WalRetention = options.WalRetention,
             WalStorageProvider = options.WalStorageProvider,
+
+            // Issue #3300: the durability hold engages by default for any tree
+            // that has never published a durable materialiser offset floor,
+            // which is true of every tree in this fixture. These tests assert
+            // the core trim predicate (cursor, TTL, causal frontier, block pin)
+            // and a hold would stop the scan before the clause under test is
+            // reached. Opt out explicitly (0 disables the hold).
+            WalDurabilityHoldCeilingBytes = 0,
         };
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.CurrentValue.Returns(translated);

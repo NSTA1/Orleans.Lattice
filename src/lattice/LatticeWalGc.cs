@@ -541,9 +541,38 @@ public sealed class LatticeWalGc(
         // where the bound cannot exist the hold does not engage; the pass falls
         // back to DurabilityUnverified, which still names the condition loudly.
         var holdCeiling = resolved.WalDurabilityHoldCeilingBytes;
-        var holdConfigured = holdCeiling is { } hc && hc > 0;
+
+        // Consumer-identity predicate (issue #3300). The hold engages only when
+        // every cursor admitting this trim is a leaf materialiser the durable
+        // offset floor does not speak for - see WalGcCursorAuthority. Keying on
+        // `offsetFloor is null` alone was not separable: a shipper-only tree and
+        // the stalled tree this hold exists for present identically under it, so
+        // that predicate held both (permanent retention on a correctly-wired
+        // deployment) or neither (issue #3300 stays live). Classifying what the
+        // cursor is EVIDENCE OF separates them, because a shipper's cursor
+        // outlives this process and a materialiser's does not.
+        var cursorAuthority = await ClassifyCursorAuthorityAsync(
+            treeName, offsetCoverage.CoveredConsumerIds, cancellationToken).ConfigureAwait(false);
+        var holdConfigured = holdCeiling is { } hc && hc > 0
+            && cursorAuthority == WalGcCursorAuthority.Volatile;
         var holdHasBudget = holdConfigured
             && retainedBefore is { } rb && rb < holdCeiling!.Value;
+
+        if (holdHasBudget)
+        {
+            // Which population this hold caught, recorded once per pass. Both
+            // arms retain bytes and both stop on `durability_hold`, but they
+            // call for opposite operator responses: `never_pinned` is a stalled
+            // tree that will hold until someone repairs its materialiser, while
+            // `pin_regressed` is a bounded transient - a rolling upgrade or leaf
+            // churn - that clears itself when the leaves re-pin. An operator
+            // seeing a hold mid-upgrade needs to know it will end without them,
+            // and the stop reason alone cannot tell them.
+            var holdEngagedReason = HasEverPinnedDurableFloor(treeName)
+                ? LatticeMetrics.ReasonHoldEngagedPinRegressed
+                : LatticeMetrics.ReasonHoldEngagedNeverPinned;
+            LatticeMetrics.WalGcDurabilityHoldEngaged.Add(1, treeTag, holdEngagedReason, tenantTag);
+        }
 
         for (var partition = 0; partition < partitions; partition++)
         {
@@ -1970,6 +1999,157 @@ public sealed class LatticeWalGc(
             && logicalRetained is { } live
             && live > 0
             && cap < live * LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple;
+
+    /// <summary>
+    /// What the cursors admitting this pass's trim are evidence OF
+    /// (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The durability hold originally engaged on <c>offsetFloor is null</c>
+    /// alone. That predicate is not separable: a shipper-only tree and the
+    /// stalled <c>repo-context-memory</c> tree present identically under it -
+    /// offset floor null, a positive cursor present, entries trimming - so a
+    /// hold keyed on floor presence either holds both or neither. Holding a
+    /// shipper-only tree is permanent retention on a correctly-configured
+    /// deployment; holding neither leaves issue #3300 live. Neither is
+    /// shippable.
+    /// </para>
+    /// <para>
+    /// The separable question is not whether a floor exists but <b>what the
+    /// cursor means</b>. A replication shipper's cursor is evidence that the
+    /// data reached a peer, and it survives this process. A leaf materialiser's
+    /// cursor is a claim about state held in that leaf's memory, and
+    /// <c>BPlusLeafGrain.Activation.cs:2515-2519</c> publishes it <i>precisely
+    /// on the path where the checkpoint was NOT advanced</i> - so on that path
+    /// the cursor is emitted exactly when durability was not achieved, and the
+    /// collector then reads it as permission to release. That claim dies with
+    /// the process, which is what makes the trim data loss.
+    /// </para>
+    /// <para>
+    /// Hence <see cref="WalGcCursorAuthority.Volatile"/>: every consumer
+    /// admitting the trim is a leaf materialiser that the durable offset floor
+    /// does not speak for, so nothing outside this process has attested to any
+    /// of it. This is the only arm the hold engages on. The consumer
+    /// populations are the ones the seam already distinguishes - see the
+    /// <c>UncoveredCursor</c> paragraph above, which names view maintainers,
+    /// log subscribers, the backup capture service and the shipper as consumers
+    /// that report cursors and never offsets.
+    /// </para>
+    /// </remarks>
+    internal enum WalGcCursorAuthority
+    {
+        /// <summary>
+        /// No consumer holds a positive cursor, so no cursor admits anything and
+        /// the scan stops on the cursor floor regardless. The hold would be a
+        /// no-op here and does not engage - reporting a hold on a pass that was
+        /// never going to trim would be the reassuring-value defect the rest of
+        /// this work exists to remove.
+        /// </summary>
+        None = 0,
+
+        /// <summary>
+        /// At least one consumer admitting the trim holds durable evidence: it
+        /// is either not a leaf materialiser at all (a shipper, view maintainer,
+        /// log subscriber or backup capture), or it is a materialiser the
+        /// durable offset floor already speaks for. The trim releases data
+        /// something outside this process has attested to, so the hold does not
+        /// engage.
+        /// </summary>
+        Durable = 1,
+
+        /// <summary>
+        /// Every consumer admitting the trim is a leaf materialiser the durable
+        /// offset floor does NOT cover, so the sole attestation for the entries
+        /// about to be released is in-process state that dies at the process
+        /// boundary. This is the issue #3300 shape and the only arm that holds.
+        /// </summary>
+        Volatile = 2,
+    }
+
+    /// <summary>
+    /// Classifies what the cursors admitting this pass are evidence of
+    /// (issue #3300). See <see cref="WalGcCursorAuthority"/>.
+    /// </summary>
+    /// <remarks>
+    /// Takes its own registry snapshot rather than reusing the one
+    /// <see cref="ApplyDurableMaterialiserFloorAsync"/> takes, because that
+    /// method returns before snapshotting when the durable pin store is empty
+    /// or unreachable - and an empty pin store is exactly the issue #3300 state
+    /// this classification has to be correct in. Folding it in would blind the
+    /// predicate on its own target. Fails closed to
+    /// <see cref="WalGcCursorAuthority.Durable"/> on any registry error, so a
+    /// transient registry fault relaxes the hold rather than engaging it: an
+    /// unread registry is not evidence that nothing durable is watching.
+    /// </remarks>
+    private async Task<WalGcCursorAuthority> ClassifyCursorAuthorityAsync(
+        string treeName,
+        IReadOnlySet<string>? coveredConsumerIds,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<WalCursorSnapshot> snapshot;
+        try
+        {
+            snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            return WalGcCursorAuthority.Durable;
+        }
+
+        var sawAdmittingCursor = false;
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var entry = snapshot[i];
+
+            // Zero-cursor consumers admit nothing, for the same reason
+            // GetMinCursorAsync skips them: a Zero cursor is a block-pin-only
+            // registration. It is not evidence either way and must not make an
+            // otherwise-volatile tree look durable.
+            if (entry.Cursor <= HybridLogicalClock.Zero)
+            {
+                continue;
+            }
+
+            sawAdmittingCursor = true;
+
+            var isMaterialiser = entry.ConsumerId.StartsWith(
+                BPlusTree.Grains.ILeafCursorReporter.MaterialiserConsumerIdPrefix,
+                StringComparison.Ordinal);
+            if (!isMaterialiser)
+            {
+                return WalGcCursorAuthority.Durable;
+            }
+
+            if (coveredConsumerIds is not null && coveredConsumerIds.Contains(entry.ConsumerId))
+            {
+                return WalGcCursorAuthority.Durable;
+            }
+        }
+
+        return sawAdmittingCursor
+            ? WalGcCursorAuthority.Volatile
+            : WalGcCursorAuthority.None;
+    }
+
+    /// <summary>
+    /// Whether a durable materialiser offset floor has <em>ever</em> been
+    /// observed for <paramref name="treeName"/> in this process (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// This is what separates the two populations a durability hold can catch,
+    /// and the distinction is the operator's, not the collector's. A tree that
+    /// has never pinned is stalled and needs someone to wire or repair a
+    /// materialiser; a tree whose floor existed and has gone is mid-upgrade or
+    /// mid-leaf-churn and will clear itself when the leaves re-pin. Both hold,
+    /// both retain bytes, and they are indistinguishable from the stop reason
+    /// alone - so the engagement counter carries the arm. Reads the high-water
+    /// mark <see cref="RecordDurableFloorProgress"/> maintains, which by
+    /// construction never regresses on floor loss.
+    /// </remarks>
+    private bool HasEverPinnedDurableFloor(string treeName)
+        => _durableFloorProgress.TryGetValue(treeName, out var progress)
+            && progress.HighWaterFloor is not null;
 
     private static async Task<(long EligibleCount, WalGcTrimStopReason StopReason)> TrimShardAsync(
         IWalStorageProvider provider,

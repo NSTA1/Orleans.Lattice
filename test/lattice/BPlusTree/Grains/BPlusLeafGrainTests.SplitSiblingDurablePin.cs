@@ -53,7 +53,13 @@ public partial class BPlusLeafGrainTests
     private static IOptionsMonitor<LatticeOptions> PinOptionsMonitor()
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1 };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable OFFSET floor. These tests seed a durable
+        // HLC pin and assert the trim that follows from it, which is a distinct
+        // durability mechanism - so the tree here has HLC evidence but no offset
+        // floor, and the hold would mask the axis under test. Opt out
+        // explicitly (0 disables the hold).
+        var options = new LatticeOptions { WalPartitions = 1, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

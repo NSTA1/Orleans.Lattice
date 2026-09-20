@@ -105,14 +105,36 @@ public sealed class LatticeWalGcDurabilityHoldTests
     /// <paramref name="checkpointOffset"/> to report no durable offsets at all,
     /// which is the absent-floor state this whole fixture is about.
     /// </summary>
+    /// <param name="includeForeignConsumer">
+    /// Registers a <c>shipper</c> cursor alongside the leaf materialiser.
+    /// <para>
+    /// Defaults to <see langword="false"/>, and the default is load-bearing
+    /// rather than tidiness. The hold's predicate is not "no offset floor" - it
+    /// is "every cursor admitting this trim is a leaf materialiser the offset
+    /// floor does not speak for". A shipper reports a cursor from outside this
+    /// process, so its presence is durable evidence and correctly suppresses the
+    /// hold. A tree carrying one is therefore NOT the issue #3300 shape, and a
+    /// fixture that registered one while asserting the hold would be asserting
+    /// against a tree the hold is designed to leave alone.
+    /// </para>
+    /// <para>
+    /// Setting it <see langword="true"/> builds exactly that control: the
+    /// separability case whose whole point is that the hold must decline.
+    /// </para>
+    /// </param>
     private static async Task<LatticeWalGc> CollectorAsync(
         IWalStorageProvider provider,
         long? checkpointOffset,
         long? holdCeiling,
-        bool useDefaultCeiling = false)
+        bool useDefaultCeiling = false,
+        bool includeForeignConsumer = false)
     {
         var registry = new InMemoryWalCursorRegistry();
-        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        if (includeForeignConsumer)
+        {
+            await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        }
+
         await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
 
         var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
@@ -138,10 +160,11 @@ public sealed class LatticeWalGcDurabilityHoldTests
         return new LatticeWalGc(sc.BuildServiceProvider(), registry, Monitor(holdCeiling, useDefaultCeiling));
     }
 
-    private static async Task<(LatticeWalGcReport Report, List<Stop> Stops, List<string> ForcedReasons)> RunAsync(LatticeWalGc sut)
+    private static async Task<(LatticeWalGcReport Report, List<Stop> Stops, List<string> ForcedReasons, List<string> EngagedReasons)> RunAsync(LatticeWalGc sut)
     {
         var stops = new List<Stop>();
         var forcedReasons = new List<string>();
+        var engagedReasons = new List<string>();
 
         using var stopListener = MeterListening.StartForInstrument(
             LatticeMetrics.WalGcTrimStops,
@@ -178,8 +201,27 @@ public sealed class LatticeWalGcDurabilityHoldTests
                 }
             }));
 
+        using var engagedListener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalGcDurabilityHoldEngaged,
+            l => l.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                string? reason = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagReason)
+                    {
+                        reason = tag.Value as string;
+                    }
+                }
+
+                lock (engagedReasons)
+                {
+                    engagedReasons.Add(reason ?? "<untagged>");
+                }
+            }));
+
         var report = await sut.RunOnceAsync(Tree);
-        return (report, stops, forcedReasons);
+        return (report, stops, forcedReasons, engagedReasons);
     }
 
     private static List<string> Advanced(IEnumerable<Stop> stops) =>
@@ -207,7 +249,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: null);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -235,7 +277,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: 99, holdCeiling: null);
 
-        var (report, stops, _) = await RunAsync(sut);
+        var (report, stops, _, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -255,7 +297,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: 1024L * 1024L);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -279,7 +321,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: 1);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -305,7 +347,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: 99, holdCeiling: 1);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -326,7 +368,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = new InMemoryWalStorageProvider();
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: 1024L * 1024L);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -346,7 +388,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: 99, holdCeiling: null);
 
-        var (_, stops, _) = await RunAsync(sut);
+        var (_, stops, _, _) = await RunAsync(sut);
 
         var reasons = stops.Select(static s => s.Reason).ToList();
         Assert.Multiple(() =>
@@ -395,7 +437,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: null, useDefaultCeiling: true);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -420,7 +462,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = await SeededAsync();
         var sut = await CollectorAsync(provider, checkpointOffset: 99, holdCeiling: null, useDefaultCeiling: true);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -455,7 +497,7 @@ public sealed class LatticeWalGcDurabilityHoldTests
         var provider = new UnweighableWalStorageProvider(inner);
         var sut = await CollectorAsync(provider, checkpointOffset: null, holdCeiling: null, useDefaultCeiling: true);
 
-        var (report, stops, forcedReasons) = await RunAsync(sut);
+        var (report, stops, forcedReasons, _) = await RunAsync(sut);
 
         Assert.Multiple(() =>
         {
@@ -552,6 +594,137 @@ public sealed class LatticeWalGcDurabilityHoldTests
                 "And the write deferred past its own pass is taken by the next one - which is precisely the "
                 + "event the hold has to survive.");
             Assert.That(Advanced(second.Stops), Is.EqualTo(new[] { "durability_unverified" }));
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_declines_the_hold_when_a_non_materialiser_cursor_admits_the_trim()
+    {
+        // THE SEPARABILITY CONTROL, and the reason the predicate is keyed on
+        // consumer identity rather than on floor presence.
+        //
+        // This tree is byte-identical to the #3300 shape under the old
+        // predicate: no durable materialiser offset floor, a positive cursor
+        // present, entries eligible. Keying the hold on `offsetFloor is null`
+        // therefore held this tree too - permanently, because a shipper never
+        // publishes an offset and so the floor never arrives. That is unbounded
+        // retention imposed on a correctly-configured deployment, which is
+        // issue #3094 arriving on our initiative.
+        //
+        // The two are separable only on what the cursor is EVIDENCE OF. A
+        // shipper's cursor says the data reached a peer and it outlives this
+        // process; a leaf materialiser's cursor is a claim about state in that
+        // leaf's memory and dies with the process. So the hold must decline
+        // here and engage in the test below, on trees that differ in nothing
+        // else.
+        var provider = await SeededAsync();
+        var sut = await CollectorAsync(
+            provider, checkpointOffset: null, holdCeiling: null,
+            useDefaultCeiling: true, includeForeignConsumer: true);
+
+        var (report, stops, forcedReasons, engagedReasons) = await RunAsync(sut);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.EntriesTrimmed, Is.EqualTo(3),
+                "A shipper cursor is durable evidence, so the collector must reclaim exactly as it did "
+                + "before the hold existed. Retaining here would be permanent, because a shipper never "
+                + "publishes an offset floor for the hold to be released by.");
+            Assert.That(Advanced(stops), Is.EqualTo(new[] { "durability_unverified" }),
+                "The naming half still applies - there genuinely is no offset floor - but naming it is all "
+                + "the collector may do on this tree.");
+            Assert.That(engagedReasons, Is.Empty,
+                "The hold did not engage, so it must not claim to have.");
+            Assert.That(forcedReasons, Is.Empty,
+                "Nor may it report being forced past a ceiling it never engaged against; that would indict "
+                + "a healthy deployment for a fault it does not have.");
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_holding_a_materialiser_only_tree_reports_never_pinned()
+    {
+        // The positive half of the pair above. Identical tree, one difference:
+        // no consumer reports a cursor from outside this process. Every cursor
+        // admitting the trim is a leaf materialiser with no durable offset
+        // coverage, so the sole attestation for these entries is in-process
+        // state that dies at the process boundary - and releasing them is the
+        // data loss issue #3300 recorded.
+        var provider = await SeededAsync();
+        var sut = await CollectorAsync(
+            provider, checkpointOffset: null, holdCeiling: null, useDefaultCeiling: true);
+
+        var (report, stops, forcedReasons, engagedReasons) = await RunAsync(sut);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.EntriesTrimmed, Is.EqualTo(0),
+                "Nothing outside this process has attested to any of these entries, so none may be released.");
+            Assert.That(Advanced(stops), Is.EqualTo(new[] { "durability_hold" }));
+            Assert.That(engagedReasons, Is.EqualTo(new[] { "never_pinned" }),
+                "No durable floor has ever been observed for this tree, so the hold is reporting a STALLED "
+                + "tree that will not clear without someone repairing its materialiser - not a transient. "
+                + "Collapsing this onto the same arm as pin_regressed would tell an operator mid-upgrade "
+                + "that they had an outage.");
+            Assert.That(forcedReasons, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task RunOnceAsync_holding_after_a_floor_disappears_reports_pin_regressed_not_never_pinned()
+    {
+        // The rolling-upgrade residue, given its own arm rather than counted as
+        // a stall. Both conditions hold the scan and both stop on
+        // `durability_hold`, so the stop reason alone cannot tell them apart -
+        // but they call for opposite operator responses. A tree that has never
+        // pinned needs intervention; a tree whose floor has gone is mid-upgrade
+        // or mid-leaf-churn and resolves itself when the leaves re-pin.
+        //
+        // Driven on ONE collector across two passes, because the distinction
+        // lives in the per-tree high-water mark that survives floor loss. A
+        // fresh collector would have no history and would - correctly - report
+        // never_pinned, which is exactly the conflation this guards.
+        var provider = await SeededAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var offsets = new Dictionary<string, long>(StringComparer.Ordinal) { [LeafConsumer] = 1 };
+        var reportOffsets = true;
+
+        var pinGrain = Substitute.For<IWalMaterialiserPinGrain>();
+        pinGrain.GetPinsAsync().Returns(Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
+            new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [LeafConsumer] = Hlc(20) }));
+        pinGrain.GetPinOffsetsAsync().Returns(_ => Task.FromResult<IReadOnlyDictionary<string, long>>(
+            reportOffsets ? offsets : new Dictionary<string, long>(StringComparer.Ordinal)));
+
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>()).Returns(pinGrain);
+
+        var sc = new ServiceCollection();
+        sc.AddSingleton<IWalStorageProvider>(provider);
+        sc.AddSingleton(factory);
+        var sut = new LatticeWalGc(
+            sc.BuildServiceProvider(), registry, Monitor(null, useDefaultCeiling: true));
+
+        var first = await RunAsync(sut);
+
+        // The leaf stops publishing an offset - the upgrade rolls, the
+        // activation churns, the floor vanishes.
+        reportOffsets = false;
+        var second = await RunAsync(sut);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.EngagedReasons, Is.Empty,
+                "A floor existed on the first pass, so the hold had nothing to protect against and must "
+                + "not have engaged.");
+            Assert.That(Advanced(second.Stops), Is.EqualTo(new[] { "durability_hold" }),
+                "With the floor gone the hold engages, because every remaining cursor is an uncovered "
+                + "materialiser.");
+            Assert.That(second.EngagedReasons, Is.EqualTo(new[] { "pin_regressed" }),
+                "And it must say the floor REGRESSED rather than that it never existed. This collector "
+                + "watched the floor advance on the previous pass; reporting never_pinned here would "
+                + "send an operator to repair a materialiser that is working.");
         });
     }
 }

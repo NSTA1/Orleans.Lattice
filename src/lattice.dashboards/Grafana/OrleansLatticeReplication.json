@@ -1949,6 +1949,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_durability_hold_forced_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}}/s" }
       ]
+    },
+    {
+      "id": 3302,
+      "title": "WAL GC durability hold engaged - retained scans (ops/s) - issue #3300",
+      "description": "Rate at which the WAL GC durability hold ENGAGED and retained a scan (orleans.lattice.wal.gc.durability_hold_engaged, issue #3300). This is the mirror of the forced panel beside it: that one counts the hold yielding, this one counts it working, so a non-zero value here is the safeguard doing its job and is NOT on its own an alert. The hold fires only where every cursor admitting the trim is a leaf materialiser that the durable offset floor does not speak for - the state in which the collector would otherwise release records nothing outside this process has attested to, because a leaf materialiser cursor is a claim about in-process state and dies at the process boundary. A tree with a replication shipper, view maintainer, log subscriber or backup capture reporting a cursor never reaches this panel, because those cursors are evidence that survives the process. READ THE reason ARM: IT DECIDES WHETHER ANYONE NEEDS TO ACT. never_pinned means no durable materialiser offset floor has ever been observed for this tree in this process - the tree is stalled, it will hold until its ceiling forces it onto the forced panel, and it needs an operator to wire or repair a materialiser. pin_regressed means a floor was observed earlier and is absent now, which is a rolling upgrade or leaf churn and clears itself as the leaves re-pin. Alert on sustained never_pinned; do not alert on pin_regressed. Reporting both on one arm would tell an operator mid-upgrade that they had an outage. An absent series means the hold has not engaged on this tree, which for a tree with a materialiser wired is the expected healthy reading. Read with the durable-floor stall panel for how long the condition has persisted.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 358 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_wal_gc_durability_hold_engaged_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}}/s" }
+      ]
     }
   ]
 }
