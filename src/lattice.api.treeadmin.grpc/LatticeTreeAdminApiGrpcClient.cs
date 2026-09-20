@@ -755,6 +755,44 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Audits <paramref name="treeId"/> for orphaned leaves - leaves spliced into a
+    /// shard's sibling chain but unreachable by descent - with no side effects.
+    /// Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's orphaned-leaf audit.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.AuditOrphanedLeaves,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Repairs <paramref name="treeId"/> by unsplicing every descent-unreachable leaf
+    /// whose keys were all shown to be readable elsewhere. An irreversible structural
+    /// change. Requires whole-tree lifecycle authority.
+    /// </summary>
+    /// <param name="treeId">The tree to repair. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's orphaned-leaf repair report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.RepairOrphanedLeaves,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Computes a read-only preview of moving WAL partition <paramref name="partition"/>
     /// of <paramref name="treeId"/> to <paramref name="targetProviderKey"/>, with no
     /// side effects. Requires whole-tree read authority.

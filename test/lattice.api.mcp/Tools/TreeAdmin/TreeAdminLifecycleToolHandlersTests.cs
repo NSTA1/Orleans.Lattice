@@ -535,6 +535,32 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task AuditOrphanedLeavesAsync_forwards_the_tree_id_and_returns_the_report()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeOrphanedLeafReport { TreeId = "orders", DryRun = true, LeavesWalked = 3 };
+        admin.AuditOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).AuditOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RepairOrphanedLeavesAsync_forwards_the_tree_id_and_returns_the_report()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeOrphanedLeafReport { TreeId = "orders", DryRun = false, LeavesWalked = 3 };
+        admin.RepairOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).RepairOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task PlanWalMoveAsync_forwards_the_arguments_and_returns_the_plan()
     {
         var admin = TreeAdmin();
@@ -849,6 +875,8 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetWalPlacementAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.AuditWalPlacementAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.PlanWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
