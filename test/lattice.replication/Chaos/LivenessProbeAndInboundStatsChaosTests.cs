@@ -24,15 +24,21 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 ///   pipeline; without the probe the gauge would climb unbounded on
 ///   the idle edge.</description></item>
 ///   <item><description><see cref="Inbound_error_counter_advances_per_failed_apply_under_chaos"/>
-///   configures the receiver-side fixture applier to throw on every
-///   3rd <c>ApplyBatchAsync</c>, then drives 60 writes against site A.
-///   The shipper retries throws per its backoff policy, the loopback
-///   transport surfaces the throw as a transport fault, and the
-///   inbound counter on site B must advance exactly as many times as
-///   the fault-injecting applier injected failures. The chaos shape
-///   is sustained receiver-side faults; before the inbound-direction peer-stats wiring shipped the inbound counter
-///   wouldn't record at all, so the test pins the failure-path
-///   recording.</description></item>
+///   arms a deterministic fault budget on the receiver-side fixture
+///   applier - two bursts of failures, drained one per entry-carrying
+///   <c>ApplyBatchAsync</c> - and drives writes against site A across
+///   both. The shipper retries throws per its backoff policy, the
+///   loopback transport surfaces the throw as a transport fault, and
+///   the inbound counter on site B must record on the failure path.
+///   The chaos shape is receiver-side apply outages inside a live
+///   pipeline; before the inbound-direction peer-stats wiring shipped
+///   the inbound counter wouldn't record at all, so the test pins the
+///   failure-path recording. Deliberately budget-driven rather than
+///   rate-driven: a one-in-N rate would make the failure count depend
+///   on how the shipper packs batches, which the test cannot control,
+///   whereas a budget drains identically however batches
+///   coalesce - each retry of a thrown batch is another call - and is
+///   entailed by the convergence assertion.</description></item>
 /// </list>
 /// </summary>
 [TestFixture]
@@ -124,63 +130,46 @@ public class LivenessProbeAndInboundStatsChaosTests
         await fixture.InitializeAsync();
 
         var siteAId = fixture.ClusterIds[0];
+        var applier = fixture.ApplierOf(1);
 
-        // Inject a fault on the receiver every 3rd apply. The shipper's
-        // backoff path retries throws, so each fault is observed once
-        // per failed batch attempt (the retry succeeds on a different
-        // batch index, so we count throws via the fixture's own
-        // InjectedFailures counter, not via the shipper's retry count).
-        fixture.ApplierOf(1).FailEveryNthCall = 3;
+        // Arm a deterministic fault budget on the receiver rather than a
+        // one-in-N rate. A rate makes the failure count a function of how
+        // many times the shipper calls the applier - i.e. of how it packs
+        // batches - which the test does not control and previously bought
+        // with a wall-clock sleep between write chunks. A budget is drained
+        // one unit per entry-carrying apply call, and the shipper's backoff
+        // path retries a thrown batch, so it drains identically whether the
+        // 20 writes below ship as twenty batches or as one.
+        const int firstBurst = 3;
+        const int secondBurst = 2;
+        applier.InjectFaults(firstBurst);
 
-        // Drive a sustained write workload on site A in small chunks
-        // separated by short delays so the shipper packs many small
-        // batches (one per chunk) rather than coalescing everything
-        // into a single 60-entry batch. Each batch dispatch is one
-        // applier call on the receiver, so chunking is what gives the
-        // fault injector enough calls to actually fire several
-        // failures.
         var aLattice = fixture.ClientOf(0).GetGrain<ILattice>(TreeName);
-        for (var chunk = 0; chunk < 30; chunk++)
-        {
-            for (var i = 0; i < 2; i++)
-            {
-                var key = $"k-{chunk:D2}-{i}";
-                await aLattice.SetAsync(key, Encoding.UTF8.GetBytes($"v-{chunk}-{i}"));
-            }
-            await Task.Delay(80);
-        }
-
-        // Wait until the receiver has fully drained: site B sees every key.
         var bLattice = fixture.ClientOf(1).GetGrain<ILattice>(TreeName);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
-        bool converged;
-        do
-        {
-            converged = true;
-            for (var chunk = 0; chunk < 30 && converged; chunk++)
-            {
-                for (var i = 0; i < 2 && converged; i++)
-                {
-                    var v = await bLattice.GetAsync($"k-{chunk:D2}-{i}");
-                    if (v is null) { converged = false; }
-                }
-            }
-            if (!converged) await Task.Delay(100);
-        } while (!converged && DateTime.UtcNow < deadline);
 
-        Assert.That(converged, Is.True,
-            $"Site B did not converge despite fault injection retries. " +
-            $"InjectedFailures = {fixture.ApplierOf(1).InjectedFailures}, " +
-            $"transport shipped = {fixture.TransportOf(0).BatchesShipped}, accepted = {fixture.TransportOf(0).BatchesAccepted}.");
+        // Burst 1: the receiver is down for the first three entry-carrying
+        // applies. No key can reach site B until one of them succeeds, and
+        // none can succeed while budget remains - so convergence below
+        // *entails* that all three faults fired. The precondition is carried
+        // by an assertion, not by a sleep.
+        await WriteRangeAsync(aLattice, 0, 10);
+        await AssertConvergedAsync(fixture, bLattice, 0, 10, "first burst");
 
-        // Sanity: faults must have been injected (otherwise the chaos
-        // intent didn't actually exercise the failure path).
-        var injected = fixture.ApplierOf(1).InjectedFailures;
-        Assert.That(injected, Is.GreaterThan(0),
-            "Test is vacuous - no faults were injected.");
+        AssertBudgetDrained(applier, expectedInjected: firstBurst, phase: "first burst");
 
-        // Inbound-error counter on site B must equal the number of
-        // injected throws for the (TreeName, site-A origin) row.
+        // Burst 2: re-arm after the counter has been reset by successful
+        // applies, so the test also covers fault-after-success rather than
+        // only a cold-start outage.
+        applier.InjectFaults(secondBurst);
+        await WriteRangeAsync(aLattice, 10, 20);
+        await AssertConvergedAsync(fixture, bLattice, 0, 20, "second burst");
+
+        AssertBudgetDrained(applier, expectedInjected: firstBurst + secondBurst, phase: "second burst");
+
+        var injected = applier.InjectedFailures;
+
+        // Inbound-error counter on site B must exist for the
+        // (TreeName, site-A origin) row.
         var bStats = fixture.PeerStatsOf(1);
         var inboundRow = bStats.Snapshot()
             .FirstOrDefault(s => s.Direction == ReplicationContactDirection.Inbound
@@ -202,8 +191,8 @@ public class LivenessProbeAndInboundStatsChaosTests
                 "Pipelining depth is outbound-only; an inbound row must never carry an in-flight count.");
         });
 
-        // The real invariant: a non-zero injected-failure count under
-        // a draining workload means the receiver-side inbound recording
+        // The real invariant: a known, non-zero injected-failure count under
+        // a drained workload means the receiver-side inbound recording
         // path fired. The ConsecutiveErrors counter resets to zero on
         // each subsequent success, so the test asserts the success
         // path also recorded (LastContactSeconds populated post-drain).
@@ -211,9 +200,76 @@ public class LivenessProbeAndInboundStatsChaosTests
             "After drain, site B's inbound row must have a populated LastContactSeconds.");
 
         TestContext.Out.WriteLine(
-            $"Inbound-error chaos: injected throws = {injected}, " +
+            $"Inbound-error chaos: injected throws = {injected} (budget-driven, batching-independent), " +
+            $"entry-carrying applier calls = {applier.EntryCarryingCalls}, " +
+            $"total applier calls = {applier.TotalCalls}, " +
             $"site B inbound row last contact = {inboundRow.LastContactSeconds:F3}s, " +
             $"transport shipped = {fixture.TransportOf(0).BatchesShipped}, accepted = {fixture.TransportOf(0).BatchesAccepted}.");
+    }
+
+    private static async Task WriteRangeAsync(ILattice lattice, int fromInclusive, int toExclusive)
+    {
+        for (var i = fromInclusive; i < toExclusive; i++)
+        {
+            await lattice.SetAsync($"k-{i:D2}", Encoding.UTF8.GetBytes($"v-{i}"));
+        }
+    }
+
+    private static async Task AssertConvergedAsync(
+        ProductionShipperFixture fixture,
+        ILattice bLattice,
+        int fromInclusive,
+        int toExclusive,
+        string phase)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+        bool converged;
+        do
+        {
+            converged = true;
+            for (var i = fromInclusive; i < toExclusive && converged; i++)
+            {
+                if (await bLattice.GetAsync($"k-{i:D2}") is null) { converged = false; }
+            }
+            if (!converged) await Task.Delay(100);
+        } while (!converged && DateTime.UtcNow < deadline);
+
+        var applier = fixture.ApplierOf(1);
+        Assert.That(converged, Is.True,
+            $"Site B did not converge in the {phase} despite fault-injection retries. " +
+            $"InjectedFailures = {applier.InjectedFailures}, " +
+            $"remaining fault budget = {applier.RemainingFaultBudget}, " +
+            $"entry-carrying applier calls = {applier.EntryCarryingCalls}, " +
+            $"transport shipped = {fixture.TransportOf(0).BatchesShipped}, accepted = {fixture.TransportOf(0).BatchesAccepted}.");
+    }
+
+    /// <summary>
+    /// Asserts the deterministic fault budget drained in full. Stated as an
+    /// explicit precondition with its own diagnosis so a future failure
+    /// names its cause instead of reading as "the inbound error counter did
+    /// not advance" and misdirecting the reader at the component under test.
+    /// </summary>
+    private static void AssertBudgetDrained(
+        FaultInjectingReplicationApplier applier,
+        int expectedInjected,
+        string phase)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(applier.RemainingFaultBudget, Is.Zero,
+                $"Chaos precondition failed in the {phase}: the receiver-side fault budget did not drain " +
+                $"({applier.RemainingFaultBudget} fault(s) still owed after site B converged). " +
+                "This is NOT a defect in the inbound-error recording path under test. The budget is drained " +
+                "one unit per entry-carrying ApplyBatchAsync call and is deliberately independent of how the " +
+                "shipper packs batches (a thrown batch is retried, and each retry is another call), so an " +
+                "undrained budget means entry-carrying batches stopped reaching the receiver altogether - " +
+                $"entry-carrying applier calls = {applier.EntryCarryingCalls}, total calls = {applier.TotalCalls}.");
+            Assert.That(applier.InjectedFailures, Is.EqualTo(expectedInjected),
+                $"Chaos precondition failed in the {phase}: expected exactly {expectedInjected} injected " +
+                $"receiver-side fault(s), saw {applier.InjectedFailures}. Injection is budget-driven and " +
+                "therefore deterministic; it does not depend on batch coalescing, so a mismatch means the " +
+                "fixture injector changed behaviour, not that the shipper packed batches differently.");
+        });
     }
 
     private static async Task WaitForOutboundContactAsync(ReplicationPeerStats stats, string peerId, TimeSpan timeout)
