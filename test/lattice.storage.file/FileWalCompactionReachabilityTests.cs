@@ -19,12 +19,27 @@ namespace Orleans.Lattice.Storage.File.Tests;
 /// and it is read there unconditionally - a trim that releases no entry still
 /// evaluates. The gate on the ratio and the ceiling was therefore never "did
 /// we trim" but "was the trim called at all", and the collector returns before
-/// calling it whenever the scan found no eligible entry. A shard whose
-/// <b>first</b> entry sits above the tree-wide offset floor produces exactly
-/// that, on every sweep, for as long as the floor is held. The result is not
-/// slow reclamation but stranded reclamation: dead bytes accumulate
+/// calling it whenever the scan found no eligible entry. A shard that has
+/// already accumulated dead bytes and only later comes to rest on the floor
+/// produces exactly that, on every sweep, for as long as the floor is held.
+/// The result is not slow reclamation but stranded reclamation: dead bytes sit
 /// <i>above</i> the threshold with no path to an evaluation, so no value of
-/// any compaction option can reach them.
+/// any compaction option can reach them. That is the population the repair
+/// restores, and it is the one the fixtures below drive.
+/// </para>
+/// <para>
+/// <b>It is not the only population, and the repair does not serve the other
+/// one (issue #3207).</b> A shard whose <b>first</b> entry has always sat above
+/// the floor has never called the trim at all, and dead bytes rise only as a
+/// direct or replayed consequence of that call - no write path marks anything
+/// dead. Its dead-byte count is therefore pinned at zero in perpetuity, which
+/// is the operand every threshold reads, so reaching the evaluation makes such
+/// a shard <i>asked</i> without making it <i>reclaimable</i>. That is not a
+/// shortfall in the repair: those retained bytes are live, not dead, so there
+/// is nothing there for a compaction to return. The remedy for that population
+/// is to make it nameable rather than to rewrite it, and
+/// <c>A_shard_that_has_never_trimmed_is_asked_and_correctly_reclaims_nothing</c>
+/// below pins that boundary so the distinction cannot be lost again.
 /// </para>
 /// <para>
 /// The fixtures below therefore put the floor <b>below the whole retained
@@ -51,6 +66,13 @@ public sealed class FileWalCompactionReachabilityTests
 
     private const int TrimThrough = 14;
     private const long FirstRetainedOffset = TrimThrough + 1;
+
+    /// <summary>
+    /// The base offset for the never-trimmed population. It is far enough above
+    /// zero that the collector can be given a floor beneath the whole range,
+    /// which is the only way to reach a shard that has never called the trim.
+    /// </summary>
+    private const long UntrimmedFirstOffset = 100;
 
     private ServiceProvider _services = null!;
     private Serializer<WalRecord> _serializer = null!;
@@ -265,7 +287,132 @@ public sealed class FileWalCompactionReachabilityTests
         });
     }
 
+    /// <summary>
+    /// The boundary of what the repair can do, pinned so it cannot be lost
+    /// again (issue #3207). This shard's first entry has always sat above the
+    /// floor, so it has never called the provider's trim, and dead bytes rise
+    /// only as a direct or replayed consequence of that call. Its dead-byte
+    /// count is pinned at zero, which is the operand every compaction arm
+    /// reads.
+    /// <para>
+    /// The assertions reproduce, in a fixture, the exact signature such a shard
+    /// publishes in production: the evaluation is <b>recorded</b> - retained
+    /// bytes are non-zero, so the shard is demonstrably being asked - and its
+    /// dead-byte answer is zero on every one of those same evaluations. That
+    /// pairing is the proof that the shard is not being skipped but is
+    /// declining on a quantity which cannot move, and it is why no
+    /// threshold-based remedy can ever observe this population: there is no
+    /// value of the ratio, the minimum, or the ceiling that a zero clears.
+    /// </para>
+    /// <para>
+    /// It is equally the proof that nothing is being lost. A compaction returns
+    /// exactly the dead bytes it finds, and these retained bytes are live, so a
+    /// rewrite here would move several megabytes to reclaim none of them. The
+    /// remedy for this population is therefore to make it <i>nameable</i> -
+    /// covered by
+    /// <c>LatticeWalGcTrimStopReasonTests.RunOnceAsync_separates_a_shard_that_releases_nothing_from_a_healthy_shard_that_also_stops</c>,
+    /// which joins the shard-attributed stop arm against that shard's flat
+    /// entries-trimmed - and not to widen any threshold.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_shard_that_has_never_trimmed_is_asked_and_correctly_reclaims_nothing()
+    {
+        await SeedUntrimmedBacklogAsync();
+
+        using var sut = CreateProvider(compactionMinimumDeadBytes: 1024);
+
+        var deadSamples = new List<long>();
+        var retainedSamples = new List<long>();
+
+        using var deadListener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalDeadBytes,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
+            {
+                if (MatchesTree(tags))
+                {
+                    lock (deadSamples)
+                    {
+                        deadSamples.Add(measurement);
+                    }
+                }
+            }));
+
+        using var retainedListener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionEvalRetainedBytes,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
+            {
+                if (MatchesTree(tags))
+                {
+                    lock (retainedSamples)
+                    {
+                        retainedSamples.Add(measurement);
+                    }
+                }
+            }));
+
+        var (report, compactions, stops) = await RunCollectorAsync(sut, checkpointOffset: UntrimmedFirstOffset - 10);
+
+        deadListener.Dispose();
+        retainedListener.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.EntriesTrimmed, Is.Zero,
+                "Every entry sits above the floor, so the scan releases nothing - which is correct, and is "
+                + "the data-loss guard working rather than a fault to be relaxed.");
+            Assert.That(stops, Is.EqualTo(new[] { "offset_floor" }),
+                "The shard stops on the same arm a healthy shard stops on once it has released all it may, "
+                + "which is exactly why the arm needs the shard dimension to be actionable.");
+
+            Assert.That(retainedSamples, Is.Not.Empty,
+                "Retained bytes being recorded at all is the evidence that the evaluation is reached: the "
+                + "shard is being asked.");
+            Assert.That(retainedSamples, Has.Count.GreaterThanOrEqualTo(2),
+                "Opening the shard evaluates once on its own, so a single sample would prove only that the "
+                + "file was loaded. A second evaluation in the same pass is the repair firing after a scan "
+                + "that released nothing - the shard declines visibly, having been asked.");
+            Assert.That(retainedSamples, Is.All.GreaterThan(0),
+                "The shard is holding real payload - this is the several-megabytes-retained reading an "
+                + "operator sees, and it is live data, not reclaimable slack.");
+            Assert.That(deadSamples, Has.Count.EqualTo(retainedSamples.Count),
+                "Dead and retained are recorded together on every evaluation, so they can be compared "
+                + "sample for sample rather than across differently-sized series.");
+            Assert.That(deadSamples, Is.All.Zero,
+                "The answer is pinned at zero on every evaluation. No write path marks bytes dead, so a "
+                + "shard that has never trimmed has no dead-byte accounting for any threshold to read.");
+
+            Assert.That(compactions, Is.Empty,
+                "Declining is correct: a compaction returns exactly the dead bytes it finds, so rewriting "
+                + "this shard would be unbounded write amplification for no reclaimed byte.");
+        });
+    }
+
     // --- helpers ------------------------------------------------------------
+
+    /// <summary>
+    /// Appends a segment whose every offset sits above <see cref="UntrimmedFirstOffset"/>
+    /// and never trims it, so the shard reaches the collector with a dead-byte
+    /// count that has never been raised. The provider is disposed so the
+    /// collector under test opens the shard from disk, exactly as a restarted
+    /// host would - which also exercises the recovery path that replays trim
+    /// markers, of which there are none to replay.
+    /// </summary>
+    private async Task SeedUntrimmedBacklogAsync()
+    {
+        using var writer = CreateProvider(compactionMinimumDeadBytes: int.MaxValue);
+        for (var i = 0; i < Appended; i++)
+        {
+            await writer.AppendBatchAsync(
+                TreeId, 0, new[] { Entry(UntrimmedFirstOffset + i) }, CancellationToken.None);
+        }
+
+        Assert.That(
+            await writer.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None),
+            Is.EqualTo(UntrimmedFirstOffset),
+            "The seed must leave the whole range above the floor the collector will be given, or the shard "
+            + "would release a prefix and stop being the never-trimmed population under test.");
+    }
 
     /// <summary>
     /// Appends a full segment and trims its prefix to dead without compacting,

@@ -228,6 +228,29 @@ public sealed class DashboardPanelTagDomainTests
             // unfiltered saturation panels on the commit-path dashboard.
             ["Overview|34|orleans.lattice.wal.saturation.transitions|state"] =
                 ["healthy", "throttled", "unknown"],
+
+            // Panel 3149 is the Panel 143 shape. Its first target is unfiltered
+            // and draws all six arms by reason; issue #3207 added a second,
+            // narrowed target that selects reason="offset_floor" and joins it
+            // against a zero entries-trimmed rate, so that the shards which are
+            // asked on every pass and release nothing are named individually
+            // rather than summed into their healthy siblings. Only the narrowed
+            // target carries a matcher, so the other five arms fall out of the
+            // matcher-bearing set while still being drawn on the graph.
+            //
+            // They are declared rather than charted on the join because the
+            // join is not meaningful for them: "stopped while releasing
+            // nothing" is a wedged reading for offset_floor, but it is the
+            // ordinary and correct reading for empty, and for exhausted it
+            // describes a shard whose entries were all ineligible for reasons
+            // the other four arms already name. Widening the second target
+            // would trade the signal for noise on the one panel that exists to
+            // make a zero-reclaim pass attributable.
+            ["Replication|3149|orleans.lattice.wal.gc.trim_stop|reason"] =
+                [
+                    "block_pin", "causal_frontier", "cursor_floor", "empty",
+                    "exhausted",
+                ],
         };
 
     private static readonly Regex SelectorRegex =

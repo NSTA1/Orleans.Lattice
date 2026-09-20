@@ -564,8 +564,26 @@ internal sealed class FileWalShard : IDisposable
     /// "was <see cref="TrimAsync"/> called at all", and a shard the GC stops
     /// scanning is a shard for which it is not. This method is the same
     /// evaluation reached by a path that does not require a release to have
-    /// happened first, which is what makes dead bytes reclaimable while the
-    /// retention floor is held (issue #3207).
+    /// happened first (issue #3207).
+    /// </para>
+    /// <para>
+    /// <b>What it can and cannot reclaim.</b> A compaction's yield is exactly
+    /// <c>_deadBytes</c>, and that quantity rises in only two places: inside
+    /// <see cref="TrimAsync"/>, and on recovery when a trim marker that
+    /// <see cref="TrimAsync"/> wrote is replayed. No append path marks anything
+    /// dead. So this evaluation completes the shard that <i>has</i> trimmed
+    /// before and is now held at the retention floor: its accumulated dead
+    /// bytes were previously measured against no threshold at all, and are now
+    /// measured against the same policy a trim would have applied. It is
+    /// structurally inert on a shard that has <i>never</i> trimmed, whose
+    /// <c>_deadBytes</c> is pinned at zero in perpetuity, and that is correct
+    /// rather than a gap: such a shard's retained bytes are live, not dead, so
+    /// a rewrite would return none of them and only the retention floor
+    /// advancing can. The shard-attributed
+    /// <c>orleans.lattice.wal.gc.trim_stop</c> arm, read against that shard's
+    /// flat <c>orleans.lattice.wal.entries_trimmed</c>, is what names that
+    /// population; no arm derived from <c>_deadBytes</c> can, because the stop
+    /// is what prevents the quantity from ever being written.
     /// </para>
     /// <para>
     /// It moves no watermark and mutates no logical state: the offsets
