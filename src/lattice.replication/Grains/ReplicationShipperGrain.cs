@@ -3456,36 +3456,6 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Computes the wire-version negotiation for the peer against its
-    /// most recently advertised <see cref="ReplicationAck.SupportedWireVersion"/>,
-    /// publishes the negotiated version and downgrade signal to the
-    /// <c>wire_version.negotiated</c> / <c>wire_version.downgrade_active</c>
-    /// gauges, records the version the header sites will stamp into
-    /// <see cref="_negotiatedWireVersion"/>, and returns
-    /// <see langword="true"/> when the batch may ship. Returns
-    /// <see langword="false"/> - after logging an error, recording the
-    /// <see cref="LatticeReplicationMetrics.ShipWireVersionDownStamp"/>
-    /// counter, and applying backoff - for the genuinely-unsupported cases
-    /// that must pause rather than ship an un-applyable frame: the peer
-    /// advertised a version older than the configured
-    /// <see cref="LatticeReplicationOptions.MinimumSupportedWireVersion"/>
-    /// floor, the tree is in a CRDT merge mode (reason
-    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedCrdtMode"/>),
-    /// or the negotiated target is below
-    /// <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>
-    /// (reason
-    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedUnsupportedVersion"/>).
-    /// A compressed last-writer-wins tree down-stamping to an otherwise
-    /// down-encodable target is NOT paused: framing compression is dropped for
-    /// that peer's batch (via <see cref="_downStampDropsCompression"/>, reason
-    /// <see cref="LatticeReplicationMetrics.DownStampReasonCompressionDropped"/>)
-    /// so it keeps replicating uncompressed - lossless, because compression
-    /// rides the framing tail only. When the negotiated target equals the
-    /// current wire version this is a true no-op: the shipper keeps its
-    /// verbatim pre-encoded entry hot path and the bytes on the wire are
-    /// byte-identical to a build that never negotiated.
-    /// </summary>
-    /// <summary>
     /// Captures the peer's advertised wire-version and shared-dictionary
     /// capability from <paramref name="ack"/> into the activation-scoped
     /// negotiation-input fields, bumping <see cref="_negotiationInputEpoch"/>
@@ -3551,6 +3521,36 @@ internal sealed class ReplicationShipperGrain(
         return left.AsSpan().SequenceEqual(right);
     }
 
+    /// <summary>
+    /// Computes the wire-version negotiation for the peer against its
+    /// most recently advertised <see cref="ReplicationAck.SupportedWireVersion"/>,
+    /// publishes the negotiated version and downgrade signal to the
+    /// <c>wire_version.negotiated</c> / <c>wire_version.downgrade_active</c>
+    /// gauges, records the version the header sites will stamp into
+    /// <see cref="_negotiatedWireVersion"/>, and returns
+    /// <see langword="true"/> when the batch may ship. Returns
+    /// <see langword="false"/> - after logging an error, recording the
+    /// <see cref="LatticeReplicationMetrics.ShipWireVersionDownStamp"/>
+    /// counter, and applying backoff - for the genuinely-unsupported cases
+    /// that must pause rather than ship an un-applyable frame: the peer
+    /// advertised a version older than the configured
+    /// <see cref="LatticeReplicationOptions.MinimumSupportedWireVersion"/>
+    /// floor, the tree is in a CRDT merge mode (reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedCrdtMode"/>),
+    /// or the negotiated target is below
+    /// <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>
+    /// (reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedUnsupportedVersion"/>).
+    /// A compressed last-writer-wins tree down-stamping to an otherwise
+    /// down-encodable target is NOT paused: framing compression is dropped for
+    /// that peer's batch (via <see cref="_downStampDropsCompression"/>, reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonCompressionDropped"/>)
+    /// so it keeps replicating uncompressed - lossless, because compression
+    /// rides the framing tail only. When the negotiated target equals the
+    /// current wire version this is a true no-op: the shipper keeps its
+    /// verbatim pre-encoded entry hot path and the bytes on the wire are
+    /// byte-identical to a build that never negotiated.
+    /// </summary>
     private bool TryNegotiateWireVersion(LatticeReplicationOptions options)
     {
         SyncNegotiationInputEpoch(options);

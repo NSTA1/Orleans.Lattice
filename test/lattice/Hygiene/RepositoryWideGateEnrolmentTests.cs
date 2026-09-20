@@ -110,6 +110,8 @@ public sealed class RepositoryWideGateEnrolmentTests
         {
             ["BPlusLeafGrainTests"] =
                 "grain fixture; two replay-slice partials read option defaults out of src, not instruments",
+            ["DuplicateXmlSummaryHygieneTests"] =
+                "asserts no member in src carries two consecutive XML summary elements, not instrument declarations",
             ["LatticeOptionsResolverPropagationGuardTests"] =
                 "asserts options-resolver propagation across packages, not instrument declarations",
             ["PackageReleasePlumbingTests"] =

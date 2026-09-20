@@ -2562,29 +2562,6 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Activation-time rehydration seam. Consults the dedicated
-    /// snapshot storage grain for a persisted blob and, when the blob
-    /// is newer than the leaf's persisted
-    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
-    /// repopulates the in-memory entry cache from the canonical byte
-    /// rows and advances the persisted checkpoint to the snapshot's
-    /// offset. The projection digest is invalidated (set to <c>null</c>)
-    /// so the next read or fold lazily rebuilds it via the existing
-    /// <c>EnsureProjectionHashInitialized</c> path; this preserves the
-    /// canonical-full-walk hash invariant the chained internal-node
-    /// fold depends on.
-    /// <para>
-    /// No-op preconditions: tree id unset (uninitialised leaf); no
-    /// snapshot present; snapshot offset not strictly greater than the
-    /// persisted checkpoint (a stale snapshot whose offset the leaf
-    /// has already run past). After a successful rehydrate the caller
-    /// (the activation hook) drives the WAL tail-replay from the new
-    /// checkpoint forward, so a snapshot that covers a prefix of the
-    /// WAL plus tail-replayed suffix produces a projection identical
-    /// to a from-zero replay.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// The admission gate this leaf reserves hydration budget from. Resolved
     /// from the activation's services when one is registered - which is the seam
     /// a test uses to drive a small, deterministic budget - and otherwise the
@@ -2980,6 +2957,29 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Activation-time rehydration seam. Consults the dedicated
+    /// snapshot storage grain for a persisted blob and, when the blob
+    /// is newer than the leaf's persisted
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
+    /// repopulates the in-memory entry cache from the canonical byte
+    /// rows and advances the persisted checkpoint to the snapshot's
+    /// offset. The projection digest is invalidated (set to <c>null</c>)
+    /// so the next read or fold lazily rebuilds it via the existing
+    /// <c>EnsureProjectionHashInitialized</c> path; this preserves the
+    /// canonical-full-walk hash invariant the chained internal-node
+    /// fold depends on.
+    /// <para>
+    /// No-op preconditions: tree id unset (uninitialised leaf); no
+    /// snapshot present; snapshot offset not strictly greater than the
+    /// persisted checkpoint (a stale snapshot whose offset the leaf
+    /// has already run past). After a successful rehydrate the caller
+    /// (the activation hook) drives the WAL tail-replay from the new
+    /// checkpoint forward, so a snapshot that covers a prefix of the
+    /// WAL plus tail-replayed suffix produces a projection identical
+    /// to a from-zero replay.
+    /// </para>
+    /// </summary>
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
