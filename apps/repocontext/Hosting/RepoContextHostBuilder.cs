@@ -460,19 +460,36 @@ public static class RepoContextHostBuilder
             workspaceRoot: config.WorkspaceRoot);
 
         // The tree-administration tool group, so the whole-tree operator verbs are
-        // reachable over the container's single MCP listener. Registered with both
-        // opt-ins LEFT OFF, which is deliberate and is the enforcement-shaped
-        // choice rather than a conservative default: the local agent's seeded grant
-        // (RepoContextGrant.Operations) carries no SchemaAdmin and no TreeLifecycle,
-        // so every tool those flags would contribute - including the orphaned-leaf
-        // REPAIR - would be advertised and then refused by the facade's own
-        // fail-closed gate. Advertising a call that can only be denied is worse than
-        // not advertising it. The read-only verbs, the orphaned-leaf AUDIT among
-        // them, need only whole-tree Read, which the local agent does hold, so they
-        // are both advertised and invocable. Enabling the repair is an operator act:
-        // it means widening the seeded grant to include TreeLifecycle and passing
-        // enableLifecycle: true here, in that order.
-        builder.Services.AddTreeAdminTools();
+        // reachable over the container's single MCP listener. The tree-lifecycle
+        // opt-in is ON and the schema-control opt-in is OFF, and both halves of
+        // that are deliberate.
+        //
+        // Lifecycle ON: the local agent's seeded grant (RepoContextGrant.Operations)
+        // now carries BOTH capabilities the orphaned-leaf REPAIR is gated on, so it
+        // is advertised AND invocable rather than advertised and then refused. The
+        // repair crosses two independent gates: the facade enforces TreeLifecycle in
+        // TreeAdminAccessAuthorizer.AuthorizeTreeLifecycleAsync, and the call then
+        // reaches LatticeGrain.DriveOrphanedLeafPassAsync, which enforces a second
+        // whole-tree gate on Admin because the non-dry-run pass removes leaves. The
+        // order matters and is the one #3289 set out: widen the grant first, then
+        // set this flag. An orphan holds a WAL materialiser pin that never advances
+        // and the trim floor is the minimum over all pins, so leaving the repair
+        // unreachable leaves the WAL pinned open.
+        //
+        // Note what this flag actually buys: it contributes the mutating
+        // tree-lifecycle verbs as a whole - create / delete / purge / restore /
+        // reshard / resize / snapshot / WAL move / view and tag-index maintenance -
+        // not the repair alone. That whole surface is accepted here because this is
+        // a single-user local box with one trusted caller, and because the facade's
+        // own fail-closed gate re-authorizes every verb per tree and ThrowIfReserved
+        // still refuses the _lattice_ namespace. It would not be an acceptable trade
+        // on a shared deployment.
+        //
+        // Schema control stays OFF: the seeded grant carries no SchemaAdmin, so
+        // every tool that flag would contribute could only ever be refused, and
+        // advertising a call that can only be denied is worse than not advertising
+        // it.
+        builder.Services.AddTreeAdminTools(enableLifecycle: true);
 
         // The default embedding provider points at the separate Onyx companion
         // container, preserving the MCP-only single-listener surface.

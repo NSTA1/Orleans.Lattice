@@ -25,12 +25,18 @@ namespace Orleans.Lattice.Api.Mcp;
 /// byte-for-byte unchanged.
 /// </para>
 /// <para>
-/// <b>Administrator-gated end to end.</b> The whole group maps to
-/// <c>LatticeOperation.Admin</c> in the discovery core's capability map, so a
-/// non-administrator session is offered <b>none</b> of these tools. Should a caller
-/// reach an invocation regardless, the facade's own fail-closed schema access gate
-/// refuses it - schema-admin authority for a mutation, read authority for an
-/// inspect. The module itself adds no authorization logic.
+/// <b>Capability-gated end to end, but not on <c>Admin</c> alone.</b> The discovery
+/// core's capability map requires <c>Admin | TreeLifecycle | BulkLoad | Restore</c>
+/// for this group, and <c>AuthAdminMcpPermissionResolver.GroupIsGranted</c> matches
+/// that mask <b>disjunctively</b> - <c>(rule.Operations &amp; mask) != None</c> - so
+/// <b>any one</b> of those four capabilities makes the whole group discoverable. A
+/// caller granted only <c>BulkLoad</c> is therefore offered these tools; it is not
+/// true that the group is offered only to an administrator, and earlier revisions of
+/// this remark saying so were wrong. Should a caller reach an invocation regardless,
+/// the facade's own fail-closed access gate refuses it per tree and per verb, and the
+/// grain re-enforces its own gate behind that. The module itself adds no
+/// authorization logic, which is exactly why the coarse discovery mask must not be
+/// read as the authorization contract.
 /// </para>
 /// <para>
 /// <b>Built once.</b> The tool list is materialised a single time in the

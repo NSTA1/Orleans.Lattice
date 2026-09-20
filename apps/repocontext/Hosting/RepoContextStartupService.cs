@@ -6,14 +6,65 @@ using Orleans.Lattice.Schema;
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
 /// <summary>
-/// The data-plane operations the local agent is granted on every
-/// repository-context tree so the whole <c>repocontext_*</c> tool surface is both
-/// advertised and callable. It is exactly the mask the MCP discovery core requires
-/// for the repository-context group (read plus the full mutation surface).
+/// The operations the local agent is granted on every repository-context tree so
+/// the whole <c>repocontext_*</c> tool surface is both advertised and callable, and
+/// so the tree-administration facade's orphaned-leaf <b>repair</b> is callable
+/// rather than merely advertised. It is the mask the MCP discovery core requires
+/// for the repository-context group (read plus the full mutation surface), plus the
+/// two distinct capabilities the repair path enforces.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>The repair is gated twice, at two different seams, on two different
+/// capabilities.</b> This is measured, not inferred, and it is the whole reason
+/// this mask carries both of the operations below:
+/// </para>
+/// <list type="number">
+///   <item><description>
+///     <c>LatticeTreeAdmin.RepairOrphanedLeavesAsync</c> calls
+///     <c>TreeAdminAccessAuthorizer.AuthorizeTreeLifecycleAsync</c>, which enforces
+///     <see cref="LatticeOperation.TreeLifecycle"/> over the whole tree.
+///   </description></item>
+///   <item><description>
+///     The call then reaches <c>LatticeGrain.DriveOrphanedLeafPassAsync</c>, which
+///     enforces a <b>second, independent</b> whole-tree gate - on
+///     <see cref="LatticeOperation.Admin"/>, because the non-dry-run pass removes
+///     leaves. The sibling inspection verb takes the same path with
+///     <see cref="LatticeOperation.Read"/>, which is why the audit was already
+///     reachable under the narrower mask while the repair was not.
+///   </description></item>
+/// </list>
+/// <para>
+/// Granting only the first leaves the repair advertised and then refused at the
+/// grain with <c>Access denied: ... not authorized to perform Admin</c> - exactly
+/// the failure mode the tool group's lifecycle opt-in was held back to avoid. Both
+/// are therefore required, and dropping either one makes the verb unreachable
+/// again.
+/// </para>
+/// <para>
+/// <b>These are whole capabilities, not single verbs.</b> Together they confer
+/// every tree-lifecycle and tree-administration verb the facade and the grain
+/// expose over every repository-context tree, not only the unsplice. That is
+/// accepted here because the grant is scoped per tree to the eleven
+/// repository-context trees - never cluster-wide - this container is a single-user
+/// local box whose sole caller is the trusted local agent, and the facade's
+/// <c>ThrowIfReserved</c> plus the grain's <c>ThrowIfSystemTree</c> still refuse the
+/// reserved <c>_lattice_</c> namespace outright. On any shared or multi-tenant
+/// deployment this mask would need to be narrower, and the repair would need a
+/// capability of its own.
+/// </para>
+/// <para>
+/// The motivation is WAL growth: an orphaned leaf holds a materialiser pin that
+/// never advances, and the trim floor is the minimum over all pins, so an
+/// unrepairable orphan pins the WAL open indefinitely.
+/// </para>
+/// </remarks>
 public static class RepoContextGrant
 {
-    /// <summary>The full repository-context data-plane operation mask.</summary>
+    /// <summary>
+    /// The full repository-context data-plane operation mask, plus the two
+    /// capabilities the orphaned-leaf repair is gated on.
+    /// </summary>
     public const LatticeOperation Operations =
         LatticeOperation.Read
         | LatticeOperation.Write
@@ -22,7 +73,9 @@ public static class RepoContextGrant
         | LatticeOperation.RangeDelete
         | LatticeOperation.CrdtApply
         | LatticeOperation.AtomicWrite
-        | LatticeOperation.BulkLoad;
+        | LatticeOperation.BulkLoad
+        | LatticeOperation.TreeLifecycle
+        | LatticeOperation.Admin;
 }
 
 /// <summary>
