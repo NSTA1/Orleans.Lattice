@@ -316,6 +316,7 @@ internal sealed class RegistryFanInGate(
         ArgumentNullException.ThrowIfNull(treeId);
 
         TaskCompletionSource<TreeRegistryEntry?> waiter;
+        int depthAtArrival;
         lock (_sync)
         {
             if (_waiting.TryGetValue(treeId, out var queued))
@@ -333,8 +334,16 @@ internal sealed class RegistryFanInGate(
             _waiting.Add(treeId, waiter);
             _arrivals.Enqueue(treeId);
             _enqueuedAt[treeId] = Stopwatch.GetTimestamp();
+
+            // Recorded inside the lock, and counting this arrival, so the value
+            // is the offered fan-in at a single consistent instant. This is the
+            // one gate instrument that moves when the bound is NOT binding, which
+            // is what lets a flat wait / width / batch-size reading be attributed
+            // to absent demand rather than to comfortable headroom.
+            depthAtArrival = _waiting.Count;
         }
 
+        LatticeMetrics.RegistryAdmissionQueueDepth.Record(depthAtArrival, LatticeTenantLabel.Platform);
         Pump();
         return waiter.Task;
     }
@@ -391,6 +400,7 @@ internal sealed class RegistryFanInGate(
         {
             List<string> ids;
             List<TaskCompletionSource<TreeRegistryEntry?>> waiters;
+            int widthAtDispatch;
 
             lock (_sync)
             {
@@ -430,7 +440,17 @@ internal sealed class RegistryFanInGate(
                 }
 
                 _inFlight++;
+                widthAtDispatch = _inFlight;
             }
+
+            // Recorded outside the lock, but from values captured inside it, so
+            // the pair is consistent without holding the lock across a metric
+            // call. Width counts THIS dispatch, so it reaches
+            // GlobalMaxConcurrentReads exactly when the ceiling is reached; see
+            // LatticeMetrics.RegistryAdmissionInFlight for why that convention
+            // differs from its neighbours on purpose.
+            LatticeMetrics.RegistryAdmissionInFlight.Record(widthAtDispatch, LatticeTenantLabel.Platform);
+            LatticeMetrics.RegistryAdmissionBatchSize.Record(ids.Count, LatticeTenantLabel.Platform);
 
             _ = DispatchAsync(ids, waiters);
         }

@@ -126,6 +126,10 @@ internal static class Program
                     notes.Add(await RunProbeAsync(grains, fleet, options, census, lifetime.Token).ConfigureAwait(false));
                     break;
 
+                case "fanout":
+                    notes.AddRange(await RunFanoutAsync(grains, fleet, options, census, lifetime.Token).ConfigureAwait(false));
+                    break;
+
                 case "teardown":
                     var residue = await fleet.TeardownAsync(options.Trees, census, options.Parallelism, lifetime.Token).ConfigureAwait(false);
                     notes.Add($"tore down {options.Trees} trees; {residue.Count} did not tear down cleanly");
@@ -340,6 +344,149 @@ internal static class Program
             : "point reads only";
 
         return $"issued {issued} registry reads ({mix}) at {options.Rate}/s for {options.Duration.TotalSeconds}s";
+    }
+
+    /// <summary>
+    /// The saturating arm: releases <see cref="DriverOptions.FanoutWidth"/>
+    /// distinct trees' option resolutions from a single barrier, repeatedly, so
+    /// the offered fan-in is the wave width by construction.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the other arms could not do this.</b> Silo-side fan-in is gated in
+    /// <c>RegistryFanInGate</c>, which hangs off <c>LatticeOptionsResolver</c> -
+    /// a silo singleton whose callers are all in-process. The <c>probe</c> arm
+    /// addresses <c>ILatticeRegistry</c> as an Orleans client, so every one of
+    /// its calls arrives past the gate and raising its rate raises registry-side
+    /// width while gate occupancy stays at zero. That is the specific reason the
+    /// original run could report a comfortable-looking width while the gate was
+    /// never entered at all.
+    /// </para>
+    /// <para>
+    /// <b>Why it forces a refresh.</b> <c>GetRoutingAsync(forceRefresh: true)</c>
+    /// invalidates the activation's cached shard map and alias, so the next
+    /// resolve goes through <c>LatticeOptionsResolver.ResolveAsync</c> and
+    /// therefore through the gate. Without it a warm activation answers from its
+    /// own cache and the wave never leaves the client's half of the system. Note
+    /// the resolver's per-tree coalescer is deliberately not a cache - it retires
+    /// a flight before publishing its result - so repeat waves keep reaching the
+    /// registry rather than decaying to nothing.
+    /// </para>
+    /// <para>
+    /// <b>Why one barrier and not a rate.</b> An open-loop pacer spreads arrivals
+    /// across its tick, which is the same dispersal that defeats the birth arm at
+    /// a 60-second scale. Releasing from a <see cref="TaskCompletionSource"/>
+    /// makes simultaneity a property of the driver rather than a hoped-for
+    /// coincidence, so the offered fan-in equals the wave width and can be
+    /// stated rather than estimated.
+    /// </para>
+    /// </remarks>
+    private static async Task<List<string>> RunFanoutAsync(
+        IGrainFactory grains,
+        TreeFleet fleet,
+        DriverOptions options,
+        CallCensus census,
+        CancellationToken cancellationToken)
+    {
+        var targets = fleet.TreeIds(options.Trees);
+        if (targets.Count == 0)
+        {
+            throw new InvalidOperationException("the fanout arm needs at least one target tree; pass --trees N.");
+        }
+
+        var width = Math.Max(1, options.FanoutWidth);
+        var waves = Math.Max(1, options.FanoutWaves);
+        var notes = new List<string>();
+        var faults = 0;
+        var issued = 0L;
+        var waveElapsed = new List<double>(waves);
+
+        for (var wave = 0; wave < waves; wave++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Every call in a wave awaits this one source, so they are released
+            // together rather than in issue order. Continuations run
+            // asynchronously so the release does not execute the wave inline on
+            // the releasing thread, which would serialise the very thing the
+            // barrier exists to parallelise.
+            var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var wall = new List<Task>(width);
+
+            for (var slot = 0; slot < width; slot++)
+            {
+                // Distinct ids within a wave, walked across the fleet between
+                // waves. Distinctness is load-bearing: the resolver collapses
+                // concurrent readers of ONE tree into a single flight, so a wave
+                // of W calls on the same tree offers a fan-in of one however
+                // wide it is.
+                var treeId = targets[(wave * width + slot) % targets.Count];
+                wall.Add(ResolveOnReleaseAsync(treeId));
+            }
+
+            var started = DateTimeOffset.UtcNow;
+            barrier.SetResult();
+            await Task.WhenAll(wall).ConfigureAwait(false);
+            waveElapsed.Add((DateTimeOffset.UtcNow - started).TotalMilliseconds);
+
+            if (options.FanoutGapMillis > 0)
+            {
+                await Task.Delay(options.FanoutGapMillis, cancellationToken).ConfigureAwait(false);
+            }
+
+            async Task ResolveOnReleaseAsync(string treeId)
+            {
+                await barrier.Task.ConfigureAwait(false);
+                Interlocked.Increment(ref issued);
+
+                try
+                {
+                    if (options.FanoutUngated)
+                    {
+                        // The control path. Identical wave, identical width,
+                        // identical ids - but addressed as a client, so it
+                        // reaches no silo-side gate. Any difference between the
+                        // two runs is attributable to the gate rather than to
+                        // the workload.
+                        var registry = grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                        await census.MeasureAsync(
+                            "ILatticeRegistry.GetEntryAsync",
+                            () => registry.GetEntryAsync(treeId)).ConfigureAwait(false);
+                        return;
+                    }
+
+                    var lattice = grains.GetGrain<ILattice>(treeId);
+                    await census.MeasureAsync(
+                        "ILattice.GetRoutingAsync",
+                        () => lattice.GetRoutingAsync(true, cancellationToken).AsTask()).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Interlocked.Increment(ref faults);
+                }
+            }
+        }
+
+        var path = options.FanoutUngated
+            ? "UNGATED control (ILatticeRegistry direct from the client, reaching no silo-side gate)"
+            : "gated (ILattice.GetRoutingAsync forceRefresh, through LatticeOptionsResolver)";
+
+        notes.Add(
+            $"fanout {path}: {waves} waves x {width} distinct trees = {issued} resolutions " +
+            $"across a fleet of {targets.Count}, gap {options.FanoutGapMillis}ms, {faults} faulted");
+        notes.Add(
+            $"wave wall-clock ms: min {waveElapsed.Min():F1}, mean {waveElapsed.Average():F1}, max {waveElapsed.Max():F1}");
+
+        // Stated in the report rather than left to the reader, because the whole
+        // point of the arm is that a reading taken below this width is not a
+        // weak measurement of the bound - it is no measurement of it.
+        notes.Add(
+            $"offered fan-in per wave is {width} distinct trees by construction (single-barrier release). " +
+            "Compare it against the gate's permit count before reading any admission figure: below that " +
+            "count the gate never queues, and the wait, width and batch-size instruments all report their " +
+            "structural floor, which is indistinguishable by eye from a bound with headroom.");
+
+        return notes;
     }
 
     private static void Emit(DriverReport report, string? outputPath)

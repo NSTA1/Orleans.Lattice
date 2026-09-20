@@ -97,6 +97,56 @@ internal sealed class DriverOptions
     /// <summary>How many entries to send per populate write call.</summary>
     public int BatchSize { get; private set; } = 256;
 
+    /// <summary>
+    /// How many distinct trees one <c>fanout</c> wave resolves simultaneously -
+    /// the OFFERED fan-in, and the only knob on the rig that moves the quantity
+    /// the gate bounds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The existing arms cannot move it at any setting. <c>probe</c> addresses
+    /// <c>ILatticeRegistry</c> as an Orleans client, so none of its traffic
+    /// passes through a silo-side gate at all; <c>load</c> reaches the resolver
+    /// but its trees are warm and few. The birth arm does reach the gate, but its
+    /// arrivals are reminder-birthed on a 60-second due time, so K trees offer
+    /// only about K/60 distinct resolutions per second: the dispersal grows
+    /// exactly as fast as the load, and no tree count closes the gap.
+    /// </para>
+    /// <para>
+    /// This switch attacks the arrival process instead of the estate size. A
+    /// wave releases every tree's resolution from one barrier, so the offered
+    /// fan-in is the wave width by construction rather than a hoped-for
+    /// coincidence of timing.
+    /// </para>
+    /// </remarks>
+    public int FanoutWidth { get; private set; } = 256;
+
+    /// <summary>How many <c>fanout</c> waves to issue.</summary>
+    public int FanoutWaves { get; private set; } = 20;
+
+    /// <summary>
+    /// Milliseconds to pause between <c>fanout</c> waves. Zero runs them
+    /// back-to-back, which is the saturating setting; a positive gap lets the
+    /// gate drain between waves and is how the arm is walked DOWN towards the
+    /// unsaturated regime to show that the instruments follow it.
+    /// </summary>
+    public int FanoutGapMillis { get; private set; }
+
+    /// <summary>
+    /// When true, the <c>fanout</c> arm bypasses <see cref="ILattice"/> and
+    /// issues the same wave straight at <see cref="ILatticeRegistry"/> from the
+    /// client, which reaches no silo-side gate.
+    /// </summary>
+    /// <remarks>
+    /// This is the rig's discriminator, and it is the reason the arm is worth
+    /// having. A rig that reaches the bounded regime but produces the same
+    /// numbers with and without the bound has measured the workload rather than
+    /// the bound. Running the identical wave width through both paths makes the
+    /// difference the reading, so "the gate is doing something" is observed
+    /// rather than assumed.
+    /// </remarks>
+    public bool FanoutUngated { get; private set; }
+
     /// <summary>Where to write the JSON report.</summary>
     public string? OutputPath { get; private set; }
 
@@ -166,6 +216,10 @@ internal sealed class DriverOptions
                 case "--keys-per-leaf": options.KeysPerLeaf = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--value-bytes": options.ValueBytes = int.Parse(Value(), CultureInfo.InvariantCulture); break;
                 case "--batch-size": options.BatchSize = int.Parse(Value(), CultureInfo.InvariantCulture); break;
+                case "--fanout-width": options.FanoutWidth = int.Parse(Value(), CultureInfo.InvariantCulture); break;
+                case "--fanout-waves": options.FanoutWaves = int.Parse(Value(), CultureInfo.InvariantCulture); break;
+                case "--fanout-gap-ms": options.FanoutGapMillis = int.Parse(Value(), CultureInfo.InvariantCulture); break;
+                case "--fanout-ungated": options.FanoutUngated = true; break;
                 case "--out": options.OutputPath = Value(); break;
                 case "--subject": options.Subject = Value(); break;
                 case "--scheme": options.Scheme = Value(); break;
@@ -198,6 +252,15 @@ internal sealed class DriverOptions
           load      Drive synthetic read/write load against a subset of the fleet.
           probe     Drive registry point reads (Resolve / GetEntry / GetShardMap),
                     mirroring the member mix seen in the observed storm.
+          fanout    Release W distinct trees' option resolutions from ONE barrier,
+                    repeatedly. This is the only arm that moves silo-side fan-in:
+                    'probe' addresses the registry as a client and reaches no
+                    silo-side gate at all, 'load' works a small warm set, and the
+                    birth arm's arrivals are reminder-dispersed over 60s so its
+                    offered fan-in is ~K/60 per second however large K grows.
+                    Pair it with --fanout-ungated to run the same wave against the
+                    registry directly, which is what makes the arm a DISCRIMINATOR
+                    rather than just a bigger load.
           teardown  DeleteTreeAsync then UnregisterAsync for every fleet tree.
           list      Report the registry's current tree ids.
 
@@ -224,6 +287,19 @@ internal sealed class DriverOptions
           --keys-per-leaf N    tree leaf capacity (default 128)
           --value-bytes N      populated value size (default 1600)
           --batch-size N       entries per populate write call (default 256)
+          --fanout-width W     distinct trees released together per wave (default 256).
+                               This is the offered fan-in. It must clear the gate's
+                               permit count before ANY gate reading is evidence, so
+                               treat a wave narrower than that as an unmeasured run
+                               rather than a comfortable one.
+          --fanout-waves N     waves to issue (default 20)
+          --fanout-gap-ms N    pause between waves, 0 = back-to-back (default 0).
+                               Raise it to walk the arm DOWN out of saturation and
+                               show the instruments follow the regime rather than
+                               reporting a constant.
+          --fanout-ungated     issue the wave straight at ILatticeRegistry from the
+                               client instead of through ILattice, reaching no
+                               silo-side gate. The A/B control arm.
           --subject S          credential subject (default repocontext-bootstrap-admin)
           --scheme S           credential scheme (default repocontext-local)
           --out PATH           write the JSON report here

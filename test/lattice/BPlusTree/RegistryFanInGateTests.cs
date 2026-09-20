@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -588,6 +589,190 @@ public class RegistryFanInGateTests
                     "a storm past the bound must show a non-zero queueing tail, or the "
                     + "instrument is not actually observing the relocated wait");
             });
+        }
+    }
+
+    /// <summary>
+    /// The width the bound caps must be observable, and observable <em>at</em> the
+    /// bound.
+    /// <para>
+    /// <b>Why a separate instrument was needed at all.</b> The obvious candidate,
+    /// <c>orleans.lattice.registry.call.in_flight</c>, counts calls executing
+    /// inside the registry singleton's body summed over every caller in the
+    /// cluster, including callers that never pass through a gate. That is a
+    /// different population with a different ceiling from the permit count
+    /// <see cref="RegistryFanInGate.GlobalMaxConcurrentReads"/> caps, so reading
+    /// it against that constant compares two quantities that were never the same
+    /// number - and a comfortable-looking reading there says nothing about
+    /// whether the bound has headroom.
+    /// </para>
+    /// <para>
+    /// <b>Why the recorded value counts the dispatch being recorded.</b> Its
+    /// neighbours exclude the arrival. Under that convention a fully saturated
+    /// gate tops out at 15 against a bound of 16, so saturation and headroom are
+    /// indistinguishable by inspection: exactly the off-by-one that would let an
+    /// experiment which did reach the ceiling still report that it had not. This
+    /// test pins the inclusive convention so that equality with the constant
+    /// remains the readable saturation signal.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_gate_width_the_bound_caps_is_recorded_and_reaches_the_bound()
+    {
+        var widths = new List<int>();
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.RegistryAdmissionInFlight,
+            l => l.SetMeasurementEventCallback<int>((_, value, _, _) =>
+            {
+                lock (widths) widths.Add(value);
+            }));
+
+        // A hold long enough that the first GlobalMaxConcurrentReads dispatches
+        // are all still in flight when the rest arrive, which is the only
+        // condition under which the permits can actually be exhausted.
+        var (factory, _) = BuildRegistry(TimeSpan.FromMilliseconds(60));
+        var gate = new RegistryFanInGate(factory);
+
+        var reads = Enumerable.Range(0, 400).Select(i => gate.GetEntryAsync($"tree-{i:D4}")).ToArray();
+        await Task.WhenAll(reads);
+        listener.Dispose();
+
+        lock (widths)
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(widths, Is.Not.Empty, "every gated dispatch must record its width");
+                Assert.That(widths.Min(), Is.GreaterThanOrEqualTo(1),
+                    "the value counts the dispatch being recorded, so it is never zero");
+                Assert.That(widths.Max(), Is.EqualTo(RegistryFanInGate.GlobalMaxConcurrentReads),
+                    $"a storm far past the bound must record width exactly "
+                    + $"{RegistryFanInGate.GlobalMaxConcurrentReads}. A max of "
+                    + $"{RegistryFanInGate.GlobalMaxConcurrentReads - 1} means the arrival was "
+                    + "excluded from the count, which would make a saturated gate "
+                    + "indistinguishable from one with a spare permit.");
+                Assert.That(widths.Max(), Is.LessThanOrEqualTo(RegistryFanInGate.GlobalMaxConcurrentReads),
+                    "the instrument must never record above the bound it reports on");
+            });
+        }
+    }
+
+    /// <summary>
+    /// The batching half of the gate must be observable as a share, not inferred.
+    /// <para>
+    /// A dispatch of one id takes the single-key <c>GetEntryAsync</c> path, which
+    /// is byte-for-byte the traffic the silo had before the gate existed; two or
+    /// more takes the batched <c>GetEntriesAsync</c> path. So the share of
+    /// recorded sizes above one is the share of reads the bound actually
+    /// coalesced, and it is the only direct evidence that the batching path ran
+    /// at all. Both arms are asserted because a batching share is only meaningful
+    /// against a demonstrated floor: without the unsaturated arm, a low share is
+    /// equally consistent with "batching is broken" and with "nothing queued".
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_batched_share_is_recorded_and_moves_only_when_the_gate_queues()
+    {
+        var saturated = await BatchSizesAsync(trees: 400);
+        var idle = await BatchSizesAsync(trees: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(idle, Has.Count.EqualTo(1), "one arrival is one dispatch");
+            Assert.That(idle[0], Is.EqualTo(1),
+                "an uncontended read must dispatch alone - a batch of one is the ungated shape, "
+                + "and if this recorded more the instrument would overstate coalescing");
+
+            Assert.That(saturated, Is.Not.Empty);
+            Assert.That(saturated.Count(s => s > 1), Is.GreaterThan(0),
+                "a storm far past the bound must actually form batches, or the gate is "
+                + "queueing without coalescing and the batching constant is dead weight");
+            Assert.That(saturated.Max(), Is.LessThanOrEqualTo(RegistryFanInGate.MaxBatchSize),
+                "no dispatch may carry more ids than the batch constant permits");
+        });
+
+        static async Task<List<int>> BatchSizesAsync(int trees)
+        {
+            var sizes = new List<int>();
+            using var listener = MeterListening.StartForInstrument(
+                LatticeMetrics.RegistryAdmissionBatchSize,
+                l => l.SetMeasurementEventCallback<int>((_, value, _, _) =>
+                {
+                    lock (sizes) sizes.Add(value);
+                }));
+
+            var (factory, _) = BuildRegistry(TimeSpan.FromMilliseconds(60));
+            var gate = new RegistryFanInGate(factory);
+
+            var reads = Enumerable.Range(0, trees).Select(i => gate.GetEntryAsync($"tree-{i:D4}")).ToArray();
+            await Task.WhenAll(reads);
+            listener.Dispose();
+
+            lock (sizes) return [.. sizes];
+        }
+    }
+
+    /// <summary>
+    /// The instrument that tells an idle gate apart from a comfortable one.
+    /// <para>
+    /// This is the fixture's answer to the false-green failure mode. Admission
+    /// dispatches synchronously on the arriving thread whenever a permit is free,
+    /// so an unsaturated gate drives every other gate signal to its structural
+    /// floor - a wait of microseconds, a width of one, a batch of one. Those
+    /// floors are not a weak measurement of headroom; they are what absent demand
+    /// looks like, and they are visually identical to a bound with room to spare.
+    /// An experiment reading only those three cannot tell the two apart, and will
+    /// report "the bound is comfortable" when what happened is that nothing ever
+    /// asked for it.
+    /// </para>
+    /// <para>
+    /// Queue depth is recorded at enqueue rather than at dispatch, so it measures
+    /// <em>offered</em> fan-in and moves whether or not the bound binds. The two
+    /// arms here are the discrimination itself: the idle arm pins the floor, the
+    /// saturated arm pins that the signal leaves it. A depth stuck at one is the
+    /// evidence that a green run means nothing.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Queue_depth_separates_absent_demand_from_a_bound_with_headroom()
+    {
+        var saturated = await DepthsAsync(trees: 400);
+        var idle = await DepthsAsync(trees: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(idle, Has.Count.EqualTo(1));
+            Assert.That(idle[0], Is.EqualTo(1),
+                "a lone arrival offers a fan-in of exactly itself - this is the floor every "
+                + "other gate instrument also sits at when nothing is asking, which is why "
+                + "none of them can be read as evidence on its own");
+
+            Assert.That(saturated.Max(), Is.GreaterThan(RegistryFanInGate.GlobalMaxConcurrentReads),
+                $"offered fan-in must be shown to exceed the bound of "
+                + $"{RegistryFanInGate.GlobalMaxConcurrentReads} before any reading from the "
+                + "wait, width or batch-size instruments is evidence about the bound at all");
+            Assert.That(saturated.Count(d => d > 1), Is.GreaterThan(saturated.Count / 2),
+                "under a storm most arrivals must find others already waiting, or the "
+                + "arrivals are dispersed in time and the run sampled the wrong regime");
+        });
+
+        static async Task<List<int>> DepthsAsync(int trees)
+        {
+            var depths = new List<int>();
+            using var listener = MeterListening.StartForInstrument(
+                LatticeMetrics.RegistryAdmissionQueueDepth,
+                l => l.SetMeasurementEventCallback<int>((_, value, _, _) =>
+                {
+                    lock (depths) depths.Add(value);
+                }));
+
+            var (factory, _) = BuildRegistry(TimeSpan.FromMilliseconds(60));
+            var gate = new RegistryFanInGate(factory);
+
+            var reads = Enumerable.Range(0, trees).Select(i => gate.GetEntryAsync($"tree-{i:D4}")).ToArray();
+            await Task.WhenAll(reads);
+            listener.Dispose();
+
+            lock (depths) return [.. depths];
         }
     }
 
