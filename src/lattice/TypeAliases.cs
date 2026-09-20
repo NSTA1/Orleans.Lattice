@@ -91,6 +91,7 @@ internal static class TypeAliases
     internal const string DirtyLeavesSnapshot = "ol.dls";
     internal const string PendingBulkGraft = "ol.pbg";
     internal const string GraftEntry = "ol.ge";
+    internal const string PendingChildLink = "ol.pcl";
     internal const string TombstoneCompactionState = "ol.tcs";
     internal const string TreeDeletionState = "ol.tds";
     internal const string TreeDeletionSnapshot = "ol.tdn";

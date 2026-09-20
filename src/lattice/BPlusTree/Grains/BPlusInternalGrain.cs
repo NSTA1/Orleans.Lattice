@@ -326,12 +326,38 @@ internal sealed partial class BPlusInternalGrain(
         }
     }
 
+    /// <summary>
+    /// True while a division of this internal node has published durable intent
+    /// but has not yet completed (issue #3265).
+    /// </summary>
+    /// <remarks>
+    /// <b>Do not simplify this back to <c>SplitState == SplitInProgress</c>.</b>
+    /// <see cref="Primitives.SplitState"/> is a monotone max lattice, so a node
+    /// that has completed one division reads <c>SplitComplete</c> for the rest
+    /// of its life and the <c>Merge(SplitInProgress)</c> opening every later
+    /// division cannot move it back. The equality test therefore answers "no
+    /// split was interrupted" for precisely the long-lived, repeatedly dividing
+    /// nodes where an interrupted division is most likely. The next overflow
+    /// then falls through to a fresh <c>SplitAsync</c>, which mints a new node
+    /// identity from <c>Guid.NewGuid()</c> and abandons the previous one -
+    /// created, persisted, and holding a separator nothing will ever deliver.
+    /// <see cref="InternalNodeState.SplitRightChildren"/> is assigned beside the
+    /// intent and cleared only on completion, so it is non-null exactly while a
+    /// division is outstanding. This is the internal-node twin of
+    /// <c>BPlusLeafGrain.HasInterruptedSplit</c>; the leaf case is the one whose
+    /// damage was measured, because an abandoned leaf also carries a WAL
+    /// materialiser pin that then freezes the shard's trim floor for good.
+    /// </remarks>
+    private bool HasInterruptedSplit
+        => state.State.SplitState == Primitives.SplitState.SplitInProgress
+            || state.State.SplitRightChildren is not null;
+
     private async Task<SplitResult?> AcceptSplitCoreAsync(string promotedKey, GrainId newChild)
     {
         SplitResult? pendingRecovery = null;
 
         // Recovery: if a previous split was interrupted, complete it first.
-        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        if (HasInterruptedSplit)
         {
             // Snapshot the recovery-mutated fields BEFORE CompleteSplitAsync
             // runs so that a failing WriteStateAsync below can revert the
