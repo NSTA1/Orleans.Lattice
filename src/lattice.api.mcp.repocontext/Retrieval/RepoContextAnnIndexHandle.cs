@@ -194,7 +194,14 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// refusals is in progress, <see cref="RepoContextAnnOpenSaturationState.Refusing"/>
     /// while one is inside its bounds, and
     /// <see cref="RepoContextAnnOpenSaturationState.Unavailable"/> once it has passed
-    /// them. Read without taking the turn.
+    /// them.
+    /// <para>
+    /// <b>Read without taking the turn</b>, and safe to do so: the underlying run is
+    /// held in a single volatile field whose sentinel value is the "no run" state, so
+    /// a reader racing the open cannot observe a started run with an unset start time
+    /// and mistake a first refusal for a breached elapsed bound. Wiring a health
+    /// surface straight to this property is the intended use.
+    /// </para>
     /// </summary>
     public RepoContextAnnOpenSaturationState OpenSaturation => _openSaturation.State;
 

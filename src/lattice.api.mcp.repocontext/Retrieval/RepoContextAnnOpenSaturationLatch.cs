@@ -68,18 +68,43 @@ internal enum RepoContextAnnOpenSaturationState
 /// </para>
 /// </summary>
 /// <remarks>
-/// Not thread-safe by itself. It is owned by a single handle and mutated only
-/// under that handle's open, which is already serialised by the coordinator's
-/// non-reentrant turn.
+/// Mutated only by its owning handle, under an open the coordinator has already
+/// serialised on a non-reentrant turn, so there is exactly one writer.
+/// <para>
+/// <b>The run is one field, so a reader cannot observe a half-started run.</b> An
+/// earlier shape carried a separate <c>bool</c> beside the start timestamp, and the
+/// two together could be read mid-write as "a run is in progress, and it started at
+/// tick zero" - which measures elapsed time from the year 1 and declares a healthy
+/// plane unavailable on its very first refusal. That is the same family of false
+/// signal this type exists to remove, pointing the other way, so the invariant was
+/// deleted rather than ordered: the sentinel start value <b>is</b> the "no run"
+/// state, the bad combination is unrepresentable, and correctness no longer rests
+/// on two writes landing in a particular order. Reads and writes are volatile so a
+/// reader outside the owning turn sees a start value that is current rather than
+/// cached.
+/// </para>
+/// <para>
+/// A torn read across the start value and the refusal count is still possible and
+/// is deliberately left alone, because it is benign in both directions: the count
+/// only ever rises within a run, so a stale count under-reports and can only delay
+/// a declaration, never manufacture one.
+/// </para>
 /// </remarks>
 internal sealed class RepoContextAnnOpenSaturationLatch
 {
+    /// <summary>
+    /// The start value meaning "no run in progress". Chosen below zero because
+    /// <see cref="DateTimeOffset.UtcTicks"/> is never negative, so no real clock
+    /// reading can collide with it and be mistaken for an idle latch.
+    /// </summary>
+    private const long NoRun = long.MinValue;
+
     private readonly TimeProvider _timeProvider;
     private readonly int _maxConsecutiveRefusals;
     private readonly long _terminalPeriodTicks;
 
-    private long _firstRefusalTicks;
-    private bool _refusing;
+    private long _firstRefusalTicks = NoRun;
+    private int _consecutiveRefusals;
 
     /// <summary>Creates a latch over the supplied bounds.</summary>
     /// <param name="timeProvider">The clock measuring the elapsed bound. Must not be <see langword="null"/>.</param>
@@ -104,12 +129,13 @@ internal sealed class RepoContextAnnOpenSaturationLatch
     {
         get
         {
-            if (!_refusing)
+            var startedAt = Volatile.Read(ref _firstRefusalTicks);
+            if (startedAt == NoRun)
             {
                 return RepoContextAnnOpenSaturationState.Clear;
             }
 
-            return HasReachedCountBound() || HasReachedPeriodBound()
+            return HasReachedCountBound() || HasReachedPeriodBound(startedAt)
                 ? RepoContextAnnOpenSaturationState.Unavailable
                 : RepoContextAnnOpenSaturationState.Refusing;
         }
@@ -119,7 +145,7 @@ internal sealed class RepoContextAnnOpenSaturationLatch
     /// How many refusals the open has taken in an unbroken run, reset to zero by
     /// any open that banked progress.
     /// </summary>
-    public int ConsecutiveRefusals { get; private set; }
+    public int ConsecutiveRefusals => Volatile.Read(ref _consecutiveRefusals);
 
     /// <summary>
     /// How long the unbroken run of refusals has lasted, or
@@ -129,12 +155,13 @@ internal sealed class RepoContextAnnOpenSaturationLatch
     {
         get
         {
-            if (!_refusing)
+            var startedAt = Volatile.Read(ref _firstRefusalTicks);
+            if (startedAt == NoRun)
             {
                 return TimeSpan.Zero;
             }
 
-            var elapsed = _timeProvider.GetUtcNow().UtcTicks - _firstRefusalTicks;
+            var elapsed = _timeProvider.GetUtcNow().UtcTicks - startedAt;
             return elapsed <= 0 ? TimeSpan.Zero : new TimeSpan(elapsed);
         }
     }
@@ -145,17 +172,15 @@ internal sealed class RepoContextAnnOpenSaturationLatch
     /// <returns>The state after this refusal.</returns>
     public RepoContextAnnOpenSaturationState RecordRefusal()
     {
-        if (!_refusing)
+        if (Volatile.Read(ref _firstRefusalTicks) == NoRun)
         {
-            _refusing = true;
-
             // The run starts at the FIRST refusal, not at the latest one, or the
             // elapsed bound would measure the gap between two refusals and could
             // never be reached however long the saturation lasted.
-            _firstRefusalTicks = _timeProvider.GetUtcNow().UtcTicks;
+            Volatile.Write(ref _firstRefusalTicks, _timeProvider.GetUtcNow().UtcTicks);
         }
 
-        ConsecutiveRefusals++;
+        Volatile.Write(ref _consecutiveRefusals, _consecutiveRefusals + 1);
         return State;
     }
 
@@ -169,21 +194,24 @@ internal sealed class RepoContextAnnOpenSaturationLatch
     /// <returns><see langword="true"/> when this call actually ended a run.</returns>
     public bool Clear()
     {
-        if (!_refusing && ConsecutiveRefusals == 0)
+        if (Volatile.Read(ref _firstRefusalTicks) == NoRun
+            && Volatile.Read(ref _consecutiveRefusals) == 0)
         {
             return false;
         }
 
-        _refusing = false;
-        ConsecutiveRefusals = 0;
-        _firstRefusalTicks = 0;
+        // The run is ended before the count is cleared, so a reader that catches
+        // the pair mid-write resolves to Clear rather than to a run with no
+        // refusals in it.
+        Volatile.Write(ref _firstRefusalTicks, NoRun);
+        Volatile.Write(ref _consecutiveRefusals, 0);
         return true;
     }
 
     private bool HasReachedCountBound()
         => _maxConsecutiveRefusals > 0 && ConsecutiveRefusals >= _maxConsecutiveRefusals;
 
-    private bool HasReachedPeriodBound()
+    private bool HasReachedPeriodBound(long startedAt)
         => _terminalPeriodTicks > 0
-            && _timeProvider.GetUtcNow().UtcTicks - _firstRefusalTicks >= _terminalPeriodTicks;
+            && _timeProvider.GetUtcNow().UtcTicks - startedAt >= _terminalPeriodTicks;
 }

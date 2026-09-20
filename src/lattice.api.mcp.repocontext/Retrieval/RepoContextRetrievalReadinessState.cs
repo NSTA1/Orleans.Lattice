@@ -234,11 +234,6 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// <see langword="true"/> when the host can serve the retrieval it is configured
     /// for - the vector plane is serving, or no embedder is bound and keyword recall is
     /// the intended steady state.
-    /// </summary>
-    /// <summary>
-    /// <see langword="true"/> when the host can serve the retrieval it is configured
-    /// for - the vector plane is serving, or no embedder is bound and keyword recall is
-    /// the intended steady state.
     /// <para>
     /// <b>Deliberately an explicit ready-set test rather than "not Building".</b> The
     /// negative form was correct while Building was the only not-ready phase and became
