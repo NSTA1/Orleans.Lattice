@@ -100,6 +100,7 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.DirtyLeavesSnapshot"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardShippingPage"] = ReadModel,
+            ["Orleans.Lattice.BPlusTree.OrphanedLeafRepairPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.RoutingTableSnapshot"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.ShardCountResult"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.ShardCountWithMovedAwayPage"] = ReadModel,
@@ -111,6 +112,7 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.ConditionalSetManyResult"] = ReadModel,
             ["Orleans.Lattice.EntryHistoryPage"] = ReadModel,
             ["Orleans.Lattice.LatticeSnapshotCoordinate"] = ReadModel,
+            ["Orleans.Lattice.OrphanedLeafRepairReport"] = ReadModel,
             ["Orleans.Lattice.RangeDeleteResult"] = ReadModel,
 
             ["Orleans.Lattice.BPlusTree.SiblingInitialization"] = CopiedOnReceipt,
