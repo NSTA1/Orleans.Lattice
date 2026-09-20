@@ -246,9 +246,19 @@ public sealed class DashboardPanelTagDomainTests
             // the other four arms already name. Widening the second target
             // would trade the signal for noise on the one panel that exists to
             // make a zero-reclaim pass attributable.
+            //
+            // The two durability arms (issue #3300) join that set on the same
+            // test, and each fails it for its own reason. durability_unverified
+            // is a NON-STOP arm: the scan released the whole shard, so "stopped
+            // while releasing nothing" is not merely uninformative for it, it is
+            // false. durability_hold is the converse - releasing nothing is the
+            // ordinary and correct reading for a deliberate hold, exactly as it
+            // is for empty, so the join would report every held shard as wedged.
+            // Both are drawn by target A, which carries no reason matcher.
             ["Replication|3149|orleans.lattice.wal.gc.trim_stop|reason"] =
                 [
-                    "block_pin", "causal_frontier", "cursor_floor", "empty",
+                    "block_pin", "causal_frontier", "cursor_floor",
+                    "durability_hold", "durability_unverified", "empty",
                     "exhausted",
                 ],
         };
