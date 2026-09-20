@@ -25,9 +25,18 @@ namespace Orleans.Lattice;
 /// presents as breaching its ceiling with a healthy floor and no stated cause.
 /// </para>
 /// <para>
-/// Diagnostic only. It never widens or narrows the trim predicate: a pass
-/// reclaims exactly the entries it would have reclaimed before this value
-/// existed.
+/// <b>Almost entirely diagnostic.</b> Every arm but one names a decision the
+/// scan would have taken anyway, so it neither widens nor narrows the trim
+/// predicate: the pass reclaims exactly the entries it would have reclaimed
+/// before the value existed. The exception is
+/// <see cref="DurabilityHold"/>, added by issue #3300, which reports a stop the
+/// collector performs <i>because</i> of a configured durability hold and which
+/// therefore does narrow the predicate - but only when
+/// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> is set, which it
+/// is not by default. This distinction is called out rather than left implicit
+/// because "diagnostic only" was a load-bearing guarantee of this enum, and a
+/// member that quietly stopped honouring it would be exactly the kind of
+/// unstated behaviour change the rest of these comments exist to prevent.
 /// </para>
 /// </summary>
 [InstrumentedEnum(
@@ -38,8 +47,19 @@ internal enum WalGcTrimStopReason
 {
     /// <summary>
     /// The scan consumed every entry the provider offered without meeting one it
-    /// had to retain. The healthy value: everything present was eligible, so the
-    /// shard trimmed as far as it physically could.
+    /// had to retain, AND a durable offset floor was available to judge them
+    /// against. The healthy value: everything present was eligible, so the shard
+    /// trimmed as far as it physically could.
+    /// <para>
+    /// Narrowed by issue #3300. This arm previously also absorbed the scan that
+    /// consumed a non-empty shard with NO durable offset floor at all, which is
+    /// not the same statement: the first says "I checked, and everything was
+    /// releasable", the second says "I could not check, so I released
+    /// everything". Those were byte-identical readings, and the conflation is
+    /// why a tree trimming live, never-checkpointed records reported a healthy
+    /// arm on every pass. The second case is now
+    /// <see cref="DurabilityUnverified"/>.
+    /// </para>
     /// </summary>
     Exhausted = 0,
 
@@ -144,4 +164,81 @@ internal enum WalGcTrimStopReason
     /// </para>
     /// </summary>
     BlockPin = 5,
+
+    /// <summary>
+    /// The scan consumed a NON-EMPTY shard while no durable materialiser offset
+    /// floor could be established for the tree at all, so every entry it
+    /// released was released without any check that the data had been durably
+    /// applied anywhere.
+    /// <para>
+    /// This is the arm that names the state issue #3300 was lost in. It is NOT
+    /// an error and it is not always a defect: a tree with no materialiser
+    /// wired, or one whose leaves legitimately owe nothing, reaches it
+    /// harmlessly. What it removes is the CONFLATION. Before it existed such a
+    /// pass reported <see cref="Exhausted"/> - the same value as a shard that
+    /// had a floor and cleared it - so "I trimmed everything because it was all
+    /// releasable" and "I trimmed everything because I could not tell whether
+    /// any of it was" were one indistinguishable reading, on the arm documented
+    /// as the healthy one. A tree silently discarding live records therefore
+    /// published a clean bill of health on every pass.
+    /// </para>
+    /// <para>
+    /// This is this repository's signature defect shape - a component that
+    /// cannot establish a fact reporting the reassuring value rather than
+    /// reporting that it could not establish it (see issues #3149, #3155,
+    /// #3301). The remedy is the same one those issues applied: make the
+    /// unknown state NAMEABLE, so the next instance is findable rather than
+    /// invisible. Handling it silently is not enough.
+    /// </para>
+    /// <para>
+    /// Deliberately distinct from <see cref="Empty"/>. An empty shard has
+    /// nothing to lose, so a missing floor over it is genuinely uninteresting;
+    /// the concerning case is exactly the one where entries WERE released. It is
+    /// also distinct from the <c>offset_floor_unavailable</c> counter, which
+    /// records only the pin-store read THROWING (issue #2314). The population
+    /// that matters here is larger and mostly silent: a reachable store that
+    /// reports no offsets, an all-sentinel pin set, or no pin store wired at
+    /// all, none of which reach that counter's catch.
+    /// </para>
+    /// <para>
+    /// Diagnostic only, exactly like every other arm: it is chosen AFTER the
+    /// scan has finished and changes nothing about which entries that scan was
+    /// allowed to release. Making trim fail closed on this state is a separate,
+    /// behavioural change that must not be conflated with naming it, because a
+    /// fail-closed gate with no working path to open it grows the WAL without
+    /// bound (issue #3094).
+    /// </para>
+    /// </summary>
+    DurabilityUnverified = 6,
+
+    /// <summary>
+    /// The scan stopped at the shard's first entry because no durable
+    /// materialiser offset floor existed for the tree and a durability hold
+    /// (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) is
+    /// configured and not yet exhausted, so nothing was reclaimed
+    /// (issue #3300).
+    /// <para>
+    /// <b>The one arm on this enum that reports a stop the collector chose
+    /// rather than one it merely observed.</b> Every other member labels a
+    /// decision the scan would have taken regardless; this one exists only
+    /// because the hold is switched on, and with the hold unconfigured - the
+    /// default - it is unreachable and the pass behaves exactly as before.
+    /// </para>
+    /// <para>
+    /// Distinct from <see cref="DurabilityUnverified"/>, and the pair is
+    /// deliberate: both describe a tree with no durable floor, but this one is
+    /// the collector <i>retaining</i> those entries and that one is the
+    /// collector <i>releasing</i> them. Reading a tree's trim-stop series should
+    /// answer which of the two happened without inference, because they differ
+    /// in whether data survived.
+    /// </para>
+    /// <para>
+    /// Counted as a retention stop, so a tree held here reports a WAL backlog
+    /// and is visible to the byte-pressure advisory rather than presenting as
+    /// idle. That is the honest reading: bytes really are being retained, and a
+    /// tree sitting on this arm is accumulating toward the ceiling that will
+    /// eventually force it onto <see cref="DurabilityUnverified"/>.
+    /// </para>
+    /// </summary>
+    DurabilityHold = 7,
 }

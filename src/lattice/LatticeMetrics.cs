@@ -2012,6 +2012,112 @@ public static class LatticeMetrics
             description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
 
     /// <summary>
+    /// How long, in seconds, since a tree's durable materialiser offset floor
+    /// last ADVANCED, recorded once per garbage-collection pass and tagged with
+    /// <see cref="TagTree"/> and <see cref="TagStatus"/> (issue #3300).
+    /// <para>
+    /// This is the instrument that answers "has this tree's durable floor moved
+    /// in the last N hours?" directly, and it exists because nothing in the
+    /// previous set could. Issue #3300 was a store whose durable floor did not
+    /// advance by a single entry across eleven hours and at least 120 writes,
+    /// losing every one of them; establishing that took a manual census,
+    /// an archive diff and a controlled restart. Every instrument that was
+    /// available either tracked WRITE VOLUME (which climbs happily while
+    /// nothing becomes durable, and so answers a severity question in neither
+    /// direction) or was ABSENT (which reads as "no problem here" to anyone who
+    /// does not already know the series should exist). An operator should not
+    /// have to run that experiment, and should not have to reason from a
+    /// missing series.
+    /// </para>
+    /// <para>
+    /// The <see cref="TagStatus"/> arm is the part that must not be collapsed,
+    /// because it is where this repository's signature defect would otherwise
+    /// reappear (see <see cref="WalGcTrimStopReason.DurabilityUnverified"/>):
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>advanced</c> - the floor moved on this pass. Records 0, which is
+    /// the genuinely healthy zero.</item>
+    /// <item><c>stalled</c> - a floor exists and did not move. Records the age
+    /// since it last did.</item>
+    /// <item><c>absent</c> - NO floor could be established at all. Records the
+    /// age since this pass first observed the tree, NOT zero. Recording zero
+    /// here would make the worst state - nothing is known to be durable -
+    /// byte-identical to the best one, which is the exact confusion that hid
+    /// issue #3300.</item>
+    /// </list>
+    /// <para>
+    /// Read it as a maximum per tree. A sustained <c>absent</c> arm, or a
+    /// <c>stalled</c> age that grows without bound while the tree is taking
+    /// writes, is a tree whose data is not becoming durable - regardless of how
+    /// healthy any volume-tracking counter looks. Because the age is measured
+    /// from process start when the floor has never advanced, a value close to
+    /// the process uptime means the floor has NEVER moved in this process, which
+    /// is the #3300 signature.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcDurableFloorStallSeconds =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.durable_floor_stall_seconds", unit: "s",
+            description: "Seconds since a tree's durable materialiser offset floor last advanced, tagged by tree and by state: advanced, stalled or absent.");
+
+    /// <summary>
+    /// Counter of WAL garbage-collection partition scans that trimmed a tree
+    /// with <b>no durable materialiser offset floor</b> only because the
+    /// configured durability hold
+    /// (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) had been
+    /// exhausted by the tree's retained bytes, tagged with
+    /// <see cref="TagTree"/> (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the signal the hold exists to produce, and it is not a tuning
+    /// hint. A non-zero value states that the collector released WAL entries
+    /// that nothing is known to have durably applied, having first tried to
+    /// retain them and run out of the budget it was given. That is the exact
+    /// condition of issue #3300, which ran for eleven hours while every series
+    /// the collector published read healthy. Alert on it.
+    /// </para>
+    /// <para>
+    /// Raising the ceiling suppresses this counter for longer without changing
+    /// anything about the underlying fault: the durable floor is still not
+    /// advancing, and <see cref="WalGcDurableFloorStallSeconds"/> is the series
+    /// that says so. Treat the pair together - this one says data was
+    /// discarded, that one says for how long the cause has been present.
+    /// </para>
+    /// <para>
+    /// Zero, here, is genuinely good news rather than an absence of news, but
+    /// only when the hold is configured. With
+    /// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> unset the hold
+    /// never engages and this counter can never fire, so a flat zero then means
+    /// the check is switched off, not that it passed.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> WalGcDurabilityHoldForced =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.durability_hold_forced",
+            description: "WAL garbage-collection partition scans that trimmed without a durable materialiser offset floor because the configured durability-hold ceiling was exhausted, tagged by tree.");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> = <c>advanced</c> (the durable materialiser offset
+    /// floor moved on this pass).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StatusDurableFloorAdvanced =
+        new(TagStatus, "advanced");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> = <c>stalled</c> (a durable materialiser offset
+    /// floor exists for this tree but did not move on this pass).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StatusDurableFloorStalled =
+        new(TagStatus, "stalled");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> = <c>absent</c> (no durable materialiser offset
+    /// floor could be established for this tree at all - the issue #3300 state,
+    /// deliberately NOT reported as a zero stall age).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StatusDurableFloorAbsent =
+        new(TagStatus, "absent");
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes that found the tree's configured
     /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> to be <b>arithmetically
     /// unreachable</b> against the working set the pass just measured - that is,
@@ -2196,7 +2302,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
-            description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, exhausted or empty.");
+            description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, durability_unverified, exhausted or empty.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
@@ -2240,6 +2346,26 @@ public static class LatticeMetrics
     /// the arm that indicts a buffering receiver holding entries back).
     /// </summary>
     public static readonly KeyValuePair<string, object?> ReasonTrimBlockPin = new(TagReason, "block_pin");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>durability_unverified</c> (a trim scan
+    /// consumed a non-empty shard with no durable materialiser offset floor
+    /// available at all - see
+    /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/>, the arm that
+    /// separates "everything was releasable" from "I could not tell whether any
+    /// of it was", which issue #3300 was lost inside of).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimDurabilityUnverified =
+        new(TagReason, "durability_unverified");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>durability_hold</c> - the scan retained a
+    /// non-empty shard untouched because the tree had no durable materialiser
+    /// offset floor and a durability hold is configured and not yet exhausted
+    /// (<see cref="WalGcTrimStopReason.DurabilityHold"/>, issue #3300).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimDurabilityHold =
+        new(TagReason, "durability_hold");
 
     /// <summary>
     /// Counter of WAL garbage-collection passes for which no retained-byte

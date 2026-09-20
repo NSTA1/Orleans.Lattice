@@ -2641,6 +2641,52 @@ public class LatticeOptions
     public long? WalMaxRetainedBytes { get; set; }
 
     /// <summary>
+    /// Byte ceiling at which the garbage collector stops holding a tree's WAL
+    /// back for want of a durable materialiser offset floor, and resumes
+    /// trimming it regardless (issue #3300). <see langword="null"/> (the
+    /// default) disables the hold entirely and preserves the pre-existing
+    /// behaviour byte for byte.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When this is set and positive, a partition whose durable offset floor is
+    /// <b>absent</b> is not trimmed while the tree's retained WAL is below the
+    /// ceiling. Absent means the collector could not establish that <i>any</i>
+    /// leaf has durably applied <i>anything</i>, so it has no evidence that a
+    /// single entry it is about to release has been written down anywhere. The
+    /// pre-existing behaviour on that path is to trim anyway, which is how
+    /// issue #3300 discarded eleven hours of writes while every counter the
+    /// collector published read healthy.
+    /// </para>
+    /// <para>
+    /// <b>The hold is bounded, and the bound is the point.</b> Refusing to trim
+    /// outright would be the obvious fix and is the wrong one: a tree that has
+    /// legitimately no materialiser wired never acquires a floor, so an
+    /// unconditional hold grows its WAL without limit and recreates issue
+    /// #3094. Retaining only up to a ceiling keeps the failure mode finite. Past
+    /// the ceiling the collector trims, because an unbounded WAL is the worse of
+    /// the two outages and the operator is entitled to have the node stay up.
+    /// </para>
+    /// <para>
+    /// <b>Forced progress is reported, not silent.</b> Each partition trimmed
+    /// past this ceiling without a durable floor increments
+    /// <see cref="LatticeMetrics.WalGcDurabilityHoldForced"/>. That counter
+    /// firing is not a tuning hint, it is the statement that this tree is
+    /// actively discarding records nothing is known to have applied - the exact
+    /// condition of issue #3300 - and it should be alerted on rather than
+    /// tolerated. Raising the ceiling buys time; it does not fix anything.
+    /// </para>
+    /// <para>
+    /// Deliberately a separate knob from <see cref="WalMaxRetainedBytes"/>,
+    /// which is an advisory pressure policy that never blocks a trim. Reusing it
+    /// would have made a durability hold appear the moment an operator
+    /// configured a byte budget, silently changing retention semantics for every
+    /// deployment that already sets one.
+    /// </para>
+    /// </remarks>
+    public long? WalDurabilityHoldCeilingBytes { get; set; }
+
+    /// <summary>
     /// The multiple of a tree's <i>logical</i> retained payload that
     /// <see cref="WalMaxRetainedBytes"/> must exceed for the ceiling to be
     /// reachable by a healthy tree, and the multiple

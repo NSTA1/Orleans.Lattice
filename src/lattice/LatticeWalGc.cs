@@ -113,6 +113,40 @@ public sealed class LatticeWalGc(
     // latch across passes for the life of the silo.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _bytePressureArmed = new(StringComparer.Ordinal);
 
+    // Per-tree durable-floor progress, for the stall-age signal (issue #3300).
+    //
+    // Holds the highest offset floor this process has ever observed for a tree
+    // and the timestamp at which that high-water mark was last RAISED. The
+    // distinction from "the floor on the previous pass" matters: the floor is a
+    // minimum over reporting leaves, so it can legitimately drop when a lagging
+    // leaf starts reporting, and treating a drop as progress would reset the
+    // stall clock on a tree that is not making any.
+    //
+    // `FirstObservedUtc` is what makes the never-advanced case measurable at
+    // all. A tree whose floor has never moved has no advance timestamp to
+    // subtract from, and reporting zero there would put the worst state on the
+    // healthiest value - the precise confusion this whole instrument exists to
+    // end - so the age is measured from the first pass that saw the tree
+    // instead. In a process that has been up for hours, that yields an age
+    // close to the uptime, which is the #3300 signature.
+    //
+    // Carried for the life of the silo, exactly like the byte-pressure latch
+    // above, so the clock survives passes. It is deliberately NOT durable: the
+    // question it answers is "is this process making data durable", and a
+    // restart is precisely the event that resolves it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DurableFloorProgress> _durableFloorProgress
+        = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The highest durable materialiser offset floor observed for a tree in this
+    /// process, when that high-water mark was last raised, and when the tree was
+    /// first seen (issue #3300).
+    /// </summary>
+    private readonly record struct DurableFloorProgress(
+        long? HighWaterFloor,
+        DateTimeOffset? LastAdvanceUtc,
+        DateTimeOffset FirstObservedUtc);
+
     // Resolved lazily so a host that never registered the storage-usage
     // sink (or replaced the WAL GC in isolation in a unit test) still works;
     // the over-threshold gauge is simply not driven by the GC in that case.
@@ -252,6 +286,7 @@ public sealed class LatticeWalGc(
         // with rather than only to subtract it with.
         var offsetCoverage = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
         var offsetFloor = offsetCoverage.Floor;
+        RecordDurableFloorProgress(treeName, offsetFloor);
         // Floor the trim point under the durable leaf-materialiser pins for
         // any leaf MISSING from the in-memory registry. This survives a full
         // silo/cluster restart that wiped the registry: a forward consumer
@@ -479,6 +514,31 @@ public sealed class LatticeWalGc(
         var retainedBacklog = false;
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName);
         var tenantTag = LatticeTenantLabel.ForTree(treeName);
+
+        // Durability hold budget (issue #3300), decided once per pass against
+        // the pre-trim footprint sampled above, exactly as the byte-pressure
+        // trigger is.
+        //
+        // `holdConfigured` is false by default, which is what keeps this change
+        // inert for every deployment that does not opt in. When it is true the
+        // hold applies only while the tree is UNDER the ceiling; at or above it
+        // the hold yields and the pass trims as it always did, because an
+        // unbounded WAL is the worse outage and a hold that can never end would
+        // recreate issue #3094 on any tree with no materialiser wired.
+        //
+        // A null `retainedBefore` - byte accounting unavailable from the
+        // provider - holds rather than forces. The alternative is to trim on the
+        // strength of a measurement we do not have, which is the same reasoning
+        // error as trimming on the strength of a durability check we did not
+        // run. The ceiling then bounds nothing, so this is the one shape in
+        // which the hold can grow a WAL without limit; it is reachable only when
+        // an operator has configured the hold against a provider that cannot
+        // report bytes, and the stop arm says plainly which trees are held.
+        var holdCeiling = resolved.WalDurabilityHoldCeilingBytes;
+        var holdConfigured = holdCeiling is { } hc && hc > 0;
+        var holdHasBudget = holdConfigured
+            && (retainedBefore is not { } rb || rb < holdCeiling!.Value);
+
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -489,7 +549,20 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, PartitionOffsetFloor(partition), PartitionOffsetAdmission(partition), cancellationToken).ConfigureAwait(false);
+
+            var partitionOffsetFloor = PartitionOffsetFloor(partition);
+
+            // Forced progress: the hold is configured, this partition has no
+            // durable floor to trim against, and the ceiling has been consumed.
+            // Count it before the scan rather than after, so the signal is
+            // recorded even if the scan throws - a pass that died partway is
+            // not a pass that decided not to discard anything.
+            if (holdConfigured && !holdHasBudget && partitionOffsetFloor is null)
+            {
+                LatticeMetrics.WalGcDurabilityHoldForced.Add(1, treeTag, tenantTag);
+            }
+
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
@@ -533,14 +606,32 @@ public sealed class LatticeWalGc(
     /// gated behind an opt-in.
     /// </para>
     /// <para>
-    /// Written as an explicit two-member exclusion rather than a list of the four
+    /// Written as an explicit member exclusion rather than a list of the four
     /// retention reasons so that a stop reason added later is treated as
     /// retention - the conservative reading - instead of silently joining the
     /// "nothing left behind" set and re-opening the defect.
     /// </para>
+    /// <para>
+    /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/> is exempted
+    /// EXPLICITLY, and the exemption is a statement about the scan rather than a
+    /// relaxation of the rule above (issue #3300). That arm is selected only on
+    /// the <c>!stop</c> path - the scan reached the end of the shard without
+    /// meeting an entry it had to retain - so it leaves nothing behind for
+    /// exactly the same structural reason <see cref="WalGcTrimStopReason.Exhausted"/>
+    /// does, and differs from it only in whether a durable floor existed to
+    /// judge the released entries against. Leaving it to the conservative
+    /// default would assert that WAL outlived a pass which in fact consumed the
+    /// whole log, manufacturing a false backlog signal on every tree that
+    /// legitimately has no materialiser wired. Note the direction of the risk
+    /// this exemption carries, because it is the opposite of the one the
+    /// default guards: it cannot hide a stranded tree, since a stranded tree
+    /// stops AT a retained entry and can never reach this arm.
+    /// </para>
     /// </remarks>
     private static bool IsRetentionStop(WalGcTrimStopReason reason)
-        => reason is not (WalGcTrimStopReason.Exhausted or WalGcTrimStopReason.Empty);
+        => reason is not (WalGcTrimStopReason.Exhausted
+            or WalGcTrimStopReason.Empty
+            or WalGcTrimStopReason.DurabilityUnverified);
 
     /// <summary>
     /// Lowers <paramref name="registryMin"/> to account for durable
@@ -1144,6 +1235,94 @@ public sealed class LatticeWalGc(
     }
 
     /// <summary>
+    /// Records how long it has been since this tree's durable materialiser
+    /// offset floor last advanced, once per garbage-collection pass
+    /// (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three outcomes, and keeping them separate is the entire point. A floor
+    /// that rose records <c>advanced</c> at a true zero; a floor that exists and
+    /// did not rise records <c>stalled</c> at its age; and a tree with NO floor
+    /// at all records <c>absent</c> at the age since this process first saw it -
+    /// never zero. Reporting the absent case as zero would give the state in
+    /// which nothing is known to be durable the same reading as the healthiest
+    /// possible one, which is the conflation that let issue #3300 run for
+    /// eleven hours behind counters that all looked fine.
+    /// </para>
+    /// <para>
+    /// Progress is measured against a HIGH-WATER MARK rather than against the
+    /// previous pass's value. The floor is a minimum over the leaves that
+    /// reported, so it can fall legitimately when a lagging leaf begins
+    /// reporting; treating that fall as movement would restart the stall clock
+    /// on a tree making no progress, which is the failure this signal exists to
+    /// catch.
+    /// </para>
+    /// <para>
+    /// Observation only. It reads no storage, issues no grain call, and never
+    /// influences what a pass may trim.
+    /// </para>
+    /// </remarks>
+    private void RecordDurableFloorProgress(string treeName, long? offsetFloor)
+    {
+        var now = _time.GetUtcNow();
+
+        var updated = _durableFloorProgress.AddOrUpdate(
+            treeName,
+            _ => new DurableFloorProgress(
+                offsetFloor,
+                offsetFloor is null ? null : now,
+                now),
+            (_, prior) =>
+            {
+                if (offsetFloor is not { } floor)
+                {
+                    // No floor on this pass. Keep whatever high-water mark and
+                    // advance timestamp we had: losing the floor is not
+                    // progress, and it must not reset the clock.
+                    return prior;
+                }
+
+                if (prior.HighWaterFloor is not { } high || floor > high)
+                {
+                    return prior with { HighWaterFloor = floor, LastAdvanceUtc = now };
+                }
+
+                return prior;
+            });
+
+        KeyValuePair<string, object?> status;
+        DateTimeOffset since;
+
+        if (offsetFloor is null)
+        {
+            status = LatticeMetrics.StatusDurableFloorAbsent;
+            since = updated.LastAdvanceUtc ?? updated.FirstObservedUtc;
+        }
+        else if (updated.LastAdvanceUtc == now)
+        {
+            status = LatticeMetrics.StatusDurableFloorAdvanced;
+            since = now;
+        }
+        else
+        {
+            status = LatticeMetrics.StatusDurableFloorStalled;
+            since = updated.LastAdvanceUtc ?? updated.FirstObservedUtc;
+        }
+
+        // Clamped at zero so a non-monotonic or substituted TimeProvider can
+        // never publish a negative age, which would read as nonsense on a
+        // histogram and could not be distinguished from a unit error.
+        var stallSeconds = (long)Math.Max(0d, (now - since).TotalSeconds);
+
+        LatticeMetrics.WalGcDurableFloorStallSeconds.Record(
+            stallSeconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+            status,
+            LatticeTenantLabel.ForTree(treeName));
+    }
+
+    /// <summary>
     /// Computes the offset-space retention floor for <paramref name="treeName"/>:
     /// the lowest leaf-materialiser checkpoint offset across every pin shard. The
     /// WAL GC must never trim an entry at or above this offset, because a leaf
@@ -1629,10 +1808,40 @@ public sealed class LatticeWalGc(
     {
         if (resolved.WalMaxRetainedBytes is not { } ceiling || ceiling <= 0)
         {
-            // Policy disabled - zero hot-path cost.
-            return (null, null, null);
+            // Byte-pressure policy disabled - zero hot-path cost.
+            //
+            // The durability hold (issue #3300) also needs this sample, and for
+            // a reason the byte-pressure policy does not share: its ceiling is
+            // what BOUNDS the hold, so a hold running against an unsampled tree
+            // never ends and grows the WAL without limit - the #3094 shape the
+            // bound exists to avoid. So take the sample for the hold too, and
+            // return a null Ceiling to keep the byte-pressure policy off. The
+            // two ceilings stay independent; only the measurement is shared.
+            if (resolved.WalDurabilityHoldCeilingBytes is not { } holdCeiling || holdCeiling <= 0)
+            {
+                return (null, null, null);
+            }
+
+            var holdSample = await SampleRetainedBytesCoreAsync(
+                resolveProvider, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            return (null, holdSample.Retained, holdSample.Logical);
         }
 
+        var sample = await SampleRetainedBytesCoreAsync(
+            resolveProvider, treeName, partitions, cancellationToken).ConfigureAwait(false);
+        return (ceiling, sample.Retained, sample.Logical);
+    }
+
+    /// <summary>
+    /// Sums a tree's retained occupancy and logical payload across partitions,
+    /// independent of which policy asked for it.
+    /// </summary>
+    private static async Task<(long? Retained, long? Logical)> SampleRetainedBytesCoreAsync(
+        Func<int, IWalStorageProvider?> resolveProvider,
+        string treeName,
+        int partitions,
+        CancellationToken cancellationToken)
+    {
         long retained = 0;
         long logical = 0;
         var anySupported = false;
@@ -1687,7 +1896,6 @@ public sealed class LatticeWalGc(
         }
 
         return (
-            ceiling,
             anySupported ? retained : null,
             anyLogicalSupported ? logical : null);
     }
@@ -1743,6 +1951,7 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? blockedFloor,
         long? offsetFloor,
         WalGcOffsetAdmission? offsetAdmission,
+        bool durabilityHold,
         CancellationToken cancellationToken)
     {
         long lastEligibleOffset = -1;
@@ -1765,6 +1974,29 @@ public sealed class LatticeWalGc(
                 pageEntries++;
                 entriesSeen++;
                 lastSeenOffset = walEntry.Offset;
+
+                // Durability hold (issue #3300). No durable materialiser offset
+                // floor exists for this tree, so there is no evidence that any
+                // leaf has applied any of what follows; retain it rather than
+                // release it on the strength of an absent check.
+                //
+                // Placed after entriesSeen++ so an EMPTY shard never reaches it
+                // and still reports Empty: a shard with nothing in it has
+                // nothing to protect, and putting it on a retention arm would
+                // make every idle shard in a hold-configured fleet look like a
+                // stranded one.
+                //
+                // Placed before the offset-floor gate below because that gate
+                // is a no-op when the floor is null - `offsetFloor is { } floor`
+                // is exactly the fail-open through which #3300 released eleven
+                // hours of writes. This is the branch that closes it, and the
+                // caller has already decided the hold has budget left.
+                if (durabilityHold && offsetFloor is null)
+                {
+                    stopReason = WalGcTrimStopReason.DurabilityHold;
+                    stop = true;
+                    break;
+                }
 
                 // Offset-space retention floor: never trim an entry ABOVE the
                 // lowest durably-applied leaf checkpoint offset, even when it is
@@ -1841,6 +2073,34 @@ public sealed class LatticeWalGc(
         {
             stopReason = WalGcTrimStopReason.Empty;
         }
+        else if (!stop && offsetFloor is null)
+        {
+            // The scan walked a NON-EMPTY shard to its end while no durable
+            // materialiser offset floor existed for this tree, so every entry
+            // it released was released without any check that the data had been
+            // durably applied anywhere (issue #3300).
+            //
+            // Reported separately from Exhausted, which it would otherwise be
+            // indistinguishable from. The two differ in the only way that
+            // matters here: Exhausted means the scan HAD a durable floor and
+            // cleared it, this means it had none to clear. Collapsed together -
+            // as they were - a tree discarding live, never-checkpointed records
+            // on every pass published the arm documented as healthy, which is
+            // precisely how this stayed invisible.
+            //
+            // Ordered AFTER the empty check on purpose. An empty shard has
+            // nothing to lose, so a missing floor over it is uninteresting and
+            // stays on the Empty arm; the state worth naming is the one where
+            // entries were actually released.
+            //
+            // Diagnostic only, exactly like every other arm. The scan above has
+            // already finished and this selects a label for what it did; it
+            // does not and must not change which entries were eligible. Making
+            // trim fail closed here is a separate behavioural change, and an
+            // unconditional one would grow the WAL without bound on every tree
+            // that legitimately has no materialiser wired (issue #3094).
+            stopReason = WalGcTrimStopReason.DurabilityUnverified;
+        }
 
         if (lastEligibleOffset < 0)
         {
@@ -1906,6 +2166,8 @@ public sealed class LatticeWalGc(
             WalGcTrimStopReason.CursorFloor => LatticeMetrics.ReasonTrimCursorFloor,
             WalGcTrimStopReason.CausalFrontier => LatticeMetrics.ReasonTrimCausalFrontier,
             WalGcTrimStopReason.BlockPin => LatticeMetrics.ReasonTrimBlockPin,
+            WalGcTrimStopReason.DurabilityUnverified => LatticeMetrics.ReasonTrimDurabilityUnverified,
+            WalGcTrimStopReason.DurabilityHold => LatticeMetrics.ReasonTrimDurabilityHold,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(reason), reason, "Unarmed WAL GC trim stop reason."),
         };
@@ -1984,7 +2246,7 @@ public sealed class LatticeWalGc(
     /// Primed across the whole partition range rather than only the partitions
     /// this silo resolves a provider for, because a partition pinned to a
     /// provider key this silo cannot resolve is skipped inside the loop and
-    /// would otherwise publish no arm at all. Primed, it publishes six flat
+    /// would otherwise publish no arm at all. Primed, it publishes eight flat
     /// zeros and no entries-trimmed series, which is a distinguishable and
     /// honest reading; a shard this silo does scan and cannot release advances
     /// an arm instead.
@@ -2000,6 +2262,8 @@ public sealed class LatticeWalGc(
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.CursorFloor, 0);
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.CausalFrontier, 0);
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.BlockPin, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.DurabilityUnverified, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.DurabilityHold, 0);
         }
     }
 
