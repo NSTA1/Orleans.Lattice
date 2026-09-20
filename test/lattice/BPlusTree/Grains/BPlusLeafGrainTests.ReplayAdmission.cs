@@ -58,7 +58,7 @@ public partial class BPlusLeafGrainTests
             ceiling, queuedForCeiling(ceiling));
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
             new LatticeOptions().WalReplayPermitMaxQueueWait,
-            sinceLastAcquisition: TimeSpan.Zero);
+            sinceLastProgress: TimeSpan.Zero);
         return ceiling;
     }
 
@@ -71,7 +71,7 @@ public partial class BPlusLeafGrainTests
     {
         BPlusLeafGrain.SeedReplayAdmissionStateForTest(
             BPlusLeafGrain.ReplayConcurrencyCeilingForTest, 0);
-        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastAcquisition: null);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastProgress: null);
     }
 
     [Test]
@@ -232,7 +232,7 @@ public partial class BPlusLeafGrainTests
             // The only difference from the refusal tests above: the queue is
             // draining, so there is no evidence of the harm being guarded against.
             BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-                TimeSpan.FromMilliseconds(2), sinceLastAcquisition: TimeSpan.FromMilliseconds(5));
+                TimeSpan.FromMilliseconds(2), sinceLastProgress: TimeSpan.FromMilliseconds(5));
 
             var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
                 preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
