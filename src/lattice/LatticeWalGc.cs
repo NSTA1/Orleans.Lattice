@@ -519,25 +519,31 @@ public sealed class LatticeWalGc(
         // the pre-trim footprint sampled above, exactly as the byte-pressure
         // trigger is.
         //
-        // `holdConfigured` is false by default, which is what keeps this change
-        // inert for every deployment that does not opt in. When it is true the
+        // `holdConfigured` is TRUE by default as of the default-on change: the
         // hold applies only while the tree is UNDER the ceiling; at or above it
         // the hold yields and the pass trims as it always did, because an
         // unbounded WAL is the worse outage and a hold that can never end would
-        // recreate issue #3094 on any tree with no materialiser wired.
+        // recreate issue #3094 on any tree with no materialiser wired. Setting
+        // the ceiling non-positive disables the hold outright.
         //
         // A null `retainedBefore` - byte accounting unavailable from the
-        // provider - holds rather than forces. The alternative is to trim on the
-        // strength of a measurement we do not have, which is the same reasoning
-        // error as trimming on the strength of a durability check we did not
-        // run. The ceiling then bounds nothing, so this is the one shape in
-        // which the hold can grow a WAL without limit; it is reachable only when
-        // an operator has configured the hold against a provider that cannot
-        // report bytes, and the stop arm says plainly which trees are held.
+        // provider - now DECLINES the hold rather than holding through it, which
+        // is the reverse of what this did while the knob was opt-in. The old
+        // reading was that trimming on an unrun byte measurement is the same
+        // reasoning error as trimming on an unrun durability check, and while an
+        // operator had to switch the hold on deliberately that was right: they
+        // had accepted the cost. Default-on changes who bears it. The ceiling is
+        // the only thing bounding this hold, so with no bytes to measure the
+        // hold never ends, and shipping that by default would put unbounded
+        // retention on every deployment whose provider cannot report bytes -
+        // issue #3094, arriving unannounced and on our initiative rather than an
+        // operator's. Bounded retention is the entire safety property here, so
+        // where the bound cannot exist the hold does not engage; the pass falls
+        // back to DurabilityUnverified, which still names the condition loudly.
         var holdCeiling = resolved.WalDurabilityHoldCeilingBytes;
         var holdConfigured = holdCeiling is { } hc && hc > 0;
         var holdHasBudget = holdConfigured
-            && (retainedBefore is not { } rb || rb < holdCeiling!.Value);
+            && retainedBefore is { } rb && rb < holdCeiling!.Value;
 
         for (var partition = 0; partition < partitions; partition++)
         {
@@ -552,14 +558,29 @@ public sealed class LatticeWalGc(
 
             var partitionOffsetFloor = PartitionOffsetFloor(partition);
 
-            // Forced progress: the hold is configured, this partition has no
-            // durable floor to trim against, and the ceiling has been consumed.
+            // Forced progress: the hold is enabled, this partition has no
+            // durable floor to trim against, and the hold is not protecting it.
             // Count it before the scan rather than after, so the signal is
             // recorded even if the scan throws - a pass that died partway is
             // not a pass that decided not to discard anything.
+            //
+            // The reason arm is load-bearing, not decoration. `ceiling_exhausted`
+            // is the hold working as designed and running out;
+            // `unmeasurable_footprint` is the hold never having engaged, because
+            // the provider reports no bytes and an unbounded hold must not be
+            // the default. They call for different repairs - the first for a
+            // materialiser, the second for a provider that can weigh itself -
+            // and a single collapsed arm would say only "unprotected", which is
+            // the conflation issue #3309 was raised to undo.
             if (holdConfigured && !holdHasBudget && partitionOffsetFloor is null)
             {
-                LatticeMetrics.WalGcDurabilityHoldForced.Add(1, treeTag, tenantTag);
+                LatticeMetrics.WalGcDurabilityHoldForced.Add(
+                    1,
+                    treeTag,
+                    retainedBefore is null
+                        ? LatticeMetrics.ReasonHoldForcedUnmeasurableFootprint
+                        : LatticeMetrics.ReasonHoldForcedCeilingExhausted,
+                    tenantTag);
             }
 
             var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
@@ -1817,6 +1838,15 @@ public sealed class LatticeWalGc(
             // bound exists to avoid. So take the sample for the hold too, and
             // return a null Ceiling to keep the byte-pressure policy off. The
             // two ceilings stay independent; only the measurement is shared.
+            //
+            // Since the hold became default-on this branch is the common case
+            // rather than the opt-in one, so a tree with byte pressure disabled
+            // now pays one retained-bytes sample per GC pass where it previously
+            // paid none. That is a per-pass, per-partition provider call, not a
+            // per-entry one, and it is the measurement the hold is bounded by:
+            // declining to take it would not save the work, it would disable the
+            // bound and with it the hold (see the null-sample path in
+            // CollectAsync).
             if (resolved.WalDurabilityHoldCeilingBytes is not { } holdCeiling || holdCeiling <= 0)
             {
                 return (null, null, null);

@@ -330,7 +330,19 @@ public sealed class SingleClusterWalDurabilityTests
         var ttlGc = new LatticeWalGc(
             sp,
             registry,
-            new FixedLatticeOptionsMonitor(new LatticeOptions { WalRetention = TimeSpan.FromMilliseconds(1) }));
+            new FixedLatticeOptionsMonitor(new LatticeOptions
+            {
+                WalRetention = TimeSpan.FromMilliseconds(1),
+
+                // Issue #3300: the durability hold engages by default for any
+                // tree that has never published a durable offset floor. This
+                // tree is created seconds earlier and its leaves have not yet
+                // checkpointed, so it sits in exactly that state - which is why
+                // the hold is opted out of here (0 disables it), keeping the
+                // issue #920 assertion below about the scheduler rather than
+                // about the hold.
+                WalDurabilityHoldCeilingBytes = 0,
+            }));
 
         // Before the core scheduler existed this non-replicated tree had no
         // GC driver at all; here we drive it on a fast cadence (the first

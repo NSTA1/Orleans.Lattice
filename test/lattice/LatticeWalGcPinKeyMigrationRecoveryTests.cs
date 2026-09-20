@@ -100,7 +100,17 @@ public sealed class LatticeWalGcPinKeyMigrationRecoveryTests
     private static IOptionsMonitor<LatticeOptions> Monitor()
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1, WalMaterialiserPinShards = PinShards };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which includes the
+        // "no durable pin anywhere" negative control here. That control exists
+        // to prove the dual read is not an unconditional floor, so the hold
+        // would mask it. Opt out explicitly (0 disables the hold).
+        var options = new LatticeOptions
+        {
+            WalPartitions = 1,
+            WalMaterialiserPinShards = PinShards,
+            WalDurabilityHoldCeilingBytes = 0,
+        };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

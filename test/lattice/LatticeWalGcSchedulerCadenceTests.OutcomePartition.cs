@@ -56,7 +56,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static IOptionsMonitor<LatticeOptions> SinglePartitionMonitor()
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1 };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree in this fixture. These tests assert which outcome arm a pass
+        // lands on; a hold would move the affirmative arm off `reclaimed` and
+        // mask the partition under test. Opt out explicitly (0 disables it).
+        var options = new LatticeOptions { WalPartitions = 1, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

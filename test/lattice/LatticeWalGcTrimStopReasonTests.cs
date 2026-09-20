@@ -56,7 +56,14 @@ public sealed partial class LatticeWalGcTrimStopReasonTests
     private static IOptionsMonitor<LatticeOptions> Monitor(int partitions = 1)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = partitions };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree reached through this helper. These tests assert trim STOP
+        // reasons, and a hold stops the scan before the reason under test is
+        // reached. Opt out explicitly (0 disables the hold); the hold's own
+        // arm is covered by the DurabilityHold partial, which builds its
+        // options separately.
+        var options = new LatticeOptions { WalPartitions = partitions, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

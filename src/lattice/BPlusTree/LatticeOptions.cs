@@ -2643,11 +2643,22 @@ public class LatticeOptions
     /// <summary>
     /// Byte ceiling at which the garbage collector stops holding a tree's WAL
     /// back for want of a durable materialiser offset floor, and resumes
-    /// trimming it regardless (issue #3300). <see langword="null"/> (the
-    /// default) disables the hold entirely and preserves the pre-existing
-    /// behaviour byte for byte.
+    /// trimming it regardless (issue #3300). Defaults to
+    /// <see cref="DefaultWalDurabilityHoldCeilingBytes"/> (256 MiB), so the hold
+    /// is <b>on by default</b>; set it to <c>0</c> (or any non-positive value)
+    /// to disable the hold entirely and restore the pre-#3300 behaviour byte for
+    /// byte.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b>Why this ships on rather than opt-in.</b> It was introduced default-off
+    /// so that naming the condition could not change anyone's retention. That was
+    /// the right call for the instrument and the wrong one for the remedy:
+    /// default-off means the fix for issue #3300 is absent from every deployment
+    /// that has not heard of issue #3300, which is all of them, so the defect
+    /// stayed live and merely became legible. A remedy shipped switched off
+    /// reproduces the failure it was written for.
+    /// </para>
     /// <para>
     /// When this is set and positive, a partition whose durable offset floor is
     /// <b>absent</b> is not trimmed while the tree's retained WAL is below the
@@ -2677,6 +2688,35 @@ public class LatticeOptions
     /// tolerated. Raising the ceiling buys time; it does not fix anything.
     /// </para>
     /// <para>
+    /// <b>The narrowness of the trigger is what makes default-on safe.</b> The
+    /// hold engages only where the offset floor is <b>absent</b> - structurally,
+    /// the branch tests <c>offsetFloor is null</c> - and never where a floor
+    /// exists but has stopped advancing. That distinction is not a policy
+    /// setting that a later edit could widen by accident: a stalled floor is a
+    /// non-null value and cannot reach the branch at all. It matters because a
+    /// stalled tree has some records covered, so holding it would retain an
+    /// unbounded working set for a bounded benefit; an absent floor means
+    /// nothing whatever is known to be applied, so every retained entry is a
+    /// sole copy. A correctly-configured deployment with a materialiser wired
+    /// has a present floor and therefore never enters this branch, which is why
+    /// turning the default on moves no healthy consumer.
+    /// </para>
+    /// <para>
+    /// <b>A hold that cannot be bounded does not engage.</b> The ceiling is
+    /// measured against the tree's retained bytes, so a provider that cannot
+    /// report bytes leaves the hold with nothing to bound it. On that shape the
+    /// hold declines and the pass trims as it did before, reporting
+    /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/> so the condition
+    /// stays legible. While this knob was opt-in the opposite choice was
+    /// correct - an operator who had switched the hold on had accepted its cost,
+    /// and holding on an unmeasurable tree was safer than trimming on a check
+    /// that never ran. Default-on inverts that: the unbounded shape would arrive
+    /// unannounced on every deployment using such a provider, which is issue
+    /// #3094 delivered by default. Bounded retention is the whole safety
+    /// property of this mechanism, so where the bound cannot exist the mechanism
+    /// does not run.
+    /// </para>
+    /// <para>
     /// Deliberately a separate knob from <see cref="WalMaxRetainedBytes"/>,
     /// which is an advisory pressure policy that never blocks a trim. Reusing it
     /// would have made a durability hold appear the moment an operator
@@ -2684,7 +2724,22 @@ public class LatticeOptions
     /// deployment that already sets one.
     /// </para>
     /// </remarks>
-    public long? WalDurabilityHoldCeilingBytes { get; set; }
+    public long? WalDurabilityHoldCeilingBytes { get; set; } = DefaultWalDurabilityHoldCeilingBytes;
+
+    /// <summary>
+    /// Default ceiling for <see cref="WalDurabilityHoldCeilingBytes"/>: 256 MiB.
+    /// </summary>
+    /// <remarks>
+    /// Sized to be generous for the only trees that can reach the hold at all -
+    /// ones with no durable floor whatever, whose WAL is therefore pure
+    /// accumulation rather than a working set - while staying small enough that
+    /// the worst case it can produce is a bounded, single-tree overshoot rather
+    /// than the unbounded growth of issue #3094. It buys time for an operator to
+    /// notice <see cref="LatticeMetrics.WalGcDurabilityHoldForced"/>; it is not a
+    /// capacity plan, and a tree that reaches it has a materialiser problem that
+    /// raising this number will not fix.
+    /// </remarks>
+    public const long DefaultWalDurabilityHoldCeilingBytes = 256L * 1024 * 1024;
 
     /// <summary>
     /// The multiple of a tree's <i>logical</i> retained payload that
