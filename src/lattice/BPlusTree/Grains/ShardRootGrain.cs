@@ -3082,6 +3082,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Forward();
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
@@ -3093,9 +3094,15 @@ internal sealed partial class ShardRootGrain(
             // leaf so non-matching values never cross the wire.
             var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var key in leafKeys)
             {
+                // A key at or behind the watermark proves this leaf is not
+                // reachable by descent for the range it claims, so nothing it
+                // reports - rows or moved-away slots - is trustworthy (3271).
+                if (!chain.Admit(key))
+                    continue;
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -3105,6 +3112,9 @@ internal sealed partial class ShardRootGrain(
                 if (keys.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (keys.Count >= pageSize)
                 break;
@@ -3116,6 +3126,19 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // A leaf shown not to be descent-reachable - by its rows regressing
+            // the chain, or by its own declared range claiming keyspace the
+            // walk has already consumed - is not evidence about where the walk
+            // is. Withholding its bounds keeps an orphan whose range is wider
+            // than the live leaf's from terminating the scan early or handing
+            // back a resume key that skips live leaves (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage
@@ -3229,6 +3252,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Reverse();
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
@@ -3239,11 +3263,16 @@ internal sealed partial class ShardRootGrain(
             // discarded here.
             var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
             {
                 var key = leafKeys[i];
+                // A key at or ahead of the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                if (!chain.Admit(key))
+                    continue;
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -3254,6 +3283,9 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
+
             if (keys.Count >= pageSize)
                 break;
 
@@ -3261,6 +3293,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See the forward variant: a chain-regressed leaf's bounds must not
+            // steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new KeysPage
@@ -3358,6 +3399,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Forward();
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -3372,9 +3414,17 @@ internal sealed partial class ShardRootGrain(
             // discarded here.
             var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var entry in leafEntries)
             {
+                // A key at or behind the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                // Suppressing here also sidesteps the question an accumulator
+                // de-duplicator could not answer: which of two values for one
+                // key wins. The untrusted leaf simply never contributes.
+                if (!chain.Admit(entry.Key))
+                    continue;
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -3384,6 +3434,9 @@ internal sealed partial class ShardRootGrain(
                 if (entries.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (entries.Count >= pageSize)
                 break;
@@ -3395,6 +3448,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage
@@ -3493,6 +3555,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Reverse();
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -3507,10 +3570,15 @@ internal sealed partial class ShardRootGrain(
             // discarded here.
             var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
                 var entry = leafEntries[i];
+                // A key at or ahead of the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                if (!chain.Admit(entry.Key))
+                    continue;
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -3521,6 +3589,9 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
+
             if (entries.Count >= pageSize)
                 break;
 
@@ -3528,6 +3599,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new EntriesPage
@@ -3636,6 +3716,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = BeginScanPageRows<string>(scan, pageSize);
+        var chain = ScanChainCursor.Forward();
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3646,14 +3727,25 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var key in leafKeys)
             {
+                // Judged before the slot filter, not after: the slot filter
+                // rejects most keys on a post-split shard, so admitting only
+                // the survivors would leave the watermark far behind what the
+                // walk has actually consumed and blind the check across most
+                // of the keyspace (issue 3271).
+                if (!chain.Admit(key))
+                    continue;
                 var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
                 if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
                 keys.Add(key);
                 if (keys.Count >= pageSize) break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (keys.Count >= pageSize) break;
 
@@ -3661,6 +3753,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage { Keys = keys, HasMore = false };
@@ -3752,6 +3853,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
+        var chain = ScanChainCursor.Forward();
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3762,14 +3864,22 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var entry in leafEntries)
             {
+                // Judged before the slot filter; see the keys variant for why
+                // (issue 3271).
+                if (!chain.Admit(entry.Key))
+                    continue;
                 var slot = ShardMap.GetVirtualSlot(entry.Key, virtualShardCount);
                 if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
                 entries.Add(entry);
                 if (entries.Count >= pageSize) break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (entries.Count >= pageSize) break;
 
@@ -3777,6 +3887,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage { Entries = entries, HasMore = false };

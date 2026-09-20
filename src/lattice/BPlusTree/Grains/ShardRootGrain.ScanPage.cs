@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -667,6 +668,234 @@ internal sealed partial class ShardRootGrain
         scan.Accumulated = rows;
         return rows;
     }
+
+    /// <summary>
+    /// Tracks how far along the keyspace a paged range-scan sibling walk has
+    /// already consumed, so a leaf that is not reachable by descent cannot
+    /// contribute to the page (issue 3271).
+    /// <para>
+    /// The defect this closes: the sibling walks follow next/prev pointers with
+    /// no descent-reachability check. A leaf that is spliced into the chain but
+    /// unreachable from the root (an orphan - see issue 3265 for how the split
+    /// seam creates them) is therefore read and emitted <em>in addition to</em>
+    /// the live leaf that legitimately owns the same range. Its rows are not
+    /// empty placeholders: leaf rows are not durable state, they are
+    /// materialised at activation by replaying the shard WAL through a
+    /// predicate keyed on (ShardIndex, LowKeyInclusive, HighKeyExclusive) and
+    /// never on leaf identity, so an orphan sharing a live leaf's shard and
+    /// bounds materialises a full shadow copy of its range. Nothing on the
+    /// page-assembly path de-duplicates.
+    /// </para>
+    /// <para>
+    /// <b>Why a watermark rather than a reachability probe or a set.</b>
+    /// Proving descent-reachability per leaf means re-descending from the root
+    /// for every leaf, which turns the O(n) sibling walk into O(n log n) grain
+    /// calls and so gives up the entire reason the chain exists. A hash set at
+    /// the accumulator de-duplicates rows but leaves the two other halves of
+    /// the invariant unfixed: an orphan's declared bounds would still steer
+    /// termination and resume, and for an entries page it raises an
+    /// unanswerable question about which of two values for one key wins. The
+    /// watermark instead exploits the one property the walk already depends on
+    /// and can check for free: a correct chain visits the keyspace
+    /// monotonically. Any key at or behind the furthest key already consumed
+    /// proves the walk has re-entered territory it has left, whoever produced
+    /// it, which catches the orphan case and also transient split races where
+    /// a leaf is read before a split and its new sibling after.
+    /// </para>
+    /// <para>
+    /// <b>The detection is per leaf and latching, deliberately.</b> Leaf rows
+    /// arrive sorted, so the first regressed key condemns the whole leaf: every
+    /// later key on it comes from the same untrusted source, including keys
+    /// that happen to fall beyond the watermark because the orphan holds a
+    /// stale key the live leaf no longer has. The latch clears at the next leaf
+    /// because a single bad splice says nothing about the leaves past it.
+    /// </para>
+    /// <para>
+    /// <b>The walk still follows the chain past a regressed leaf.</b> An orphan
+    /// is spliced <em>between</em> live leaves, so stopping at one would
+    /// truncate the page and lose live rows - a worse defect than the one being
+    /// fixed. Only the orphan's rows and its declared bounds are discarded.
+    /// </para>
+    /// <para>
+    /// <b>What this deliberately does not do:</b> it does not advance the
+    /// leaf-level <c>afterExclusive</c> filter to the watermark. Doing so would
+    /// suppress the duplicates one hop earlier and more cheaply, but it would
+    /// also destroy the evidence that anything was wrong - the filter that
+    /// hides the symptom would hide the cause - and it would make the leaf-read
+    /// coalescing key depend on the contents of previously visited leaves.
+    /// Rows are read as before and judged here, where the condition can be
+    /// reported.
+    /// </para>
+    /// <para>
+    /// Cost on a healthy chain is one ordinal comparison per emitted row and no
+    /// allocation; the regression branch is never taken.
+    /// </para>
+    /// </summary>
+    private struct ScanChainCursor
+    {
+        private readonly bool _reverse;
+        private string? _watermark;
+        private string? _leafEntryWatermark;
+        private bool _leafRegressed;
+        private bool _leafWarned;
+
+        private ScanChainCursor(bool reverse)
+        {
+            _reverse = reverse;
+            _watermark = null;
+            _leafEntryWatermark = null;
+            _leafRegressed = false;
+            _leafWarned = false;
+        }
+
+        /// <summary>A cursor for a walk that consumes the keyspace ascending.</summary>
+        internal static ScanChainCursor Forward() => new(reverse: false);
+
+        /// <summary>A cursor for a walk that consumes the keyspace descending.</summary>
+        internal static ScanChainCursor Reverse() => new(reverse: true);
+
+        /// <summary>
+        /// Whether the leaf currently being read regressed the chain, and so
+        /// must not contribute rows, termination, or a resume position.
+        /// </summary>
+        internal readonly bool LeafRegressed => _leafRegressed;
+
+        /// <summary>The furthest key consumed from a trusted leaf so far.</summary>
+        internal readonly string? Watermark => _watermark;
+
+        /// <summary>
+        /// Clears the per-leaf regression latch and records where the walk had
+        /// reached before this leaf contributed anything. Call once per leaf,
+        /// before admitting any of its rows.
+        /// </summary>
+        internal void BeginLeaf()
+        {
+            _leafRegressed = false;
+            _leafWarned = false;
+            _leafEntryWatermark = _watermark;
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> at most once per leaf, and only for a
+        /// leaf that regressed, so a leaf detected by both its rows and its
+        /// declared bounds is reported once rather than twice.
+        /// </summary>
+        internal bool TryClaimWarning()
+        {
+            if (!_leafRegressed || _leafWarned)
+                return false;
+            _leafWarned = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Judges one row's key against the watermark. Returns
+        /// <see langword="true"/> when the row may be emitted, advancing the
+        /// watermark to it; returns <see langword="false"/> when the key
+        /// regresses the chain, latching the current leaf as untrusted for the
+        /// remainder of its rows.
+        /// </summary>
+        /// <remarks>
+        /// A key equal to the watermark is a regression, not a tie: a key lives
+        /// on exactly one leaf, so seeing it twice in one walk is itself the
+        /// proof that two leaves claim the same range.
+        /// </remarks>
+        internal bool Admit(string key)
+        {
+            if (_leafRegressed)
+                return false;
+
+            if (_watermark is { } mark)
+            {
+                var order = string.CompareOrdinal(key, mark);
+                if (_reverse ? order >= 0 : order <= 0)
+                {
+                    _leafRegressed = true;
+                    return false;
+                }
+            }
+
+            _watermark = key;
+            return true;
+        }
+
+        /// <summary>
+        /// Judges the leaf's own declared <see cref="LeafKeyRange"/> against the
+        /// watermark as it stood <em>before</em> this leaf contributed, and
+        /// returns whether those bounds may be trusted to terminate the walk or
+        /// to produce a resume key.
+        /// </summary>
+        /// <remarks>
+        /// This is the half of the check <see cref="Admit"/> cannot reach. A
+        /// leaf that yields no rows at all - because it is empty, or because
+        /// the range or predicate filtered everything it holds - never trips
+        /// the row watermark, yet its declared bounds are still consulted for
+        /// termination and resume. An orphan claiming a range wider than the
+        /// live leaf's would therefore end the page early and silently drop the
+        /// live leaves beyond it. Comparing the leaf's leading edge against the
+        /// pre-leaf watermark catches exactly that: in a correct chain the
+        /// keyspace a leaf claims begins past everything already consumed, so a
+        /// leading edge at or behind the pre-leaf watermark is a leaf claiming
+        /// territory the walk has already left. A leaf with no bounds recorded
+        /// at all is not judged, preserving the existing legacy fallback; but a
+        /// leaf that declares a real trailing edge while leaving its leading
+        /// edge unset is claiming the keyspace from the unbounded end, which is
+        /// behind any watermark and so is judged like any other regression.
+        /// </remarks>
+        internal bool TrustsBounds(LeafKeyRange bounds)
+        {
+            if (_leafRegressed)
+                return false;
+
+            if (_leafEntryWatermark is not { } mark)
+                return true;
+
+            var edge = _reverse ? bounds.HighKeyExclusive : bounds.LowKeyInclusive;
+            if (edge is null)
+            {
+                var trailing = _reverse ? bounds.LowKeyInclusive : bounds.HighKeyExclusive;
+                if (trailing is null)
+                    return true;
+
+                _leafRegressed = true;
+                return false;
+            }
+
+            var order = string.CompareOrdinal(edge, mark);
+            if (_reverse ? order > 0 : order <= 0)
+            {
+                _leafRegressed = true;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reports a leaf whose keys regressed the scan's chain watermark, which
+    /// proves it is not reachable by descent for the range it claims to own
+    /// (issue 3271). Emitted once per offending leaf per page.
+    /// </summary>
+    /// <remarks>
+    /// This is a warning rather than a throw on purpose. Throwing would convert
+    /// a bounded read-correctness defect into a total read outage for exactly
+    /// the trees that carry an orphan, and issue 3269 establishes that no
+    /// operator repair path exists yet - so the failure would be unrecoverable
+    /// rather than merely loud. The page is served correctly and the tree's
+    /// need for repair is reported.
+    /// </remarks>
+    private void WarnScanChainRegression(ScanPageWalk scan, GrainId leafId, string? watermark) =>
+        logger.LogWarning(
+            "Range scan {Operation} on tree {TreeId} shard {ShardIndex} suppressed rows from leaf {LeafId}: " +
+            "its keys are at or behind the chain watermark {Watermark}, so the leaf is not reachable by descent " +
+            "for the range it claims and its rows duplicate a live leaf (issue 3271). The shard's leaf chain " +
+            "needs repair (issue 3269).",
+            scan.Operation,
+            TreeId,
+            ShardIndex,
+            leafId,
+            watermark);
 
     /// <summary>
     /// Publishes a finished partial page for the guard to bank if the ceiling
