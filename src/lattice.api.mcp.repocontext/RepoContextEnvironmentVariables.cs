@@ -102,6 +102,8 @@ public static class RepoContextEnvironmentVariables
         RepoContextAnnOptions.OpenSliceBudgetSecondsVariable,
         RepoContextAnnOptions.MaxOpenSliceExtensionsVariable,
         RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
+        RepoContextAnnOptions.MaxConsecutiveOpenRefusalsVariable,
+        RepoContextAnnOptions.OpenRefusalTerminalPeriodSecondsVariable,
     ];
 
     /// <summary>
@@ -261,6 +263,20 @@ public static class RepoContextEnvironmentVariables
                 RepoContextAnnOptions.IngestSliceBudgetSecondsVariable,
                 Seconds(annResolved.IngestSliceBudget),
                 Seconds(annDefaults.IngestSliceBudget)),
+
+            // The refusal-run terminal bounds (issue #3286). Reported as a pair for
+            // the same reason the budget and its extension cap are: either bound
+            // alone states how long a refusal run may go undeclared, and whichever
+            // is reached first declares, so an operator shown one is reading a
+            // figure that something else may already have pre-empted.
+            Snapshot(
+                RepoContextAnnOptions.MaxConsecutiveOpenRefusalsVariable,
+                Refusals(annResolved.MaxConsecutiveOpenRefusals),
+                Refusals(annDefaults.MaxConsecutiveOpenRefusals)),
+            Snapshot(
+                RepoContextAnnOptions.OpenRefusalTerminalPeriodSecondsVariable,
+                Seconds(annResolved.OpenRefusalTerminalPeriod),
+                Seconds(annDefaults.OpenRefusalTerminalPeriod)),
         ];
 
         static RepoContextSettingSnapshot Snapshot(string name, string resolved, string @default)
@@ -281,6 +297,9 @@ public static class RepoContextEnvironmentVariables
 
         static string Extensions(int value)
             => string.Create(CultureInfo.InvariantCulture, $"{value} extension(s)");
+
+        static string Refusals(int value)
+            => string.Create(CultureInfo.InvariantCulture, $"{value} consecutive refusal(s)");
     }
 
     /// <summary>

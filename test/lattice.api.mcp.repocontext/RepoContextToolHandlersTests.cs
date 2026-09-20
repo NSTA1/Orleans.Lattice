@@ -43,6 +43,10 @@ public sealed class RepoContextToolHandlersTests
         // unavailable falsifies that phase's premise, so this drops straight to
         // Building with no hold-down to wait out.
         [RepoContextRetrievalReadinessPhase.Building] = s => s.MarkUnavailable(),
+
+        // The saturation declaration applies from any not-yet-serving phase, so a
+        // fresh state reaches it directly (issue #3286).
+        [RepoContextRetrievalReadinessPhase.SaturatedUnavailable] = s => s.MarkSaturationUnavailable(),
     };
 
     private static RepoContextRetrievalReadinessState NewState(SettableTimeProvider clock)
@@ -221,8 +225,12 @@ public sealed class RepoContextToolHandlersTests
                 Assert.That(health.RetrievalPhase,
                     Is.EqualTo(RepoContextRetrievalReadinessState.PhaseTag(phase)));
                 Assert.That(health.RetrievalReady,
-                    Is.EqualTo(phase != RepoContextRetrievalReadinessPhase.Building),
-                    $"Readiness for {phase} disagrees with the state's own IsReady contract.");
+                    Is.EqualTo(RepoContextRetrievalReadinessState.IsReadyPhase(phase)),
+                    $"Readiness for {phase} disagrees with the state's own IsReady contract. "
+                    + "This reads the POSITIVE ready-set predicate rather than restating the old "
+                    + "'anything that is not Building' form: that negative form silently defaulted "
+                    + "each new phase to ready, which is how a plane declared unavailable-saturated "
+                    + "would have been reported as serving (issue #3286).");
                 Assert.That(health.Status, Is.Not.Null.And.Not.Empty);
             });
 

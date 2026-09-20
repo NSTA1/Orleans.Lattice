@@ -125,13 +125,14 @@ public sealed class RepoContextPreMintedArmsTests
                     RepoContextRetrievalPath.KeywordIndexDegraded,
                     RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
                     RepoContextRetrievalReadinessState.ProbeCause,
+                    RepoContextRetrievalReadinessState.SaturatedCause,
                     RepoContextRetrievalReadinessState.UnknownCause,
                 }),
                 "Issue #3280. This counter published NO series at all until the first fault episode, so "
                 + "'retrieval has never degraded on this process' - the healthy reading, and the one a "
                 + "definition-of-done falsifier has to be able to make - was indistinguishable from an "
                 + "instrument that was never wired. The assertion is deliberately an exact set rather than "
-                + "a subset: a sixth cause added to NormalizeCause without being primed fails here, which "
+                + "a subset: a seventh cause added to NormalizeCause without being primed fails here, which "
                 + "is the only shape of this test that does not silently re-admit the defect for the new "
                 + "arm.");
             Assert.That(
@@ -139,6 +140,12 @@ public sealed class RepoContextPreMintedArmsTests
                 Is.Zero,
                 "Pre-minting must not fabricate a fault. Every arm exists and reads zero on a state that "
                 + "has never been told the plane could not serve.");
+            Assert.That(
+                arms.Value(RepoContextRetrievalReadinessState.SaturatedCause),
+                Is.Zero,
+                "and the saturation arm added by issue #3286 is primed on the same terms: a plane that "
+                + "was never refused reads a measured zero rather than an absent series, so an operator "
+                + "can tell 'never saturated' from 'the classifier is not wired'.");
             Assert.That(
                 arms.Value(RepoContextRetrievalReadinessState.UnknownCause),
                 Is.Zero);

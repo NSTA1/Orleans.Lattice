@@ -297,7 +297,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             Assert.That(causes, Is.Not.Empty,
                 "positive control: the reflection must find members, or every assertion below "
                 + "passes over an empty set");
-            Assert.That(causes, Has.Length.EqualTo(5),
+            Assert.That(causes, Has.Length.EqualTo(6),
                 "a member added without a tag of its own would fall onto 'unexpected' and be "
                 + "silently merged with it, which is the one arm whose whole job is to be rare; "
                 + "add the tag and update this count together");
@@ -375,19 +375,24 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         reporter.RecordFaulted(
             RepoContextAnnBuildFaultCause.PlaneRejected, Repo, TestSpace, RepoContextAnnBuildStepPhase.Training);
         reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.Saturated, Repo, TestSpace, RepoContextAnnBuildStepPhase.Opening);
+        reporter.RecordFaulted(
             (RepoContextAnnBuildFaultCause)9999, Repo, TestSpace, RepoContextAnnBuildStepPhase.Reconciling);
 
         var slices = reporter.Read();
 
         Assert.Multiple(() =>
         {
-            Assert.That(slices.Faulted, Is.EqualTo(6),
+            Assert.That(slices.Faulted, Is.EqualTo(7),
                 "positive control: every recorded fault must reach the undifferentiated total, "
                 + "so the per-cause split below is a partition of a number that is itself right");
             Assert.That(slices.FaultedByCause.ScanPageStalled, Is.EqualTo(2));
             Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.EqualTo(1));
             Assert.That(slices.FaultedByCause.ProjectionStale, Is.EqualTo(1));
             Assert.That(slices.FaultedByCause.PlaneRejected, Is.EqualTo(1));
+            Assert.That(slices.FaultedByCause.Saturated, Is.EqualTo(1),
+                "the saturation arm has to be readable back off the snapshot, or the grain fixtures "
+                + "that assert against the snapshot cannot tell a refusal from the arm that pages");
             Assert.That(slices.FaultedByCause.Unexpected, Is.EqualTo(1),
                 "an unmapped value must land on the same arm the tag mapping resolves it to, or "
                 + "the tally and the meter disagree about where a fault went");
@@ -396,7 +401,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
                 + "not sum to the total is the shape that makes a dashboard ratio quietly wrong");
             Assert.That(slices.FaultedByPhase.Ingesting, Is.EqualTo(2));
             Assert.That(slices.FaultedByPhase.Persisting, Is.EqualTo(1));
-            Assert.That(slices.FaultedByPhase.Opening, Is.EqualTo(1));
+            Assert.That(slices.FaultedByPhase.Opening, Is.EqualTo(2));
             Assert.That(slices.FaultedByPhase.Training, Is.EqualTo(1));
             Assert.That(slices.FaultedByPhase.Reconciling, Is.EqualTo(1));
             Assert.That(slices.FaultedByPhase.Coordinating, Is.EqualTo(0));
@@ -480,6 +485,45 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             new SiloUnavailableException("silo S1 is not available"),
             RepoContextAnnBuildSliceReporter.CauseDependencyUnavailableTag)
             .SetName("Silo_churn_is_matched_by_type_name_because_one_runtime_type_is_internal");
+
+        // ISSUE #3286. The two instruments that book this one event disagreed:
+        // repocontext.ann.index.load recorded outcome="refused" while this one
+        // recorded cause="unexpected", the arm its own HELP text calls the only
+        // value that should page. Measured live, refused read 61 against a faulted
+        // 44 on the same plane over the same window.
+        yield return new TestCaseData(
+            new LatticeSaturatedException("WAL replay permits are withheld at the occupancy floor"),
+            RepoContextAnnBuildSliceReporter.CauseSaturatedTag)
+            .SetName("An_admission_refusal_is_saturated_rather_than_the_arm_that_pages");
+
+        yield return new TestCaseData(
+            new InvalidOperationException(
+                "the open could not complete",
+                new LatticeSaturatedException("WAL replay permits are withheld")),
+            RepoContextAnnBuildSliceReporter.CauseSaturatedTag)
+            .SetName("A_wrapped_admission_refusal_is_still_saturated");
+
+        // THE OUTER-FIRST CASE. The classifier walks the inner-exception chain from
+        // the OUTERMOST exception inwards, so a refusal that happens to wrap a
+        // classifiable inner cause is attributed to the refusal. That is the right
+        // attribution here - the open was turned away at admission and never got
+        // far enough for the inner condition to be what stopped it - and a walk
+        // reordered to deepest-first would quietly send an operator after an
+        // embedding-space defect that is not there while the real condition is a
+        // heap at its hard limit.
+        //
+        // Note what this case does NOT pin, because the distinction matters for
+        // anyone maintaining it: the ARM ORDER inside the loop body. No arm below
+        // the saturation arm matches InvalidOperationException, which
+        // LatticeSaturatedException derives from, so moving the saturation arm down
+        // the body changes nothing observable today. The reason it is written first
+        // is stated at the site instead.
+        yield return new TestCaseData(
+            new LatticeSaturatedException(
+                "WAL replay permits are withheld",
+                new EmbeddingSpaceMismatchException("space dimension 768 does not match 384")),
+            RepoContextAnnBuildSliceReporter.CauseSaturatedTag)
+            .SetName("An_admission_refusal_outranks_an_inner_cause_it_merely_wrapped");
     }
 
     /// <summary>
