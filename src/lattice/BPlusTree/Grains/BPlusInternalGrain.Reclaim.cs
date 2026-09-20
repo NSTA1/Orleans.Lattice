@@ -42,7 +42,12 @@ internal sealed partial class BPlusInternalGrain
         // silently reverted by the recovery it does not know about. Reclaim is
         // a background tidy-up with nothing time-critical about it, so the
         // right answer is to decline and let the next pass retry.
-        if (state.State.SplitState == SplitState.SplitInProgress) return false;
+        // Issue #3265: HasInterruptedSplit, not the dead equality test. The
+        // comment above names SplitRightChildren as what recovery reconstructs
+        // from, and that field is exactly what the predicate reads - so this
+        // guard was asking the right question through the one expression that
+        // cannot answer it on a node which has split before.
+        if (HasInterruptedSplit) return false;
 
         var index = -1;
         for (int i = 0; i < state.State.Children.Count; i++)

@@ -243,7 +243,11 @@ internal sealed partial class BPlusLeafGrain
     {
         if (state.State.SplitKey is not { } splitKey) return false;
 
-        if (state.State.SplitState == SplitState.SplitInProgress) return false;
+        // Issue #3265: HasInterruptedSplit, not the dead equality test. This
+        // arm clears SplitKey and SplitSiblingId, which are precisely the
+        // fields a resumed division needs, so answering "no split in flight"
+        // on a leaf that has one destroys the evidence recovery runs on.
+        if (HasInterruptedSplit) return false;
 
         // A widen that stops at or below the boundary has not absorbed it,
         // and the successor still owns the keys above it.
@@ -269,7 +273,10 @@ internal sealed partial class BPlusLeafGrain
         // that are mid-flight between this leaf and a sibling that may not
         // exist yet. The row count above can legitimately read zero in that
         // window, so it is exactly the case the count cannot detect.
-        if (state.State.SplitState == SplitState.SplitInProgress)
+        // Issue #3265: HasInterruptedSplit, not the dead equality test, or the
+        // window this comment describes stops being detected on exactly the
+        // leaves that divide most often.
+        if (HasInterruptedSplit)
             return true;
 
         // The moved-away seal is deliberately sticky: it is what stops a
@@ -470,7 +477,13 @@ internal sealed partial class BPlusLeafGrain
             // took on S on this path (ShardRootGrain.LeafReclaim.cs, the
             // !unlinked arm calls AbandonRetirementAsync), so a declination
             // does not leave S refusing writes.
-            if (state.State.SplitState == SplitState.SplitInProgress
+            // Issue #3265: HasInterruptedSplit, not the dead equality test.
+            // This declination's whole argument is that the evidence lives on
+            // the splitting leaf rather than on S, so reading that evidence
+            // through a predicate that is false on any leaf which has split
+            // before would unlink S on precisely the donors most likely to be
+            // mid-division.
+            if (HasInterruptedSplit
                 && state.State.SplitSiblingId == expectedNext)
             {
                 return false;

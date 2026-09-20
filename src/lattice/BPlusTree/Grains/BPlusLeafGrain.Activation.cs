@@ -2209,7 +2209,7 @@ internal sealed partial class BPlusLeafGrain
             // the end of the current turn, which protects a turn-local
             // operation and does nothing for a multi-turn one, so the exclusion
             // has to be explicit.
-            () => state.State.SplitState == Primitives.SplitState.SplitInProgress);
+            () => HasInterruptedSplit);
     }
 
     /// <summary>

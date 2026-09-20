@@ -834,7 +834,7 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
-        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        if (HasInterruptedSplit)
         {
             var recovered = await CompleteRecoverySplitUnderGateAsync();
 
@@ -1115,7 +1115,7 @@ internal sealed partial class BPlusLeafGrain(
         // SetCoreAsync) can place each entry on the leaf that declares it. The
         // scan is skipped entirely on a leaf with no declared bounds, which is
         // the common shape. See BPlusLeafGrain.SpanAdmission.cs.
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         if (splitInProgress || MergeObserverActive || ContainsOutOfSpanKey(entries))
         {
             SplitResult? lastSplit = null;
@@ -1180,7 +1180,7 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         SplitResult? split;
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         // The matched set is drawn from this leaf's own cache, so an out-of-span
         // entry can only appear here if a row was orphaned before this rule
         // existed. Routing it per key keeps the guard uniform across every
@@ -1958,7 +1958,7 @@ internal sealed partial class BPlusLeafGrain(
         // leaf and from the no-split-yet fast path in LatticeGrain.CountAsync -
         // both of which describe it in comments as "cheap", and both of which
         // therefore ran before any division could.
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         var splitKey = state.State.SplitKey;
         var scanStart = startInclusive;
         var scanEnd = MinOrdinal(endExclusive, splitInProgress ? splitKey : null);
@@ -2049,7 +2049,7 @@ internal sealed partial class BPlusLeafGrain(
         // walk this replaced. What changes is peak footprint - the whole-cache
         // view calls HydrateAll, which ends in DetachSnapshot and makes every
         // row resident for the life of the activation (issue #2368).
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         var splitKey = state.State.SplitKey;
         var scanEnd = splitInProgress ? splitKey : null;
         var live = 0;
@@ -3067,7 +3067,7 @@ internal sealed partial class BPlusLeafGrain(
         // Issue #2786: the earliest instant at which this answer could change
         // with nothing written. See PublishLeafExpiryHorizon.
         var earliestExpiry = long.MaxValue;
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
@@ -3196,7 +3196,7 @@ internal sealed partial class BPlusLeafGrain(
         // Issue #2786: the earliest instant at which this answer could change
         // with nothing written. See PublishLeafExpiryHorizon.
         var earliestExpiry = long.MaxValue;
-        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitInProgress = HasInterruptedSplit;
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
@@ -3459,7 +3459,7 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
-        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        if (HasInterruptedSplit)
         {
             var recovered = await CompleteRecoverySplitUnderGateAsync();
 

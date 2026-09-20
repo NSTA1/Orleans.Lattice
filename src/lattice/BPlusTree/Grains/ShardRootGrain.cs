@@ -1230,15 +1230,10 @@ internal sealed partial class ShardRootGrain(
             var split = splitResults[i];
             if (split is null) continue;
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             // Any residual split at the root must be promoted into a
             // new root grain - matches the single-key path's
@@ -1367,15 +1362,10 @@ internal sealed partial class ShardRootGrain(
                 continue;
             }
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             while (split is not null)
             {
@@ -1634,15 +1624,10 @@ internal sealed partial class ShardRootGrain(
             var split = leafResults[i].Split;
             if (split is null) continue;
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             while (split is not null)
             {
@@ -2761,7 +2746,8 @@ internal sealed partial class ShardRootGrain(
         // applies - this is a CPU optimisation, not an allocation one.
         if (state.State.RootNodeId is not null
             && state.State.PendingPromotion is null
-            && state.State.PendingBulkGraft is null)
+            && state.State.PendingBulkGraft is null
+            && state.State.PendingChildLinks.Count == 0)
         {
             return Task.CompletedTask;
         }
@@ -2774,6 +2760,7 @@ internal sealed partial class ShardRootGrain(
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
+        await ResumePendingChildLinksAsync();
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
@@ -2945,13 +2932,10 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var splitResult = await leafGrain.MergeManyAsync(entries, isCrossShardMigration);
 
-            while (splitResult is not null && path.Count > 0)
-            {
-                var parentId = path.Pop();
-                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            splitResult = await PropagateSplitAsync(splitResult, path);
 
             return splitResult;
         }
