@@ -397,6 +397,28 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.AuditWalPlacementAsync(treeId, cancellationToken);
     }
 
+    /// <summary>Audits a tree for orphaned leaves - leaves spliced into a shard's sibling chain but unreachable by descent.</summary>
+    public static Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree to audit for orphaned leaves. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.AuditOrphanedLeavesAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Repairs a tree's orphaned leaves by unsplicing every descent-unreachable leaf whose keys are all readable elsewhere.</summary>
+    public static Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose orphaned leaves to repair. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.RepairOrphanedLeavesAsync(treeId, cancellationToken);
+    }
+
     /// <summary>Previews moving a WAL partition to a target provider key (the range that would be copied), with no side effects.</summary>
     public static Task<TreeWalMovePlan> PlanWalMoveAsync(
         ILatticeTreeAdmin treeAdmin,

@@ -573,6 +573,50 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeOrphanedLeafReport_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeOrphanedLeafReport
+        {
+            TreeId = "orders",
+            DryRun = true,
+            LeavesWalked = 11,
+            Findings = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeOrphanedLeafFinding
+                {
+                    ShardIndex = 2,
+                    LeafId = "leaf-7",
+                    LowKeyInclusive = "a",
+                    HighKeyExclusive = "m",
+                    KeyCount = 4,
+                    VerifiedKeyCount = 4,
+                    Disposition = TreeOrphanedLeafDisposition.Repairable,
+                },
+                new TreeOrphanedLeafFinding
+                {
+                    ShardIndex = 3,
+                    LeafId = "leaf-8",
+                    KeyCount = 4,
+                    VerifiedKeyCount = 1,
+                    Disposition = TreeOrphanedLeafDisposition.RefusedUnverifiedKeys,
+                    UnverifiedKey = "zebra",
+                }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.DryRun, Is.True);
+            Assert.That(copy.LeavesWalked, Is.EqualTo(11));
+            Assert.That(copy.Findings, Has.Length.EqualTo(2));
+            Assert.That(copy.Findings[0].LowKeyInclusive, Is.EqualTo("a"));
+            Assert.That(copy.Findings[0].Disposition, Is.EqualTo(TreeOrphanedLeafDisposition.Repairable));
+            Assert.That(copy.Findings[1].UnverifiedKey, Is.EqualTo("zebra"));
+            Assert.That(copy.Findings[1].IsRefusal, Is.True);
+            Assert.That(copy.RefusedCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void TreeWalMovePlan_response_round_trips_through_the_marshaller()
     {
         var copy = RoundTrip(new TreeWalMovePlan

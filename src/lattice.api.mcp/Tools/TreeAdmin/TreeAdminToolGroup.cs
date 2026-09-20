@@ -201,6 +201,18 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "partition pinned to a provider key the silo cannot resolve so configuration drift is caught before "
                 + "WAL shards begin to fail closed. Reports the silo's known provider keys. A pure read with no side "
                 + "effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_audit",
+                "Audit a tree for orphaned leaves",
+                "Audits a tree for orphaned leaves - leaves spliced into a shard's sibling chain but unreachable by "
+                + "descent from that shard's root - and reports what the repair verb would do about each, without "
+                + "changing anything. An orphan is left behind by a split interrupted after it linked the new sibling "
+                + "into the chain but before its parent learned about it, and it is not cosmetic: a leaf nothing "
+                + "routes to never checkpoints, so its write-ahead-log materialiser pin never advances, the trim "
+                + "floor never rises, and the WAL never trims or compacts again. Reports every leaf walked, each "
+                + "orphan's shard, key range and key count, and a disposition saying whether the repair would "
+                + "unsplice it or refuse. An empty finding list is a clean bill of health and rules this defect out "
+                + "as the cause of an unbounded WAL. Run this before the repair verb, which reaches its verdict with "
+                + "the same code. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
                 "Preview a WAL partition move",
                 "Computes a read-only preview of moving a WAL partition to a target storage provider key: the offset "
@@ -298,6 +310,17 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
         if (enableLifecycle)
         {
             // ----- Tree lifecycle and registry config (destructive) -----
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_repair",
+                "Repair a tree's orphaned leaves",
+                "Repairs a tree by unsplicing every descent-unreachable leaf whose keys were all shown to be "
+                + "readable elsewhere, releasing the write-ahead-log materialiser pin that was holding the trim "
+                + "floor down and letting the WAL trim and compact again. An irreversible structural change to the "
+                + "tree. Itself fail-closed per leaf: a leaf is unspliced only when every key it holds was verified "
+                + "readable by descent, and any leaf that cannot be shown safe is left exactly as it was and "
+                + "reported as a refusal. Run lattice_treeadmin_orphaned_leaves_audit first - it reaches its verdict "
+                + "with the same code, so it reports in advance what this verb would do. Rejected for a reserved "
+                + "system tree id. Requires whole-tree lifecycle authority, which routine admin authority does not "
+                + "confer. Lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.CreateTreeAsync, "lattice_treeadmin_tree_create",
                 "Explicitly create a tree",
                 "Explicitly creates (registers) a tree with an optional initial structural sizing (shard count, "

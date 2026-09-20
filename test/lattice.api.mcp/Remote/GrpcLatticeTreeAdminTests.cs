@@ -560,6 +560,35 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
+    public async Task AuditOrphanedLeavesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeOrphanedLeafReport { TreeId = "orders", DryRun = true, LeavesWalked = 4 });
+
+        var result = await Adapter(invoker).AuditOrphanedLeavesAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.LeavesWalked, Is.EqualTo(4));
+            Assert.That(result.DryRun, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task RepairOrphanedLeavesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeOrphanedLeafReport { TreeId = "orders", DryRun = false, LeavesWalked = 4 });
+
+        var result = await Adapter(invoker).RepairOrphanedLeavesAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.DryRun, Is.False);
+        });
+    }
+
+    [Test]
     public async Task PlanWalMoveAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(_ => new TreeWalMovePlan

@@ -254,6 +254,18 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         => _client.AuditWalPlacementAsync(treeId, cancellationToken);
 
     /// <inheritdoc />
+    public Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.AuditOrphanedLeavesAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.RepairOrphanedLeavesAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
     public Task<TreeWalMovePlan> PlanWalMoveAsync(
         string treeId,
         int partition,

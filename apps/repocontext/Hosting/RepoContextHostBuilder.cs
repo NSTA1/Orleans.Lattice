@@ -8,6 +8,8 @@ using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Mcp;
+using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Scaling;
@@ -373,6 +375,22 @@ public static class RepoContextHostBuilder
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, LocalTrustedAuthenticator>();
             silo.AddLatticeAuthApi();
 
+            // The tree-administration control facade, which the MCP treeadmin tool
+            // group adapts over. It is what makes the whole-tree operator verbs -
+            // notably the orphaned-leaf audit, the named remedy for a tree whose WAL
+            // trim floor is pinned by a descent-unreachable leaf - reachable on this
+            // box at all: the container publishes only the MCP listener, so a verb
+            // with no MCP tool has no invocation path here (issue 3287).
+            //
+            // The facade composes the schema control facade by delegation, which in
+            // turn requires the schema enforcement layer, so all three are registered
+            // in that order. Enforcement is inert on this box: it authors no policy,
+            // and its write interceptor passes every value through verbatim for a
+            // tree that has none, so no repo-context write path changes.
+            silo.AddLatticeSchemaEnforcement();
+            silo.AddLatticeSchemaApi();
+            silo.AddLatticeTreeAdminApi();
+
             // Capture the durable agent-memory tree into an external blob sink so a
             // gesture that destroys the primary store does not destroy its only
             // copy. Registered after AddLattice (ConfigureDurability, above), which
@@ -440,6 +458,21 @@ public static class RepoContextHostBuilder
             enableWrites: true,
             workspaceMode: true,
             workspaceRoot: config.WorkspaceRoot);
+
+        // The tree-administration tool group, so the whole-tree operator verbs are
+        // reachable over the container's single MCP listener. Registered with both
+        // opt-ins LEFT OFF, which is deliberate and is the enforcement-shaped
+        // choice rather than a conservative default: the local agent's seeded grant
+        // (RepoContextGrant.Operations) carries no SchemaAdmin and no TreeLifecycle,
+        // so every tool those flags would contribute - including the orphaned-leaf
+        // REPAIR - would be advertised and then refused by the facade's own
+        // fail-closed gate. Advertising a call that can only be denied is worse than
+        // not advertising it. The read-only verbs, the orphaned-leaf AUDIT among
+        // them, need only whole-tree Read, which the local agent does hold, so they
+        // are both advertised and invocable. Enabling the repair is an operator act:
+        // it means widening the seeded grant to include TreeLifecycle and passing
+        // enableLifecycle: true here, in that order.
+        builder.Services.AddTreeAdminTools();
 
         // The default embedding provider points at the separate Onyx companion
         // container, preserving the MCP-only single-listener surface.
