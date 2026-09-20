@@ -250,6 +250,41 @@ services:
       # retained, so setting this back to "1" and restarting is a safe rollback
       # that over-retains WAL rather than over-trimming it.
       LATTICE_WAL_PIN_BUCKETS: "8"
+      # Ceiling on how long ONE durable pin shard may shed steady-state pin
+      # reports CONTINUOUSLY before a single report is forced through anyway.
+      #
+      # WHY THIS EXISTS (issue #3310, measured on this box). The steady-state
+      # pin write is shed under pin-store pressure (issue #2014) and is the ONLY
+      # write path carrying an advancing CheckpointOffset. The paths that are
+      # exempt from the gate - the birth seed and the deactivation flush - still
+      # FEED it, so under continuous churn the window re-arms faster than it
+      # lapses and never closes. The durable pin offset then freezes, the WAL GC
+      # offset floor has nothing fresher to stand on, and retained WAL grows
+      # without bound. On repo-context-vector-index the floor sat frozen at one
+      # offset for forty minutes while the WAL grew 175 MB, and the shed counter
+      # read 12987 for that tree against 12, 2 and 0 for its three siblings.
+      #
+      # THIS IS NOT THE ISSUE #3300 FAILURE IN DISGUISE, and the distinction is
+      # the whole safety argument. It does not lower, weaken or bypass the
+      # retention floor - the leaf clamps every reported offset to
+      # min(checkpoint, covered) before the report is built, so a forced report
+      # is arithmetically incapable of publishing an offset it has not proven
+      # durable. It bounds WHEN a true value is published, never WHAT.
+      #
+      # The hazard of setting this TOO SMALL is the opposite one: forcing writes
+      # faster than the pin store can absorb them re-saturates the queue the
+      # shedding exists to protect. Read it as a ceiling on stall, not a target.
+      # At 120 s each pin shard contributes at most one forced write every two
+      # minutes, so eight shards cost a handful of writes a minute against the
+      # thousands of reports a busy tree sheds in the same window.
+      #
+      # Setting this to "0" disarms the ceiling and restores the pre-#3310
+      # behaviour exactly. That is a rollback to unbounded retention growth, not
+      # to data loss, which is the correct direction for this seam to fail.
+      # Watch orleans_lattice_materialiser_pin_shed_stall_seconds (a line that
+      # only climbs is the latch) and ..._pin_shed_forced_total (every increment
+      # is one deliberate override, and an alarm rather than routine).
+      LATTICE_WAL_PIN_SHED_CEILING_SECONDS: "120"
       # Advisory per-tree ceiling on the WAL bytes held on disk. The library ships
       # this DISABLED and is right to: the correct value depends both on the
       # volume the WAL lives on and on the largest tree's working set, neither of

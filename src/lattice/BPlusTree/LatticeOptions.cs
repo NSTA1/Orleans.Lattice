@@ -2036,6 +2036,51 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserPinShards = 8;
 
     /// <summary>
+    /// Maximum time a durable leaf-materialiser pin shard may shed coalescible
+    /// reports <b>continuously</b> before one is forced through. <c>null</c>
+    /// (the default) leaves the bound disarmed and preserves the historical
+    /// issue #2012 behaviour exactly.
+    /// <para>
+    /// The shed window of issue #2012 was designed as a short, self-tuning
+    /// hold-off proportional to the cost of the write that opened it - not a
+    /// latch. Nothing bounded how often it could be re-opened, and the
+    /// non-sheddable write paths (the birth block-pin seed and the retention
+    /// flush) record their own duration into the same per-shard gate they are
+    /// themselves exempt from. Under sustained leaf-activation churn on a large
+    /// tree, those exempt writes can hold a window open indefinitely and starve
+    /// the only path that restamps materialiser coverage, so the durable pin
+    /// stops advancing while the checkpoint it tracks moves on and the retained
+    /// WAL grows without bound (issue #3310).
+    /// </para>
+    /// <para>
+    /// Setting a ceiling bounds that: once a shard has shed continuously for
+    /// this long, the next report is issued regardless of the window and
+    /// <see cref="LatticeMetrics.MaterialiserPinShedForced"/> records it. The
+    /// run then restarts, so the cost is at most one enqueued write per ceiling
+    /// period per shard and the #2012 shedding continues to dominate. Pin
+    /// staleness - and therefore retained WAL - is bounded by the ceiling
+    /// instead of being unbounded.
+    /// </para>
+    /// <para>
+    /// <b>Arming this cannot lose data.</b> Forcing a report publishes more
+    /// durability evidence, never less, and the offset it carries was already
+    /// clamped to <c>min(checkpoint, durable snapshot coverage)</c> inside the
+    /// leaf before the reporter saw it, so no value this seam can emit exceeds
+    /// proven durable coverage. The real cost of arming it too aggressively is
+    /// the issue #2012 failure itself - re-saturating the pin grain's
+    /// non-reentrancy queue - which is why the default is disarmed and why a
+    /// ceiling should be set in units of minutes, not milliseconds.
+    /// </para>
+    /// <para>
+    /// Leaving this <c>null</c> does not make a stall invisible:
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/> reports the
+    /// age of every shard's current shed run either way. Disarmed means
+    /// "unbounded but observed", never "unobserved".
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalMaterialiserPinShedCeiling { get; set; }
+
+    /// <summary>
     /// Number of independently-persisted durable state slots ("buckets") each
     /// leaf-materialiser pin shard splits its pin map across.
     /// <para>
