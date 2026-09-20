@@ -31,6 +31,20 @@ public partial class BPlusLeafGrainTests
     /// and returns that ceiling, so a test states its intent in terms of the
     /// bound rather than a magic number.
     /// </summary>
+    /// <remarks>
+    /// <b>Also seeds a stalled queue (issue #3290).</b> Refusal is now a
+    /// conjunction: the queue must be past the depth bound <em>and</em> failing
+    /// to drain. Depth alone was never sufficient evidence of harm - it is
+    /// derived from <c>ceiling * depthPerPermit</c>, where the ceiling is a
+    /// supply-side CPU quantity and the queue is filled by demand-side fan-out,
+    /// so the same healthy activation storm was admitted on a 16-processor host
+    /// and refused on a 4-processor one. Seeding both halves is what keeps these
+    /// tests aimed at their actual subject, which is that a refusal is typed,
+    /// counted, and does not inflate the waiter count - not at which predicate
+    /// produced it. The one test here that asserts <em>admission</em> gets the
+    /// same stalled queue and is still admitted, which is the useful converse:
+    /// a stalled queue alone does not refuse either.
+    /// </remarks>
     private static async Task<int> SeedAdmittedWaitersAsync(Func<int, int> queuedForCeiling)
     {
         await QuiescentReplayGateAsync();
@@ -42,16 +56,23 @@ public partial class BPlusLeafGrainTests
 
         BPlusLeafGrain.SeedReplayAdmissionStateForTest(
             ceiling, queuedForCeiling(ceiling));
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+            new LatticeOptions().WalReplayPermitMaxQueueWait,
+            sinceLastAcquisition: TimeSpan.Zero);
         return ceiling;
     }
 
     /// <summary>
-    /// Returns the seeded waiter count to zero while leaving the sized gate in
-    /// place, so a following fixture does not start against a fabricated queue.
+    /// Returns the seeded waiter count to zero and clears the seeded stall,
+    /// leaving the sized gate in place, so a following fixture does not start
+    /// against a fabricated queue.
     /// </summary>
-    private static void ClearSeededAdmittedWaiters() =>
+    private static void ClearSeededAdmittedWaiters()
+    {
         BPlusLeafGrain.SeedReplayAdmissionStateForTest(
             BPlusLeafGrain.ReplayConcurrencyCeilingForTest, 0);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastAcquisition: null);
+    }
 
     [Test]
     [NonParallelizable]
@@ -176,6 +197,52 @@ public partial class BPlusLeafGrainTests
                     (IGrainBase)grain, CancellationToken.None),
                 $"an interactive caller must still be admitted at a depth of {ceiling * options.WalReplayPermitQueueDepthPerPermit - ceiling} "
                 + "admitted waiters, which is exactly where a bulk caller is refused");
+        }
+        finally
+        {
+            ClearSeededAdmittedWaiters();
+        }
+    }
+
+    /// <summary>
+    /// A queue past the depth bound that is nonetheless draining admits the
+    /// activation. Issue #3290, end to end.
+    /// </summary>
+    /// <remarks>
+    /// This is the defect of issue #3290 stated as a test, at the same seam as
+    /// the two refusal tests above and deliberately adjacent to them: the depth
+    /// they seed is identical, and only the drain evidence differs. Without the
+    /// demand-side half, this activation is refused with
+    /// <c>LatticeSaturatedException</c> - which is exactly what was happening to
+    /// the system registry tree on a 4-processor CI runner, where a bound of 16
+    /// met an ordinary fan-out that offered 40 waiters and drained them in
+    /// milliseconds. The depth bound's inputs contain no arrival term and no
+    /// latency term, so depth alone could not tell that queue apart from the
+    /// 87-deep regenerative backlog of issue #3284.
+    /// </remarks>
+    [Test]
+    [NonParallelizable]
+    public async Task An_activation_past_the_bound_is_admitted_while_the_queue_is_draining()
+    {
+        var options = new LatticeOptions();
+        await SeedAdmittedWaitersAsync(c => c * options.WalReplayPermitQueueDepthPerPermit);
+
+        try
+        {
+            // The only difference from the refusal tests above: the queue is
+            // draining, so there is no evidence of the harm being guarded against.
+            BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+                TimeSpan.FromMilliseconds(2), sinceLastAcquisition: TimeSpan.FromMilliseconds(5));
+
+            var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+                preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
+            state.State.TreeId = UniqueReplayPermitTree();
+
+            Assert.DoesNotThrowAsync(
+                async () => await LeafActivationHarness.ActivateAsync(
+                    (IGrainBase)grain, CancellationToken.None),
+                "a queue past the depth bound that is draining in milliseconds is healthy "
+                + "fan-out, and refusing it fails load that would have succeeded");
         }
         finally
         {

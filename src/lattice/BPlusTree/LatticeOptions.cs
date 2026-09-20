@@ -2157,6 +2157,15 @@ public class LatticeOptions
     /// sizing time, the local managed heap at runtime - are strictly local, so
     /// there is no cluster-wide term for it to be adaptive to.
     /// </para>
+    /// <para>
+    /// <b>Necessary but no longer sufficient (issue #3290).</b> The paragraph
+    /// above is correct that the resources are local; it was wrong to conclude
+    /// that a bound derived from them alone could judge a queue. This value now
+    /// gates refusal jointly with
+    /// <see cref="WalReplayPermitMaxQueueWait"/>, which supplies the demand-side
+    /// term it lacks. Raising this number is therefore no longer the way to stop
+    /// spurious refusals, and it should not be tuned for that reason.
+    /// </para>
     /// </summary>
     public int WalReplayPermitQueueDepthPerPermit { get; set; } =
         DefaultWalReplayPermitQueueDepthPerPermit;
@@ -2171,6 +2180,52 @@ public class LatticeOptions
     /// </para>
     /// </summary>
     public const int DefaultWalReplayPermitQueueDepthPerPermit = 4;
+
+    /// <summary>
+    /// The longest smoothed WAL replay permit queue wait treated as healthy.
+    /// Defaults to <see cref="DefaultWalReplayPermitMaxQueueWait"/> (5 seconds).
+    /// Set to <see cref="TimeSpan.Zero"/> to disable this half of the admission
+    /// decision, restoring the pure depth bound of issue #3284.
+    /// <para>
+    /// <b>This is the demand-side half, and it is load-bearing (issue #3290).</b>
+    /// <see cref="WalReplayPermitQueueDepthPerPermit"/> multiplies a supply-side
+    /// ceiling by a dimensionless constant, so the bound it produces carries
+    /// neither an arrival term nor a latency term while the queue it guards is
+    /// filled entirely by cluster-wide fan-out that contains no CPU term. The
+    /// consequence was measured: the same healthy fan-out peaked at 31 waiters
+    /// against a bound of 64 on a 16-processor host and at 40 against a bound of
+    /// 16 on a 4-processor one, so an ordinary activation was admitted on the
+    /// large host and refused on the small one. The bound was anti-correlated
+    /// with need, loosest where the silo copes and tightest where it does not.
+    /// </para>
+    /// <para>
+    /// Both halves must now hold before an activation is refused. Depth says the
+    /// queue is long; this says it is <b>not draining</b>, which is the only
+    /// signal that separates a wide fan-out from the self-sustaining backlog of
+    /// issue #3284, and the only one expressed in the same units as the harm
+    /// (a request deadline is a time, not a count).
+    /// </para>
+    /// </summary>
+    public TimeSpan WalReplayPermitMaxQueueWait { get; set; } =
+        DefaultWalReplayPermitMaxQueueWait;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplayPermitMaxQueueWait"/> (5 seconds).
+    /// <para>
+    /// Chosen to sit well clear of <b>both</b> measured regimes rather than
+    /// between them, because a threshold that separates two populations by two
+    /// orders of magnitude does not need to be precise to be right. The healthy
+    /// regime of issue #3290 drained 40 queued waiters inside a test that
+    /// completed in 111 ms, so its waits are sub-second. The pathological regime
+    /// of issue #3284 was 87 waiters against a ceiling of 6 that were exhausting
+    /// an Orleans request deadline in the queue, so its waits are tens of
+    /// seconds. Five seconds is roughly an order of magnitude above the first
+    /// and comfortably below the second, and it stays under the 30-second
+    /// Orleans default response timeout with enough margin for the replay itself
+    /// and the remainder of the call.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultWalReplayPermitMaxQueueWait = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of WAL records the activation-time leaf replay applies in

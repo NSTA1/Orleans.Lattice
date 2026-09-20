@@ -53,7 +53,10 @@ namespace Orleans.Lattice;
 ///   <c>BPlusLeafGrain.AcquireReplayPermitAsync</c>, raised when the
 ///   admitted-waiter count already meets the bound derived from
 ///   <see cref="LatticeOptions.WalReplayPermitQueueDepthPerPermit"/> and
-///   the resolved per-silo permit ceiling (issue #3284). Unlike the three
+///   the resolved per-silo permit ceiling (issue #3284) <b>and</b> the
+///   queue is failing to drain within
+///   <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/> (issue
+///   #3290). Unlike the three
 ///   above it is raised <b>before</b> the caller waits for anything, which
 ///   is the point: an activation admitted to a queue it cannot reach the
 ///   head of burns its whole request deadline and then enqueues a

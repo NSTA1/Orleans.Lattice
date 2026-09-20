@@ -441,6 +441,14 @@ if (options.WalReplayPermitQueueDepthPerPermit < 0)
         + "(zero admits an unbounded replay-permit queue, the historical shape; a positive value bounds "
         + "the admitted waiters at that many per resolved permit).");
 }
+if (options.WalReplayPermitMaxQueueWait < TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} must be greater than or equal to "
+        + "TimeSpan.Zero (zero disables the demand-side half of replay-permit admission, restoring the "
+        + "pure depth bound; a positive value refuses admission only once the queue is both over depth "
+        + "and failing to drain within that wait).");
+}
 if (options.WalReplayMaxRecordsPerTurn < 0)
 {
     return ValidateOptionsResult.Fail(

@@ -328,7 +328,9 @@ public static class LatticeMetrics
     /// <see cref="LeafActivationFailures"/>: the activation was refused a place
     /// in the WAL replay permit queue because the admitted-waiter bound derived
     /// from <see cref="LatticeOptions.WalReplayPermitQueueDepthPerPermit"/> was
-    /// already reached. Issue #3284.
+    /// already reached and the queue was also failing to drain within
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/>. Issues #3284
+    /// and #3290.
     /// <para>
     /// <b>Distinct from <see cref="ActivationFailureCanceledAwaitingPermit"/>,
     /// and the pair is the whole point of the arm.</b> That value means an
