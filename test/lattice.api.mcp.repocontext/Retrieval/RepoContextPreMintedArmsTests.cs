@@ -3,8 +3,8 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
 /// <summary>
-/// Tests that every arm of the two partitioned repository-context counters exists
-/// from the moment its reporter is constructed, and that the descriptions which
+/// Tests that every arm of the three partitioned repository-context counters exists
+/// from the moment its owner is constructed, and that the descriptions which
 /// invite a reader to interpret a zero also name the condition under which that
 /// interpretation stops holding.
 /// </summary>
@@ -107,6 +107,88 @@ public sealed class RepoContextPreMintedArmsTests
     }
 
     [Test]
+    public void Every_retrieval_unavailable_cause_arm_is_present_at_zero_on_a_fresh_state()
+    {
+        using var arms = new ArmObserver(
+            RepoContextRetrievalReadinessState.UnavailableInstrumentName,
+            RepoContextRetrievalReadinessState.CauseTagKey);
+
+        using var state = new RepoContextRetrievalReadinessState(TimeProvider.System);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                arms.Observed,
+                Is.EquivalentTo(new[]
+                {
+                    RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
+                    RepoContextRetrievalPath.KeywordIndexDegraded,
+                    RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
+                    RepoContextRetrievalReadinessState.ProbeCause,
+                    RepoContextRetrievalReadinessState.UnknownCause,
+                }),
+                "Issue #3280. This counter published NO series at all until the first fault episode, so "
+                + "'retrieval has never degraded on this process' - the healthy reading, and the one a "
+                + "definition-of-done falsifier has to be able to make - was indistinguishable from an "
+                + "instrument that was never wired. The assertion is deliberately an exact set rather than "
+                + "a subset: a sixth cause added to NormalizeCause without being primed fails here, which "
+                + "is the only shape of this test that does not silently re-admit the defect for the new "
+                + "arm.");
+            Assert.That(
+                arms.Value(RepoContextRetrievalPath.KeywordVectorPlaneUnavailable),
+                Is.Zero,
+                "Pre-minting must not fabricate a fault. Every arm exists and reads zero on a state that "
+                + "has never been told the plane could not serve.");
+            Assert.That(
+                arms.Value(RepoContextRetrievalReadinessState.UnknownCause),
+                Is.Zero);
+        });
+    }
+
+    [Test]
+    public void The_primed_cause_arms_are_exactly_the_set_the_normaliser_can_return()
+    {
+        using var arms = new ArmObserver(
+            RepoContextRetrievalReadinessState.UnavailableInstrumentName,
+            RepoContextRetrievalReadinessState.CauseTagKey);
+
+        using var state = new RepoContextRetrievalReadinessState(TimeProvider.System);
+
+        Assert.That(
+            arms.Observed,
+            Is.EquivalentTo(RepoContextRetrievalReadinessState.MeteredCauses),
+            "The primed set and the emittable set are derived from one list on purpose. This asserts the "
+            + "derivation actually reaches the meter, so the single source of truth is a fact about the "
+            + "published series rather than only about the source.");
+    }
+
+    [Test]
+    public void A_pre_minted_cause_arm_still_advances_when_the_episode_it_names_occurs()
+    {
+        using var arms = new ArmObserver(
+            RepoContextRetrievalReadinessState.UnavailableInstrumentName,
+            RepoContextRetrievalReadinessState.CauseTagKey);
+
+        using var state = new RepoContextRetrievalReadinessState(TimeProvider.System);
+        state.MarkUnavailable(RepoContextRetrievalPath.KeywordIndexDegraded);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                arms.Value(RepoContextRetrievalPath.KeywordIndexDegraded),
+                Is.EqualTo(1),
+                "The control for the two tests above: this is what proves the observer records values on "
+                + "this instrument at all, so their 'the arm exists and reads zero' is an observation "
+                + "rather than the silence of a harness that is measuring nothing.");
+            Assert.That(
+                arms.Value(RepoContextRetrievalReadinessState.ProbeCause),
+                Is.Zero,
+                "The unexercised arms stay at zero. Pre-minting makes a zero readable; it does not make "
+                + "every arm move together.");
+        });
+    }
+
+    [Test]
     public void A_pre_minted_arm_still_advances_when_the_outcome_it_names_occurs()
     {
         using var arms = new ArmObserver(
@@ -137,16 +219,18 @@ public sealed class RepoContextPreMintedArmsTests
     {
         using var descriptions = new DescriptionObserver(
             RepoContextAnnIndexSweepReporter.SweepInstrumentName,
-            RepoContextRetrievalGuardReporter.AnnSearchInstrumentName);
+            RepoContextRetrievalGuardReporter.AnnSearchInstrumentName,
+            RepoContextRetrievalReadinessState.UnavailableInstrumentName);
 
         using var sweeps = new RepoContextAnnIndexSweepReporter();
         using var guards = new RepoContextRetrievalGuardReporter(summaryInterval: TimeSpan.Zero);
+        using var readiness = new RepoContextRetrievalReadinessState(TimeProvider.System);
 
         Assert.That(
             descriptions.Captured,
-            Has.Count.EqualTo(2),
-            "Both instruments must have been published and their descriptions captured, or the assertions "
-            + "below are inspecting an empty set and pass for that reason alone.");
+            Has.Count.EqualTo(3),
+            "All three instruments must have been published and their descriptions captured, or the "
+            + "assertions below are inspecting an empty set and pass for that reason alone.");
 
         Assert.Multiple(() =>
         {

@@ -56,6 +56,14 @@ public sealed partial class RepoContextRetrievalReadinessStateTests
         };
         listener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
         {
+            // Skip the constructor's pre-mints. They carry a zero on every cause arm, so a
+            // fixture that recorded them observes the full arm set before any episode occurs -
+            // which both corrupts a recorded sequence and lets a "last cause seen" assertion
+            // pass on a mint rather than on a fault (issue #3280).
+            if (measurement == 0)
+            {
+                return;
+            }
             episodes += measurement;
             foreach (var tag in tags)
             {
