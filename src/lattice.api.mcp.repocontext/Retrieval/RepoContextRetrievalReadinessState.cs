@@ -81,6 +81,22 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     internal const string UnknownCause = "unknown";
 
     /// <summary>
+    /// The closed set of cause arms this state can ever put on the meter, and the single
+    /// source of truth for both halves of that guarantee: <see cref="NormalizeCause"/>
+    /// resolves against this list, and the constructor pre-mints exactly these arms at
+    /// zero. Deriving both from one list is what stops a cause being added to the
+    /// normaliser and silently arriving unprimed.
+    /// </summary>
+    internal static readonly string[] MeteredCauses =
+    [
+        RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
+        RepoContextRetrievalPath.KeywordIndexDegraded,
+        RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
+        ProbeCause,
+        UnknownCause,
+    ];
+
+    /// <summary>
     /// The default window a vector-plane fault must persist for before readiness is
     /// revoked, long enough to ride out a transient fault without oscillating.
     /// </summary>
@@ -128,7 +144,35 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         _unavailable = _meter.CreateCounter<long>(
             UnavailableInstrumentName,
             unit: "{event}",
-            description: "Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by cause.");
+            description:
+                "Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by "
+                + "cause: 'keyword.vector_plane_unavailable', 'keyword.index_degraded', "
+                + "'keyword.exact_fallback_suppressed' (the three keyword retrieval paths that mean a real "
+                + "capability loss), 'probe' (a readiness probe rather than a query observed it), or "
+                + "'unknown' (a cause outside that closed set, normalised so an unbounded tag can never "
+                + "reach the meter). All five arms are pre-minted at zero when this state is constructed, so "
+                + "each is present from process start rather than appearing on its first fault episode, "
+                + "which makes 'retrieval has never degraded on this process' a measured absence rather than "
+                + "an absent measurement. Without that, no series exists at all until the first fault, and a "
+                + "healthy host and an unwired instrument read identically. If an arm is absent rather than "
+                + "zero, that reading does not hold and nothing should be concluded from this instrument "
+                + "until 'lattice_metrics_series' has been read against the collector ceiling and "
+                + "'lattice_metrics_dropped_measurements_by_family_total' checked for a non-zero value: a "
+                + "series whose first occurrence falls after a ceiling is reached is refused at creation and "
+                + "never appears at all.");
+
+        // Pre-mint every arm of the cause partition with a zero-valued add, iterating the
+        // same closed list NormalizeCause resolves against so the primed set and the
+        // emittable set cannot drift. An arm that is created on its first occurrence is the
+        // arm most likely to be refused by a saturated collector, and it is exactly the arm
+        // a reader is invited to read as a measured zero (issues #2515, #3280).
+        foreach (var cause in MeteredCauses)
+        {
+            _unavailable.Add(
+                0,
+                new KeyValuePair<string, object?>(CauseTagKey, cause),
+                LatticeTenantLabel.Platform);
+        }
     }
 
     /// <summary>
@@ -490,26 +534,21 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     }
 
     /// <summary>
-    /// Resolves a supplied cause against the closed set of local values, so the meter's
-    /// tag cardinality is bounded no matter what a caller passes.
+    /// Resolves a supplied cause against <see cref="MeteredCauses"/>, the closed set of
+    /// local values, so the meter's tag cardinality is bounded no matter what a caller
+    /// passes. It is total onto that set: anything unrecognised becomes
+    /// <see cref="UnknownCause"/>, which is itself an arm of it.
     /// </summary>
     private static string NormalizeCause(string? cause)
     {
-        if (string.Equals(cause, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, StringComparison.Ordinal))
+        foreach (var candidate in MeteredCauses)
         {
-            return RepoContextRetrievalPath.KeywordVectorPlaneUnavailable;
+            if (string.Equals(cause, candidate, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
         }
 
-        if (string.Equals(cause, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
-        {
-            return RepoContextRetrievalPath.KeywordIndexDegraded;
-        }
-
-        if (string.Equals(cause, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
-        {
-            return RepoContextRetrievalPath.KeywordExactFallbackSuppressed;
-        }
-
-        return string.Equals(cause, ProbeCause, StringComparison.Ordinal) ? ProbeCause : UnknownCause;
+        return UnknownCause;
     }
 }
