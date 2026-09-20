@@ -194,6 +194,15 @@ public sealed class TreeAdminOrphanedLeafToolTests
     /// the pass is complete, an empty finding list is not the clean bill of health
     /// the description otherwise promises. Saying only the first half would leave
     /// an operator reading a partial batch as a cleared tree.
+    /// <para>
+    /// The qualifier itself is asserted, not merely the words around it. An
+    /// earlier revision of this test checked only that "clean bill of health"
+    /// and "complete=true" both appeared somewhere in the description, and a
+    /// perturbation that deleted the qualifying clause outright - leaving a flat
+    /// "an empty finding list is a clean bill of health" - kept both phrases and
+    /// passed. The assertion has to bind them together or it is satisfied by the
+    /// exact sentence it exists to forbid.
+    /// </para>
     /// </summary>
     [Test]
     public void Audit_tool_description_qualifies_the_clean_verdict_by_completeness()
@@ -204,9 +213,15 @@ public sealed class TreeAdminOrphanedLeafToolTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(description, Does.Contain("complete=true").IgnoreCase);
-            Assert.That(description, Does.Contain("clean bill of health").IgnoreCase);
             Assert.That(description, Does.Contain("bounded batch").IgnoreCase);
+            Assert.That(
+                description,
+                Does.Match(@"clean bill of health[^.]*ONLY when complete=true").IgnoreCase,
+                "the clean verdict must be conditioned on completeness in the same sentence that offers it");
+            Assert.That(
+                description,
+                Does.Contain("partial batch").IgnoreCase,
+                "an operator must be told what a partial batch's empty finding list does mean, not only what it does not");
         });
     }
 

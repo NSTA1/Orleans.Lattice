@@ -74,9 +74,20 @@ internal sealed partial class LatticeGrain
         // Sorted rather than taken in map order. The cursor names a shard by
         // INDEX, and resuming means "skip every shard below it", which is only
         // the same thing as "skip the ones already done" when the walk visits
-        // indices in ascending order. ShardMap's fast path already yields them
-        // sorted; its fallback for a hand-built or wire-corrupt map does not,
-        // and a pass that silently skipped a shard would report a clean tree.
+        // indices in ascending order.
+        //
+        // This sort is DEFENSIVE AND CURRENTLY REDUNDANT, and that is stated
+        // rather than hidden because the honest version is the useful one: both
+        // of ShardMap.GetPhysicalShardIndices' paths happen to return ascending
+        // order today (the bitmap fast path by construction, the HashSet
+        // fallback by a trailing Array.Sort of its own), so removing this line
+        // changes no observable behaviour and no test can currently go red for
+        // it. What is absent is a *declared* ordering guarantee: the method's
+        // contract does not promise sorted output, and its fallback branch is
+        // documented as unexercised by any production path, so it is precisely
+        // the branch a future change would feel free to alter. The cost here is
+        // an already-sorted sort over the shard count; the cost of being wrong
+        // is a pass that silently skips a shard and reports a clean tree.
         var physicalShards = shardMap.GetPhysicalShardIndices().ToArray();
         Array.Sort(physicalShards);
 
