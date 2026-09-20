@@ -11,14 +11,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// <summary>
 /// Unit tests for <see cref="RepoContextGrant"/> and the seed step of
 /// <see cref="RepoContextStartupService"/>: the granted operation mask matches the
-/// repository-context tool surface, and warmup seeds exactly one Allow rule per
-/// tree scoped to that tree for the local agent.
+/// repository-context tool surface plus both capabilities the orphaned-leaf repair
+/// is gated on, and warmup seeds exactly one Allow rule per tree scoped to that
+/// tree for the local agent.
 /// </summary>
 [TestFixture]
 public sealed class RepoContextStartupServiceTests
 {
     [Test]
-    public void Grant_covers_the_full_repository_context_data_plane_mask()
+    public void Grant_covers_the_full_repository_context_data_plane_mask_plus_the_repair_capabilities()
     {
         const LatticeOperation expected =
             LatticeOperation.Read
@@ -28,9 +29,82 @@ public sealed class RepoContextStartupServiceTests
             | LatticeOperation.RangeDelete
             | LatticeOperation.CrdtApply
             | LatticeOperation.AtomicWrite
-            | LatticeOperation.BulkLoad;
+            | LatticeOperation.BulkLoad
+            | LatticeOperation.TreeLifecycle
+            | LatticeOperation.Admin;
 
         Assert.That(RepoContextGrant.Operations, Is.EqualTo(expected));
+    }
+
+    /// <summary>
+    /// Pins <b>both</b> capabilities the orphaned-leaf repair is gated on, separately
+    /// from the exact-equality assertion above, so a regression reports the cause
+    /// rather than only a changed mask.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The repair crosses two independent gates, and each one alone is insufficient:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <c>LatticeTreeAdmin.RepairOrphanedLeavesAsync</c> enforces whole-tree
+    ///     <see cref="LatticeOperation.TreeLifecycle"/> through
+    ///     <c>TreeAdminAccessAuthorizer.AuthorizeTreeLifecycleAsync</c>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>LatticeGrain.DriveOrphanedLeafPassAsync</c> then enforces whole-tree
+    ///     <see cref="LatticeOperation.Admin"/> for the non-dry-run pass, because it
+    ///     removes leaves. The sibling inspection verb takes the identical path under
+    ///     <see cref="LatticeOperation.Read"/>, which is why the audit was reachable
+    ///     while the repair was not.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// Missing either bit leaves the tool advertised and then refused, which is
+    /// precisely the state #3289 chose to avoid by leaving it unregistered.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Grant_carries_both_capabilities_the_orphaned_leaf_repair_is_gated_on()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(
+                RepoContextGrant.Operations.HasFlag(LatticeOperation.TreeLifecycle),
+                Is.True,
+                "The facade enforces whole-tree TreeLifecycle before the call reaches the grain.");
+            Assert.That(
+                RepoContextGrant.Operations.HasFlag(LatticeOperation.Admin),
+                Is.True,
+                "The grain enforces a second whole-tree gate on Admin for the non-dry-run pass.");
+        });
+
+    /// <summary>
+    /// Records that <see cref="LatticeOperation.Admin"/> is <b>not</b> what makes the
+    /// tree-administration tool group discoverable, so a future narrowing cannot cite
+    /// discovery as the reason the bit has to stay.
+    /// </summary>
+    /// <remarks>
+    /// The group is discovered through
+    /// <c>LatticeApiMcpGroupCapabilityMap.RequiredOperations</c>, whose TreeAdmin mask
+    /// is <c>Admin | TreeLifecycle | BulkLoad | Restore</c> and is matched
+    /// <b>disjunctively</b> by <c>AuthAdminMcpPermissionResolver.GroupIsGranted</c>
+    /// (<c>(rule.Operations &amp; mask) != None</c>). The grant intersected that mask
+    /// through <see cref="LatticeOperation.BulkLoad"/> long before it carried
+    /// <c>Admin</c>, which is why the group was discoverable - and the orphaned-leaf
+    /// audit advertised - with no <c>Admin</c> anywhere in it. <c>Admin</c> is carried
+    /// for the grain's <b>invocation</b> gate alone, and the XML docs on
+    /// <c>TreeAdminToolGroup</c> claiming the group is discovered only by an
+    /// <c>Admin</c>-granted caller are simply wrong.
+    /// </remarks>
+    [Test]
+    public void Administrator_capability_is_not_what_makes_the_tree_admin_group_discoverable()
+    {
+        const LatticeOperation withoutAdmin = RepoContextGrant.Operations & ~LatticeOperation.Admin;
+
+        Assert.That(
+            withoutAdmin & LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.TreeAdmin),
+            Is.Not.EqualTo(LatticeOperation.None),
+            "The group mask is matched disjunctively, so the grant reaches treeadmin through BulkLoad alone.");
     }
 
     [Test]

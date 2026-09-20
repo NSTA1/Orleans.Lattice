@@ -25,8 +25,12 @@ namespace Orleans.Lattice.Api.Mcp;
 /// tree-administration facade: it holds the <c>ILatticeSchemaControl</c> facade,
 /// resolved from the request service provider at call time, and each tool defers to
 /// the facade's own fail-closed schema access gate, so an unauthorized caller is
-/// default-denied on every read and mutation, and the group is discovered only by a
-/// caller granted <see cref="LatticeOperation.Admin"/>.
+/// default-denied on every read and mutation. The group is discovered by a caller
+/// granted <b>any one</b> of <see cref="LatticeOperation.Admin"/>,
+/// <see cref="LatticeOperation.TreeLifecycle"/>,
+/// <see cref="LatticeOperation.BulkLoad"/>, or <see cref="LatticeOperation.Restore"/>
+/// - the discovery core matches that capability mask disjunctively, so it is not an
+/// administrator-only group.
 /// </para>
 /// <para>Add it after <c>AddLatticeMcp</c> (the host must also register the schema control facade):</para>
 /// <code>
@@ -39,9 +43,9 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
     /// <summary>
     /// Registers the tree-administration tool module as a
     /// <see cref="LatticeApiMcpGroup.TreeAdmin"/> tool group. Registering the group
-    /// is what makes it discoverable in <c>lattice_capabilities</c> to an
-    /// administrator-granted caller. The read-only schema-inspection tools are
-    /// always contributed; when <paramref name="enableSchemaControl"/> is
+    /// is what makes it discoverable in <c>lattice_capabilities</c> to a caller
+    /// granted any one of the group's capabilities. The read-only schema-inspection
+    /// tools are always contributed; when <paramref name="enableSchemaControl"/> is
     /// <see langword="true"/> this also sets
     /// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/> so the
     /// mutating schema-management tools are contributed alongside them. Idempotent.
@@ -54,11 +58,19 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
     /// tools. Defaults to <see langword="false"/> (schema-inspect-only).
     /// </param>
     /// <param name="enableLifecycle">
-    /// When <see langword="true"/>, the mutating tree-lifecycle tools (explicit tree
-    /// creation, alias assignment, per-tree configuration update) are contributed in
-    /// addition to the read-only lifecycle tools (existence, alias resolution, config
-    /// read, shard-map read). Defaults to <see langword="false"/>
+    /// When <see langword="true"/>, the mutating tree-lifecycle tools are contributed
+    /// in addition to the read-only lifecycle tools (existence, alias resolution,
+    /// config read, shard-map read). Defaults to <see langword="false"/>
     /// (lifecycle-read-only).
+    /// <para>
+    /// This is a broad flag, not a switch for any single verb: it contributes tree
+    /// create / delete / purge / recover / reshard / resize (and undo) / snapshot /
+    /// restore (set, run, revert), alias assignment, per-tree config update,
+    /// retention, compaction trigger, tag-index reconcile, the bulk-load session
+    /// verbs, the view create / drop / rebuild / reconcile verbs, the WAL move
+    /// verbs, and the orphaned-leaf repair. Enable it only where that entire surface
+    /// is acceptable.
+    /// </para>
     /// </param>
     /// <returns>The service collection for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>
