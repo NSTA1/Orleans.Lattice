@@ -78,6 +78,14 @@ public sealed class BackgroundCredentialScopeGuardTests
             + "authorize. Note this is precisely why it can run: its whole purpose is to report a shutdown "
             + "risk BEFORE the stop, and a credentialed store read would make the forecast itself a source "
             + "of the load it is trying to measure.",
+        ["RepoContextMemoryWatch.cs"] =
+            "Measures this process against its own managed-heap ceiling (issue #3255 item 3): it reads "
+            + "GC.GetGCMemoryInfo, counts first-chance OutOfMemoryException, and writes a heap-history "
+            + "file under the data root with plain file IO. It holds no ILattice reference and opens no "
+            + "tree, so it has no gated read to authorize. The same reasoning as "
+            + "RepoContextDrainForecastService applies with extra force here: its readings are taken "
+            + "while the process may be out of memory, and a credentialed store read on that path would "
+            + "make the instrument a consumer of the very resource it exists to report the exhaustion of.",
     };
 
     private static readonly string[] ScanRoots =
