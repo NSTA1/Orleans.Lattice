@@ -261,7 +261,57 @@ internal sealed class LatticeWalGcScheduler(
     /// multiplied by the tree count.
     /// </para>
     /// </remarks>
-    private const int MaxReactivationTouchesPerPass = 4;
+    internal const int MaxReactivationTouchesPerPass = 4;
+
+    /// <summary>
+    /// Hard ceiling on the leaves one pass may drive once the touch budget is
+    /// scaled up by the tree's floor-holding pin population (issue #3279).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the budget scales at all.</b> Measured on a live estate, the WAL
+    /// head of one tree advanced at 79.3 offsets a minute while its offset floor
+    /// advanced at 0.148 - a ratio of 536 - and the gap between them more than
+    /// doubled, from 11,098 to 26,603 offsets, over 3.3 hours. The floor was not
+    /// converging slowly; it was losing ground monotonically. A drive is already
+    /// maximally effective per leaf - every one measured carried its pin the
+    /// entire gap to the head in a single activation - so per-drive efficiency
+    /// cannot be improved and the only remaining term is how many leaves a pass
+    /// may touch. A <i>constant</i> there cannot converge against a moving head
+    /// whatever constant is chosen, which is why this is a scaled budget with a
+    /// ceiling and not simply a larger number.
+    /// </para>
+    /// <para>
+    /// <b>Why it must still be bounded, and why the ceiling is this low
+    /// relative to <see cref="MaxOrphanRetirementsPerPass"/>.</b> That budget is
+    /// 512 because retiring an orphan deletes a row: no leaf to activate,
+    /// nothing to replay, no permit to take. A reactivation touch is the
+    /// opposite on every one of those axes, and touches are issued concurrently
+    /// via <c>Task.WhenAll</c>, so this number is a direct concurrency bound on
+    /// grain activations and WAL replays. Do not reach for 512 here by analogy
+    /// with that constant: its own remarks are explicit that the two must not
+    /// share a bound, and copying the number would repeat the error in the
+    /// other direction. Trees are swept sequentially, so this remains the whole
+    /// silo's concurrent touch ceiling.
+    /// </para>
+    /// </remarks>
+    internal const int MaxReactivationTouchesCeiling = 32;
+
+    /// <summary>
+    /// Floor-holding pins that must be present before the per-pass touch budget
+    /// is widened by one above <see cref="MaxReactivationTouchesPerPass"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately coarser than <see cref="FloorHolderPinsPerRemedyCandidate"/>
+    /// so the candidate pool always outgrows the drive it feeds: a pool that
+    /// merely matched the drive would starve it again the moment
+    /// <see cref="ReactivationMinBlockAge"/> and
+    /// <see cref="ReactivationRetryCooldown"/> took their share, which is the
+    /// measured failure this change exists to remove. A tree holding fewer than
+    /// this many pins keeps the historical budget of
+    /// <see cref="MaxReactivationTouchesPerPass"/> exactly.
+    /// </remarks>
+    internal const int FloorHolderPinsPerReactivationTouch = 512;
 
     /// <summary>
     /// How many orphaned durable materialiser pins the bulk sweep may retire
@@ -375,7 +425,64 @@ internal sealed class LatticeWalGcScheduler(
     /// change them together or not at all.
     /// </para>
     /// </remarks>
-    private const int MaxFloorHolderClassificationsPerSweep = 8;
+    internal const int MaxFloorHolderClassificationsPerSweep = 8;
+
+    /// <summary>
+    /// Hard ceiling on the floor-holder candidate pool the #3178 remedy draws
+    /// from, and on the durable reads a classifying sweep may spend filling it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists at all, stated as the defect it removes (issue
+    /// #3279).</b> <see cref="MaxFloorHolderClassificationsPerSweep"/> is a
+    /// <i>diagnostic</i> read budget, and its own remarks say so: a reader needs
+    /// to know which state the floor's holder is in, not a census. Issue #3178
+    /// then took that capped diagnostic sample and used it, unchanged, as the
+    /// <i>candidate set for a remedy</i>. Those are different jobs with
+    /// different right answers, and sharing one bound between them is the same
+    /// error <see cref="MaxOrphanRetirementsPerPass"/>'s remarks already
+    /// describe once and issue #2768 describes again: a bound justified for one
+    /// population strangling another.
+    /// </para>
+    /// <para>
+    /// <b>The measurement.</b> On a live estate the sample was saturated at
+    /// exactly 8 on 43 of 43 consecutive sweeps of one tree carrying 20,992
+    /// floor-holding pins - a coverage of 0.04% - while the drive it feeds
+    /// averaged 1.79 leaves against a budget of
+    /// <see cref="MaxReactivationTouchesPerPass"/>. The drive was not saturated
+    /// and widening it alone would have changed nothing: the pool was starving
+    /// it. A candidate must clear <see cref="ReactivationMinBlockAge"/> before
+    /// it may be driven and then serves <see cref="ReactivationRetryCooldown"/>
+    /// afterwards, so a pool of 8 refilled from the bottom of the offset order
+    /// holds, at any instant, mostly candidates that are too young to drive or
+    /// still cooling down. The pool must exceed the drive budget by enough to
+    /// cover both waits, which is what <see cref="FloorHolderPinsPerRemedyCandidate"/>
+    /// buys.
+    /// </para>
+    /// <para>
+    /// <b>Why a ceiling and not an unbounded pool.</b> Each admitted candidate
+    /// costs exactly one durable read in
+    /// <c>ClassifyFloorHolderPinsAsync</c>, so the pool is a read budget even
+    /// after it stops being only a diagnostic one. The offer itself is a bounded
+    /// in-memory insertion and is free; the reads are not. This is the quantity
+    /// that must stay bounded, and it is bounded here.
+    /// </para>
+    /// </remarks>
+    internal const int MaxFloorHolderRemedyCandidatesPerSweep = 256;
+
+    /// <summary>
+    /// Floor-holding pins that must be present before the remedy's candidate
+    /// pool is widened by one above <see cref="MaxFloorHolderClassificationsPerSweep"/>.
+    /// </summary>
+    /// <remarks>
+    /// The deficit signal is the tree's own floor-holding pin population, which
+    /// <see cref="SweepOrphanedMaterialiserPinsAsync"/> already counts to report
+    /// classification coverage, so no new plumbing measures it. A tree holding
+    /// fewer than this many pins keeps the historical pool of
+    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> exactly, which is why
+    /// a healthy tree sees no behaviour change at all.
+    /// </remarks>
+    internal const int FloorHolderPinsPerRemedyCandidate = 128;
 
     /// <summary>
     /// UTC instant of the last bulk orphan sweep per tree, so the sweep honours
@@ -438,6 +545,106 @@ internal sealed class LatticeWalGcScheduler(
     /// </remarks>
     private readonly Dictionary<string, FloorHolderRepairSet> _repairableFloorHolders =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The floor-holding durable pin population most recently counted per tree,
+    /// which is the deficit signal both remedy budgets are scaled by (issue
+    /// #3279).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Written by <see cref="SweepOrphanedMaterialiserPinsAsync"/> from the
+    /// count it already takes to report classification coverage, so measuring
+    /// the deficit costs nothing new. Read on the following pass rather than the
+    /// one that wrote it: the pool is filled <i>during</i> the enumeration that
+    /// produces the count, so the current sweep's population is not yet known
+    /// when the pool must be sized. That lag is harmless because the quantity is
+    /// a population, which moves over hours, not an instantaneous reading.
+    /// </para>
+    /// <para>
+    /// A tree absent from this map has never completed a counting sweep, and
+    /// both budgets fall back to their historical constants. That is the
+    /// deliberate fail-safe direction: an unmeasured tree behaves exactly as it
+    /// did before this change.
+    /// </para>
+    /// </remarks>
+    private readonly Dictionary<string, int> _floorHolderPinPopulation =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Scales one of the two floor-holder remedy budgets by the tree's measured
+    /// floor-holding pin population, clamped to the budget's own floor and
+    /// ceiling (issue #3279).
+    /// </summary>
+    /// <param name="population">
+    /// The tree's measured floor-holding pin population, or a non-positive
+    /// value when none has been measured yet.
+    /// </param>
+    /// <param name="baseBudget">
+    /// The historical constant, which is also the minimum. A tree with no
+    /// measured population, or one below <paramref name="pinsPerUnit"/>, gets
+    /// exactly this and so is unaffected by this change.
+    /// </param>
+    /// <param name="ceiling">The hard upper bound; the budget never exceeds it.</param>
+    /// <param name="pinsPerUnit">
+    /// Pins required per unit of budget above <paramref name="baseBudget"/>.
+    /// </param>
+    /// <remarks>
+    /// Integer division throughout, and the result is clamped on both ends, so
+    /// this cannot return a value outside
+    /// <c>[baseBudget, ceiling]</c> for any population including a negative or
+    /// overflowing one. The clamp is the whole safety argument for scaling a
+    /// budget at all, so it is expressed once, here, rather than at each call
+    /// site where it could drift apart. Kept a pure function of the population
+    /// rather than of the tree id so that the arithmetic - which is the part
+    /// carrying the safety argument - is assertable without standing a
+    /// scheduler up and driving a sweep to populate the map.
+    /// </remarks>
+    internal static int ScaleFloorHolderBudget(int population, int baseBudget, int ceiling, int pinsPerUnit)
+    {
+        if (population <= 0)
+        {
+            return baseBudget;
+        }
+
+        var scaled = population / pinsPerUnit;
+        if (scaled <= baseBudget)
+        {
+            return baseBudget;
+        }
+
+        return scaled >= ceiling ? ceiling : scaled;
+    }
+
+    private int ScaleFloorHolderBudget(string treeId, int baseBudget, int ceiling, int pinsPerUnit) =>
+        ScaleFloorHolderBudget(
+            _floorHolderPinPopulation.TryGetValue(treeId, out var population) ? population : 0,
+            baseBudget,
+            ceiling,
+            pinsPerUnit);
+
+    /// <summary>
+    /// How many floor-holding candidates this sweep may admit for the tree,
+    /// severed from the diagnostic read budget
+    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> (issue #3279).
+    /// </summary>
+    private int FloorHolderRemedyCandidateBudget(string treeId) =>
+        ScaleFloorHolderBudget(
+            treeId,
+            MaxFloorHolderClassificationsPerSweep,
+            MaxFloorHolderRemedyCandidatesPerSweep,
+            FloorHolderPinsPerRemedyCandidate);
+
+    /// <summary>
+    /// How many distinct leaves this pass may drive for the tree, scaled off
+    /// <see cref="MaxReactivationTouchesPerPass"/> (issue #3279).
+    /// </summary>
+    private int ReactivationTouchBudget(string treeId) =>
+        ScaleFloorHolderBudget(
+            treeId,
+            MaxReactivationTouchesPerPass,
+            MaxReactivationTouchesCeiling,
+            FloorHolderPinsPerReactivationTouch);
 
     /// <summary>
     /// A classifying sweep's repairable floor holders, carrying with them the
@@ -2520,7 +2727,7 @@ internal sealed class LatticeWalGcScheduler(
             logger.LogDebug(
                 ex,
                 "WAL GC pass failed for tree {Tree}; will retry on the next tick.",
-                treeId);
+                    treeId);
 
             // A wedged tree relaxes on its own timeline rather than retrying at
             // the floor forever, and its siblings keep their own schedules.
@@ -3376,7 +3583,7 @@ internal sealed class LatticeWalGcScheduler(
 
             logger.LogWarning(
                 "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumers reported as blocking keep changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}, and the floor has named {DistinctBlockers} blocking consumers since the episode began. Investigate why this tree has several leaves whose snapshot capture does not complete.",
-                treeId,
+                    treeId,
                 now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
                 blockingConsumerIds[0],
                 observation.DistinctBlockers);
@@ -3401,9 +3608,15 @@ internal sealed class LatticeWalGcScheduler(
         // neither, and the attempted arm counts leaves rather than partitions.
         HashSet<GrainId>? touchingLeaves = null;
 
+        // Scaled off MaxReactivationTouchesPerPass by the tree's floor-holding
+        // pin population, and hard-capped at MaxReactivationTouchesCeiling
+        // (issue #3279). A tree small enough to be served by the historical
+        // constant gets exactly the historical constant.
+        var touchBudget = ReactivationTouchBudget(treeId);
+
         for (var i = 0; i < blockingConsumerIds.Count; i++)
         {
-            if (touching is { Count: >= MaxReactivationTouchesPerPass })
+            if (touching is { Count: var touched } && touched >= touchBudget)
             {
                 break;
             }
@@ -4357,8 +4570,8 @@ internal sealed class LatticeWalGcScheduler(
             logger.LogDebug(
                 ex,
                 "WAL GC could not read the durable pin offset for consumer {Consumer} on tree {Tree} while grading a reactivation drive; the drive is graded as not having advanced it.",
-                consumerId,
-                treeId);
+                    consumerId,
+                    treeId);
 
             return null;
         }
@@ -4418,16 +4631,16 @@ internal sealed class LatticeWalGcScheduler(
 
             logger.LogInformation(
                 "WAL GC retired orphaned materialiser pin {Consumer} on tree {Tree}: its leaf reported no bound tree id, so the leaf was reclaimed or purged and the pin outlived it. The cursor floor is no longer blocked on its account.",
-                consumerId,
-                treeId);
+                    consumerId,
+                    treeId);
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 ex,
                 "WAL GC could not retire orphaned materialiser pin {Consumer} on tree {Tree}; it stays registered and keeps blocking the cursor floor until a later sweep retires it.",
-                consumerId,
-                treeId);
+                    consumerId,
+                    treeId);
         }
     }
 
@@ -4539,9 +4752,15 @@ internal sealed class LatticeWalGcScheduler(
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
         // The lowest pins seen so far, ascending, each list capped at
-        // MaxFloorHolderClassificationsPerSweep. Collected only when this arm
-        // owes a classification, and bounded in memory rather than sorted at the
-        // end, so a 52,224-pin tree costs a constant-size list either way.
+        // FloorHolderRemedyCandidateBudget - which is MaxFloorHolderClassifications-
+        // PerSweep on any tree small enough not to need more, and scales with the
+        // measured floor-holding pin population above that (issue #3279). The two
+        // were one constant until the remedy that #3178 hung off this sample was
+        // measured starving on it: the pool saturated at 8 on 43 of 43 sweeps of a
+        // 20,992-pin tree while the drive it feeds averaged 1.79 of its own budget
+        // of 4. Collected only when this arm owes a classification, and bounded in
+        // memory rather than sorted at the end, so a 52,224-pin tree costs a
+        // constant-size list either way.
         //
         // Two lists, split on whether the pin constrains an offset floor, and
         // that split is load-bearing (issue #3178). ComputeMaterialiserOffsetFloorAsync
@@ -4556,11 +4775,12 @@ internal sealed class LatticeWalGcScheduler(
         // PerSweep's own remarks state the same claim from the other end. Keep the
         // two in step: a frontier-ordered sample would not select these pins, because
         // frontier and offset advance independently (issue #3194).
+        var remedyCandidateBudget = FloorHolderRemedyCandidateBudget(treeId);
         var unusableHolders = classifyFloorHolders
-            ? new List<WalGcFloorHolderCandidate>(MaxFloorHolderClassificationsPerSweep)
+            ? new List<WalGcFloorHolderCandidate>(remedyCandidateBudget)
             : null;
         var offsetHolders = classifyFloorHolders
-            ? new List<WalGcFloorHolderCandidate>(MaxFloorHolderClassificationsPerSweep)
+            ? new List<WalGcFloorHolderCandidate>(remedyCandidateBudget)
             : null;
 
         for (var i = 0; i < keys.Count; i++)
@@ -4641,10 +4861,32 @@ internal sealed class LatticeWalGcScheduler(
 
                 OfferFloorHolderCandidate(
                     offset < 0 ? unusableHolders : offsetHolders,
-                    MaxFloorHolderClassificationsPerSweep,
+                    remedyCandidateBudget,
                     candidate);
             }
         }
+
+        // Record the floor-holding pin population before the classification
+        // consumes it: this is the deficit signal both remedy budgets are scaled
+        // by on the NEXT sweep (issue #3279).
+        //
+        // Sited at method-body level and ABOVE the classification block, so it
+        // is deliberately NOT conditional on classifyFloorHolders. Both call
+        // paths reach it - the classifying one taken by a pressured tree and the
+        // non-classifying one taken by the blocked-tree drive - which matters
+        // because the second is the path that spends ReactivationTouchBudget, so
+        // the drive's own input is refreshed by the pass that consumes it. Were
+        // this written only on a classifying sweep, a tree swept without
+        // classifying would be pinned at the historical budget forever with no
+        // signal saying so: the same shape as the defect being fixed.
+        //
+        // Written unconditionally, including the zero, so a tree that drains
+        // back to health narrows its budgets again instead of holding a widened
+        // one from a past incident. A shard whose durable read threw was skipped
+        // above and contributes nothing here, so a partial sweep UNDER-counts
+        // and yields a SMALLER budget - the fail-safe direction, never a larger
+        // one.
+        _floorHolderPinPopulation[treeId] = located.Count;
 
         // Classify the floor's holders before anything is retired, so the states
         // recorded describe the floor as it stood when it was enumerated rather
@@ -4978,10 +5220,10 @@ internal sealed class LatticeWalGcScheduler(
 
             logger.LogInformation(
                 "WAL GC classified blocking pin {Consumer} on tree {Tree} partition {Partition} as {PinState}. This is diagnostic only and does not change what the pass may trim.",
-                consumerId,
-                treeId,
-                partitionTag,
-                state);
+                    consumerId,
+                    treeId,
+                    partitionTag,
+                    state);
         }
     }
 
@@ -5192,6 +5434,7 @@ internal sealed class LatticeWalGcScheduler(
         // singleton instead.
         HashSet<string>? requireOffsetAdvance = null;
         var sampled = unusableHolders.Count + offsetHolders.Count;
+        var logged = 0;
 
         // The sample's offset list is ascending by offset, so its head IS the
         // lowest offset this sweep saw. On a tree whose pins were all enumerated
@@ -5380,17 +5623,32 @@ internal sealed class LatticeWalGcScheduler(
                 floorAdmitted = true;
             }
 
-            logger.LogInformation(
-                "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}, durable checkpoint {DurableCheckpoint}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. The published pin is min(checkpoint, covered): a durable checkpoint EQUAL to the pin offset means the checkpoint is the binding term and is not advancing, while one far ABOVE it means coverage is the binding term and is not restamping - opposite faults with opposite remedies, which the pin offset alone cannot separate. A null checkpoint means none was read (unreadable, absent, or orphaned); coverage is per-activation state no storage read can reach, so it is deliberately not reported here. Diagnostic, except that a usable, durably-checkpointed pin sitting exactly on the offset floor is driven for liveness (issue #3178) - it does not change what the pass may trim.",
-                consumerId,
-                treeId,
-                partitionTag,
-                state,
-                candidate.Offset,
-                offsetFloor,
-                durableCheckpoint,
-                sampled,
-                population);
+            if (logged < MaxFloorHolderClassificationsPerSweep)
+            {
+                // Bounded at the DIAGNOSTIC budget, not the remedy's candidate
+                // budget, which is the whole point of having severed the two
+                // (issue #3279). The pool now scales with the pin population,
+                // but this line is a per-candidate Information-level record
+                // whose purpose is to let a reader NAME the floor's holder, and
+                // a reader needs a sample of that, not a census of up to
+                // MaxFloorHolderRemedyCandidatesPerSweep lines per tree per
+                // sweep. Widening the remedy must not widen the log. The line
+                // still reports {Sampled} as the true pool size, so the reader
+                // can see that it is reading a sample and how large the pool it
+                // was drawn from actually is.
+                logged++;
+                logger.LogInformation(
+                    "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}, durable checkpoint {DurableCheckpoint}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. The published pin is min(checkpoint, covered): a durable checkpoint EQUAL to the pin offset means the checkpoint is the binding term and is not advancing, while one far ABOVE it means coverage is the binding term and is not restamping - opposite faults with opposite remedies, which the pin offset alone cannot separate. A null checkpoint means none was read (unreadable, absent, or orphaned); coverage is per-activation state no storage read can reach, so it is deliberately not reported here. Diagnostic, except that a usable, durably-checkpointed pin sitting exactly on the offset floor is driven for liveness (issue #3178) - it does not change what the pass may trim.",
+                    consumerId,
+                    treeId,
+                    partitionTag,
+                    state,
+                    candidate.Offset,
+                    offsetFloor,
+                    durableCheckpoint,
+                    sampled,
+                    population);
+            }
         }
 
         RecordFloorHolderClassification(
