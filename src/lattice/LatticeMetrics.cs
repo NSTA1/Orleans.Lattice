@@ -2358,12 +2358,23 @@ public static class LatticeMetrics
     /// durable materialiser pin - see
     /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
     /// <para>
-    /// This is a defect state, not a quiet one: the tree cannot reclaim at all
-    /// and its WAL grows without bound. It is separated from
+    /// This is a defect state, not a quiet one: the tree cannot reclaim at all,
+    /// so the WAL it already holds is permanently unreleasable and no retention
+    /// or compaction setting can release it. It is separated from
     /// <see cref="OutcomeIdle"/> because the two demand opposite responses, and
     /// because the same predicate drives the scheduler's backoff - so before
     /// this value existed a blocked tree was scheduled <i>least</i> often
     /// precisely when it needed attention most.
+    /// </para>
+    /// <para>
+    /// <b>This arm is the discriminator; the footprint is not.</b> Do not use
+    /// growth, absence of growth, byte count or growth stopping to tell a
+    /// blocked tree from a quiet one. A tree only grows while it is being
+    /// written to, so a blocked tree reads flat the rest of the time:
+    /// <c>repo-context-vector-payload</c>, which has never trimmed a byte in its
+    /// lifetime, measured flat for 5.5 minutes of an 8-minute window. Each of
+    /// those readings returns the benign answer at exactly the moment it should
+    /// not, which is why the classification is recorded as its own arm here.
     /// </para>
     /// <para>
     /// The series is primed at zero for every tree the scheduler collects, so

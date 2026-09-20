@@ -12,8 +12,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// input to the WAL saturation signal is derived from the <i>in-memory</i>
 /// cursor registry, so a durable pin store that has stopped keeping up - the
 /// exact condition of issue #2012, where the retention floor stalled and the
-/// WAL grew without bound - reads perfectly healthy. Measuring the durable
-/// write itself is the only way that condition becomes observable.
+/// retained WAL became permanently unreleasable - reads perfectly healthy.
+/// Measuring the durable write itself is the only way that condition becomes
+/// observable; the footprint is not, because a tree only grows while it is being
+/// written to and a stalled tree is flat the rest of the time.
 /// </para>
 /// <para>
 /// The measurement is deliberately <b>caller-side</b>. A pin grain activation
