@@ -175,7 +175,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             Assert.That(admission.Blocked, Is.GreaterThan(0),
                 "the blocked arm must advance. A wedged tree that reports zero on every reactivation arm "
                     + "and zero here is indistinguishable from a healthy tree with nothing to repair, which "
-                    + "is exactly how repo-context-vector-payload grew an unbounded WAL beside a sibling at "
+                    + "is exactly how repo-context-vector-payload accumulated a permanently unreleasable WAL beside a sibling at "
                     + "90 attempts without a single series naming the difference.");
             Assert.That(admission.Admitted, Is.Zero,
                 "and the admitted arm must not. The two arms are mutually exclusive per sweep; charging "

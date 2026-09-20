@@ -5296,7 +5296,13 @@ internal sealed class LatticeWalGcScheduler(
                 // evidence about the FLOOR when this candidate is the one
                 // holding it. A candidate drawn from the unusable list carries
                 // offset -1 and constrains no offset floor, so the equality
-                // below is correctly false for it.
+                // below is correctly false for it. Unlike the coverage-unknown
+                // arm this one carries no >= 0 guard, and does not need one:
+                // the candidate offers partition on offset < 0 (see the split at
+                // roughly line 4633), so offsetHolders holds only non-negative
+                // offsets and the head of that ascending sample can never be
+                // negative. That guarantee lives ~750 lines from this risk,
+                // hence the cross-reference.
                 if (offsetFloor is { } uncoveredFloor && candidate.Offset == uncoveredFloor)
                 {
                     floorAdmitted = true;
