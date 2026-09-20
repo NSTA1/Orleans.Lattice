@@ -1276,8 +1276,15 @@ Two `ILattice` methods provide the operator path.
 
 | Method | Description |
 |--------|-------------|
-| `InspectOrphanedLeavesAsync(CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
-| `RepairOrphanedLeavesAsync(CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
+| `InspectOrphanedLeavesAsync(string?, CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
+| `RepairOrphanedLeavesAsync(string?, CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
+
+The leading `string?` on both is the **resume token** from the previous
+call's report. Pass `null` (the default) to start a new pass; pass
+`report.ResumeFrom` back unaltered to continue one. See
+[Driving a pass to completion](#driving-a-pass-to-completion) below -
+it is not optional detail, because one call is one bounded batch and a
+caller that ignores the token only ever sees the first one.
 
 The verification in step two **fails closed**. If the orphan holds any
 key that the routed live leaf does not hold, the leaf is left exactly
@@ -1297,15 +1304,31 @@ the keyspace and widening a neighbour over the orphan's bounds would
 create an overlap - and therefore a second materialisation of that
 range.
 
-### Read `VerdictComplete` before reading `Findings`
+### Driving a pass to completion
 
-A report also carries `Gaps`: every region of the tree the pass could
-not establish a verdict over. A shard that declined because it was
-mid-split or already draining, a sibling chain severed part-way across
-the keyspace, a leaf whose declared bounds make reachability
-undecidable, and a budget exhausted with no position to resume from
-are all reported here rather than silently folded into an empty
-findings list.
+One call to either verb is **one bounded batch**. It returns when its
+work budget is spent, leaving `ResumeFrom` non-null and `IsComplete`
+false; pass that token back unaltered to continue from exactly where it
+stopped. The bound is deliberate: an earlier revision drove the whole
+fan-out inside a single call, and on an ordinary tree that had
+accumulated 236 orphans it ran past the Orleans client response deadline
+and surfaced a `TimeoutException` to the caller - after the grain had
+already completed every repair. The operation reported failure having
+entirely succeeded.
+
+### Read `VerdictComplete` too, and read it before `Findings`
+
+`IsComplete` and `VerdictComplete` answer different questions.
+`IsComplete` says how far the pass got; `VerdictComplete` says whether
+it could judge what it reached.
+
+A report carries `Gaps`: every region of the tree the pass could not
+establish a verdict over. A shard that declined because it was mid-split
+or already draining, a sibling chain severed part-way across the
+keyspace, a leaf whose declared bounds make reachability undecidable,
+and a shard-level budget exhausted with no position to resume from are
+all reported here rather than silently folded into an empty findings
+list.
 
 This matters because the enumeration walks each shard's sibling chain
 from its head, and the chain is the same structure an orphan damages.
@@ -1317,24 +1340,37 @@ segment past the break and reporting orphans in it. Both were telling
 the truth about the same shard.
 
 `VerdictComplete` is true only when `Gaps` is empty. **An empty
-`Findings` list is a clean bill of health only when `VerdictComplete`
-is also true.** When it is false the answer is "this could not be
-established", not "there is nothing here", and it does not rule an
-orphan out as the cause of an unbounded WAL.
+`Findings` list is a clean bill of health only when `IsComplete` and
+`VerdictComplete` are both true.** When either is false the answer is
+"this could not be established", not "there is nothing here", and it
+does not rule an orphan out as the cause of an unbounded WAL.
 
 ```csharp verify
 // Dry run first: see what would be repaired, and why anything is refused.
-OrphanedLeafRepairReport survey =
-    await tree.InspectOrphanedLeavesAsync(cancellationToken);
-
-foreach (OrphanedLeafAuditGap gap in survey.Gaps)
+// One call is one bounded batch, so drive it until IsComplete.
+var findings = new List<OrphanedLeafFinding>();
+var gaps = new List<OrphanedLeafAuditGap>();
+string? cursor = null;
+int refused = 0;
+do
 {
-    // Read this BEFORE the findings: a region that was never examined
+    OrphanedLeafRepairReport batch =
+        await tree.InspectOrphanedLeavesAsync(cursor, cancellationToken);
+    findings.AddRange(batch.Findings);
+    gaps.AddRange(batch.Gaps);
+    refused += batch.RefusedCount;
+    cursor = batch.ResumeFrom;
+}
+while (cursor is not null);
+
+foreach (OrphanedLeafAuditGap gap in gaps)
+{
+    // Read this BEFORE the findings: a region that could not be judged
     // contributes no findings by construction.
     _ = (gap.ShardIndex, gap.Reason, gap.LeafId, gap.KeyHint);
 }
 
-foreach (OrphanedLeafFinding finding in survey.Findings)
+foreach (OrphanedLeafFinding finding in findings)
 {
     if (finding.IsRefusal)
     {
@@ -1343,23 +1379,69 @@ foreach (OrphanedLeafFinding finding in survey.Findings)
     }
 }
 
-if (survey.VerdictComplete && survey.Findings.Count == 0)
+if (gaps.Count == 0 && findings.Count == 0)
 {
-    // The only reading that actually rules the defect out.
-    _ = survey.LeavesWalked;
+    // The only reading that actually rules the defect out: the pass was
+    // driven to completion AND it could judge everything it reached.
 }
 
-if (survey.Findings.Count > 0 && survey.RefusedCount == 0)
+if (findings.Count > 0 && refused == 0)
 {
-    OrphanedLeafRepairReport repaired =
-        await tree.RepairOrphanedLeavesAsync(cancellationToken);
-    _ = (repaired.LeavesWalked, repaired.RepairedCount);
+    cursor = null;
+    do
+    {
+        OrphanedLeafRepairReport batch =
+            await tree.RepairOrphanedLeavesAsync(cursor, cancellationToken);
+        _ = (batch.LeavesWalked, batch.RepairedCount);
+        cursor = batch.ResumeFrom;
+    }
+    while (cursor is not null);
+
+    // Then RE-AUDIT. The repair's own return is not the source of truth.
 }
 ```
 
-Both calls are batched internally and safe to run against a live tree
-under load. A single invocation walks a bounded number of leaves per
-shard; re-invoke until `LeavesWalked` reports no further findings.
+Both calls are safe to run against a live tree under load, and both are
+idempotent: re-running cannot double-repair, because a leaf already
+unspliced is gone from the chain and a refused one is refused again on
+the same evidence. A pass restarted from `null` re-establishes the truth
+from scratch rather than compounding anything.
+
+Three consequences are worth stating plainly, because each is a way to
+read a correct report incorrectly.
+
+- **An empty `Findings` on a partial batch is not a clean tree.** It
+  says only that the part of the tree *this* batch reached was clean.
+  The clean bill of health requires `IsComplete`.
+- **An empty `Findings` with a non-empty `Gaps` is not a clean tree
+  either.** A region the pass could not judge contributes zero findings
+  by construction, so the clean bill of health requires
+  `VerdictComplete` as well.
+- **If you see a timeout or any transport error, the return value is
+  not authoritative, and its absence is not evidence that nothing
+  happened.** The reply may have been lost after the work landed.
+  Do not guess and do not simply retry: run the audit - which mutates
+  nothing - and let it establish the true state. The safe loop is
+  **audit, repair to completion, then RE-AUDIT**.
+- **A retry is not free even though it is safe.** A second repair pass
+  started while the first is still running mutates the same leaf chains
+  under compare-and-swap. It cannot corrupt the tree, but it wastes the
+  budget re-verifying work the other pass is doing. Drive one pass to
+  completion rather than starting a second.
+
+The work budget is wall-clock, not a leaf count, because the cost of
+this pass is dominated by per-key verification rather than by leaves
+traversed: in the incident above the tree that blew the deadline had
+walked *fewer* leaves (2121) than the tree that returned comfortably
+(2443), but held roughly 83 keys per orphaned leaf, each verified by an
+individual descent. Any leaf cap that admitted the second tree would
+have admitted the first.
+
+One residual bound is worth knowing: a single leaf's key verification is
+atomic and cannot be split, since a partial verification proves nothing
+about safety. A pathological leaf approaching the 100,000-key
+verification ceiling can therefore still overrun on its own. The
+guarantee is bounded work *per call*, not an absolute wall-clock cap.
 
 ## Metrics
 

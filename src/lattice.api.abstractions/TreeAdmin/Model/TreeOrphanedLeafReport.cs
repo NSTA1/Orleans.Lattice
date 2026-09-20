@@ -20,11 +20,14 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// </para>
 /// <para>
 /// An empty <see cref="Findings"/> with a non-zero <see cref="LeavesWalked"/> is a
-/// clean bill of health for the tree <b>only when <see cref="VerdictComplete"/> is
-/// also <see langword="true"/></b>, and is then as useful an answer as a finding:
-/// it rules the orphaned-leaf defect out as the cause of an unbounded WAL. When
-/// <see cref="Gaps"/> is non-empty the pass did not examine the whole tree, so an
-/// empty findings list says nothing about the part it did not reach (issue 3301).
+/// clean bill of health for the tree, and is then as useful an answer as a finding:
+/// it rules the orphaned-leaf defect out as the cause of an unbounded WAL. That
+/// reading needs <b>both</b> <see cref="IsComplete"/> and
+/// <see cref="VerdictComplete"/> to be <see langword="true"/>, because they answer
+/// different questions. One call is one bounded batch, so on an incomplete batch an
+/// empty <see cref="Findings"/> means "nothing wrong in the part of the tree this
+/// batch reached". A non-empty <see cref="Gaps"/> means the pass could not judge
+/// part of what it did reach, so the zero there is not evidence either (issue 3301).
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -51,6 +54,22 @@ public sealed record TreeOrphanedLeafReport
     [Id(3)] public ImmutableArray<TreeOrphanedLeafFinding> Findings { get; init; } = [];
 
     /// <summary>
+    /// The opaque position the next batch resumes from, or <see langword="null"/>
+    /// when every shard of the tree has been examined to the end of its chain.
+    /// Hand it back unaltered to continue. It names a position in the keyspace
+    /// rather than any server-side state, so it never expires and a pass may be
+    /// resumed, abandoned, or restarted at any time.
+    /// </summary>
+    [Id(4)] public string? ResumeFrom { get; init; }
+
+    /// <summary>
+    /// Whether this batch reached the end of the last shard's chain, so the whole
+    /// tree has now been examined. <see langword="false"/> means the batch ran out
+    /// of work budget and its counts describe only the part of the tree it reached.
+    /// </summary>
+    public bool IsComplete => ResumeFrom is null;
+
+    /// <summary>
     /// Every region of the tree the pass could not establish a verdict over, in
     /// shard order (issue 3301). Empty is the healthy answer.
     /// <para>
@@ -60,15 +79,16 @@ public sealed record TreeOrphanedLeafReport
     /// indistinguishable from health unless the gap is surfaced.
     /// </para>
     /// </summary>
-    [Id(4)] public ImmutableArray<TreeOrphanedLeafGap> Gaps { get; init; } = [];
+    [Id(5)] public ImmutableArray<TreeOrphanedLeafGap> Gaps { get; init; } = [];
 
     /// <summary>
-    /// Whether the pass examined the whole tree, and so whether
-    /// <see cref="Findings"/> may be read as a verdict over it.
+    /// Whether the pass could establish a verdict over everything it reached, and
+    /// so whether <see cref="Findings"/> may be read as a verdict over it.
     /// <para>
-    /// <b>An operator deciding that a tree needs no attention must check this
-    /// before checking <see cref="Findings"/>.</b> False means the answer is "I
-    /// could not establish this", not "there is nothing here".
+    /// <b>An operator deciding that a tree needs no attention must check this, and
+    /// <see cref="IsComplete"/>, before checking <see cref="Findings"/>.</b> False
+    /// means the answer is "I could not establish this", not "there is nothing
+    /// here".
     /// </para>
     /// </summary>
     public bool VerdictComplete => Gaps.IsDefaultOrEmpty;

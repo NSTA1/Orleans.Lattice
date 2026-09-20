@@ -1,17 +1,28 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// The result of one orphaned-leaf inspection or repair across every physical
-/// shard of a tree. See <see cref="ILattice.InspectOrphanedLeavesAsync"/> and
+/// The result of one <b>bounded batch</b> of an orphaned-leaf inspection or
+/// repair across the physical shards of a tree. See
+/// <see cref="ILattice.InspectOrphanedLeavesAsync"/> and
 /// <see cref="ILattice.RepairOrphanedLeavesAsync"/>.
 /// <para>
-/// A report with an empty <see cref="Findings"/> list is the healthy answer
-/// <b>only when <see cref="VerdictComplete"/> is also
-/// <see langword="true"/></b>: every leaf in every shard's sibling chain was
-/// reached and every one of them was reachable by descent. When
-/// <see cref="Gaps"/> is non-empty the pass did not examine the whole tree,
-/// and an empty findings list says nothing about the part it did not reach
-/// (issue 3301).
+/// <b>Read <see cref="IsComplete"/> and <see cref="VerdictComplete"/> before
+/// reading <see cref="Findings"/>.</b> They answer two different questions and
+/// an empty findings list is the healthy whole-tree answer only when both are
+/// <see langword="true"/>.
+/// </para>
+/// <para>
+/// <see cref="IsComplete"/> asks <i>how far did the pass get</i>. A batch stops
+/// when its work budget is spent and names where to resume in
+/// <see cref="ResumeFrom"/>, so an empty <see cref="Findings"/> means "no orphan
+/// in the part of the tree this batch reached", not "no orphan in the tree".
+/// </para>
+/// <para>
+/// <see cref="VerdictComplete"/> asks <i>could the pass judge what it reached</i>.
+/// A shard that declined, or a sibling chain severed part-way across the
+/// keyspace, contributes zero findings by construction, so the pass reports
+/// those regions in <see cref="Gaps"/> rather than letting the resulting zero
+/// read as health (issue 3301).
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -32,6 +43,33 @@ public readonly record struct OrphanedLeafRepairReport
     [Id(1)] public int LeavesWalked { get; init; }
 
     /// <summary>
+    /// The opaque position the next batch resumes from, or
+    /// <see langword="null"/> when every shard of the tree has been examined to
+    /// the end of its chain.
+    /// <para>
+    /// Hand it back unaltered to
+    /// <see cref="ILattice.RepairOrphanedLeavesAsync"/> (or
+    /// <see cref="ILattice.InspectOrphanedLeavesAsync"/>) to continue. It is
+    /// not a handle to any server-side state and it does not expire: it names a
+    /// position in the keyspace, so a pass may be resumed, abandoned, or
+    /// restarted from <see langword="null"/> at any time.
+    /// </para>
+    /// </summary>
+    [Id(3)] public string? ResumeFrom { get; init; }
+
+    /// <summary>
+    /// Whether this batch reached the end of the last shard's chain, so the
+    /// whole tree has now been examined.
+    /// <para>
+    /// <b>This is the field that makes a partial answer legible.</b> A batch
+    /// that ran out of budget reports <see langword="false"/> here and its
+    /// counts describe only what it reached; treating them as whole-tree
+    /// figures would read a bounded walk as a clean tree.
+    /// </para>
+    /// </summary>
+    public bool IsComplete => ResumeFrom is null;
+
+    /// <summary>
     /// Every descent-unreachable leaf found, in chain order within each shard
     /// and shard order across the tree.
     /// </summary>
@@ -43,30 +81,35 @@ public readonly record struct OrphanedLeafRepairReport
     /// <para>
     /// A gap is not a finding and not an error - it is the pass reporting
     /// where it did not look, which is the one thing an empty findings list
-    /// could not previously express. Read it before reading
-    /// <see cref="Findings"/>: a shard that declined, or a sibling chain
-    /// severed part-way across the keyspace, contributes zero findings by
-    /// construction, and on a tree wide enough to matter that zero is
-    /// indistinguishable from health unless the gap is surfaced.
+    /// could not previously express. It is distinct from
+    /// <see cref="IsComplete"/>: a batch may stop early with its budget spent
+    /// and still have judged every leaf it touched, and a batch may run to the
+    /// end of the tree and still have been unable to judge part of it.
     /// </para>
     /// </summary>
-    [Id(3)] public IReadOnlyList<OrphanedLeafAuditGap> Gaps { get; init; }
+    [Id(4)] public IReadOnlyList<OrphanedLeafAuditGap> Gaps { get; init; }
 
     /// <summary>
-    /// Whether the pass examined the whole tree, and so whether
-    /// <see cref="Findings"/> may be read as a verdict over it.
+    /// Whether the pass could establish a verdict over everything it reached,
+    /// and so whether <see cref="Findings"/> may be read as a verdict over it.
     /// <para>
-    /// <b>An operator deciding that a tree needs no attention must check this
-    /// before checking <see cref="Findings"/>.</b> False means the answer is
-    /// "I could not establish this", not "there is nothing here".
+    /// <b>An operator deciding that a tree needs no attention must check this,
+    /// and <see cref="IsComplete"/>, before checking <see cref="Findings"/>.</b>
+    /// False means the answer is "I could not establish this", not "there is
+    /// nothing here".
     /// </para>
     /// </summary>
     public bool VerdictComplete => Gaps is null or { Count: 0 };
 
     /// <summary>
     /// How many orphans were unspliced and had their materialiser pins
-    /// retired. Always zero when <see cref="DryRun"/> is
+    /// retired <b>by this batch</b>. Always zero when <see cref="DryRun"/> is
     /// <see langword="true"/>.
+    /// <para>
+    /// It counts this batch only, so driving a pass to completion means summing
+    /// it across batches. Do not read a zero on its own as "nothing was wrong":
+    /// on a resumed batch it means only that this batch found nothing.
+    /// </para>
     /// </summary>
     public int RepairedCount
         => Findings?.Count(f => f.Disposition == OrphanedLeafDisposition.Repaired) ?? 0;

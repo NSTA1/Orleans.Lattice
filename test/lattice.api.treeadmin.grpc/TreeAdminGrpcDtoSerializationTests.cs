@@ -52,6 +52,26 @@ public sealed class TreeAdminGrpcDtoSerializationTests
         });
     }
 
+    /// <summary>
+    /// The resume token is what makes a bounded orphaned-leaf pass drivable to
+    /// completion across the wire (issue 3302), so both its present and absent
+    /// forms have to survive a round trip: a token dropped in transit strands
+    /// the pass on its first batch, and a null that arrived as an empty string
+    /// would be rejected as a malformed token rather than read as "start".
+    /// </summary>
+    [Test]
+    public void TreeAdminOrphanedLeafRequest_round_trips()
+    {
+        var resuming = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders", ResumeFrom = "olp1:3:kb3JkZXJz" });
+        var starting = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders" });
+        Assert.Multiple(() =>
+        {
+            Assert.That(resuming.TreeId, Is.EqualTo("orders"));
+            Assert.That(resuming.ResumeFrom, Is.EqualTo("olp1:3:kb3JkZXJz"));
+            Assert.That(starting.ResumeFrom, Is.Null);
+        });
+    }
+
     [Test]
     public void TreeAdminDiagnosticsRequest_round_trips()
     {

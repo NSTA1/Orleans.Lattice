@@ -83,7 +83,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>()).Returns(CoreReport(dryRun: true));
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(CoreReport(dryRun: true));
         var facade = Create(factory);
 
         var report = await facade.AuditOrphanedLeavesAsync(Tree);
@@ -112,7 +112,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(new OrphanedLeafRepairReport { DryRun = true, LeavesWalked = 40, Findings = Array.Empty<OrphanedLeafFinding>() });
         var facade = Create(factory);
 
@@ -127,12 +127,46 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
         });
     }
 
+    /// <summary>
+    /// The resume token and the completeness flag are what let an operator drive
+    /// a bounded pass to the end and tell a clean verdict from a partial one
+    /// (issue 3302). A facade that dropped either on the way through would turn
+    /// every pass into its first batch while still looking correct: the report
+    /// would read complete, and "no findings" would be indistinguishable from
+    /// "no findings yet".
+    /// </summary>
     [Test]
-    public async Task AuditOrphanedLeavesAsync_tolerates_a_null_findings_list()
+    public async Task Both_verbs_carry_the_resume_token_and_completeness_through_the_projection()
     {
+        const string Token = "olp1:3:kb3JkZXJz";
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(new OrphanedLeafRepairReport { DryRun = true, LeavesWalked = 9, ResumeFrom = Token });
+        tree.RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(new OrphanedLeafRepairReport { DryRun = false, LeavesWalked = 9, ResumeFrom = null });
+        var facade = Create(factory);
+
+        var partial = await facade.AuditOrphanedLeavesAsync(Tree, Token);
+        var complete = await facade.RepairOrphanedLeavesAsync(Tree, Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(partial.ResumeFrom, Is.EqualTo(Token));
+            Assert.That(partial.IsComplete, Is.False, "a partial batch must not read as a clean verdict");
+            Assert.That(complete.ResumeFrom, Is.Null);
+            Assert.That(complete.IsComplete, Is.True);
+        });
+
+        await tree.Received(1).InspectOrphanedLeavesAsync(Token, Arg.Any<CancellationToken>());
+        await tree.Received(1).RepairOrphanedLeavesAsync(Token, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AuditOrphanedLeavesAsync_tolerates_a_null_findings_list()    {
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(new OrphanedLeafRepairReport { DryRun = true, LeavesWalked = 2, Findings = null! });
         var facade = Create(factory);
 
@@ -150,7 +184,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
         // (issue 3301).
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(new OrphanedLeafRepairReport
             {
                 DryRun = true,
@@ -190,7 +224,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>())
+        tree.InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(new OrphanedLeafRepairReport
             {
                 DryRun = true,
@@ -218,7 +252,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
 
         Assert.That(async () => await facade.AuditOrphanedLeavesAsync(Tree),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
-        tree.DidNotReceive().InspectOrphanedLeavesAsync(Arg.Any<CancellationToken>());
+        tree.DidNotReceive().InspectOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -240,7 +274,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var tree = WireTree(factory);
-        tree.RepairOrphanedLeavesAsync(Arg.Any<CancellationToken>()).Returns(CoreReport(dryRun: false));
+        tree.RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(CoreReport(dryRun: false));
         var facade = Create(factory);
 
         var report = await facade.RepairOrphanedLeavesAsync(Tree);
@@ -264,7 +298,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
 
         Assert.That(async () => await facade.RepairOrphanedLeavesAsync(Tree),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
-        tree.DidNotReceive().RepairOrphanedLeavesAsync(Arg.Any<CancellationToken>());
+        tree.DidNotReceive().RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -277,7 +311,7 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
 
         Assert.That(async () => await facade.RepairOrphanedLeavesAsync(reserved),
             Throws.ArgumentException);
-        tree.DidNotReceive().RepairOrphanedLeavesAsync(Arg.Any<CancellationToken>());
+        tree.DidNotReceive().RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

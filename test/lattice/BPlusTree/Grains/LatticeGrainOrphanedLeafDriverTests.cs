@@ -89,7 +89,7 @@ public class LatticeGrainOrphanedLeafDriverTests
                 };
             });
 
-        var report = await grain.InspectOrphanedLeavesAsync(CancellationToken.None);
+        var report = await grain.InspectOrphanedLeavesAsync(null, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -117,7 +117,7 @@ public class LatticeGrainOrphanedLeafDriverTests
         shard.RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(_ => new OrphanedLeafRepairPage { LeavesWalked = 7 });
 
-        var report = await grain.InspectOrphanedLeavesAsync(CancellationToken.None);
+        var report = await grain.InspectOrphanedLeavesAsync(null, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -146,7 +146,7 @@ public class LatticeGrainOrphanedLeafDriverTests
             .Returns(_ => OrphanedLeafRepairPage.Declined(
                 0, OrphanedLeafAuditGapReason.ShardSplitInProgress));
 
-        var report = await grain.RepairOrphanedLeavesAsync(CancellationToken.None);
+        var report = await grain.RepairOrphanedLeavesAsync(null, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
