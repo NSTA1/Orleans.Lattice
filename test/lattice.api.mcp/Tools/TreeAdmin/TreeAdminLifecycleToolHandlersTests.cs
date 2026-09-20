@@ -539,12 +539,12 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     {
         var admin = TreeAdmin();
         var expected = new TreeOrphanedLeafReport { TreeId = "orders", DryRun = true, LeavesWalked = 3 };
-        admin.AuditOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+        admin.AuditOrphanedLeavesAsync("orders", Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(expected);
 
-        var result = await TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(admin, "orders", CancellationToken.None);
+        var result = await TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(admin, "orders", null, CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).AuditOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>());
+        await admin.Received(1).AuditOrphanedLeavesAsync("orders", null, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -552,12 +552,34 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     {
         var admin = TreeAdmin();
         var expected = new TreeOrphanedLeafReport { TreeId = "orders", DryRun = false, LeavesWalked = 3 };
-        admin.RepairOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+        admin.RepairOrphanedLeavesAsync("orders", Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(expected);
 
-        var result = await TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(admin, "orders", CancellationToken.None);
+        var result = await TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(admin, "orders", null, CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).RepairOrphanedLeavesAsync("orders", Arg.Any<CancellationToken>());
+        await admin.Received(1).RepairOrphanedLeavesAsync("orders", null, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The resume token is what makes a bounded pass drivable to completion, so a
+    /// handler that accepted it and dropped it would strand every pass on its first
+    /// batch while still looking correct at the tool surface (issue 3302).
+    /// </summary>
+    [Test]
+    public async Task OrphanedLeafHandlers_forward_the_resume_token_verbatim()
+    {
+        var admin = TreeAdmin();
+        const string Token = "olp1:7:YWJj";
+        admin.AuditOrphanedLeavesAsync("orders", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeOrphanedLeafReport { TreeId = "orders", DryRun = true });
+        admin.RepairOrphanedLeavesAsync("orders", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeOrphanedLeafReport { TreeId = "orders", DryRun = false });
+
+        await TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(admin, "orders", Token, CancellationToken.None);
+        await TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(admin, "orders", Token, CancellationToken.None);
+
+        await admin.Received(1).AuditOrphanedLeavesAsync("orders", Token, Arg.Any<CancellationToken>());
+        await admin.Received(1).RepairOrphanedLeavesAsync("orders", Token, Arg.Any<CancellationToken>());
     }
 
     [Test]

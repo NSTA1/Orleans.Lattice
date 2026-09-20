@@ -1286,14 +1286,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
     /// <inheritdoc />
     public async Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
-        string treeId, CancellationToken cancellationToken = default)
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .InspectOrphanedLeavesAsync(cancellationToken)
+            .InspectOrphanedLeavesAsync(resumeFrom, cancellationToken)
             .ConfigureAwait(false);
 
         return ToOrphanedLeafReport(report, treeId);
@@ -1301,7 +1301,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
     /// <inheritdoc />
     public async Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
-        string treeId, CancellationToken cancellationToken = default)
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -1309,7 +1309,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .RepairOrphanedLeavesAsync(cancellationToken)
+            .RepairOrphanedLeavesAsync(resumeFrom, cancellationToken)
             .ConfigureAwait(false);
 
         return ToOrphanedLeafReport(report, treeId);
@@ -1349,6 +1349,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             DryRun = report.DryRun,
             LeavesWalked = report.LeavesWalked,
             Findings = findings.MoveToImmutable(),
+            ResumeFrom = report.ResumeFrom,
         };
     }
 

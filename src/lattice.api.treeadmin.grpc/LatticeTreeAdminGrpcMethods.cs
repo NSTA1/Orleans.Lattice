@@ -186,6 +186,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
         Serializer<TreeAdminShardRequest> shardRequestSerializer,
+        Serializer<TreeAdminOrphanedLeafRequest> orphanedLeafRequestSerializer,
         Serializer<TreeAdminDiagnosticsRequest> diagnosticsRequestSerializer,
         Serializer<TreeAdminStorageUsageRequest> storageUsageRequestSerializer,
         Serializer<TreeHotnessReport> hotnessReportSerializer,
@@ -247,6 +248,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
         ArgumentNullException.ThrowIfNull(shardRequestSerializer);
+        ArgumentNullException.ThrowIfNull(orphanedLeafRequestSerializer);
         ArgumentNullException.ThrowIfNull(diagnosticsRequestSerializer);
         ArgumentNullException.ThrowIfNull(storageUsageRequestSerializer);
         ArgumentNullException.ThrowIfNull(hotnessReportSerializer);
@@ -541,18 +543,18 @@ internal sealed class LatticeTreeAdminGrpcMethods
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walPlacementAuditSerializer));
 
-        AuditOrphanedLeaves = new Method<TreeAdminTreeRequest, TreeOrphanedLeafReport>(
+        AuditOrphanedLeaves = new Method<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(
             type: MethodType.Unary,
             serviceName: ServiceName,
             name: AuditOrphanedLeavesMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafReportSerializer));
 
-        RepairOrphanedLeaves = new Method<TreeAdminTreeRequest, TreeOrphanedLeafReport>(
+        RepairOrphanedLeaves = new Method<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(
             type: MethodType.Unary,
             serviceName: ServiceName,
             name: RepairOrphanedLeavesMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(orphanedLeafReportSerializer));
 
         PlanWalMove = new Method<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(
@@ -764,10 +766,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
     public Method<TreeAdminTreeRequest, TreeWalPlacementAudit> AuditWalPlacement { get; }
 
     /// <summary>The unary <c>AuditOrphanedLeaves</c> read-only orphaned-leaf audit RPC.</summary>
-    public Method<TreeAdminTreeRequest, TreeOrphanedLeafReport> AuditOrphanedLeaves { get; }
+    public Method<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport> AuditOrphanedLeaves { get; }
 
     /// <summary>The unary <c>RepairOrphanedLeaves</c> mutating orphaned-leaf repair RPC.</summary>
-    public Method<TreeAdminTreeRequest, TreeOrphanedLeafReport> RepairOrphanedLeaves { get; }
+    public Method<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport> RepairOrphanedLeaves { get; }
 
     /// <summary>The unary <c>PlanWalMove</c> read-only WAL move plan RPC.</summary>
     public Method<TreeAdminWalMovePlanRequest, TreeWalMovePlan> PlanWalMove { get; }
@@ -829,6 +831,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminShardRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminOrphanedLeafRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminDiagnosticsRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeHotnessReport>>(),

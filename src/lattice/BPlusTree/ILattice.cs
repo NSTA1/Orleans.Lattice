@@ -1126,9 +1126,24 @@ public interface ILattice : IGrainWithStringKey
     /// would act on, and a refusal here is the refusal the repair would make.
     /// Run it first.
     /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch.</b> It walks until its work budget is
+    /// spent and then returns, naming where to resume in
+    /// <see cref="OrphanedLeafRepairReport.ResumeFrom"/>; drive it until
+    /// <see cref="OrphanedLeafRepairReport.IsComplete"/> is
+    /// <see langword="true"/>. Until then an empty
+    /// <see cref="OrphanedLeafRepairReport.Findings"/> says only that the part
+    /// of the tree this batch reached was clean, which is not the same claim.
+    /// </para>
     /// </summary>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="OrphanedLeafRepairReport.ResumeFrom"/>,
+    /// passed back unaltered, or <see langword="null"/> to start a new pass at
+    /// the first shard. Rejected if it is not a token this surface produced.
+    /// </param>
     /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
     Task<OrphanedLeafRepairReport> InspectOrphanedLeavesAsync(
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -1152,13 +1167,43 @@ public interface ILattice : IGrainWithStringKey
     /// elsewhere; they are checked.
     /// </para>
     /// <para>
-    /// Safe to re-run. A leaf already removed is gone from the chain, a leaf
+    /// Safe to re-run, and that is what makes a retry safe rather than
+    /// dangerous. A leaf already removed is gone from the chain, a leaf
     /// refused is refused again on the same evidence, and an interrupted
-    /// removal is completed by the next pass.
+    /// removal is completed by the next pass. Re-running from
+    /// <see langword="null"/> therefore cannot double-repair anything; it costs
+    /// only the walk.
+    /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch, and this is the fix for issue
+    /// 3302.</b> An earlier revision drove every shard and every batch inside
+    /// one grain call, so on a damaged tree it outran the client's response
+    /// deadline: the caller was handed a <c>TimeoutException</c> while the
+    /// grain went on to complete the repair, discarding the report of what it
+    /// had done. Drive this verb until
+    /// <see cref="OrphanedLeafRepairReport.IsComplete"/> is
+    /// <see langword="true"/>, passing each report's
+    /// <see cref="OrphanedLeafRepairReport.ResumeFrom"/> to the next call.
+    /// </para>
+    /// <para>
+    /// <b>If you do see a timeout, the return value is not authoritative -
+    /// the audit is.</b> A lost reply is indistinguishable from a failure at
+    /// the call site, so do not infer from it that nothing happened. Run
+    /// <see cref="InspectOrphanedLeavesAsync"/>, which mutates nothing and
+    /// reaches its verdict with this same code, and let it establish the true
+    /// state before deciding anything. The whole loop is
+    /// <c>audit -&gt; repair to completion -&gt; re-audit</c>, and the
+    /// re-audit is not optional.
     /// </para>
     /// </summary>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="OrphanedLeafRepairReport.ResumeFrom"/>,
+    /// passed back unaltered, or <see langword="null"/> to start a new pass at
+    /// the first shard. Rejected if it is not a token this surface produced.
+    /// </param>
     /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
     Task<OrphanedLeafRepairReport> RepairOrphanedLeavesAsync(
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default);
 
     // ── Stateful cursors ────────────────────────────────

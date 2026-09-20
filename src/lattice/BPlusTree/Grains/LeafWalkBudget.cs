@@ -184,6 +184,37 @@ internal struct LeafWalkBudget
     }
 
     /// <summary>
+    /// Builds the budget one batch of the tree-level orphaned-leaf pass runs
+    /// under - the fan-out in <c>LatticeGrain.OrphanRepair</c> that drives each
+    /// shard's own bounded batches (issue 3302).
+    /// <para>
+    /// <b>It deliberately carries no leaf cap.</b> Every other site here bounds
+    /// leaves as well as time, because there a leaf is a good proxy for work.
+    /// At tree level it is not, and the measurement that opened issue 3302 says
+    /// so directly: one tree walked 2443 leaves with 2 repairs and returned
+    /// inside the client's 30-second response deadline, while another walked
+    /// 2121 leaves with 236 repairs and blew through it. Fewer leaves, more
+    /// time. The cost is carried by the per-key verification each repairable
+    /// leaf triggers - roughly 19,600 sequential grain calls on that tree - and
+    /// a leaf cap cannot see that, so it would bound the wrong quantity and
+    /// still let a repair-dense batch outrun the deadline.
+    /// </para>
+    /// <para>
+    /// The wall clock is checked between shard batches, never inside one, so
+    /// the worst case for a whole tree-level call is this budget plus one
+    /// shard batch - which carries the same
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/> net. At the
+    /// 10-second default that is 20 seconds against a 30-second deadline,
+    /// leaving the reply's own marshalling the remaining margin.
+    /// </para>
+    /// </summary>
+    internal static LeafWalkBudget ForOrphanedLeafPass(LatticeOptions options, long startTimestamp = 0L)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new LeafWalkBudget(0, options.BackgroundDrainMaxDuration, startTimestamp);
+    }
+
+    /// <summary>
     /// A budget that never yields, for a walk whose whole-walk atomicity is
     /// load-bearing and which therefore runs to the end of the chain in one
     /// turn. Expressing that as an explicit unbounded budget - rather than as a
