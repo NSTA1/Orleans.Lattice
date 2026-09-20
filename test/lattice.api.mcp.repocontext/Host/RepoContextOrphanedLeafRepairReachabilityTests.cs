@@ -132,8 +132,8 @@ public sealed class RepoContextOrphanedLeafRepairReachabilityTests
             {
                 // The vector-membership tree is one of the two the live audit found
                 // repairable orphans on, so it is a tree the operator will name.
-                var audit = await admin.AuditOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, Ct);
-                var repair = await admin.RepairOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, Ct);
+                var audit = await admin.AuditOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, cancellationToken: Ct);
+                var repair = await admin.RepairOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, cancellationToken: Ct);
 
                 Assert.Multiple(() =>
                 {
@@ -170,7 +170,7 @@ public sealed class RepoContextOrphanedLeafRepairReachabilityTests
             using (LatticeCredentialContext.Use("not-the-local-agent", scheme: LocalTrustedAgent.Scheme))
             {
                 Assert.That(
-                    async () => await admin.RepairOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, Ct),
+                    async () => await admin.RepairOrphanedLeavesAsync(RepoContextHostTrees.VectorMembership, cancellationToken: Ct),
                     Throws.InstanceOf<LatticeAuthorizationDeniedException>(),
                     "The grant is scoped to one subject; the gate must still be the enforcement seam.");
             }

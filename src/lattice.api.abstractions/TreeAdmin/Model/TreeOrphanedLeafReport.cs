@@ -21,7 +21,10 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <para>
 /// An empty <see cref="Findings"/> with a non-zero <see cref="LeavesWalked"/> is a
 /// clean bill of health for the tree, and is as useful an answer as a finding: it
-/// rules the orphaned-leaf defect out as the cause of an unbounded WAL.
+/// rules the orphaned-leaf defect out as the cause of an unbounded WAL - but only
+/// once <see cref="IsComplete"/> is <see langword="true"/>. One call is one bounded
+/// batch, so on an incomplete batch an empty <see cref="Findings"/> means "nothing
+/// wrong in the part of the tree this batch reached", which is a much weaker claim.
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -46,6 +49,22 @@ public sealed record TreeOrphanedLeafReport
     /// orphaned leaves.
     /// </summary>
     [Id(3)] public ImmutableArray<TreeOrphanedLeafFinding> Findings { get; init; } = [];
+
+    /// <summary>
+    /// The opaque position the next batch resumes from, or <see langword="null"/>
+    /// when every shard of the tree has been examined to the end of its chain.
+    /// Hand it back unaltered to continue. It names a position in the keyspace
+    /// rather than any server-side state, so it never expires and a pass may be
+    /// resumed, abandoned, or restarted at any time.
+    /// </summary>
+    [Id(4)] public string? ResumeFrom { get; init; }
+
+    /// <summary>
+    /// Whether this batch reached the end of the last shard's chain, so the whole
+    /// tree has now been examined. <see langword="false"/> means the batch ran out
+    /// of work budget and its counts describe only the part of the tree it reached.
+    /// </summary>
+    public bool IsComplete => ResumeFrom is null;
 
     /// <summary>
     /// How many leaves the repair unspliced. Always zero for an audit, whose

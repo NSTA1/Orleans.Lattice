@@ -402,10 +402,12 @@ internal static class TreeAdminLifecycleToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree to audit for orphaned leaves. Must not be null or empty.")]
         string treeId,
+        [Description("The previous batch's resumeFrom token, passed back unaltered, or omitted to start a new pass. One call is one bounded batch: drive the pass until the report says complete=true, because until then an empty finding list describes only the part of the tree the batch reached.")]
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
-        return treeAdmin.AuditOrphanedLeavesAsync(treeId, cancellationToken);
+        return treeAdmin.AuditOrphanedLeavesAsync(treeId, resumeFrom, cancellationToken);
     }
 
     /// <summary>Repairs a tree's orphaned leaves by unsplicing every descent-unreachable leaf whose keys are all readable elsewhere.</summary>
@@ -413,10 +415,12 @@ internal static class TreeAdminLifecycleToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree whose orphaned leaves to repair. Must not be null or empty.")]
         string treeId,
+        [Description("The previous batch's resumeFrom token, passed back unaltered, or omitted to start a new pass. One call is one bounded batch: drive the pass until the report says complete=true, then re-audit. If a call times out, its return value is not authoritative and its absence does not mean nothing happened - re-audit rather than retrying blindly, though re-running is safe and cannot double-repair.")]
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
-        return treeAdmin.RepairOrphanedLeavesAsync(treeId, cancellationToken);
+        return treeAdmin.RepairOrphanedLeavesAsync(treeId, resumeFrom, cancellationToken);
     }
 
     /// <summary>Previews moving a WAL partition to a target provider key (the range that would be copied), with no side effects.</summary>

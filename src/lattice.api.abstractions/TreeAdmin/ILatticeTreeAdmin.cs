@@ -675,14 +675,30 @@ public interface ILatticeTreeAdmin
     /// first. A report with no findings is a clean bill of health and rules the
     /// defect out as the cause of an unbounded WAL.
     /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch.</b> It returns when its work budget is
+    /// spent, naming where to resume in
+    /// <see cref="TreeOrphanedLeafReport.ResumeFrom"/>; drive it until
+    /// <see cref="TreeOrphanedLeafReport.IsComplete"/> is <c>true</c>. Until then
+    /// "no findings" is a statement about the part of the tree the batch reached,
+    /// not about the tree.
+    /// </para>
     /// </remarks>
     /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="TreeOrphanedLeafReport.ResumeFrom"/>, passed
+    /// back unaltered, or <c>null</c> to start a new pass.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's orphaned-leaf audit, with one finding per orphan.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="treeId"/> is <c>null</c> or empty, or <paramref name="resumeFrom"/>
+    /// is not a token this surface produced.
+    /// </exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
     Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
         string treeId,
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -706,18 +722,44 @@ public interface ILatticeTreeAdmin
     /// <see cref="AuditOrphanedLeavesAsync"/> first: it reaches its verdict with the
     /// same code, so it reports in advance what this verb would do.
     /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch (issue 3302).</b> An earlier revision drove
+    /// every shard in one call, so on a damaged tree it outran the client's response
+    /// deadline and surfaced a timeout while the repair went on to complete
+    /// successfully - reporting failure having succeeded, and discarding the record
+    /// of what it had done. Drive this verb until
+    /// <see cref="TreeOrphanedLeafReport.IsComplete"/> is <c>true</c>, passing each
+    /// report's <see cref="TreeOrphanedLeafReport.ResumeFrom"/> to the next call.
+    /// </para>
+    /// <para>
+    /// <b>On a timeout the return value is not authoritative; the audit is.</b> A
+    /// lost reply cannot be told from a failure at the call site, so do not conclude
+    /// that nothing happened, and in particular do not retry blindly on that
+    /// assumption. Re-running is safe - the pass is idempotent, so a repaired leaf is
+    /// gone from the chain and a refused one is refused again on the same evidence -
+    /// but the way to learn the true state is
+    /// <see cref="AuditOrphanedLeavesAsync"/>, which mutates nothing. The loop is
+    /// <c>audit -&gt; repair to completion -&gt; re-audit</c>, and the re-audit is
+    /// not optional.
+    /// </para>
     /// </remarks>
     /// <param name="treeId">The tree to repair. Must not be <c>null</c> or empty.</param>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="TreeOrphanedLeafReport.ResumeFrom"/>, passed
+    /// back unaltered, or <c>null</c> to start a new pass.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The repair report, with one finding per orphan found.</returns>
     /// <exception cref="ArgumentException">
-    /// <paramref name="treeId"/> is <c>null</c>, empty, or a reserved system tree id.
+    /// <paramref name="treeId"/> is <c>null</c>, empty, or a reserved system tree id,
+    /// or <paramref name="resumeFrom"/> is not a token this surface produced.
     /// </exception>
     /// <exception cref="LatticeAuthorizationDeniedException">
     /// The caller is not authorized to manage the tree's lifecycle.
     /// </exception>
     Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
         string treeId,
+        string? resumeFrom = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

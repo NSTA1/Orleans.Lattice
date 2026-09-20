@@ -760,16 +760,20 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// Requires whole-tree read authority.
     /// </summary>
     /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="TreeOrphanedLeafReport.ResumeFrom"/>, or
+    /// <c>null</c> to start a new pass. Drive until the report is complete.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's orphaned-leaf audit.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     public Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
-        string treeId, CancellationToken cancellationToken = default)
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return UnaryAsync(
             _methods.AuditOrphanedLeaves,
-            new TreeAdminTreeRequest { TreeId = treeId },
+            new TreeAdminOrphanedLeafRequest { TreeId = treeId, ResumeFrom = resumeFrom },
             cancellationToken);
     }
 
@@ -777,18 +781,26 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// Repairs <paramref name="treeId"/> by unsplicing every descent-unreachable leaf
     /// whose keys were all shown to be readable elsewhere. An irreversible structural
     /// change. Requires whole-tree lifecycle authority.
+    /// <para>
+    /// One call is one bounded batch: drive it until the report is complete, and on a
+    /// timeout re-audit rather than trusting the absent return value.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree to repair. Must not be <c>null</c> or empty.</param>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="TreeOrphanedLeafReport.ResumeFrom"/>, or
+    /// <c>null</c> to start a new pass.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's orphaned-leaf repair report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     public Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
-        string treeId, CancellationToken cancellationToken = default)
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return UnaryAsync(
             _methods.RepairOrphanedLeaves,
-            new TreeAdminTreeRequest { TreeId = treeId },
+            new TreeAdminOrphanedLeafRequest { TreeId = treeId, ResumeFrom = resumeFrom },
             cancellationToken);
     }
 

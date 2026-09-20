@@ -123,6 +123,93 @@ public sealed class TreeAdminOrphanedLeafToolTests
         });
     }
 
+    /// <summary>
+    /// Both verbs return one bounded batch (issue 3302), so the resume token has
+    /// to be offerable by the caller. A tool that reports a resume position but
+    /// does not accept one back strands every pass on its first batch, and an
+    /// operator has no way to finish the repair at all.
+    /// </summary>
+    [Test]
+    public void Both_tools_accept_a_resume_token_so_a_bounded_pass_can_be_driven_to_completion()
+    {
+        var group = CreateGroup(enableLifecycle: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in new[] { AuditToolName, RepairToolName })
+            {
+                var schema = Tool(group, name).ProtocolTool.InputSchema;
+                Assert.That(
+                    schema.TryGetProperty("properties", out var props) && props.TryGetProperty("resumeFrom", out _),
+                    Is.True,
+                    $"{name} must accept the previous batch's resume token.");
+                Assert.That(
+                    schema.TryGetProperty("required", out var required)
+                        && required.EnumerateArray().Any(e => e.GetString() == "resumeFrom"),
+                    Is.False,
+                    $"{name} must be callable without a token to start a new pass.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// <b>Requirement 3 of issue 3302.</b> A timeout on the repair is not
+    /// distinguishable at the call site from a failure, and in the field the
+    /// grain went on to complete all 236 repairs after the client gave up. The
+    /// obvious operator response - retry - starts a second pass over a chain the
+    /// first may still be mutating. The description is the only place an agent or
+    /// operator learns otherwise, so it must state the safe loop and must warn
+    /// that the return value is not authoritative when a timeout is seen.
+    /// <para>
+    /// Asserted on the description text rather than on prose in a doc comment
+    /// because the description is what actually reaches the caller: a doc comment
+    /// deleted here changes nothing the operator sees, and this line going red is
+    /// the only signal that the warning has gone.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Repair_tool_description_states_the_safe_loop_and_warns_the_return_is_not_authoritative()
+    {
+        var group = CreateGroup(enableLifecycle: true);
+
+        var description = Tool(group, RepairToolName).ProtocolTool.Description ?? string.Empty;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Does.Contain("re-audit").IgnoreCase,
+                "the safe loop ends in a re-audit, and that is the step an operator skips");
+            Assert.That(description, Does.Contain("timeout").IgnoreCase,
+                "the failure mode has to be named to be recognised");
+            Assert.That(description, Does.Contain("not authoritative").IgnoreCase,
+                "the return value being untrustworthy after a timeout is the whole warning");
+            Assert.That(description, Does.Contain("complete=").IgnoreCase,
+                "an operator must be told which field says the pass finished");
+            Assert.That(description, Does.Contain("resume_from").Or.Contain("resumeFrom"),
+                "a bounded pass is undrivable unless the token is named");
+        });
+    }
+
+    /// <summary>
+    /// The audit's completeness flag carries a second, easily-missed claim: until
+    /// the pass is complete, an empty finding list is not the clean bill of health
+    /// the description otherwise promises. Saying only the first half would leave
+    /// an operator reading a partial batch as a cleared tree.
+    /// </summary>
+    [Test]
+    public void Audit_tool_description_qualifies_the_clean_verdict_by_completeness()
+    {
+        var group = CreateGroup(enableLifecycle: false);
+
+        var description = Tool(group, AuditToolName).ProtocolTool.Description ?? string.Empty;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Does.Contain("complete=true").IgnoreCase);
+            Assert.That(description, Does.Contain("clean bill of health").IgnoreCase);
+            Assert.That(description, Does.Contain("bounded batch").IgnoreCase);
+        });
+    }
+
     [Test]
     public void The_two_verbs_stay_separate_rather_than_collapsing_into_a_dry_run_flag()
     {
