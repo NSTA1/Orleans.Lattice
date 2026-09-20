@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The load-bearing tests here are the two duplicate-row cases. Orleans reads the
+/// The load-bearing tests here are the three duplicate-row cases. Orleans reads the
 /// version report with <c>SingleOrDefault()</c>, so a batch that returns two rows
 /// throws <c>InvalidOperationException("Sequence contains more than one
 /// element")</c> out of <c>WriteStateAsync</c> rather than surfacing a storage
@@ -21,6 +21,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// version by selecting it back out of <c>OrleansStorage</c> therefore returns one
 /// row per storage row, which makes such a grain permanently unwritable while it
 /// still reads cleanly (<c>ReadFromStorageKey</c> caps itself with <c>LIMIT 1</c>).
+/// </para>
+/// <para>
+/// The <c>DeleteStorageKey</c> cases carry the same weight for an additional
+/// reason. The upstream PostgreSQL form of that query is
+/// <c>DELETE ... RETURNING Version + 1</c>, which emits one row per deleted row
+/// and would therefore reintroduce that wedge on any grain identity holding a
+/// duplicate. This host's copy computes the version as a scalar instead, and
+/// <see cref="A_delete_reports_exactly_one_row_when_the_grain_identity_has_a_duplicate_row"/>
+/// is what pins the difference.
 /// </para>
 /// <para>
 /// These fixtures drive the real embedded script through a real SQLite file, so
@@ -33,7 +42,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// The upstream script this host's copy derives from has the defective form in
 /// both queries and is tracked as dotnet/orleans#11303. These tests therefore
 /// also guard the local divergence: if the vendored script is ever re-synced
-/// from upstream before that issue is fixed, the two duplicate-row cases redden.
+/// from upstream before that issue is fixed, the duplicate-row cases redden.
 /// </para>
 /// </remarks>
 [TestFixture]
@@ -48,6 +57,7 @@ public sealed class SqliteGrainStorageQueryTests
     private string _dbPath = null!;
     private string _writeSql = null!;
     private string _clearSql = null!;
+    private string _deleteSql = null!;
 
     [SetUp]
     public void SetUp()
@@ -57,6 +67,7 @@ public sealed class SqliteGrainStorageQueryTests
         new SqliteSchemaInitializer(_dbPath).Initialize();
         _writeSql = StoredQuery("WriteToStorageKey");
         _clearSql = StoredQuery("ClearStorageKey");
+        _deleteSql = StoredQuery("DeleteStorageKey");
     }
 
     [TearDown]
@@ -177,6 +188,120 @@ public sealed class SqliteGrainStorageQueryTests
         Assert.That(StorageRowCount(), Is.EqualTo(1));
     }
 
+    [Test]
+    public void A_delete_removes_the_row_entirely()
+    {
+        Write(version: null);
+        Assert.That(StorageRowCount(), Is.EqualTo(1), "the row must exist before it can be deleted");
+
+        Delete(version: 1);
+
+        // The row count is the assertion that matters. Asserting only that a read
+        // comes back with no payload is strictly weaker: the ClearStorageKey
+        // behaviour this replaces already satisfies that, because it nulls
+        // PayloadBinary and keeps the row. Only a count of zero distinguishes the
+        // two, which is the whole substance of the defect.
+        Assert.That(StorageRowCount(), Is.EqualTo(0),
+            "DeleteStorageKey must remove the row, not null its payload.");
+    }
+
+    [Test]
+    public void A_clear_leaves_a_tombstone_row_behind_which_is_the_behaviour_delete_replaces()
+    {
+        Write(version: null);
+
+        Clear(version: 1);
+
+        // The contrast that gives the test above its meaning, pinned rather than
+        // assumed. ClearStorageKey is retained in the script because Orleans
+        // resolves it at Init unconditionally, so it stays executable and stays
+        // wrong; enabling DeleteStateOnClear is what routes clears away from it.
+        // Were this query ever changed to delete as well, this test reddens and
+        // says so, rather than the pair silently becoming the same query.
+        Assert.Multiple(() =>
+        {
+            Assert.That(StorageRowCount(), Is.EqualTo(1));
+            Assert.That(PayloadLength(), Is.Null, "the retained row carries no payload bytes");
+        });
+    }
+
+    [Test]
+    public void A_delete_reports_the_incremented_version()
+    {
+        Write(version: null);
+
+        // Orleans' ClearStateAsync feeds this straight into
+        // CheckVersionInconsistency, which raises a conflict when the reported
+        // version equals the one the grain already held. Reporting 1 back would
+        // therefore turn every successful delete into an
+        // InconsistentStateException.
+        Assert.That(Delete(version: 1), Is.EqualTo(new[] { 2 }));
+    }
+
+    [Test]
+    public void A_delete_against_a_stale_version_keeps_the_row_and_reports_the_stale_version()
+    {
+        Write(version: null);
+        Write(version: 1);
+
+        var versions = Delete(version: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(versions, Has.Count.EqualTo(1));
+            Assert.That(versions[0], Is.EqualTo(1),
+                "a reported version equal to the grain's own version is what makes Orleans "
+                + "raise InconsistentStateException.");
+            Assert.That(StorageRowCount(), Is.EqualTo(1),
+                "a delete that lost the optimistic-concurrency check must not remove the row.");
+        });
+    }
+
+    [Test]
+    public void A_delete_reports_exactly_one_row_when_the_grain_identity_has_a_duplicate_row()
+    {
+        Write(version: null);
+        DuplicateEveryStorageRow();
+
+        var versions = Delete(version: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(versions, Has.Count.EqualTo(1),
+                "ClearStateAsync reads this with SingleOrDefault(). Upstream's "
+                + "DELETE ... RETURNING form emits one row per deleted row, so it would throw "
+                + "InvalidOperationException('Sequence contains more than one element') here.");
+            Assert.That(versions[0], Is.EqualTo(2));
+            Assert.That(StorageRowCount(), Is.EqualTo(0),
+                "both duplicated rows match the identity and the version, so both go.");
+        });
+    }
+
+    [Test]
+    public void A_grain_that_was_deleted_can_be_written_again_from_scratch()
+    {
+        Write(version: null);
+        Delete(version: 1);
+
+        // After a delete-on-clear Orleans sets ETag to null and RecordExists to
+        // false, so the next write arrives on the first-write path rather than
+        // the update path. The row must come back at version 1.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Write(version: null), Is.EqualTo(new[] { 1 }));
+            Assert.That(StorageRowCount(), Is.EqualTo(1));
+        });
+    }
+
+    private long? PayloadLength()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT LENGTH(PayloadBinary) FROM OrleansStorage LIMIT 1;";
+        var value = command.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt64(value);
+    }
+
     private void DuplicateEveryStorageRow()
     {
         using var connection = Open();
@@ -192,6 +317,8 @@ public sealed class SqliteGrainStorageQueryTests
     private List<int> Write(int? version) => Run(_writeSql, version, payload: true);
 
     private List<int> Clear(int? version) => Run(_clearSql, version, payload: false);
+
+    private List<int> Delete(int? version) => Run(_deleteSql, version, payload: false);
 
     private List<int> Run(string sql, int? version, bool payload)
     {

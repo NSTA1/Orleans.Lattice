@@ -150,7 +150,9 @@ public sealed class LeafCursorReporterShedTests
     [Test]
     public void A_shard_with_no_recorded_pressure_is_never_shed()
     {
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(ShardKey()), Is.False,
+        Assert.That(
+            WalMaterialiserPinPressure.EvaluateShed(ShardKey(), ceilingMs: null),
+            Is.EqualTo(WalMaterialiserPinPressure.PinShedDecision.Proceed),
             "an unmeasured shard must behave exactly as every pre-#2014 build did");
     }
 

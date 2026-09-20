@@ -244,6 +244,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextHostConfiguration.WorkspaceRootKey,
         RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
         RepoContextPinBucketing.PinBucketsKey,
+        RepoContextPinShedCeiling.PinShedCeilingKey,
         RepoContextWalRetention.MaxRetainedBytesKey,
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
@@ -348,6 +349,18 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 RepoContextPinBucketing.PinBucketsKey,
                 RepoContextPinBucketing.ResolveBucketCount,
                 RepoContextPinBucketing.DefaultPinBuckets),
+
+            // Reported through Knob rather than through a nullable helper even though
+            // zero is a meaningful state here. Zero is a value an operator TYPES, not
+            // an absence: the host arms this ceiling by default, so the only way to
+            // read a zero is that somebody disarmed it deliberately, and printing it
+            // as a plain zero says exactly that. The reading that would mislead is the
+            // opposite one - a blank - which is why this is not folded in with the
+            // optional byte ceiling below.
+            Knob(
+                RepoContextPinShedCeiling.PinShedCeilingKey,
+                RepoContextPinShedCeiling.ResolveCeilingSeconds,
+                RepoContextPinShedCeiling.DefaultPinShedCeilingSeconds),
 
             // Rendered through its own helper rather than Knob, because its resolved value
             // is nullable and null is a meaningful state rather than an absence: it is the

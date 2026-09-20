@@ -106,6 +106,43 @@ public static class DurabilitySelector
                     {
                         options.Invariant = PostgresInvariantName;
                         options.ConnectionString = config.PostgresConnectionString!;
+
+                        // DeleteStateOnClear is deliberately left at Orleans'
+                        // default of false here, unlike the Sqlite and Azure
+                        // branches below. It is not an oversight and it is not a
+                        // judgement that tombstoned rows are acceptable on
+                        // Postgres - they are not - it is that this host cannot
+                        // guarantee the query the option requires exists.
+                        //
+                        // Enabling it makes Orleans resolve the query key
+                        // 'DeleteStorageKey' during AdoNetGrainStorage.Init and
+                        // throw when it is absent, which fails SILO STARTUP
+                        // rather than degrading at the first clear. The Sqlite
+                        // branch can carry that coupling safely because this
+                        // repository owns the schema and SqliteSchemaInitializer
+                        // reapplies it INSERT OR REPLACE on every start, so the
+                        // key cannot be missing. No Postgres schema ships here
+                        // at all: the catalogue is provisioned by the operator
+                        // from whichever Orleans script version they used, and
+                        // this host never reads or repairs it. Turning the
+                        // option on would therefore convert an absent query in a
+                        // store outside this repository's control into a
+                        // container that will not boot.
+                        //
+                        // That risk is live rather than theoretical. Orleans
+                        // only aligned its PostgreSQL-Persistence.sql with its
+                        // own PostgreSQL-Persistence-3.6.0.sql migration in
+                        // dotnet/orleans#11247, so whether DeleteStorageKey is
+                        // present depends on both the script version and the
+                        // provisioning path taken.
+                        //
+                        // To opt in, apply a DeleteStorageKey definition to the
+                        // OrleansQuery catalogue of the target database and set
+                        // this to true. Prefer the scalar version-report shape
+                        // used by this repository's SQLite script over upstream's
+                        // DELETE ... RETURNING, which emits one row per deleted
+                        // row and throws out of Orleans' SingleOrDefault() when a
+                        // grain identity has acquired a duplicate row.
                     });
                     break;
                 case RelationalStore.Azure:
@@ -113,7 +150,21 @@ public static class DurabilitySelector
                     // so it is wired through the captured silo builder (same DI
                     // container) under the same provider name.
                     silo.AddAzureTableGrainStorage(name, options =>
-                        options.TableServiceClient = new TableServiceClient(config.AzureConnectionString!));
+                    {
+                        options.TableServiceClient = new TableServiceClient(config.AzureConnectionString!);
+
+                        // Delete the entity on clear rather than retaining it
+                        // with a null payload. The Azure Table provider honours
+                        // this directly against the table API, so unlike the
+                        // relational providers there is no query catalogue and
+                        // therefore no schema coupling to satisfy first. The
+                        // growth this prevents is a property of the grain keys,
+                        // not of the backing store - several grain types here are
+                        // keyed generationally, so a retained row is never
+                        // revisited and the population only grows - so the same
+                        // defect would apply to an Azure deployment.
+                        options.DeleteStateOnClear = true;
+                    });
                     break;
                 case RelationalStore.Sqlite:
                 default:
@@ -121,6 +172,23 @@ public static class DurabilitySelector
                     {
                         options.Invariant = SqliteSchemaInitializer.InvariantName;
                         options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(config.SqlitePath);
+
+                        // Delete the grain row on clear rather than nulling its
+                        // payload and keeping it. Without this, nothing in this
+                        // deployment ever removes a grain-state row: measured on
+                        // the deployed container, 29.8% of OrleansStorage rows
+                        // were dead tombstones accruing at roughly 3,000/day.
+                        //
+                        // This is coupled to the DeleteStorageKey query in
+                        // Persistence/Sqlite/SQLite-Persistence.sql and the two
+                        // must never be separated - Orleans throws at silo
+                        // startup when this is true and that key is absent. The
+                        // coupling is safe on this branch specifically because
+                        // SqliteSchemaInitializer reapplies the embedded script
+                        // INSERT OR REPLACE on every start, so an existing
+                        // database picks the query up on the next deploy with no
+                        // migration step.
+                        options.DeleteStateOnClear = true;
                     });
                     break;
             }

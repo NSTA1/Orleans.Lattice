@@ -80,6 +80,33 @@ public static class LatticeMetrics
     /// </summary>
     public const string TagPartition = "partition";
 
+    /// <summary>
+    /// Tag key for the durable leaf-materialiser <b>pin shard</b> index.
+    /// <para>
+    /// <b>This does not join to <see cref="TagShard"/> and must never be
+    /// reported as it.</b> <see cref="TagShard"/> is the physical WAL shard: a
+    /// mutation's partition, chosen by hashing the mutation key modulo
+    /// <see cref="LatticeOptions.WalPartitions"/>, and it is the axis
+    /// <see cref="WalEntriesTrimmed"/> is attributed on. A pin shard is chosen
+    /// by hashing the <i>consumer id</i> modulo
+    /// <see cref="LatticeOptions.WalMaterialiserPinShards"/>
+    /// (<c>WalMaterialiserPinRouting.ShardKey</c>). The two are unrelated
+    /// routing functions over unrelated inputs.
+    /// </para>
+    /// <para>
+    /// The hazard is concrete rather than theoretical, because both options
+    /// default to <b>8</b>: every series on both axes is labelled <c>0</c>
+    /// through <c>7</c>, so a dashboard or ad-hoc query that joins
+    /// <c>pin_shard=N</c> to <c>shard=N</c> returns a well-formed, entirely
+    /// meaningless correlation rather than an obvious error. This follows the
+    /// precedent set by <see cref="TagPartition"/>, which exists for the weaker
+    /// version of the same problem - a routing key that <i>does</i> line up 1:1
+    /// with the shard index today, separated anyway so a later fan-out shape
+    /// could not silently overload <see cref="TagShard"/>.
+    /// </para>
+    /// </summary>
+    public const string TagPinShard = "pin_shard";
+
     /// <summary>Tag key for the operation kind (e.g. <c>keys</c> or <c>entries</c> on scan histograms).</summary>
     public const string TagOperation = "operation";
 
@@ -2715,19 +2742,127 @@ public static class LatticeMetrics
     /// write demonstrated the store is not keeping up. Tagged with
     /// <see cref="TagTree"/>.
     /// <para>
-    /// Shedding is always safe - a shed report leaves the durable pin staler,
-    /// which only ever retains more WAL - and it is the caller-side half of the
-    /// issue #2012 fix: declining to enqueue removes queueing delay that a
-    /// grain-side refusal could not, because a refusal still has to reach the
-    /// front of the non-reentrancy queue before it can be issued. A sustained
-    /// non-zero rate means the pin store is the bottleneck; pair it with
-    /// <see cref="MaterialiserPinDurableWriteLatency"/> and consider raising
+    /// Shedding is safe for <i>durability</i> - a shed report leaves the durable
+    /// pin staler, which only ever retains more WAL - and it is the caller-side
+    /// half of the issue #2012 fix: declining to enqueue removes queueing delay
+    /// that a grain-side refusal could not, because a refusal still has to reach
+    /// the front of the non-reentrancy queue before it can be issued. A
+    /// sustained non-zero rate means the pin store is the bottleneck; pair it
+    /// with <see cref="MaterialiserPinDurableWriteLatency"/> and consider raising
     /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/>.
+    /// </para>
+    /// <para>
+    /// <b>"Only ever retains more WAL" is a statement about correctness, not
+    /// about boundedness, and issue #3310 is the case where the distinction
+    /// binds.</b> Because a shed report is not merely deferred but dropped, and
+    /// because the write whose cost opens the shed window is itself exempt from
+    /// the gate, a shard under sustained pressure can re-open its own window
+    /// indefinitely. The durable pin then stops restamping entirely while the
+    /// checkpoint it should be tracking advances - observed on a live estate as
+    /// an offset floor frozen at a single value across 40 minutes while the WAL
+    /// grew 1610 -> 1785 MB and the checkpoint passed it by more than 9,000
+    /// offsets. Read this counter with
+    /// <see cref="MaterialiserPinShedStallSeconds"/>, which is the series that
+    /// distinguishes a healthy burst of shedding from a shard that has not let a
+    /// report through in hours: this counter rises identically in both cases.
+    /// </para>
+    /// <para>
+    /// Tagged with <see cref="TagPinShard"/> as well as <see cref="TagTree"/>
+    /// since issue #3310. Summed to the tree, an actively-reporting majority of
+    /// pin shards masks a stalled minority - the same masking that
+    /// <see cref="WalEntriesTrimmed"/> warns about on its own axis. Note the two
+    /// shard axes are <b>not</b> joinable; see <see cref="TagPinShard"/>.
     /// </para>
     /// </summary>
     public static readonly Counter<long> MaterialiserPinReportsShed =
         Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.reports_shed", unit: "{report}",
-            description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree.");
+            description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree and pin shard.");
+
+    /// <summary>
+    /// Counter of coalescible leaf-materialiser pin reports that were
+    /// <b>forced through</b> a live shed window because the shard had been
+    /// shedding continuously for longer than
+    /// <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/>. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagPinShard"/>.
+    /// <para>
+    /// <b>This is the loud half of a bound, and a non-zero value is a report
+    /// about the estate rather than an error.</b> It means the self-tuning shed
+    /// window of issue #2012 stopped behaving as the short hold-off it was
+    /// designed to be and became a de facto latch, and that the ceiling added
+    /// for issue #3310 broke that latch to let coverage restamp. Forcing costs
+    /// exactly one enqueued write per ceiling period per shard, so it bounds
+    /// pin staleness - and therefore retained WAL - at the price of a duty cycle
+    /// the #2012 shedding still dominates.
+    /// </para>
+    /// <para>
+    /// <b>Forcing cannot cause data loss and is not a fail-open.</b> A forced
+    /// report publishes <i>more</i> durability evidence, never less, and the
+    /// offset it carries was already clamped to
+    /// <c>min(checkpoint, durable snapshot coverage)</c> inside the leaf by
+    /// <c>ResolveDurablePinForPartition</c> before the reporter ever saw it. No
+    /// scheduling decision at this seam can produce an offset exceeding proven
+    /// durable coverage, so this path cannot authorise a trim past it - the
+    /// failure mode of issue #3300, which is this same seam failing in the
+    /// opposite direction.
+    /// </para>
+    /// <para>
+    /// The ceiling is opt-in, so this counter is flat at zero unless
+    /// <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/> is configured.
+    /// A flat zero therefore means "no bound is armed", not "no stall is
+    /// happening"; <see cref="MaterialiserPinShedStallSeconds"/> is the series
+    /// that reports the stall itself and is emitted either way.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinShedForced =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.shed_forced", unit: "{report}",
+            description: "Pin reports forced through a shed window that exceeded the configured ceiling, tagged by tree and pin shard.");
+
+    /// <summary>
+    /// Observable gauge of how long each durable leaf-materialiser pin shard has
+    /// been shedding <b>continuously</b> - the age of its current unbroken run
+    /// of shed reports, in seconds. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagPinShard"/>. Reads <c>0</c> for a shard that is not
+    /// currently shedding, and resets the instant any report gets through,
+    /// whether the window lapsed naturally or
+    /// <see cref="MaterialiserPinShedForced"/> broke it.
+    /// <para>
+    /// <b>This is the only series that separates healthy shedding from a latched
+    /// shard, and it exists because a counter cannot.</b>
+    /// <see cref="MaterialiserPinReportsShed"/> rises at the same rate whether a
+    /// shard sheds a burst and recovers within a second or has not restamped
+    /// coverage since the process started - the volume of shed work is identical,
+    /// and only elapsed time without progress tells the two apart. That is the
+    /// same reasoning that produced
+    /// <see cref="WalGcDurableFloorStallSeconds"/> for issue #3300, one layer
+    /// further down: that series reports <i>that</i> a tree's durable floor has
+    /// stalled and explicitly directs the operator to suspect the materialiser,
+    /// the checkpoint flush, or the collector; this one answers which, and on
+    /// which shard.
+    /// </para>
+    /// <para>
+    /// <b>Emitted regardless of whether the ceiling is configured, which is the
+    /// point.</b> With
+    /// <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/> armed, no run
+    /// can exceed the ceiling and this gauge is a bounded sawtooth. With the
+    /// ceiling left at its default of <c>null</c>, runs are unbounded and this
+    /// gauge is the <i>only</i> thing that makes that visible - so a stall
+    /// cannot be both unbounded and silent, which is the pair of properties
+    /// issue #3310 set out to break.
+    /// </para>
+    /// <para>
+    /// A shard that stops being reported to altogether holds its run open and
+    /// the value keeps climbing. That is deliberate: the quantity is "time since
+    /// this shard last let a coalescible report through", and a shard nobody
+    /// reports to is restamping coverage exactly as little as one that sheds
+    /// every report.
+    /// </para>
+    /// </summary>
+    public static readonly ObservableGauge<long> MaterialiserPinShedStallSeconds =
+        Meter.CreateObservableGauge(
+            "orleans.lattice.materialiser.pin.shed_stall_seconds",
+            static () => BPlusTree.Grains.WalMaterialiserPinPressure.ObserveShedStalls(),
+            unit: "s",
+            description: "Age of each pin shard's current unbroken shed run, tagged by tree and pin shard.");
 
     /// <summary>
     /// Counter of leaf-materialiser pin merges classified by what the merge

@@ -81,6 +81,11 @@ public sealed class DurabilitySelectorWiringTests
         {
             Assert.That(options.Invariant, Is.EqualTo(DurabilitySelector.PostgresInvariantName));
             Assert.That(options.ConnectionString, Is.EqualTo(PostgresConnection));
+            Assert.That(options.DeleteStateOnClear, Is.False,
+                "deliberate: this host ships no Postgres schema, so it cannot guarantee the "
+                + "DeleteStorageKey query the option requires exists. Orleans throws at silo "
+                + "startup when it does not, which would turn an operator-provisioned catalogue "
+                + "outside this repository's control into a container that will not boot.");
         });
     }
 
@@ -97,6 +102,10 @@ public sealed class DurabilitySelectorWiringTests
         {
             Assert.That(options.Invariant, Is.EqualTo(SqliteSchemaInitializer.InvariantName));
             Assert.That(options.ConnectionString, Does.Contain("/mnt/data/repo.db"));
+            Assert.That(options.DeleteStateOnClear, Is.True,
+                "cleared rows must be removed rather than nulled and retained; the embedded "
+                + "script defines the DeleteStorageKey query this requires and "
+                + "SqliteSchemaInitializer reapplies it on every start. See issue #3307.");
         });
     }
 

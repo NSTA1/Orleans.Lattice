@@ -191,6 +191,20 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.LeafProjectionRetention)} must be positive or {nameof(Timeout.InfiniteTimeSpan)}.");
         }
+        // Null is the disarmed state and is the library default, so only a set
+        // value is checked. A non-positive value is REJECTED rather than
+        // quietly read as disarmed: TimeSpan.Zero would make every shed run
+        // instantly older than its ceiling and force every report through,
+        // disabling the issue #2014 back-pressure outright and re-saturating
+        // the pin queue. Silently substituting "disarmed" for that would hide
+        // the typo instead; failing names it.
+        if (options.WalMaterialiserPinShedCeiling is { } pinShedCeiling
+            && pinShedCeiling <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.WalMaterialiserPinShedCeiling)} must be positive, or null to disarm it "
+                + "(a non-positive ceiling would force every pin report through and re-saturate the very queue the shedding protects).");
+        }
         // Only an explicitly configured ceiling is validated. Left null the
         // option derives from the silo's response timeout, and the resolver
         // clamps that derivation itself, so there is nothing here to reject.

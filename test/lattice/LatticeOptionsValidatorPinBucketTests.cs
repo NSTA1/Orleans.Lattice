@@ -39,6 +39,54 @@ public class LatticeOptionsValidatorPinBucketTests
         });
     }
 
+    [Test]
+    public void WalMaterialiserPinShedCeiling_defaults_to_disarmed()
+    {
+        // The issue #3310 ceiling ships OFF, for the same compatibility reason as
+        // the bucket count above: arming it changes when a host writes durable
+        // pins, and a library cannot know whether a given deployment's pin store
+        // can absorb that. The repocontext container arms it explicitly at its own
+        // wiring seam.
+        var options = new LatticeOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.WalMaterialiserPinShedCeiling, Is.Null);
+            Assert.That(Validate(_ => { }).Succeeded, Is.True);
+        });
+    }
+
+    [TestCase(1)]
+    [TestCase(120)]
+    [TestCase(3600)]
+    public void A_positive_pin_shed_ceiling_succeeds(int seconds)
+        => Assert.That(
+            Validate(o => o.WalMaterialiserPinShedCeiling = TimeSpan.FromSeconds(seconds)).Succeeded,
+            Is.True);
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void A_non_positive_pin_shed_ceiling_is_rejected_rather_than_read_as_disarmed(int seconds)
+    {
+        // The distinction this asserts is the whole point of the branch. Reading a
+        // zero as "disarmed" would be the lenient choice and would hide an
+        // operator's typo; reading it literally would be worse still, because a
+        // zero-length ceiling makes every shed run instantly older than it and
+        // forces EVERY report through, disabling the issue #2014 back-pressure and
+        // re-saturating the pin queue the shedding exists to protect. Null is the
+        // only expression of "disarmed", so a non-positive value is always a
+        // mistake and is named as one.
+        var result = Validate(o => o.WalMaterialiserPinShedCeiling = TimeSpan.FromSeconds(seconds));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalMaterialiserPinShedCeiling)));
+            Assert.That(result.FailureMessage, Does.Contain("null to disarm"),
+                "the message must name the ONLY way to turn the ceiling off, or an operator who wanted it off will reach for zero again");
+        });
+    }
+
     [TestCase(1)]
     [TestCase(8)]
     [TestCase(4096)]
