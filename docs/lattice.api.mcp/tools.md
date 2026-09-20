@@ -271,7 +271,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_wal_move_plan` | read | Preview moving a WAL partition to a target storage provider. |
 | `lattice_treeadmin_wal_move_execute` | manage | Execute a planned WAL partition move. |
 | `lattice_treeadmin_wal_move_reclaim` | manage | Reclaim source WAL storage after a move. |
-| `lattice_treeadmin_orphaned_leaves_audit` | read | Audit a tree for descent-unreachable leaves and report what the repair would do about each. One bounded batch per call; drive to `complete=true`. |
+| `lattice_treeadmin_orphaned_leaves_audit` | read | Audit a tree for descent-unreachable leaves and report what the repair would do about each, plus every region it could not establish a verdict over. One bounded batch per call; drive to `complete=true`, then check `verdict_complete`. |
 | `lattice_treeadmin_orphaned_leaves_repair` | manage | Unsplice every orphaned leaf whose keys were all verified readable elsewhere, releasing the WAL trim floor. One bounded batch per call; drive to `complete=true`, then re-audit. On a timeout the return value is not authoritative. |
 
 ### Views, tag indexes, compaction, and retention

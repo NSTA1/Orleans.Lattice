@@ -20,11 +20,14 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// </para>
 /// <para>
 /// An empty <see cref="Findings"/> with a non-zero <see cref="LeavesWalked"/> is a
-/// clean bill of health for the tree, and is as useful an answer as a finding: it
-/// rules the orphaned-leaf defect out as the cause of an unbounded WAL - but only
-/// once <see cref="IsComplete"/> is <see langword="true"/>. One call is one bounded
-/// batch, so on an incomplete batch an empty <see cref="Findings"/> means "nothing
-/// wrong in the part of the tree this batch reached", which is a much weaker claim.
+/// clean bill of health for the tree, and is then as useful an answer as a finding:
+/// it rules the orphaned-leaf defect out as the cause of an unbounded WAL. That
+/// reading needs <b>both</b> <see cref="IsComplete"/> and
+/// <see cref="VerdictComplete"/> to be <see langword="true"/>, because they answer
+/// different questions. One call is one bounded batch, so on an incomplete batch an
+/// empty <see cref="Findings"/> means "nothing wrong in the part of the tree this
+/// batch reached". A non-empty <see cref="Gaps"/> means the pass could not judge
+/// part of what it did reach, so the zero there is not evidence either (issue 3301).
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -65,6 +68,30 @@ public sealed record TreeOrphanedLeafReport
     /// of work budget and its counts describe only the part of the tree it reached.
     /// </summary>
     public bool IsComplete => ResumeFrom is null;
+
+    /// <summary>
+    /// Every region of the tree the pass could not establish a verdict over, in
+    /// shard order (issue 3301). Empty is the healthy answer.
+    /// <para>
+    /// Read this before reading <see cref="Findings"/>. A shard that declined, or a
+    /// sibling chain severed part-way across the keyspace, contributes zero
+    /// findings by construction, and on a tree wide enough to matter that zero is
+    /// indistinguishable from health unless the gap is surfaced.
+    /// </para>
+    /// </summary>
+    [Id(5)] public ImmutableArray<TreeOrphanedLeafGap> Gaps { get; init; } = [];
+
+    /// <summary>
+    /// Whether the pass could establish a verdict over everything it reached, and
+    /// so whether <see cref="Findings"/> may be read as a verdict over it.
+    /// <para>
+    /// <b>An operator deciding that a tree needs no attention must check this, and
+    /// <see cref="IsComplete"/>, before checking <see cref="Findings"/>.</b> False
+    /// means the answer is "I could not establish this", not "there is nothing
+    /// here".
+    /// </para>
+    /// </summary>
+    public bool VerdictComplete => Gaps.IsDefaultOrEmpty;
 
     /// <summary>
     /// How many leaves the repair unspliced. Always zero for an audit, whose

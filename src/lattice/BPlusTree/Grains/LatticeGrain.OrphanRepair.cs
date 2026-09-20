@@ -25,6 +25,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// This file now returns after a bounded batch with a cursor, so the deadline
 /// is not the thing that decides whether an operator gets an answer.
 /// </para>
+/// <para>
+/// <b>It also reduces the per-shard gaps (issue 3301).</b> A shard that
+/// declined the pass, or whose sibling chain is severed part-way across the
+/// keyspace, contributes zero findings by construction, so the reduction
+/// carries those regions out in <c>Gaps</c> rather than letting the resulting
+/// zero read as a clean tree. That is a separate question from the cursor
+/// above: <c>ResumeFrom</c> says how far the batch got, <c>Gaps</c> says what
+/// it could not judge of the part it reached.
+/// </para>
 /// </summary>
 internal sealed partial class LatticeGrain
 {
@@ -96,6 +105,7 @@ internal sealed partial class LatticeGrain
 
         var leavesWalked = 0;
         var findings = new List<OrphanedLeafFinding>();
+        var gaps = new List<OrphanedLeafAuditGap>();
         string? nextResumeFrom = null;
 
         // Sequential across shards, not concurrent, and deliberately unlike
@@ -129,6 +139,7 @@ internal sealed partial class LatticeGrain
 
                 leavesWalked += page.LeavesWalked;
                 if (page.Findings is { Count: > 0 }) findings.AddRange(page.Findings);
+                if (page.Gaps is { Count: > 0 }) gaps.AddRange(page.Gaps);
 
                 shardCursor = page.ResumeFromInclusive;
 
@@ -159,6 +170,7 @@ internal sealed partial class LatticeGrain
             DryRun = dryRun,
             LeavesWalked = leavesWalked,
             Findings = findings,
+            Gaps = gaps,
             ResumeFrom = nextResumeFrom,
         };
     }

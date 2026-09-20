@@ -6,13 +6,23 @@ namespace Orleans.Lattice;
 /// <see cref="ILattice.InspectOrphanedLeavesAsync"/> and
 /// <see cref="ILattice.RepairOrphanedLeavesAsync"/>.
 /// <para>
-/// <b>Read <see cref="IsComplete"/> before reading <see cref="Findings"/>.</b>
-/// A batch stops when its work budget is spent and names where to resume in
-/// <see cref="ResumeFrom"/>, so an empty <see cref="Findings"/> means "no
-/// orphan in the part of the tree this batch reached", not "no orphan in the
-/// tree". Only an empty <see cref="Findings"/> on a batch whose
-/// <see cref="IsComplete"/> is <see langword="true"/> - or on the last of a
-/// run of batches driven to completion - is the healthy whole-tree answer.
+/// <b>Read <see cref="IsComplete"/> and <see cref="VerdictComplete"/> before
+/// reading <see cref="Findings"/>.</b> They answer two different questions and
+/// an empty findings list is the healthy whole-tree answer only when both are
+/// <see langword="true"/>.
+/// </para>
+/// <para>
+/// <see cref="IsComplete"/> asks <i>how far did the pass get</i>. A batch stops
+/// when its work budget is spent and names where to resume in
+/// <see cref="ResumeFrom"/>, so an empty <see cref="Findings"/> means "no orphan
+/// in the part of the tree this batch reached", not "no orphan in the tree".
+/// </para>
+/// <para>
+/// <see cref="VerdictComplete"/> asks <i>could the pass judge what it reached</i>.
+/// A shard that declined, or a sibling chain severed part-way across the
+/// keyspace, contributes zero findings by construction, so the pass reports
+/// those regions in <see cref="Gaps"/> rather than letting the resulting zero
+/// read as health (issue 3301).
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -64,6 +74,32 @@ public readonly record struct OrphanedLeafRepairReport
     /// and shard order across the tree.
     /// </summary>
     [Id(2)] public IReadOnlyList<OrphanedLeafFinding> Findings { get; init; }
+
+    /// <summary>
+    /// Every region of the tree the pass could not establish a verdict over,
+    /// in shard order (issue 3301).
+    /// <para>
+    /// A gap is not a finding and not an error - it is the pass reporting
+    /// where it did not look, which is the one thing an empty findings list
+    /// could not previously express. It is distinct from
+    /// <see cref="IsComplete"/>: a batch may stop early with its budget spent
+    /// and still have judged every leaf it touched, and a batch may run to the
+    /// end of the tree and still have been unable to judge part of it.
+    /// </para>
+    /// </summary>
+    [Id(4)] public IReadOnlyList<OrphanedLeafAuditGap> Gaps { get; init; }
+
+    /// <summary>
+    /// Whether the pass could establish a verdict over everything it reached,
+    /// and so whether <see cref="Findings"/> may be read as a verdict over it.
+    /// <para>
+    /// <b>An operator deciding that a tree needs no attention must check this,
+    /// and <see cref="IsComplete"/>, before checking <see cref="Findings"/>.</b>
+    /// False means the answer is "I could not establish this", not "there is
+    /// nothing here".
+    /// </para>
+    /// </summary>
+    public bool VerdictComplete => Gaps is null or { Count: 0 };
 
     /// <summary>
     /// How many orphans were unspliced and had their materialiser pins

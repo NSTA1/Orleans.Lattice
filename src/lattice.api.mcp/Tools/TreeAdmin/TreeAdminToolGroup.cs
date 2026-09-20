@@ -219,10 +219,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "unsplice it or refuse. Run this before the repair verb, which reaches its verdict with "
                 + "the same code. ONE CALL IS ONE BOUNDED BATCH: it returns when its work budget is spent and "
                 + "reports complete=false with a resume_from token. Pass that token back unaltered to continue, and "
-                + "drive the pass until complete=true. An empty finding list is a clean bill of health that rules "
-                + "this defect out as the cause of an unbounded WAL ONLY when complete=true; on a partial batch it "
-                + "says merely that the part of the tree this batch reached was clean. A pure read with no side "
-                + "effects. Requires whole-tree read authority. Read-only."),
+                + "drive the pass until complete=true. TWO FLAGS GOVERN HOW TO READ THE FINDING LIST. complete says "
+                + "how far the batch got; verdict_complete says whether it could judge what it reached. The pass also "
+                + "reports every region it could NOT establish a verdict over - a shard that declined because it was "
+                + "mid-split or already draining, a sibling chain severed part-way across the keyspace, a leaf whose "
+                + "declared bounds make reachability undecidable - and a region that was not judged contributes zero "
+                + "findings by construction. An empty finding list is a clean bill of health that rules this defect "
+                + "out as the cause of an unbounded WAL ONLY when complete=true AND verdict_complete=true. On a "
+                + "partial batch it says merely that the part of the tree this batch reached was clean; when "
+                + "verdict_complete=false the answer is 'this could not be established', not 'there is nothing "
+                + "here'. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
                 "Preview a WAL partition move",
                 "Computes a read-only preview of moving a WAL partition to a target storage provider key: the offset "

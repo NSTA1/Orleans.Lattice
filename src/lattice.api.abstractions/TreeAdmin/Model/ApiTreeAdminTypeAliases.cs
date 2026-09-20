@@ -164,4 +164,10 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeOrphanedLeafReport"/>.</summary>
     public const string TreeOrphanedLeafReport = "oit.or";
+
+    /// <summary>Alias for <see cref="TreeOrphanedLeafGap"/>.</summary>
+    public const string TreeOrphanedLeafGap = "oit.og";
+
+    /// <summary>Alias for <see cref="TreeOrphanedLeafGapReason"/>.</summary>
+    public const string TreeOrphanedLeafGapReason = "oit.gp";
 }

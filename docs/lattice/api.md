@@ -1316,10 +1316,40 @@ and surfaced a `TimeoutException` to the caller - after the grain had
 already completed every repair. The operation reported failure having
 entirely succeeded.
 
+### Read `VerdictComplete` too, and read it before `Findings`
+
+`IsComplete` and `VerdictComplete` answer different questions.
+`IsComplete` says how far the pass got; `VerdictComplete` says whether
+it could judge what it reached.
+
+A report carries `Gaps`: every region of the tree the pass could not
+establish a verdict over. A shard that declined because it was mid-split
+or already draining, a sibling chain severed part-way across the
+keyspace, a leaf whose declared bounds make reachability undecidable,
+and a shard-level budget exhausted with no position to resume from are
+all reported here rather than silently folded into an empty findings
+list.
+
+This matters because the enumeration walks each shard's sibling chain
+from its head, and the chain is the same structure an orphan damages.
+Before issue 3301 a pointer severed mid-keyspace ended the walk, the
+drive read the resulting null resume position as completion, and the
+shard was reported examined and clean - while range scans, which enter
+the chain by descending on their own lower bound, kept reaching the
+segment past the break and reporting orphans in it. Both were telling
+the truth about the same shard.
+
+`VerdictComplete` is true only when `Gaps` is empty. **An empty
+`Findings` list is a clean bill of health only when `IsComplete` and
+`VerdictComplete` are both true.** When either is false the answer is
+"this could not be established", not "there is nothing here", and it
+does not rule an orphan out as the cause of an unbounded WAL.
+
 ```csharp verify
 // Dry run first: see what would be repaired, and why anything is refused.
 // One call is one bounded batch, so drive it until IsComplete.
 var findings = new List<OrphanedLeafFinding>();
+var gaps = new List<OrphanedLeafAuditGap>();
 string? cursor = null;
 int refused = 0;
 do
@@ -1327,10 +1357,18 @@ do
     OrphanedLeafRepairReport batch =
         await tree.InspectOrphanedLeavesAsync(cursor, cancellationToken);
     findings.AddRange(batch.Findings);
+    gaps.AddRange(batch.Gaps);
     refused += batch.RefusedCount;
     cursor = batch.ResumeFrom;
 }
 while (cursor is not null);
+
+foreach (OrphanedLeafAuditGap gap in gaps)
+{
+    // Read this BEFORE the findings: a region that could not be judged
+    // contributes no findings by construction.
+    _ = (gap.ShardIndex, gap.Reason, gap.LeafId, gap.KeyHint);
+}
 
 foreach (OrphanedLeafFinding finding in findings)
 {
@@ -1339,6 +1377,12 @@ foreach (OrphanedLeafFinding finding in findings)
         // Investigate before escalating - a refusal means repair is unsafe.
         _ = (finding.ShardIndex, finding.LeafId, finding.Disposition, finding.UnverifiedKey);
     }
+}
+
+if (gaps.Count == 0 && findings.Count == 0)
+{
+    // The only reading that actually rules the defect out: the pass was
+    // driven to completion AND it could judge everything it reached.
 }
 
 if (findings.Count > 0 && refused == 0)
@@ -1369,6 +1413,10 @@ read a correct report incorrectly.
 - **An empty `Findings` on a partial batch is not a clean tree.** It
   says only that the part of the tree *this* batch reached was clean.
   The clean bill of health requires `IsComplete`.
+- **An empty `Findings` with a non-empty `Gaps` is not a clean tree
+  either.** A region the pass could not judge contributes zero findings
+  by construction, so the clean bill of health requires
+  `VerdictComplete` as well.
 - **If you see a timeout or any transport error, the return value is
   not authoritative, and its absence is not evidence that nothing
   happened.** The reply may have been lost after the work landed.
