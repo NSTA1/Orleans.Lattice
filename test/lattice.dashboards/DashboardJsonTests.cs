@@ -57,6 +57,33 @@ public sealed class DashboardJsonTests
             // direct operators to. Documented in both reference docs; left off
             // the bundled panels deliberately.
             "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
+
+            // The three registry fan-in gate state histograms (issue #3266) are
+            // instrument-grade diagnostics, not operator-facing signals. They
+            // exist to answer one question a rig asks and an operator does not:
+            // "did this measurement reach the regime in which the bound binds?"
+            // The bound was merged behind a benchmark rig that reported a gate
+            // width of 1.9-3.2 against a bound of 16, a ~0.002 ms admission
+            // wait, and 0.7% batched - readings that are equally consistent with
+            // a comfortable bound and with a gate that was never entered,
+            // because the permit count had no instrument at all. These three
+            // close that gap.
+            //
+            // They are deliberately NOT charted. The operator-facing signal for
+            // this gate is already on the Overview dashboard as
+            // orleans.lattice.registry.admission.wait, which is the one that
+            // sees a stall relocated out of the registry onto its callers. A
+            // permit count, a queue depth and a batch size sit flat and
+            // uninformative on a healthy deployment, and charting them would
+            // give every operator three permanently-dull graphs to explain the
+            // one that matters. Their consumer is
+            // benchmark/registry-fanin/scripts/collect-window.ps1, which reads
+            // them into the AdmissionGate block, and
+            // RegistryFanInRegimeTests, which asserts on them every CI build.
+            // Both reference docs carry rows marking them *(not charted)*.
+            "orleans.lattice.registry.admission.in_flight",
+            "orleans.lattice.registry.admission.batch.size",
+            "orleans.lattice.registry.admission.queue.depth",
         };
 
     private static IReadOnlyDictionary<string, string> ExpectedTokenToMeter { get; } =

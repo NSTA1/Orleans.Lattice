@@ -977,6 +977,88 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.registry.admission.wait", unit: "ms",
             description: "Time a registry read waited for the caller-side fan-in bound before its round trip was dispatched.");
 
+    /// <summary>
+    /// Histogram of the number of fan-in permits this silo held at the moment a
+    /// gated registry round trip was dispatched - the width the bound in
+    /// <c>RegistryFanInGate.GlobalMaxConcurrentReads</c> actually caps.
+    /// <para>
+    /// <b>Why this is not <see cref="RegistryCallInFlight"/>.</b> That instrument
+    /// counts calls executing inside the registry singleton's grain body, summed
+    /// over every caller in the cluster and including callers that never pass
+    /// through the gate at all (an Orleans client addressing
+    /// <c>ILatticeRegistry</c> directly, for one). This instrument counts permits
+    /// held by one silo's gate. They are different populations with different
+    /// ceilings, and only this one is bounded by
+    /// <c>GlobalMaxConcurrentReads</c>. Reading the registry-side width against
+    /// that constant compares two quantities that were never the same number, and
+    /// a low reading there is not evidence that the bound has room.
+    /// </para>
+    /// <para>
+    /// <b>The recorded value INCLUDES the dispatch being recorded</b>, so it runs
+    /// 1..<c>GlobalMaxConcurrentReads</c> and a recorded value equal to that
+    /// constant means the ceiling was actually reached. This deliberately differs
+    /// from the exclude-the-arrival convention of <see cref="RegistryCallInFlight"/>
+    /// and <see cref="LeafCommitInFlight"/>: under that convention a fully
+    /// saturated gate would top out one below its own bound, and a saturated
+    /// reading would be indistinguishable from an unsaturated one by inspection.
+    /// An off-by-one that makes saturation unobservable is the failure this
+    /// instrument exists to remove, so the convention is chosen for comparability
+    /// with the constant rather than for consistency with its neighbours.
+    /// </para>
+    /// <para>
+    /// Read the distribution, never the mean: permit occupancy is bursty, so a
+    /// window mean is dominated by idle time and measures something other than
+    /// the peak. The actionable reading is the share of dispatches at the
+    /// ceiling - <c>_bucket{le="16"}</c> against the total count.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> RegistryAdmissionInFlight =
+        Meter.CreateHistogram<int>("orleans.lattice.registry.admission.in_flight", unit: "{dispatch}",
+            description: "Fan-in permits held by this silo's registry gate when a gated round trip was dispatched, counting that dispatch.");
+
+    /// <summary>
+    /// Histogram of how many distinct tree ids one gated registry round trip
+    /// carried, recorded once per dispatch.
+    /// <para>
+    /// A value of one is the single-key <c>GetEntryAsync</c> path a silo takes
+    /// when nothing is queued behind the bound - byte-for-byte the traffic it had
+    /// before the gate existed - and two or more is the batched
+    /// <c>GetEntriesAsync</c> path. The share above one is therefore the share of
+    /// registry reads the bound actually coalesced, which is the only direct
+    /// evidence that the batching half of the gate ran at all. A population
+    /// sitting almost entirely at one means the gate never queued, which is a
+    /// statement about the offered load rather than about the batching.
+    /// </para>
+    /// <para>
+    /// Read beside <see cref="RegistryAdmissionInFlight"/>: batches larger than
+    /// one can only form once the permits are saturated, so a batch-size
+    /// distribution above one with a width distribution below the ceiling is
+    /// contradictory and means one of the two is being read wrongly.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> RegistryAdmissionBatchSize =
+        Meter.CreateHistogram<int>("orleans.lattice.registry.admission.batch.size", unit: "{tree}",
+            description: "Distinct tree ids carried by one gated registry round trip.");
+
+    /// <summary>
+    /// Histogram of how many distinct tree ids were already waiting for a fan-in
+    /// permit at the moment another one arrived, counting the arrival.
+    /// <para>
+    /// This is the <em>offered</em> fan-in, and it is the signal that separates
+    /// "the bound had room" from "nothing asked for it". Admission dispatches
+    /// synchronously on the arriving thread whenever a permit is free, so when
+    /// the gate is not binding every other gate instrument reports its floor - a
+    /// wait of microseconds, a width of one, a batch of one - and those floors
+    /// look exactly like a comfortable bound. They are not a weak measurement of
+    /// headroom; they are what no demand looks like. A queue depth that stays at
+    /// one says the demand never arrived, and until it rises above one no reading
+    /// from the other three is evidence about the bound at all.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> RegistryAdmissionQueueDepth =
+        Meter.CreateHistogram<int>("orleans.lattice.registry.admission.queue.depth", unit: "{tree}",
+            description: "Distinct tree ids waiting for a registry fan-in permit when another arrived, counting the arrival.");
+
     // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
 
     /// <summary>

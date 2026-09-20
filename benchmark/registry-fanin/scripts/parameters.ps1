@@ -58,6 +58,24 @@
 	Replicates              = 3             # n >= 3 per cell; the spec's floor, not a target
 	MeasureWindowSec        = 900           # 15 minutes from ready
 
+	# ---- Fan-out arm (issue #3266): the arm that reaches the bound ----
+	# Every arm above drives the gate through a DISPERSED arrival process, and
+	# dispersal is exactly why the first run of this rig could not reach the
+	# regime the bound governs. Background services are reminder-birthed on a
+	# 60-second due time, so K trees offer only ~K/60 distinct-tree resolutions
+	# per second; by Little's law the offered fan-in is ~(K/60) x latency, which
+	# at a few milliseconds is ~K/12000. Dispersal grows as fast as the estate
+	# does, so raising K moves the reading not at all - the ARRIVAL PROCESS is
+	# the lever, not the estate size.
+	#
+	# The fan-out arm therefore releases FanoutWidth distinct trees from one
+	# barrier, which is the only shape that puts more distinct ids in flight at
+	# one instant than there are permits.
+	FanoutWidth             = 256           # distinct trees released simultaneously per wave
+	FanoutWaves             = 20            # waves per run; more dispatches => a meaningful batched share
+	FanoutGapMillis         = 0             # inter-wave gap; raise it to WALK THE ARM BACK to the starved regime
+	FanoutStarvedGapMillis  = 250           # the gap the walk-back control uses
+
 	# Phase 1 DEPTH arm. Leaf count is a controlled axis in its own right, held
 	# at a low fixed value while K varies and varied at fixed K = 20, and only
 	# crossed once each has been read separately.

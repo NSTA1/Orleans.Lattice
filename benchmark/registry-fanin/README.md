@@ -260,6 +260,7 @@ indistinguishable from a correct read in the output.
 | `scripts/run-cell.ps1` | one cell = K x depth x cold start x window |
 | `scripts/run-breadth.ps1` | steady-state enumeration vs K - **superseded and unrun**; see finding 1 above, the per-tree services are reminder-birthed so a steady-state sweep samples the wrong regime |
 | `scripts/run-birth-curve.ps1` | **cold-start birth curve** - the experiment that targets the storm regime |
+| `scripts/run-fanout.ps1` | **the fan-out arm** - the only arm that reaches the regime in which the fan-in bound binds, plus its ungated A/B control; see [The fan-out arm](#the-fan-out-arm-the-only-arm-that-reaches-the-bound) |
 | `scripts/run-host-pressure.ps1` | cold start at fixed K while a throwaway burner contends for the host |
 | `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers (41) |
 
@@ -268,12 +269,13 @@ indistinguishable from a correct read in the output.
 ```powershell
 ./scripts/rig.ps1 driver -DriverArgs "create --trees 40 --leaves-per-tree 1"
 ./scripts/rig.ps1 driver -DriverArgs "probe --trees 40 --rate 100 --duration 240 --enumerate-pct 10"
+./scripts/rig.ps1 driver -DriverArgs "fanout --trees 256 --fanout-width 256 --fanout-waves 20"
 ./scripts/rig.ps1 driver -DriverArgs "teardown --trees 40"
 ```
 
-Verbs: `create`, `populate`, `probe`, `census`, `list`, `teardown`. The driver
-emits client-side timing independent of every server instrument - per-call
-latency, deadline exceptions, and peak in-flight concurrency.
+Verbs: `create`, `populate`, `probe`, `fanout`, `census`, `list`, `teardown`.
+The driver emits client-side timing independent of every server instrument -
+per-call latency, deadline exceptions, and peak in-flight concurrency.
 
 Teardown is `DeleteTreeAsync` then `UnregisterAsync`.
 
@@ -285,6 +287,195 @@ protected container `repocontextcontainer-repocontext-1` and its volume
 guard refuses to run if the rig's own project, volume, or image tag does not
 match its required prefix. The rig runs against a **separate, throwaway**
 container with its own volume, built from the same image.
+
+## The fan-out arm: the only arm that reaches the bound
+
+This section documents issue #3266 and the arm added to resolve it. It is the
+longest section in this file because the failure it describes is the kind that
+survives review: it produced a green.
+
+### The false green
+
+`RegistryFanInGate.GlobalMaxConcurrentReads` (16) was merged with this rig
+behind it. The rig was run. It reported:
+
+| figure | reported | what it was actually saying |
+|---|---|---|
+| observed gate width | 1.9 to 3.2 against a bound of 16 | not a gate reading at all - see below |
+| admission wait | ~0.002 ms | the instrument's **structural floor** |
+| reads batched | 0.7% | the **floor**, plus incidental timing |
+
+Read as a bound with comfortable headroom, that is a pass. It is not. Every one
+of those three readings is *also* exactly what the apparatus emits when the gate
+is never entered, and the two cases are indistinguishable from the readings
+alone. The run never came within a factor of five of the bound, so it never
+exercised admission, never exercised queueing, and never exercised the batching
+path the change exists to drive.
+
+**An instrument that cannot reach the failing regime yields no evidence, not
+weak evidence.** A green from such an instrument is worse than a red, because
+it additionally asserts there is nothing to fix. See "False greens - a green
+check that never exercised its property" in
+`.github/instructions/testing.instructions.md`.
+
+### The three figures were floors, and one was not a gate reading
+
+- **The ~0.002 ms admission wait is a structural floor.** `GetEntryAsync`
+  enqueues and then calls `Pump()` **synchronously on the calling thread**, so
+  an arrival that finds a free permit is dequeued by its own thread in the same
+  stack frame. No workload can make that number smaller. It is what a gate that
+  never queued emits, and reading it as "admission is fast" inverts its meaning.
+- **0.7% batched is the same fact restated.** A batch of two requires two
+  distinct ids waiting at one instant. Below the bound a small non-zero share
+  still appears, because arrivals enqueue *under* the gate lock but `Pump()`
+  runs *outside* it, so two arrivals can couple in a window of microseconds.
+  That incidental coupling is **not** the bound coalescing anything: it does not
+  grow with offered load, and it is present on a gate that never queued once.
+  This is why the acceptance criterion for the fix is "materially above 0.7%",
+  not "above zero".
+- **The 1.9-3.2 "gate width" never measured the gate.** It is
+  `MeanGlobalFanInWidth`, computed by `collect-window.ps1` from
+  `RegistryCallCensus` - concurrency *inside the registry grain body*, summed
+  over all callers including Orleans clients. `GlobalMaxConcurrentReads` bounds
+  `RegistryFanInGate._inFlight`, a silo-side permit count that **had no
+  instrument at all**. The headline criterion was therefore *unmeasurable*, not
+  unmet. Three series were added for it (see [The gate's own
+  instruments](#the-gates-own-instruments)).
+
+### Why no existing arm can reach the regime
+
+Three compounding reasons. Only the third is fatal.
+
+**1. The `probe` verb never touches the gate.** `RegistryFanInGate` hangs off
+the silo's `LatticeOptionsResolver` and is `internal`; its only callers are
+in-silo. `probe` addresses `ILatticeRegistry` as an Orleans **client**, so 100%
+of probe traffic bypasses the gate entirely. No amount of probe load can move a
+gate instrument.
+
+**2. A permit carries a batch, not a read.** `Pump()` takes
+`Math.Min(MaxBatchSize = 64, arrivals)` ids per permit, so a *single
+instantaneous burst* needs more than `16 x 64 = 960` waiting ids before the
+permits are exhausted. With arrivals **spread in time** the first 16 each take a
+permit of their own and 16 concurrent distinct reads suffice. The ~960 figure
+applies only to one simultaneous burst - which is exactly what this arm issues,
+so it is the relevant figure here.
+
+**3. Dispersal - and this is the fatal one.** The per-tree background services
+are reminder-birthed with a 60-second due time (see finding 1 above), so K trees
+yield only about `K/60` distinct-tree resolutions per second. By Little's law
+the offered fan-in is `D ~ (K/60) x L`, and at `L ~ 2-5 ms` that is
+`D ~ K/12000`. Reaching `D = 16` would need `K ~ 190,000` trees. **The
+dispersal grows exactly as fast as the load does**, so scaling the estate is
+structurally the wrong axis: every existing arm varies K or offered rate, and
+neither moves D. The **arrival process**, not the estate size, is the lever.
+
+### What the fan-out arm does
+
+`scripts/run-fanout.ps1` releases `FanoutWidth` distinct trees from **one
+barrier** per wave - the only shape that puts more distinct ids in flight at one
+instant than there are permits - and drives them through
+`ILattice.GetRoutingAsync(forceRefresh: true)`, which resolves through
+`LatticeOptionsResolver` and therefore through the gate. `forceRefresh`
+invalidates the stale alias and the shard map, so the slow path runs every time;
+`LatticeOptionsResolver.ResolveAsync` always calls
+`FetchRegistryEntryCoalescedAsync`, which is a **coalescer, not a cache** (the
+flight is retired before its result is published), so repeated waves keep
+reaching the gate rather than being served from memory.
+
+It then runs the **same load again with `--fanout-ungated`**, which addresses
+`ILatticeRegistry` directly and reaches no gate. That control is the deliverable,
+not a nicety: a rig that reaches the saturated regime but produces the same
+numbers with and without the bound has measured the workload, not the bound, and
+is still not an instrument.
+
+`-WalkBack` adds a third window at `FanoutStarvedGapMillis`, reproducing the
+dispersed regime so the original false green can be read *next to* the fixed
+one instead of being described.
+
+```powershell
+./scripts/run-fanout.ps1 -Width 256 -Waves 20 -WalkBack
+```
+
+The arm refuses to run at a width at or below the permit count, because running
+it there reproduces the false green rather than testing anything.
+
+### The gate's own instruments
+
+Three series were added, all on the `Orleans.Lattice` meter:
+
+| instrument | what it answers |
+|---|---|
+| `orleans.lattice.registry.admission.in_flight` | did gate width reach the bound? |
+| `orleans.lattice.registry.admission.queue.depth` | was the offered fan-in ever large enough for the bound to matter? |
+| `orleans.lattice.registry.admission.batch.size` | did the batching path run, and how wide? |
+
+Two design points matter for reading them:
+
+- **`in_flight` is recorded *including* the arriving dispatch**, deliberately
+  inverting the exclude-the-arrival convention used by `RegistryCallInFlight`
+  and `LeafCommitInFlight`. Under that convention a fully saturated gate tops
+  out at 15, and saturation becomes indistinguishable from headroom - which is
+  the exact failure mode this whole issue is about.
+- **`queue.depth` is the only gate signal that moves when the bound is *not*
+  binding.** It is the *offered* fan-in, so it separates "the bound had room"
+  from "nothing ever asked for it". Without it, the other two figures are
+  unreadable: that is precisely why the original run's numbers could not be
+  interpreted.
+
+`collect-window.ps1` reads all three into an `AdmissionGate` block whose
+`RegimeReached` field is the one to consult first. **Every other figure in that
+block is meaningless while it is false.**
+
+### The bound limits calls, not work
+
+Stated separately because it is the thing most likely to be misremembered. The
+bound holds the number of concurrent registry **grain calls** at 16 - which is
+the quantity the production storm was counted in, 103 timeouts against a single
+registry activation. It does **not** hold the number of reads reaching the
+registry near 16: a permit carries up to `MaxBatchSize` ids, so the ceiling on
+admitted work is the product of the two constants, `16 x 64 = 1024`, asserted by
+`RegistryFanInGateTests.The_downstream_ceiling_is_the_product_of_the_two_constants`.
+
+Measured, at a 400-wide wave: the gated path put **16** concurrent calls into the
+registry against the ungated control's **400**, while concurrent *keys* were
+**367-393** gated against **400** ungated. Anyone reading the bound as "at most
+16 reads reach the registry" is wrong by up to a factor of 64. The A/B arm
+asserts the non-separation of the key figure, so that reading fails a test rather
+than surviving as folklore.
+
+### Evidence: the regime is reached, and the arms separate
+
+From `RegistryFanInRegimeTests`, stable across three consecutive runs:
+
+| arm | offered depth | gate width | admission wait | batched | registry calls |
+|---|---|---|---|---|---|
+| saturated, 400 simultaneous | 365-384 | **16 / 16** | **60-75 ms** | **27-54%** | **16** |
+| starved, 200 at 10 ms stagger | 1 | 5-6 / 16 | 0.04-0.43 ms | 0.0% | 5-6 |
+| ungated control, 400 simultaneous | 0 | - | - | - | **400** |
+
+Against the three acceptance criteria of #3266: gate width reaches the bound
+exactly; the admission wait is four orders of magnitude above its structural
+floor; the batched share is roughly fifty times the 0.7% that was reported; and
+the bounded path is separated from the unbounded one by a factor of 25 on the
+quantity the bound governs, with the gate's instruments correctly silent on the
+control.
+
+The starved row is the original false green, reproduced. Note that it is
+produced by **dispersal**, not by a narrow barrier release: four ids hitting the
+lock at one instant couple incidentally and batch a third of the time at that
+sample size, which says nothing about a gate serving dispersed traffic.
+Reproducing a regime means reproducing its arrival process, not just its
+concurrency.
+
+### Why the demonstration also lives in the test suite
+
+`test/lattice/BPlusTree/RegistryFanInRegimeTests.cs` is the executable form of
+everything above. The rig evidence is a JSON file produced by one Docker run on
+one machine on one day: it *demonstrates* the fix but cannot *defend* it. The
+fixture runs on every CI build, so a future change that quietly returns the
+apparatus to the unmeasurable regime - widening the batch take, moving a record
+site, resolving from a cache before the gate - fails there instead of being
+rediscovered by another false green.
 
 ## Results so far
 

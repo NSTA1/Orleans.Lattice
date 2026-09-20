@@ -236,6 +236,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.registry.call.duration` | histogram (`ms`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
 | `orleans.lattice.registry.call.in_flight` | histogram (`{call}`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
 | `orleans.lattice.registry.admission.wait` | histogram (`ms`) | `tenant` | Overview | Tree-registry fan-in gate - caller-side admission wait (the only signal that sees a stall relocated out of the registry) |
+| `orleans.lattice.registry.admission.in_flight` | histogram (`{dispatch}`) | `tenant` | *(not charted)* | Fan-in permits this silo's gate held at dispatch, counting the dispatch, so the ceiling reads as `16` rather than `15` |
+| `orleans.lattice.registry.admission.batch.size` | histogram (`{tree}`) | `tenant` | *(not charted)* | Distinct tree ids per gated round trip - the share above `1` is the share the bound actually coalesced |
+| `orleans.lattice.registry.admission.queue.depth` | histogram (`{tree}`) | `tenant` | *(not charted)* | Offered fan-in at enqueue - distinguishes "the bound had room" from "nothing asked for it" |
 | `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree`, `tenant` | CommitPath | Leaf commit concurrency (in-flight) p95 |
 | `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path`, `tenant` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
 | `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2`, `tenant` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |

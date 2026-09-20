@@ -110,6 +110,7 @@ $metricsText = & curl.exe -s "http://127.0.0.1:$($config.HostPort)/metrics"
 # that looks exactly like a silo emitting no metrics at all.
 $metricLines = @($metricsText | ForEach-Object { "$_" })
 $registry = ConvertFrom-FanInPrometheusText -Lines $metricLines -NameFilter 'orleans_lattice_registry_call'
+$admission = ConvertFrom-FanInPrometheusText -Lines $metricLines -NameFilter 'orleans_lattice_registry_admission'
 $storage = ConvertFrom-FanInPrometheusText -Lines $metricLines -NameFilter 'orleans_storage_read_latency'
 
 # Derive per-operation service time and fan-in width from the sum/count pairs.
@@ -209,6 +210,125 @@ $armRows = foreach ($op in ($arms.Keys | Sort-Object)) {
 	}
 }
 
+# ---- The ADMISSION GATE: the instruments that report on the bound itself ----
+# These are not a second opinion on the registry arms above. They measure a
+# different population: RegistryArms counts calls inside the registry singleton
+# body summed over every caller in the cluster, including clients that never
+# pass through a silo-side gate, whereas these count permits held by ONE silo's
+# RegistryFanInGate. Only the second is bounded by GlobalMaxConcurrentReads.
+#
+# The original rig run reported a registry-side width of 1.9-3.2 against a bound
+# of 16 and concluded the bound had room. That comparison is void: the two
+# quantities were never the same number, and the gate had in fact not been
+# entered at all. This block exists so the bound is read against its own
+# instrument rather than against a neighbouring one.
+function Get-AdmissionPair([string] $stem) {
+	$sum = 0.0; $count = 0.0; $found = $false
+	foreach ($key in $admission.Keys) {
+		if ($key -match "^orleans_lattice_registry_admission_$([regex]::Escape($stem))_sum(\{.*\})?$") { $sum += [double] $admission[$key]; $found = $true }
+		elseif ($key -match "^orleans_lattice_registry_admission_$([regex]::Escape($stem))_count(\{.*\})?$") { $count += [double] $admission[$key]; $found = $true }
+	}
+	return @{ Sum = $sum; Count = $count; Present = $found }
+}
+
+# Share of samples ABOVE a bucket boundary, read from the cumulative _bucket
+# series. Returned as $null when no boundary at or below $le exists, rather than
+# as zero: a missing boundary and a genuine zero share are different facts, and
+# reporting the first as the second would recreate exactly the false-green this
+# rig exists to stop.
+function Get-AdmissionShareAbove([string] $stem, [double] $le, [double] $total) {
+	if ($total -le 0) { return $null }
+	$at = $null
+	foreach ($key in $admission.Keys) {
+		if ($key -notmatch "^orleans_lattice_registry_admission_$([regex]::Escape($stem))_bucket\{(?<tags>.*)\}$") { continue }
+		if ($Matches['tags'] -notmatch 'le="(?<le>[^"]+)"') { continue }
+		$bound = $Matches['le']
+		if ($bound -eq '+Inf') { continue }
+		$value = [double]::Parse($bound, [cultureinfo]::InvariantCulture)
+		if ([math]::Abs($value - $le) -lt 1e-9) { $at = [double] $admission[$key] }
+	}
+	if ($null -eq $at) { return $null }
+	return [math]::Round(($total - $at) / $total, 4)
+}
+
+$widthPair = Get-AdmissionPair 'in_flight'
+$batchPair = Get-AdmissionPair 'batch_size'
+$depthPair = Get-AdmissionPair 'queue_depth'
+$waitPair = Get-AdmissionPair 'wait'
+
+# Read from the source declaration for the same reason the interleaving set is:
+# a restated constant is correct the day it is written and silently wrong the
+# first time the bound is retuned, and the wrongness would surface as a
+# confident-looking verdict rather than as an error.
+$gateSource = Join-Path (Split-Path -Parent (Split-Path -Parent $RigRoot)) 'src/lattice/BPlusTree/RegistryFanInGate.cs'
+if (-not (Test-Path $gateSource)) { throw "Cannot read the gate's constants: '$gateSource' is not present." }
+$gateText = Get-Content -Raw -Path $gateSource
+if ($gateText -notmatch 'GlobalMaxConcurrentReads\s*=\s*(?<n>\d+)') { throw "Cannot parse GlobalMaxConcurrentReads from '$gateSource'." }
+$permits = [int] $Matches['n']
+if ($gateText -notmatch 'MaxBatchSize\s*=\s*(?<n>\d+)') { throw "Cannot parse MaxBatchSize from '$gateSource'." }
+$maxBatch = [int] $Matches['n']
+
+$meanWidth = if ($widthPair.Count -gt 0) { [math]::Round($widthPair.Sum / $widthPair.Count, 4) } else { $null }
+$meanBatch = if ($batchPair.Count -gt 0) { [math]::Round($batchPair.Sum / $batchPair.Count, 4) } else { $null }
+$meanDepth = if ($depthPair.Count -gt 0) { [math]::Round($depthPair.Sum / $depthPair.Count, 4) } else { $null }
+$meanWait = if ($waitPair.Count -gt 0) { [math]::Round($waitPair.Sum / $waitPair.Count, 4) } else { $null }
+
+# The batched proportion, taken from the registry arms rather than from a
+# histogram bucket. A dispatch of one id calls GetEntryAsync and a dispatch of
+# two or more calls GetEntriesAsync, so the split between those two arms IS the
+# batched proportion exactly, with no bucket-boundary approximation.
+$singleDispatches = 0.0
+$batchedDispatches = 0.0
+foreach ($key in $registry.Keys) {
+	if ($key -match '^orleans_lattice_registry_call_duration_count\{(?<tags>.*)\}$') {
+		if ($Matches['tags'] -match 'operation="get_entry"') { $singleDispatches += [double] $registry[$key] }
+		elseif ($Matches['tags'] -match 'operation="get_entries"') { $batchedDispatches += [double] $registry[$key] }
+	}
+}
+$dispatchTotal = $singleDispatches + $batchedDispatches
+
+# The gate is only entered by in-silo callers, so an absent instrument means the
+# workload never reached it. That is reported as a distinct state from a low
+# reading, because they license opposite conclusions: a low reading is evidence
+# about the bound, an absent one is evidence about the rig.
+$gateEntered = $depthPair.Present -and ($depthPair.Count -gt 0)
+$offeredExceedsBound = $gateEntered -and ($null -ne $meanDepth) -and ($meanDepth -gt $permits)
+
+$admissionGate = [pscustomobject] @{
+	PermitCount            = $permits
+	MaxBatchSize           = $maxBatch
+	DownstreamKeyCeiling   = $permits * $maxBatch
+
+	GateEntered            = $gateEntered
+	Dispatches             = [long] $widthPair.Count
+	Arrivals               = [long] $depthPair.Count
+
+	MeanGateWidth          = $meanWidth
+	ShareOfDispatchesAboveTen = Get-AdmissionShareAbove 'in_flight' 10 $widthPair.Count
+
+	MeanOfferedQueueDepth  = $meanDepth
+	ShareOfArrivalsAboveTen = Get-AdmissionShareAbove 'queue_depth' 10 $depthPair.Count
+
+	MeanAdmissionWaitMs    = $meanWait
+	MeanBatchSize          = $meanBatch
+
+	SingleKeyDispatches    = [long] $singleDispatches
+	BatchedDispatches      = [long] $batchedDispatches
+	BatchedProportion      = if ($dispatchTotal -gt 0) { [math]::Round($batchedDispatches / $dispatchTotal, 4) } else { $null }
+
+	# The verdict, and the only field here that should be read first.
+	RegimeReached          = $offeredExceedsBound
+	RegimeNote             = if (-not $gateEntered) {
+		'NOT MEASURED: no arrival ever reached the silo-side gate, so this run says nothing whatever about the bound. The gate is entered only by in-silo callers (LatticeOptionsResolver and the per-tree background services); an Orleans client addressing ILatticeRegistry directly - which is what the probe arm does - passes it entirely. Use the fanout arm.'
+	} elseif (-not $offeredExceedsBound) {
+		"NOT MEASURED: offered fan-in (mean queue depth $meanDepth) did not exceed the bound of $permits, so the gate never queued. Every other admission figure here is therefore at its STRUCTURAL FLOOR, not at a comfortable level: admission dispatches synchronously on the arriving thread whenever a permit is free, so a sub-millisecond wait, a width near 1 and a batch near 1 are what ABSENT DEMAND looks like and are indistinguishable by eye from a bound with headroom. An instrument that cannot reach the failing regime yields no evidence, not weak evidence. Raise --fanout-width."
+	} else {
+		"MEASURED: offered fan-in (mean queue depth $meanDepth) exceeded the bound of $permits, so admission genuinely queued and the width, wait and batch-size readings above are evidence about the bound rather than about the offered load."
+	}
+
+	BucketNote             = 'Share-above figures are read from cumulative _bucket series, so they are only available at the exporter''s configured boundaries; a boundary that does not exist is reported as null rather than as zero, because "no such boundary" and "a zero share" license opposite conclusions. Means are over SAMPLES (dispatches and arrivals), not over time, so idle time contributes nothing to them - unlike the registry-side window means above.'
+}
+
 # ---- Result ----
 $result = [pscustomobject] @{
 	Label            = $Label
@@ -232,6 +352,8 @@ $result = [pscustomobject] @{
 
 	TimeoutCensus    = $census
 	RegistryArms     = @($armRows)
+	AdmissionGate    = $admissionGate
+	AdmissionSeries  = $admission
 	StorageSeries    = $storage
 
 	# Co-tenancy, observed rather than assumed. Taken at the end of the window;
