@@ -87,33 +87,33 @@ public sealed class WalMaterialiserPinPressureTests
     }
 
     [Test]
-    public void ShouldShed_is_false_for_an_unseen_shard()
+    public void IsWindowOpen_is_false_for_an_unseen_shard()
     {
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False);
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.False);
     }
 
     [Test]
-    public void ShouldShed_is_false_after_an_instant_write()
+    public void IsWindowOpen_is_false_after_an_instant_write()
     {
         // A healthy store's writes measure zero elapsed milliseconds, which must
         // open no shed window at all - otherwise the gate would suppress traffic
         // on a perfectly healthy deployment.
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 0, faulted: false, latencyThresholdMs: null);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False);
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.False);
     }
 
     [Test]
-    public void ShouldShed_is_true_after_a_slow_write()
+    public void IsWindowOpen_is_true_after_a_slow_write()
     {
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 30_000, faulted: false, latencyThresholdMs: null);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.True,
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.True,
             "a multi-second durable write must open a shed window so reports stop piling into the shard's non-reentrancy queue");
     }
 
     [Test]
-    public void ShouldShed_is_false_after_a_cheap_fault()
+    public void IsWindowOpen_is_false_after_a_cheap_fault()
     {
         // A pin write can fail cheaply - a synchronous rejection, a missing
         // activation - in a millisecond or two. LeafCursorReporter rolls the
@@ -122,29 +122,29 @@ public sealed class WalMaterialiserPinPressureTests
         // exists to guarantee. Only demonstrated cost opens the gate.
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 3, faulted: true, latencyThresholdMs: 1_000);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False,
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.False,
             "a fault that cost nothing to attempt must not suppress its own retry");
     }
 
     [Test]
-    public void ShouldShed_is_true_after_an_expensive_fault()
+    public void IsWindowOpen_is_true_after_an_expensive_fault()
     {
         // The issue #2012 condition: attempts that cost seconds apiece. Here the
         // fault IS the evidence of pressure, and piling on more attempts only
         // lengthens the queue every other reporting leaf waits behind.
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 30_000, faulted: true, latencyThresholdMs: 1_000);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.True,
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.True,
             "a fault that took seconds must open a shed window even though nothing landed");
     }
 
     [Test]
-    public void ShouldShed_window_is_scoped_to_the_shard_that_was_slow()
+    public void IsWindowOpen_window_is_scoped_to_the_shard_that_was_slow()
     {
         var otherShardKey = _tree + WalMaterialiserPinRouting.ShardSeparator + "5";
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 30_000, faulted: false, latencyThresholdMs: null);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(otherShardKey), Is.False,
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(otherShardKey), Is.False,
             "one slow shard must not suppress reporting to a healthy sibling shard");
     }
 
@@ -157,7 +157,7 @@ public sealed class WalMaterialiserPinPressureTests
         // amortisation of that demonstrated cost.
         WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 1, faulted: false, latencyThresholdMs: null);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.True);
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.True);
     }
 
     [Test]
@@ -170,7 +170,7 @@ public sealed class WalMaterialiserPinPressureTests
         Assert.Multiple(() =>
         {
             Assert.That(TripsFor(), Is.EqualTo(0));
-            Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False);
+            Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.False);
         });
     }
 
@@ -179,7 +179,7 @@ public sealed class WalMaterialiserPinPressureTests
     {
         WalMaterialiserPinPressure.ForceShedForTests(_shardKey, durationMs: 60_000);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.True);
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.True);
     }
 
     [Test]
@@ -187,7 +187,7 @@ public sealed class WalMaterialiserPinPressureTests
     {
         WalMaterialiserPinPressure.ForceShedForTests(_shardKey, durationMs: -1);
 
-        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False,
+        Assert.That(WalMaterialiserPinPressure.IsWindowOpen(_shardKey), Is.False,
             "the shed window must expire on its own so a recovered store resumes reporting without intervention");
     }
 }

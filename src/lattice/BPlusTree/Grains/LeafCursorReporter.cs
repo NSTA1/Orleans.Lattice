@@ -500,14 +500,41 @@ internal sealed class LeafCursorReporter(
         // real frontier is produced by the deactivation flush, dropping it leaves
         // no durable floor at all, which is the cold-restart
         // LeafProjectionStaleException of issue #1464.
-        if (sheddable && WalMaterialiserPinPressure.ShouldShed(grainKey))
+        //
+        // Bounded since issue #3310. "A skipped report retains more WAL" is a
+        // claim about durability, not about boundedness: because the report is
+        // dropped rather than deferred, and because the exempt paths above record
+        // their own duration into the very gate they skip, a shard under
+        // sustained pressure can re-open its window indefinitely and stop
+        // restamping coverage altogether while the checkpoint advances past it.
+        // WalMaterialiserPinShedCeiling caps the continuous run and forces one
+        // report through, loudly. Forcing cannot overstate durability: the offset
+        // was clamped to min(checkpoint, durable coverage) in the leaf before it
+        // reached this method.
+        if (sheddable)
         {
             var shedTreeId = WalMaterialiserPinRouting.TreeNameFromKey(grainKey);
-            LatticeMetrics.MaterialiserPinReportsShed.Add(
-                bucket.Count,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
-                LatticeTenantLabel.ForTree(shedTreeId));
-            return false;
+            var shedShard = WalMaterialiserPinRouting.ShardIndexFromKey(grainKey);
+            var decision = WalMaterialiserPinPressure.EvaluateShed(grainKey, ResolvePinShedCeilingMs());
+
+            if (decision == WalMaterialiserPinPressure.PinShedDecision.Shed)
+            {
+                LatticeMetrics.MaterialiserPinReportsShed.Add(
+                    bucket.Count,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
+                    LatticeTenantLabel.ForTree(shedTreeId));
+                return false;
+            }
+
+            if (decision == WalMaterialiserPinPressure.PinShedDecision.Forced)
+            {
+                LatticeMetrics.MaterialiserPinShedForced.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
+                    LatticeTenantLabel.ForTree(shedTreeId));
+            }
         }
 
         var latencyThresholdMs = ResolvePinLatencyThresholdMs();
@@ -566,6 +593,27 @@ internal sealed class LeafCursorReporter(
         => options?.Get(string.Empty).WalSaturationMaterialiserPinLatencyThreshold is { } threshold
             ? (long)threshold.TotalMilliseconds
             : null;
+
+    /// <summary>
+    /// Resolves <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/> in
+    /// milliseconds, or <c>null</c> when the bound is disarmed (the default) or
+    /// no options monitor is wired in.
+    /// <para>
+    /// A non-positive configured value resolves to <c>null</c> rather than to
+    /// zero. Zero would force every single report through a live shed window,
+    /// disabling the issue #2012 shedding entirely and re-saturating the pin
+    /// grain's non-reentrancy queue - turning a misconfiguration into the
+    /// outage the shedding exists to prevent. Refusing it degrades to the
+    /// documented default instead, and
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/> still
+    /// reports the stall, so the mistake is visible rather than catastrophic.
+    /// </para>
+    /// </summary>
+    private long? ResolvePinShedCeilingMs()
+        => options?.Get(string.Empty).WalMaterialiserPinShedCeiling is { } ceiling
+            && ceiling > TimeSpan.Zero
+                ? (long)ceiling.TotalMilliseconds
+                : null;
 
     /// <summary>
     /// Teardown fallback for <see cref="SeedShardAsync"/>: writes

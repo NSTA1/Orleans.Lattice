@@ -362,6 +362,18 @@ public static class RepoContextHostBuilder
             // it. Global (not per-tree) by design - see RepoContextPinBucketing.
             silo.ConfigureRepoContextPinBucketing(builder.Configuration);
 
+            // Bound how long one pin shard may shed steady-state pin reports
+            // CONTINUOUSLY before one is forced through. The shed path is the only
+            // one carrying an advancing CheckpointOffset, so an unbounded shed
+            // freezes the WAL GC durable offset floor and retention grows without
+            // bound (issue #3310, measured on this deployment's own vector-index
+            // tree). Forcing cannot overstate durability - the leaf clamps the
+            // reported offset to min(checkpoint, covered) before it is written - so
+            // this bounds WHEN a true value is published, never WHAT is published,
+            // and is not the issue #3300 failure in disguise. See
+            // RepoContextPinShedCeiling.
+            silo.ConfigureRepoContextPinShedCeiling(builder.Configuration);
+
             // Let a constrained deployment pin the per-silo concurrent leaf WAL
             // replay ceiling instead of inheriting Environment.ProcessorCount,
             // which reports whatever DOTNET_PROCESSOR_COUNT says rather than the
