@@ -5162,6 +5162,18 @@ internal sealed class LatticeWalGcScheduler(
         var classified = 0;
         var repairable = new List<string>();
 
+        // Issue #3258. Whether the candidate DEFINING this tree's offset floor
+        // cleared the admission gate below. Tracked as a single per-sweep bit
+        // rather than a per-candidate count because a tree has one floor per
+        // sweep however many pins sit on it, and because it is the floor's own
+        // holder that decides whether any repair is possible at all: the floor
+        // is the head of the ascending offset sample, so every other candidate
+        // is strictly above it, and the gate admits a coverage-unknown
+        // candidate only on equality with the floor. If the floor's holder is
+        // refused, nothing can be admitted, and no existing instrument
+        // separates that from a tree with no repair to do.
+        var floorAdmitted = false;
+
         // Lazily allocated. The offset-axis branch below admits nothing on the
         // overwhelming majority of sweeps - most classified holders are either
         // unusable or not on the floor - and this method runs per tree per
@@ -5279,6 +5291,16 @@ internal sealed class LatticeWalGcScheduler(
             if (state == WalGcBlockingPinState.CheckpointedUncovered)
             {
                 repairable.Add(consumerId);
+
+                // This arm is admitted irrespective of offset, so it is only
+                // evidence about the FLOOR when this candidate is the one
+                // holding it. A candidate drawn from the unusable list carries
+                // offset -1 and constrains no offset floor, so the equality
+                // below is correctly false for it.
+                if (offsetFloor is { } uncoveredFloor && candidate.Offset == uncoveredFloor)
+                {
+                    floorAdmitted = true;
+                }
             }
             else if (state == WalGcBlockingPinState.CheckpointedCoverageUnknown
                 && candidate.Offset >= 0
@@ -5335,6 +5357,11 @@ internal sealed class LatticeWalGcScheduler(
                 repairable.Add(consumerId);
                 requireOffsetAdvance ??= new HashSet<string>(StringComparer.Ordinal);
                 requireOffsetAdvance.Add(consumerId);
+
+                // Issue #3258. Reaching here required candidate.Offset == floor,
+                // so this candidate IS the floor's holder by construction and no
+                // further test is needed.
+                floorAdmitted = true;
             }
 
             logger.LogInformation(
@@ -5354,6 +5381,32 @@ internal sealed class LatticeWalGcScheduler(
             LatticeMetrics.FloorHolderClassified, treeTag, tenantTag, classified);
         RecordFloorHolderClassification(
             LatticeMetrics.FloorHolderUnclassified, treeTag, tenantTag, Math.Max(0, population - classified));
+
+        // Issue #3258. Prime BOTH arms on every sweep that reaches the
+        // classifier, before deciding which one to charge. Priming is what
+        // makes the three readings distinguishable: series absent means the
+        // classifier never ran on this tree, both arms present and static at
+        // zero means it ran and found no offset floor to admit, and a climbing
+        // "blocked" arm means it found one and refused it every time. Priming
+        // the arm that is about to be charged is harmless, since a zero add is
+        // a no-op once the series exists.
+        PrimeFloorHolderAdmission(treeTag, tenantTag);
+
+        // Charged only when an offset floor actually exists. With no floor
+        // there is no holder to admit or refuse, and charging "admitted" there
+        // would report absence of work as success, while charging "blocked"
+        // would report it as a wedge. Both are lies; the primed zeros are the
+        // truth.
+        if (offsetFloor is not null)
+        {
+            RecordFloorHolderAdmission(
+                floorAdmitted
+                    ? LatticeMetrics.FloorHolderAdmissionAdmitted
+                    : LatticeMetrics.FloorHolderAdmissionBlocked,
+                treeTag,
+                tenantTag,
+                1);
+        }
 
         return new FloorHolderRepairSet(repairable, requireOffsetAdvance ?? NoOffsetAdvanceRequired);
     }
@@ -5375,6 +5428,32 @@ internal sealed class LatticeWalGcScheduler(
         KeyValuePair<string, object?> tenantTag,
         long delta) =>
         LatticeMetrics.WalGcFloorHolderClassification.Add(delta, treeTag, status, tenantTag);
+
+    /// <summary>
+    /// Records one <see cref="LatticeMetrics.WalGcFloorHolderAdmission"/> arm
+    /// (issue #3258).
+    /// </summary>
+    private static void RecordFloorHolderAdmission(
+        KeyValuePair<string, object?> status,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        long delta) =>
+        LatticeMetrics.WalGcFloorHolderAdmission.Add(delta, treeTag, status, tenantTag);
+
+    /// <summary>
+    /// Publishes both <see cref="LatticeMetrics.WalGcFloorHolderAdmission"/>
+    /// arms at zero for a tree, so a wedged tree reads as a static
+    /// <c>blocked = 0</c> beside a moving sibling rather than as an absent
+    /// series indistinguishable from a tree the classifier never reached
+    /// (issue #3258).
+    /// </summary>
+    private static void PrimeFloorHolderAdmission(
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag)
+    {
+        RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionAdmitted, treeTag, tenantTag, 0);
+        RecordFloorHolderAdmission(LatticeMetrics.FloorHolderAdmissionBlocked, treeTag, tenantTag, 0);
+    }
 
     /// <summary>
     /// Reads one leaf's persisted projection checkpoint for a partition

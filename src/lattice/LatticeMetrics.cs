@@ -5341,6 +5341,91 @@ public static class LatticeMetrics
         new(TagStatus, "offset_absent");
 
     /// <summary>
+    /// Whether the candidate that <i>defines</i> a tree's durable materialiser
+    /// offset floor was admitted to the issue #3178 liveness drive on a
+    /// classifying sweep, tagged by tree, tenant and status (issue #3258).
+    /// <para>
+    /// <b>The question it answers, and why no existing instrument can.</b> The
+    /// offset floor is the head of the ascending offset sample, so it is
+    /// defined by one of the candidates being classified and every other
+    /// candidate is strictly above it by construction. The admission gate takes
+    /// a candidate classified
+    /// <see cref="WalGcBlockingPinState.CheckpointedUncovered"/>, or one
+    /// classified
+    /// <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/> whose
+    /// offset <i>equals</i> that floor. It follows that when the floor-defining
+    /// candidate is itself inadmissible, no candidate can be admitted at all,
+    /// the repair set is dropped and the drive is never entered - permanently,
+    /// because the pin store merges monotonic-max and nothing the leaf
+    /// subsequently does can lower the offset holding the floor. Nothing
+    /// recorded today separates that from a tree with no repair to do.
+    /// <see cref="WalGcFloorHolderClassification"/> counts how many candidates
+    /// were examined but not which one holds the floor;
+    /// <see cref="WalGcBlockingPinStates"/> records verdicts without saying
+    /// which verdict belongs to the floor; and the drive's own counters record
+    /// only attempts that happened, so a tree that can never attempt one reads
+    /// exactly like a tree that never needed one.
+    /// </para>
+    /// <para>
+    /// <b>Three readings, which is the point.</b> An absent series means the
+    /// floor-holder classifier is not wired on this silo. Both arms present and
+    /// static at zero means the classifier ran and the tree constrained no
+    /// offset floor, so there was nothing to admit or block - a legitimate
+    /// healthy state, not a wedge. A climbing <c>blocked</c> arm means the tree
+    /// has an offset floor, it is held by a candidate the gate cannot admit,
+    /// and the floor therefore cannot advance by this path. That third reading
+    /// is what issue #3258 exists to expose: on
+    /// <c>repo-context-vector-payload</c> every reactivation counter sat at
+    /// zero beside siblings in the tens, and a zero attempt count is equally
+    /// consistent with <i>no repair was needed</i> and <i>no repair was ever
+    /// possible</i>. Those two are the same series today and different
+    /// operational situations - one is idle, the other grows a WAL without
+    /// bound.
+    /// </para>
+    /// <para>
+    /// <b>It deliberately does not report whether the repair succeeded.</b> The
+    /// <c>admitted</c> arm says a candidate entered the drive, not that the
+    /// drive healed anything; the existing reactivation instruments carry that.
+    /// Folding outcome in here would merge two independent failures - never
+    /// admitted, and admitted but unhealed - into one arm, and it is precisely
+    /// the first that has no other witness.
+    /// </para>
+    /// <para>
+    /// <b>Why it is recorded once per sweep rather than once per candidate.</b>
+    /// The quantity is a property of the floor, and a tree has one floor per
+    /// sweep however many pins hold offsets at it. Counting per candidate would
+    /// make the arms scale with the sample size rather than with the number of
+    /// sweeps, so a tree whose sample happened to be larger would read as more
+    /// blocked than one that was equally stuck.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcFloorHolderAdmission =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.floor_holder_admission", unit: "{sweep}",
+            description: "Whether the candidate defining a tree's durable materialiser offset floor was admitted to the issue #3178 blocked-leaf liveness drive, recorded once per classifying sweep and tagged by tree, tenant and status (issue #3258). 'admitted' means the floor-defining candidate cleared the admission gate and the drive was entered. 'blocked' means it did not, which is terminal rather than transient: the offset floor is the head of the ascending offset sample, so it is defined by one of the classified candidates and every other candidate is strictly above it, and the gate admits only a 'checkpointed_uncovered' candidate or a 'checkpointed_coverage_unknown' one whose offset equals that floor - so if the floor's own holder is inadmissible then nothing can be admitted, the repair set is dropped, and the pin store's monotonic-max merge means nothing the leaf later does can lower the offset that holds it. No existing instrument answers this. floor_holder_classification counts how many candidates were examined but not which holds the floor; blocking_pin_state records verdicts without attributing one to the floor; and the reactivation counters record only attempts that occurred, so a tree that can never attempt one is byte-identical to a tree that never needed one. That was the whole of issue #3258: repo-context-vector-payload sat at zero on every reactivation arm beside siblings in the tens, with a growing WAL, and no series in the process could distinguish 'no repair needed' from 'no repair possible'. Read three ways. An absent series means the floor-holder classifier is not wired on this silo. Both arms present and static at zero means the classifier ran and the tree constrained no offset floor at all, so there was nothing to admit or block - the offset axis is inert, which is healthy. A climbing 'blocked' arm means the tree has an offset floor, it is held by a candidate the gate cannot admit, and the floor cannot advance by this path. Both arms are zero-primed on every sweep that reaches the classifier, independently of which arm resolves and independently of whether an offset floor exists, so 'blocked' reading zero is a measured absence rather than silence - which is the entire value of the instrument, because a wedge that reads as an unprimed zero is exactly the failure it was built to end. It deliberately says nothing about whether the drive healed anything: the reactivation instruments carry that, and folding outcome in here would merge 'never admitted' with 'admitted but unhealed' into one arm when it is the former that has no other witness. Recorded once per sweep rather than once per candidate, because a tree has one floor per sweep however many pins sit at it, and counting per candidate would scale the arms with sample size rather than with sweeps. Diagnostic only: it never changes what a pass is allowed to trim.");
+
+    /// <summary>Canonical name of <see cref="WalGcFloorHolderAdmission"/>.</summary>
+    public const string WalGcFloorHolderAdmissionName =
+        "orleans.lattice.wal.gc.floor_holder_admission";
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcFloorHolderAdmission"/>
+    /// for a sweep whose floor-defining candidate cleared the admission gate,
+    /// so the blocked-leaf liveness drive was entered.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> FloorHolderAdmissionAdmitted =
+        new(TagStatus, "admitted");
+
+    /// <summary>
+    /// <see cref="TagStatus"/> value on <see cref="WalGcFloorHolderAdmission"/>
+    /// for a sweep whose floor-defining candidate did not clear the admission
+    /// gate. Terminal rather than transient: no other candidate can be admitted
+    /// once the floor's own holder is refused, so the tree's offset floor
+    /// cannot advance by this path at all.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> FloorHolderAdmissionBlocked =
+        new(TagStatus, "blocked");
+
+    /// <summary>
     /// How far each WAL GC scheduling pass actually got: the reachability layer
     /// for every instrument sited inside the region that stops executing when
     /// the scheduler degrades (issue #3075).

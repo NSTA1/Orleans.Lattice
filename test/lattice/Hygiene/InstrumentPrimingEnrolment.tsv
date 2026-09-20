@@ -8,8 +8,8 @@ src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseC
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
-src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_annSweeps	anchored	dimension=cause; total=faulted; assertedBy=The_cause_partition_sums_to_the_faulted_arm
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_armingAttempts	primed	
@@ -371,6 +371,7 @@ src/lattice/LatticeMetrics.cs#WalGcBlockedLeafReactivations	unresolved	reason=di
 src/lattice/LatticeMetrics.cs#WalGcBlockingPinStates	unresolved	reason=dimension partition: no declaration found for partition
 src/lattice/LatticeMetrics.cs#WalGcCeilingUnsatisfiable	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcCoverageUnknownPinOffset	unresolved	reason=dimension partition: no declaration found for partition
+src/lattice/LatticeMetrics.cs#WalGcFloorHolderAdmission	unresolved	reason=dimension (unread-tag-argument:treeTag, status, tenantTag): tag argument(s) treeTag, status, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcFloorHolderClassification	unresolved	reason=dimension (unread-tag-argument:treeTag, status, tenantTag): tag argument(s) treeTag, status, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcInterval	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcOffsetFloorUnavailable	unresolved	reason=dimension tree: no declaration found for treeName
