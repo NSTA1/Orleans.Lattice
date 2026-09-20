@@ -147,9 +147,25 @@ internal sealed partial class BPlusLeafGrain
     private static int _replayConcurrencyCeiling;
 
     /// <summary>
-    /// Count of activations currently blocked on
-    /// <see cref="_replayConcurrencyGate"/>, incremented immediately before the
-    /// wait and decremented in a <c>finally</c> once it ends by any route.
+    /// Count of activations that have <b>entered</b> the wait on
+    /// <see cref="_replayConcurrencyGate"/> and not yet left it, incremented
+    /// immediately before the wait and decremented in a <c>finally</c> once it
+    /// ends by any route.
+    /// <para>
+    /// <b>This is arrivals in flight, not activations blocked.</b> The increment
+    /// is unconditional and precedes <c>WaitAsync</c>, so an activation that
+    /// finds a free permit and acquires without ever blocking is counted here
+    /// for the whole of its acquire window. The blocked set is therefore a
+    /// <b>subset</b> of this count, and the difference is bounded by
+    /// <see cref="_replayConcurrencyCeiling"/>, since only that many activations
+    /// can hold a permit without having decremented yet. Measured on the
+    /// integration fixture of issue #3290 the inflation reached 2 against a
+    /// ceiling of 4. That is small against the admission bound but it is the
+    /// <b>whole</b> of the Interactive reservation, which is also exactly
+    /// <see cref="_replayConcurrencyCeiling"/> slots wide, so the reservation
+    /// must not be relied on to deliver protection until an arrival counted
+    /// here is distinguished from an activation actually waiting.
+    /// </para>
     /// <para>
     /// This is the <b>un-terminated</b> set, and nothing else in this file can
     /// see it. Both existing recording sites - the cancel arm and the acquire
@@ -173,6 +189,54 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private static int _queuedReplayPermitWaiters;
+
+    /// <summary>
+    /// Exponentially-weighted mean of the <b>observed</b> permit queue wait, in
+    /// <see cref="TimeSpan"/> ticks, updated as each wait terminates by either
+    /// route. Zero until the first wait terminates.
+    /// <para>
+    /// This is the demand-side term the admission bound of issue #3284 lacked.
+    /// That bound was <c>ceiling * queueDepthPerPermit</c>: <c>ceiling</c> is
+    /// <c>min(ProcessorCount, ContainerCpuGrant)</c>, a <b>supply</b> quantity
+    /// describing how fast this silo can drain the queue, and
+    /// <c>queueDepthPerPermit</c> is dimensionless, so the product carried no
+    /// arrival term and no latency term at all. The queue is filled by
+    /// cluster-wide fan-out, which contains no CPU term, so the bound was
+    /// derived entirely from supply and fed entirely by demand - loosest on a
+    /// large host that copes easily, tightest on a small one that does not.
+    /// Issue #3290 measured both halves: the same fan-out peaked at 31 waiters
+    /// against a bound of 64 on a 16-processor host and at 40 against a bound of
+    /// 16 on a 4-processor one, refusing ordinary activations on the second.
+    /// </para>
+    /// <para>
+    /// Measuring the wait <b>directly</b> rather than estimating it closes that
+    /// gap without reintroducing the term that caused it. Little's Law would
+    /// have predicted the wait as <c>depth * meanServiceTime / ceiling</c>, in
+    /// which <c>ceiling</c> appears correctly as a service-rate denominator
+    /// rather than as a bare multiplier; observing the wait that actually
+    /// occurred absorbs the supply term into the measurement, so <c>ceiling</c>
+    /// need not appear in the predicate at all and cannot be reintroduced as a
+    /// multiplier by a later refactor.
+    /// </para>
+    /// <para>
+    /// Both outcomes feed the mean deliberately. A wait that ended in
+    /// cancellation is the <b>strongest</b> available evidence of the harm the
+    /// bound exists to prevent: it is an activation that burned its request
+    /// deadline in the queue and is about to enqueue a replacement, which is
+    /// precisely the 87-waiter regime measured on issue #3284.
+    /// </para>
+    /// </summary>
+    private static long _replayPermitWaitEwmaTicks;
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> reading of the most recent
+    /// <b>acquisition</b> from <see cref="_replayConcurrencyGate"/>, or <c>0</c>
+    /// before the first. Distinguishes a deep queue that is draining from one
+    /// that is not: <see cref="_replayPermitWaitEwmaTicks"/> is updated only as
+    /// waits terminate, so a fully stalled gate produces no new samples and
+    /// would otherwise keep reporting the healthy mean it last observed.
+    /// </summary>
+    private static long _lastReplayPermitAcquisition;
 
     /// <summary>
     /// Count of permits currently <b>withheld</b> from
@@ -334,8 +398,10 @@ internal sealed partial class BPlusLeafGrain
                 + "which see orleans.lattice.wal.replay.permits_queued (issue #3047).");
 
     /// <summary>
-    /// Publishes the activations currently blocked on
-    /// <see cref="_replayConcurrencyGate"/>.
+    /// Publishes the activations that have entered the wait on
+    /// <see cref="_replayConcurrencyGate"/> and not yet left it. See
+    /// <see cref="_queuedReplayPermitWaiters"/>: this is arrivals in flight,
+    /// not activations blocked.
     /// <para>
     /// This is the only series in the estate that can see a gate <b>admitting
     /// nothing</b>. Every other permit instrument records at a terminal
@@ -358,8 +424,12 @@ internal sealed partial class BPlusLeafGrain
                 LatticeTenantLabel.Platform),
             unit: "{activation}",
             description:
-                "Activations currently blocked waiting for a permit on the per-silo WAL replay "
-                + "concurrency gate. The only series that observes the un-terminated set: the queue-wait "
+                "Activations that have entered the wait for a permit on the per-silo WAL replay "
+                + "concurrency gate and not yet left it. This counts arrivals in flight, not activations "
+                + "blocked: the count is incremented before the wait, so an activation that acquires "
+                + "without ever blocking is included for its acquire window, and the blocked set is a "
+                + "subset exceeded by at most orleans.lattice.wal.replay.permit_ceiling (issue #3290). "
+                + "The only series that observes the un-terminated set: the queue-wait "
                 + "histogram records at acquisition or cancellation, so an activation that never "
                 + "terminates is invisible to it (issue #3047).");
 
@@ -403,6 +473,8 @@ internal sealed partial class BPlusLeafGrain
             _replayConcurrencyCeiling = 0;
             Volatile.Write(ref _withheldReplayPermits, 0);
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
+            Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
+            Volatile.Write(ref _lastReplayPermitAcquisition, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
     }
@@ -985,6 +1057,108 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Folds a terminated permit wait into
+    /// <see cref="_replayPermitWaitEwmaTicks"/>, and records the acquisition
+    /// timestamp when the wait ended by acquiring.
+    /// </summary>
+    /// <param name="wait">The observed queue wait.</param>
+    /// <param name="acquired"><see langword="true"/> when the wait ended in
+    /// acquisition rather than cancellation.</param>
+    /// <remarks>
+    /// A plain unsynchronised read-modify-write. A lost update under a
+    /// concurrent fold costs one sample out of a smoothed mean, which is
+    /// immaterial, and a lock on the acquire path of a reactivation storm would
+    /// be a new contention point in exactly the regime this exists to observe.
+    /// </remarks>
+    private static void NoteReplayPermitQueueWait(TimeSpan wait, bool acquired)
+    {
+        // A 1/8 smoothing factor: slow enough that one outlier replay cannot
+        // move the mean far, fast enough that a genuine regime change is
+        // reflected within a handful of samples rather than a storm's worth.
+        var ticks = wait.Ticks < 0 ? 0 : wait.Ticks;
+        var previous = Volatile.Read(ref _replayPermitWaitEwmaTicks);
+        Volatile.Write(ref _replayPermitWaitEwmaTicks, previous + ((ticks - previous) / 8));
+
+        if (acquired)
+            Volatile.Write(ref _lastReplayPermitAcquisition, Stopwatch.GetTimestamp());
+    }
+
+    /// <summary>
+    /// Whether the replay permit queue is <b>failing to drain</b>, which is the
+    /// demand-side half of the admission decision. A queue that is over the
+    /// depth bound but draining quickly is healthy fan-out and must be admitted;
+    /// only a queue that is over the bound <b>and</b> costing arrivals more than
+    /// <paramref name="maxQueueWait"/> is the regime issue #3284 refuses.
+    /// </summary>
+    /// <param name="maxQueueWait">The longest queue wait treated as healthy.
+    /// Non-positive disables this half, restoring the pure depth bound.</param>
+    /// <returns><see langword="true"/> when the queue is not draining inside
+    /// <paramref name="maxQueueWait"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Every unknown resolves toward admitting</b>, deliberately. Nothing at
+    /// this seam makes a caller back off and the public API has no retry, so a
+    /// refusal does not shed load, it <b>fails</b> it, converting a slow success
+    /// into a hard error. Under ignorance the safe direction is therefore to let
+    /// work through: a cold gate that has never completed a wait has no evidence
+    /// of harm and returns <see langword="false"/>, and a disabled
+    /// <paramref name="maxQueueWait"/> returns <see langword="false"/> rather
+    /// than refusing.
+    /// </para>
+    /// <para>
+    /// The stall arm is not redundant with the mean. The mean is updated only as
+    /// waits <b>terminate</b>, so a gate whose permits are all held by wedged
+    /// replays produces no new samples at all and would keep reporting the
+    /// healthy mean it last observed, indefinitely. Time since the last
+    /// acquisition is the only signal that survives a total stall.
+    /// </para>
+    /// </remarks>
+    internal static bool IsReplayPermitQueueNotDraining(TimeSpan maxQueueWait)
+    {
+        if (maxQueueWait <= TimeSpan.Zero)
+            return false;
+
+        if (Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
+            return true;
+
+        var lastAcquisition = Volatile.Read(ref _lastReplayPermitAcquisition);
+        return lastAcquisition != 0 && Stopwatch.GetElapsedTime(lastAcquisition) >= maxQueueWait;
+    }
+
+    /// <summary>
+    /// Test-only view of <see cref="_replayPermitWaitEwmaTicks"/>.
+    /// </summary>
+    internal static TimeSpan ReplayPermitWaitMeanForTest
+        => TimeSpan.FromTicks(Volatile.Read(ref _replayPermitWaitEwmaTicks));
+
+    /// <summary>
+    /// Test-only seam that drives <see cref="IsReplayPermitQueueNotDraining"/>
+    /// deterministically, so the admission predicate is exercised at the seam
+    /// rather than by racing a real storm.
+    /// </summary>
+    /// <param name="mean">The smoothed queue wait to publish.</param>
+    /// <param name="sinceLastAcquisition">Time to backdate the last acquisition
+    /// by, or <see langword="null"/> to report that nothing has ever acquired.</param>
+    internal static void SeedReplayPermitWaitStateForTest(TimeSpan mean, TimeSpan? sinceLastAcquisition)
+    {
+        Volatile.Write(ref _replayPermitWaitEwmaTicks, mean.Ticks);
+        Volatile.Write(
+            ref _lastReplayPermitAcquisition,
+            sinceLastAcquisition is null
+                ? 0
+                : Stopwatch.GetTimestamp() - (long)(sinceLastAcquisition.Value.TotalSeconds * Stopwatch.Frequency));
+    }
+
+    /// <summary>
+    /// Test-only entry to <see cref="NoteReplayPermitQueueWait"/>, so the
+    /// smoothing behaviour is assertable without driving a real permit wait.
+    /// </summary>
+    /// <param name="wait">The observed queue wait to fold in.</param>
+    /// <param name="acquired">Whether the wait ended in acquisition.</param>
+    internal static void NoteReplayPermitQueueWaitForTest(TimeSpan wait, bool acquired)
+        => NoteReplayPermitQueueWait(wait, acquired);
+
+    /// <summary>
     /// Acquires a permit from the per-silo replay concurrency gate, returning
     /// the semaphore so the caller can release it once the replay completes.
     /// Returns <c>null</c> for a leaf with no tree id (a no-op activation that
@@ -1042,10 +1216,22 @@ internal sealed partial class BPlusLeafGrain
         // that provoked the measured backlog is classified at the top of its own
         // fan-out and every leaf it reaches inherits the classification without
         // knowing the seam exists.
+        //
+        // BOTH halves must hold (issue #3290). The depth bound alone is derived
+        // purely from supply - `ceiling` is min(ProcessorCount, ContainerCpuGrant)
+        // - while the queue is filled purely by demand, cluster-wide fan-out that
+        // contains no CPU term. So it refused the SAME healthy fan-out on a small
+        // host that it waved through on a large one: measured at peak 31 waiters
+        // against a bound of 64 on 16 processors, and peak 40 against a bound of
+        // 16 on 4, where it refused ordinary registry activations. Depth is
+        // therefore necessary but not sufficient; the queue must also be failing
+        // to drain, which is the only half that carries a latency term and the
+        // only half that distinguishes a wide fan-out from a wedged one.
         var admissionClass = LatticeReplayAdmissionContext.Current;
         if (enforceAdmissionBound
             && !TryAdmitReplayPermitWaiter(
-                options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound))
+                options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
+            && IsReplayPermitQueueNotDraining(options.WalReplayPermitMaxQueueWait))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 
@@ -1057,7 +1243,10 @@ internal sealed partial class BPlusLeafGrain
             throw new LatticeSaturatedException(
                 $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
                 + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
-                + $"{Volatile.Read(ref _replayConcurrencyCeiling)} permit(s), so this activation was "
+                + $"{Volatile.Read(ref _replayConcurrencyCeiling)} permit(s), and the queue is not "
+                + $"draining: the smoothed queue wait is {ReplayPermitWaitMeanForTest.TotalMilliseconds:F0} ms "
+                + $"against a {nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
+                + $"{options.WalReplayPermitMaxQueueWait.TotalMilliseconds:F0} ms. This activation was "
                 + "refused admission rather than queued behind work it could not outlast. Retry after a "
                 + "backoff, or raise "
                 + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
@@ -1459,9 +1648,12 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="outcome">Whether the wait ended in acquisition or cancellation.</param>
     private void RecordReplayPermitQueueWait(long queuedAt, KeyValuePair<string, object?> outcome)
     {
+        var elapsed = Stopwatch.GetElapsedTime(queuedAt);
+        NoteReplayPermitQueueWait(elapsed, acquired: outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired));
+
         var treeId = state.State.TreeId;
         LatticeMetrics.WalReplayPermitQueueWait.Record(
-            Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds,
+            elapsed.TotalMilliseconds,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
