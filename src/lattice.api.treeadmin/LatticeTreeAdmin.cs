@@ -741,6 +741,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticks);
         }
+        if (update.ApplyWalMaxRetainedBytes && update.WalMaxRetainedBytes is { } ceiling)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ceiling);
+        }
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -757,6 +761,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             var window = update.HistoryRetentionWindowTicks is { } t ? TimeSpan.FromTicks(t) : (TimeSpan?)null;
             await registry.SetHistoryRetentionAsync(effectiveTreeId, update.HistoryRetentionMode, window).ConfigureAwait(false);
+        }
+        if (update.ApplyWalMaxRetainedBytes)
+        {
+            await registry.SetWalMaxRetainedBytesAsync(effectiveTreeId, update.WalMaxRetainedBytes).ConfigureAwait(false);
         }
 
         var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
@@ -2398,5 +2406,6 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             ProjectionDigestPermanentlyDisabled = entry?.ProjectionDigestPermanentlyDisabled ?? false,
             HistoryRetentionMode = entry?.HistoryRetentionMode,
             HistoryRetentionWindowTicks = entry?.HistoryRetentionWindowTicks,
+            WalMaxRetainedBytes = entry?.WalMaxRetainedBytes,
         };
 }

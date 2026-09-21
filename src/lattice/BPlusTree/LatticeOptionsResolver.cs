@@ -48,6 +48,16 @@ namespace Orleans.Lattice.BPlusTree;
 /// the read-through cache drives. Absent on the registry entry, the resolved
 /// cap equals the static option exactly.
 /// </para>
+/// <para>
+/// The per-tree
+/// <see cref="State.TreeRegistryEntry.WalMaxRetainedBytes"/> override behaves
+/// the same way for the advisory WAL retained-byte ceiling: folded into the
+/// resolved <see cref="LatticeOptions.WalMaxRetainedBytes"/> and exposed
+/// through the lightweight <see cref="GetWalMaxRetainedBytesAsync(string)"/>
+/// fast path the WAL garbage collector drives on every pass, so a change lands
+/// on the next pass without a silo restart (issue #3333). Absent on the
+/// registry entry, the resolved ceiling equals the static option exactly.
+/// </para>
 /// </summary>
 internal sealed class LatticeOptionsResolver(
     IGrainFactory grainFactory,
@@ -428,6 +438,53 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Fast-path resolver for the effective
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> advisory WAL
+    /// retained-byte ceiling only. Returns the per-tree runtime override
+    /// (<see cref="State.TreeRegistryEntry.WalMaxRetainedBytes"/>) when one is
+    /// pinned, otherwise the silo-wide static
+    /// <c>IOptionsMonitor&lt;LatticeOptions&gt;</c> value. A <c>null</c> result
+    /// means the advisory byte-pressure policy is disabled (the default).
+    /// <para>
+    /// Intended for <c>LatticeWalGc.RunOnceAsync</c>, which re-resolves the
+    /// ceiling on every garbage-collection pass so a runtime override change is
+    /// honoured on the next pass without a restart. Unlike
+    /// <see cref="ResolveAsync"/> this does <em>not</em> allocate a full
+    /// <see cref="ResolvedLatticeOptions"/> record and does <em>not</em> seed a
+    /// missing registry row (it is a pure read), so the per-pass ceiling lookup
+    /// stays allocation-light and side-effect free. The override is
+    /// runtime-mutable, so - unlike the tree-immutable WAL partition pin - the
+    /// value is never memoised: each call reads the registry fresh. That is the
+    /// whole point of the override, so memoising it here would silently restore
+    /// the restart requirement it exists to remove.
+    /// </para>
+    /// <para>
+    /// System trees (IDs beginning with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) resolve synchronously to
+    /// the static option without touching the registry, matching the
+    /// <see cref="ResolveAsync"/> branch and avoiding the registry-tree
+    /// bootstrap cycle.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose effective WAL retained-byte ceiling to resolve.</param>
+    public ValueTask<long?> GetWalMaxRetainedBytesAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<long?>(optionsMonitor.Get(treeId).WalMaxRetainedBytes);
+        }
+        return new ValueTask<long?>(LoadWalMaxRetainedBytesSlowAsync(treeId));
+    }
+
+    private async Task<long?> LoadWalMaxRetainedBytesSlowAsync(string treeId)
+    {
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        var baseOptions = optionsMonitor.Get(treeId);
+        return entry?.WalMaxRetainedBytes ?? baseOptions.WalMaxRetainedBytes;
+    }
+
+    /// <summary>
     /// Resolves the leaf-access tracking and leaf-cache pre-warm settings for a
     /// tree, synchronously and without touching the registry.
     /// <para>
@@ -737,6 +794,7 @@ internal sealed class LatticeOptionsResolver(
         int walPartitions;
         bool maintainDigest;
         long? maxCacheValueBytes;
+        long? walMaxRetainedBytes;
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             mlk = LatticeConstants.DefaultMaxLeafKeys;
@@ -765,6 +823,11 @@ internal sealed class LatticeOptionsResolver(
             // to the silo-wide static option, exactly matching the
             // pre-override behaviour for system-tree caches.
             maxCacheValueBytes = baseOptions.MaxCacheValueBytes;
+            // Same reasoning for the advisory WAL retained-byte ceiling: with no
+            // registry entry there is no per-tree override to read, so it
+            // resolves to the silo-wide static option exactly as it did before
+            // the override existed.
+            walMaxRetainedBytes = baseOptions.WalMaxRetainedBytes;
         }
         else
         {
@@ -829,6 +892,10 @@ internal sealed class LatticeOptionsResolver(
             // IOptionsMonitor value, so the no-override path is byte-for-byte
             // identical to the pre-override behaviour.
             maxCacheValueBytes = entry?.MaxCacheValueBytes ?? baseOptions.MaxCacheValueBytes;
+            // Effective WalMaxRetainedBytes precedence:
+            //   1. Per-tree runtime override (entry.WalMaxRetainedBytes) wins.
+            //   2. Silo-wide LatticeOptions.WalMaxRetainedBytes is the fallback.
+            walMaxRetainedBytes = entry?.WalMaxRetainedBytes ?? baseOptions.WalMaxRetainedBytes;
         }
 
         // Compaction shard-tick interval: clamp configured values below
@@ -938,6 +1005,12 @@ internal sealed class LatticeOptionsResolver(
         // MaxCacheValueBytes is sourced from the per-tree runtime override
         // (registry entry) when present, else the silo-wide static option.
         resolved.MaxCacheValueBytes = maxCacheValueBytes;
+
+        // WalMaxRetainedBytes is sourced from the per-tree runtime override
+        // (registry entry) when present, else the silo-wide static option. The
+        // WAL garbage collector re-resolves this on every pass, so a change
+        // lands on the next pass without a restart.
+        resolved.WalMaxRetainedBytes = walMaxRetainedBytes;
 
         return resolved;
     }

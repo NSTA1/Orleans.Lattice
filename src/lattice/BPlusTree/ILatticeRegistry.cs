@@ -381,6 +381,31 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task SetMaxCacheValueBytesAsync(string treeId, long? maxCacheValueBytes);
 
     /// <summary>
+    /// Sets or clears the per-tree runtime
+    /// <see cref="State.TreeRegistryEntry.WalMaxRetainedBytes"/> override for
+    /// <paramref name="treeId"/>. Pass a positive byte count to pin the advisory
+    /// WAL retained-byte ceiling for this tree, or <c>null</c> to remove the
+    /// override and fall back to the silo-wide
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/>. The value, when
+    /// supplied, must be greater than or equal to 1 (mirroring the silo-wide
+    /// option's validation); a value below 1 throws
+    /// <see cref="ArgumentOutOfRangeException"/>. Upserts the registry entry if
+    /// the tree is not yet registered.
+    /// <para>
+    /// The new ceiling takes effect on the tree's next WAL garbage-collection
+    /// pass, because that pass re-resolves the ceiling rather than capturing it
+    /// at activation. The ceiling is advisory - it never changes what a pass is
+    /// allowed to trim - so lowering it cannot cause over-trimming.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL retained-byte ceiling override is being set.</param>
+    /// <param name="walMaxRetainedBytes">
+    /// The per-tree retained-byte ceiling to pin (must be &gt;= 1), or <c>null</c>
+    /// to clear the override.
+    /// </param>
+    Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes);
+
+    /// <summary>
     /// Stamps the
     /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
     /// latch to <c>true</c> for <paramref name="treeId"/>. Idempotent

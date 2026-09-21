@@ -110,6 +110,10 @@ internal static class TreeAdminLifecycleToolHandlers
         HistoryRetentionMode? historyRetentionMode = null,
         [Description("The durable-history age bound in ticks to pin, or null to clear it. Must be strictly positive when supplied. Honoured only when applyHistoryRetention is true.")]
         long? historyRetentionWindowTicks = null,
+        [Description("When true, write the walMaxRetainedBytes override; when false, leave the tree's WAL retained-byte ceiling override unchanged.")]
+        bool applyWalMaxRetainedBytes = false,
+        [Description("The advisory WAL retained-byte ceiling to pin, or null to clear it (fall back to the silo-wide option). Must be strictly positive when supplied. Honoured only when applyWalMaxRetainedBytes is true. The ceiling is advisory: it never changes what a WAL garbage-collection pass may trim, so lowering it cannot over-trim. Takes effect on the tree's next GC pass, with no silo restart.")]
+        long? walMaxRetainedBytes = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
@@ -122,6 +126,8 @@ internal static class TreeAdminLifecycleToolHandlers
             ApplyHistoryRetention = applyHistoryRetention,
             HistoryRetentionMode = historyRetentionMode,
             HistoryRetentionWindowTicks = historyRetentionWindowTicks,
+            ApplyWalMaxRetainedBytes = applyWalMaxRetainedBytes,
+            WalMaxRetainedBytes = walMaxRetainedBytes,
         };
         return treeAdmin.SetTreeConfigAsync(treeId, update, cancellationToken);
     }

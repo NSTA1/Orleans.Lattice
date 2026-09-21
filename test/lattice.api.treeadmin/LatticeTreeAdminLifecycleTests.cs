@@ -421,6 +421,78 @@ public sealed class LatticeTreeAdminLifecycleTests
             Throws.TypeOf<ArgumentOutOfRangeException>());
     }
 
+    // ----- SetTreeConfig: WAL retained-byte ceiling (issue #3333) -----
+
+    [Test]
+    public async Task SetTreeConfigAsync_writes_the_wal_ceiling_when_applied()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { WalMaxRetainedBytes = 21474836480 });
+        var facade = Create(factory);
+
+        var update = new TreeConfigurationUpdate
+        {
+            ApplyWalMaxRetainedBytes = true,
+            WalMaxRetainedBytes = 21474836480,
+        };
+
+        var report = await facade.SetTreeConfigAsync(Tree, update);
+
+        await registry.Received(1).SetWalMaxRetainedBytesAsync(Tree, 21474836480);
+        Assert.That(report.WalMaxRetainedBytes, Is.EqualTo(21474836480));
+    }
+
+    [Test]
+    public async Task SetTreeConfigAsync_clears_the_wal_ceiling_with_a_null_applied_value()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry());
+        var facade = Create(factory);
+
+        var update = new TreeConfigurationUpdate
+        {
+            ApplyWalMaxRetainedBytes = true,
+            WalMaxRetainedBytes = null,
+        };
+
+        var report = await facade.SetTreeConfigAsync(Tree, update);
+
+        await registry.Received(1).SetWalMaxRetainedBytesAsync(Tree, null);
+        Assert.That(report.WalMaxRetainedBytes, Is.Null);
+    }
+
+    [Test]
+    public async Task SetTreeConfigAsync_leaves_the_wal_ceiling_untouched_when_not_applied()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry());
+        var facade = Create(factory);
+
+        await facade.SetTreeConfigAsync(Tree, new TreeConfigurationUpdate { ApplyPublishEvents = true, PublishEvents = true });
+
+        await registry.DidNotReceive().SetWalMaxRetainedBytesAsync(Tree, Arg.Any<long?>());
+    }
+
+    [Test]
+    public void SetTreeConfigAsync_non_positive_wal_ceiling_throws()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        Registry(factory);
+        var facade = Create(factory);
+
+        var update = new TreeConfigurationUpdate
+        {
+            ApplyWalMaxRetainedBytes = true,
+            WalMaxRetainedBytes = 0,
+        };
+
+        Assert.That(async () => await facade.SetTreeConfigAsync(Tree, update),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
     [Test]
     public void SetTreeConfigAsync_reserved_tree_id_is_rejected()
     {
