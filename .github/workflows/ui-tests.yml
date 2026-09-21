@@ -178,6 +178,10 @@ jobs:
             pwsh "$script" install chromium --with-deps
           fi
 
+      # tla-toolchain: not-required - every shard filter here selects
+      # TestCategory=UI inside test/lattice.explorer.uitests, which contains no
+      # `Tlc`-category fixture. See spec/README.md and
+      # CiTlaToolchainProvisioningTests.
       - name: Run browser UI tests
         run: |
           dotnet test "$UI_TEST_PROJECT" --no-build --configuration Release \
