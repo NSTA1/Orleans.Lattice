@@ -5,17 +5,21 @@ namespace Orleans.Lattice;
 /// entry: either the entry may be trimmed, or the one clause of the eligibility
 /// predicate that refused it.
 /// <para>
-/// The three rejection members exist because the predicate's clauses are
+/// The four rejection members exist because the predicate's clauses are
 /// independent and indict entirely different subsystems (issue #3155). A bare
 /// <see langword="false"/> answers "may I trim this?" correctly and answers "who
 /// is holding my WAL?" not at all, which is the question an operator is actually
 /// asking when a tree stops every scan on its first entry and reclaims nothing.
 /// </para>
 /// <para>
-/// Diagnostic only. The clause an entry is rejected by never changes whether it
-/// is rejected: <see cref="WalGcTrimCore.IsEntryEligible"/> is exactly
-/// <c>ClassifyEntry(...) == Eligible</c>, so a pass reclaims precisely the
-/// entries it would have reclaimed before this enum existed.
+/// <b>Diagnostic only, with one exception.</b> For every member but
+/// <see cref="DurableOffsetRefusal"/>, the clause an entry is rejected by never
+/// changes whether it is rejected: <see cref="WalGcTrimCore.IsEntryEligible"/> is
+/// exactly <c>ClassifyEntry(...) == Eligible</c>, so a pass reclaims precisely
+/// the entries it would have reclaimed before this enum existed.
+/// <see cref="DurableOffsetRefusal"/> (issue #3300) is a verdict the predicate
+/// reaches because it now narrows, and is called out rather than left implicit
+/// because "diagnostic only" was a load-bearing guarantee of this enum.
 /// </para>
 /// </summary>
 internal enum WalGcTrimEligibility
@@ -38,10 +42,18 @@ internal enum WalGcTrimEligibility
     /// <para>
     /// The name is retained from when the clause was HLC-only (issue #3172 added
     /// the offset axis as a disjunct) because the cursor remains the axis a
-    /// caller can act on: the offset axis only ever ADDS entitlement, so an entry
-    /// reported here was refused by the cursor and either had no offset floor to
-    /// appeal to or sat above it - and in the second case the scan stops at the
-    /// floor before reaching this verdict anyway.
+    /// caller can act on: an entry reported here was refused by the cursor and
+    /// either had no offset floor to appeal to or sat above it - and in the
+    /// second case the scan stops at the floor before reaching this verdict
+    /// anyway.
+    /// </para>
+    /// <para>
+    /// Not to be confused with <see cref="DurableOffsetRefusal"/>, which is the
+    /// exact converse (issue #3300): there the cursor ACCEPTED the entry and the
+    /// durable offset floor overruled it. The two are separated because they
+    /// indict opposite subsystems - this one a consumer that has not caught up,
+    /// that one a leaf that has not made its applied state durable - and because
+    /// only this one clears itself when a reader advances.
     /// </para>
     /// </summary>
     CursorFloor = 1,
@@ -70,4 +82,42 @@ internal enum WalGcTrimEligibility
     /// </para>
     /// </summary>
     BlockPin = 3,
+
+    /// <summary>
+    /// The entitlement clause refused the entry because the durable materialiser
+    /// offset floor overruled a consumer cursor that would have admitted it: the
+    /// minimum consumer cursor dominates the entry, no retention TTL ceiling
+    /// covers it, and the supplied <see cref="WalGcOffsetAdmission"/> declined it
+    /// (issue #3300).
+    /// <para>
+    /// Indicts the <b>durable materialiser</b>, not the consumer. Every other
+    /// rejection on this enum names something that has not advanced far enough;
+    /// this one names a tree where something HAS advanced - the in-memory
+    /// consumer cursor - past what any durable evidence supports. That cursor
+    /// tracks what a leaf folded into its CACHE, so it advances the moment a
+    /// write lands, and before this verdict existed the collector released the
+    /// WAL entry on that alone. The WAL copy was the only copy, so the rows
+    /// survived in memory until the next process boundary and then were gone -
+    /// with the pass reporting a healthy arm throughout.
+    /// </para>
+    /// <para>
+    /// <b>Unlike the other three, this rejection is not purely diagnostic.</b>
+    /// The other members label a decision the scan would have taken anyway; this
+    /// one exists because the predicate now narrows. It is reachable only where a
+    /// durable offset floor was actually established for the partition, so a tree
+    /// that reports no offsets is untouched, and a configured retention TTL still
+    /// admits independently - an operator who has stated that data past a window
+    /// may be dropped still gets that honoured against a floor that has stalled.
+    /// </para>
+    /// <para>
+    /// A sustained run of this arm with nothing reclaimed is a leaf whose durable
+    /// checkpoint or snapshot coverage has stopped advancing, which is the state
+    /// to investigate - and naming it is the point. A silent hold here would be
+    /// indistinguishable from the stalled-floor state of issue #3094, and those
+    /// two demand opposite responses: this one means data is being CORRECTLY
+    /// retained pending durability, that one means retention has no path to
+    /// clear.
+    /// </para>
+    /// </summary>
+    DurableOffsetRefusal = 4,
 }

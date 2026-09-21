@@ -18,8 +18,9 @@ namespace Orleans.Lattice;
 /// </para>
 /// <list type="number">
 ///   <item>
-///     <b>Entitlement clause</b> - a <em>disjunction</em> over two independent
-///     axes, of which at least one must accept the entry (issue #3172).
+///     <b>Entitlement clause</b> - two independent axes, at least one of which
+///     must accept the entry (issue #3172), with the offset axis <em>overruling</em>
+///     the consumer cursor whenever it is available (issue #3300).
 ///     <list type="bullet">
 ///       <item>
 ///         The <b>HLC axis</b>: a reported consumer cursor above
@@ -37,6 +38,28 @@ namespace Orleans.Lattice;
 ///     a leaf's applied offset while its HLC checkpoint stays flat - so before
 ///     the offset axis could grant entitlement, a tree making durable progress
 ///     predominantly through offset-only advance retained its WAL forever.
+///     <para>
+///     <b>The disjunction is not symmetric, and issue #3300 is what that
+///     asymmetry cost.</b> The offset admission is the STRONGER proof of
+///     application: it says "every consumer folded into this minimum has
+///     durably applied through here", whereas the consumer cursor says only
+///     "an in-memory reader has seen this far". Between a strong proof and a
+///     weak one, a plain disjunction is just the weak one - so while the offset
+///     axis could only ever ADD entitlement, an entry the in-memory cursor had
+///     passed was released with no durable evidence required at all, and the
+///     WAL copy it destroyed was the only copy. The offset axis may now refuse
+///     what the cursor alone would have admitted, reported as
+///     <see cref="WalGcTrimEligibility.DurableOffsetRefusal"/>.
+///     </para>
+///     <para>
+///     Two carve-outs keep that narrowing from reintroducing the unbounded
+///     growth of issue #3094. A <see langword="null"/> admission changes
+///     nothing whatsoever - a tree with no durable floor reporting evaluates
+///     the byte-identical pre-#3172 predicate - and the TTL ceiling stays an
+///     INDEPENDENT admit, so an operator who has configured a retention window
+///     still gets it honoured against a floor that has stalled. Only the cursor
+///     arm is overrulable.
+///     </para>
 ///   </item>
 ///   <item>
 ///     <b>Causal-stable clause</b> - once any consumer has reported a per-origin
@@ -84,8 +107,9 @@ internal static class WalGcTrimCore
     /// </param>
     /// <param name="offsetAdmission">
     /// The offset-space entitlement, or <see langword="null"/> when the durable
-    /// materialiser offset floor is unavailable - in which case it admits
-    /// nothing and the predicate is byte-identical to its pre-#3172 behaviour.
+    /// materialiser offset floor is unavailable - in which case it neither
+    /// admits nor refuses and the predicate is byte-identical to its pre-#3172
+    /// behaviour.
     /// </param>
     /// <returns>
     /// <see langword="true"/> when the entry may be trimmed; otherwise
@@ -134,6 +158,9 @@ internal static class WalGcTrimCore
     /// offset axis accepted the entry. It is still named for the cursor because
     /// that remains the only axis a caller can be holding open when an offset
     /// admission is unavailable, which is the state it is reported in most often.
+    /// It is distinct from <see cref="WalGcTrimEligibility.DurableOffsetRefusal"/>,
+    /// which is the opposite reading: there the cursor DID accept the entry and
+    /// the durable offset floor overruled it (issue #3300).
     /// </para>
     /// </remarks>
     /// <param name="entryTimestamp">The entry's Hybrid Logical Clock stamp.</param>
@@ -160,8 +187,9 @@ internal static class WalGcTrimCore
     /// </param>
     /// <param name="offsetAdmission">
     /// The offset-space entitlement, or <see langword="null"/> when the durable
-    /// materialiser offset floor is unavailable - in which case it admits
-    /// nothing and the predicate is byte-identical to its pre-#3172 behaviour.
+    /// materialiser offset floor is unavailable - in which case it neither
+    /// admits nor refuses and the predicate is byte-identical to its pre-#3172
+    /// behaviour.
     /// </param>
     /// <returns>
     /// <see cref="WalGcTrimEligibility.Eligible"/> when the entry may be trimmed;
@@ -179,22 +207,44 @@ internal static class WalGcTrimCore
     {
         // Entitlement clause, half one - the HLC axis: cursor OR TTL must accept
         // the entry (the legacy HLC-only behaviour).
-        var accepted = false;
-        if (minCursor is { } mc && mc > HybridLogicalClock.Zero && entryTimestamp <= mc)
-        {
-            accepted = true;
-        }
-        else if (ttlCeiling is { } ceiling && entryTimestamp <= ceiling)
-        {
-            accepted = true;
-        }
+        //
+        // The two arms are evaluated into separate flags rather than collapsed
+        // into one, because half two below treats them differently (issue
+        // #3300): the TTL ceiling is an operator retention policy and stays
+        // independently sufficient, whereas the cursor is the weaker proof the
+        // offset axis may overrule. Their disjunction is exactly the value the
+        // single `accepted` flag carried before, so the verdict on every input
+        // that does not reach half two is unchanged.
+        var cursorAccepts = minCursor is { } mc
+            && mc > HybridLogicalClock.Zero
+            && entryTimestamp <= mc;
+        var ttlAccepts = ttlCeiling is { } ceiling && entryTimestamp <= ceiling;
+        var accepted = cursorAccepts || ttlAccepts;
 
-        // Entitlement clause, half two - the offset axis (issue #3172). The two
-        // halves are a DISJUNCTION, not a conjunction: the durable materialiser
-        // offset floor is a stronger proof of application than the HLC frontier
-        // is ("every consumer folded into this minimum has durably applied
-        // through here"), and the two axes advance independently, so an entry
-        // the HLC axis refuses may still be entitled on offset evidence alone.
+        // Entitlement clause, half two - the offset axis (issues #3172, #3300).
+        //
+        // The durable materialiser offset floor is a stronger proof of
+        // application than the HLC frontier is ("every consumer folded into this
+        // minimum has durably applied through here"), and the two axes advance
+        // independently, so an entry the HLC axis refuses may still be entitled
+        // on offset evidence alone (#3172).
+        //
+        // The converse now also holds (#3300). Consulting the stronger proof
+        // only when the weaker one had already refused made it an ADMIT-ONLY
+        // axis, which is the same thing as not consulting it: an entry the
+        // in-memory consumer cursor had passed was released with no durable
+        // evidence required. That cursor tracks what a leaf folded into its
+        // CACHE, so it advances the moment a write lands - the WAL copy was
+        // destroyed seconds later and the rows vanished at the next process
+        // boundary, which is the loss issue #3300 measured. The offset axis may
+        // therefore refuse, and a refusal is attributed to its own verdict so
+        // the hold is nameable in a scrape rather than silently
+        // indistinguishable from a stalled floor (issue #3094).
+        //
+        // Note what is NOT overruled. A ttlAccepts entry is still trimmed: an
+        // operator who configured a retention window has stated that data past
+        // it may be dropped, and honouring that keeps retention bounded on a
+        // tree whose floor has stalled. Only the cursor arm is overrulable.
         //
         // It is scoped to the entitlement clause and no further. The
         // causal-stable and blocked-floor clauses below stay conjunctive,
@@ -202,12 +252,19 @@ internal static class WalGcTrimCore
         // the offset floor knows nothing about - rather than durable
         // application.
         //
-        // A null admission (no durable offset floor on this pass) admits
-        // nothing, so an unavailable floor leaves this predicate exactly as it
-        // was.
-        if (!accepted && offsetAdmission is { } admission)
+        // A null admission (no durable offset floor on this pass) neither admits
+        // nor refuses, so an unavailable floor leaves this predicate exactly as
+        // it was.
+        if (offsetAdmission is { } admission)
         {
-            accepted = admission.Admits(entryTimestamp, entryOffset);
+            if (admission.Admits(entryTimestamp, entryOffset))
+            {
+                accepted = true;
+            }
+            else if (cursorAccepts && !ttlAccepts)
+            {
+                return WalGcTrimEligibility.DurableOffsetRefusal;
+            }
         }
 
         if (!accepted)

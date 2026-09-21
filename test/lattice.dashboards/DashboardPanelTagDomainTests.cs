@@ -267,10 +267,15 @@ public sealed class DashboardPanelTagDomainTests
             // ordinary and correct reading for a deliberate hold, exactly as it
             // is for empty, so the join would report every held shard as wedged.
             // Both are drawn by target A, which carries no reason matcher.
+            //
+            // durable_offset_refusal (issue #3300) joins them for durability_hold's
+            // reason exactly: it is a deliberate hold, so "stopped while releasing
+            // nothing" is its ordinary and correct reading rather than a wedged one.
             ["Replication|3149|orleans.lattice.wal.gc.trim_stop|reason"] =
                 [
                     "block_pin", "causal_frontier", "cursor_floor",
-                    "durability_hold", "durability_unverified", "empty",
+                    "durability_hold", "durability_unverified",
+                    "durable_offset_refusal", "empty",
                     "exhausted",
                 ],
         };

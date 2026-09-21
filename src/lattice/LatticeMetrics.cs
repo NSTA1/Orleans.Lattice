@@ -2387,7 +2387,9 @@ public static class LatticeMetrics
     /// </para>
     /// <para>
     /// Every arm - <c>exhausted</c>, <c>empty</c>, <c>offset_floor</c>,
-    /// <c>cursor_floor</c>, <c>causal_frontier</c> and <c>block_pin</c> - is
+    /// <c>cursor_floor</c>, <c>causal_frontier</c>, <c>block_pin</c>,
+    /// <c>durability_unverified</c>, <c>durability_hold</c> and
+    /// <c>durable_offset_refusal</c> - is
     /// zero-primed per shard per tree on every pass, so an absent series
     /// means this silo is not running WAL GC for the tree rather than that the
     /// tree never stopped a scan. That priming is what lets a reader treat a flat
@@ -2395,18 +2397,20 @@ public static class LatticeMetrics
     /// inference that was unavailable before this instrument existed. Priming
     /// covers the whole partition range rather than only the partitions this
     /// silo resolves a provider for, so a partition pinned elsewhere publishes
-    /// six flat zeros and no entries-trimmed series, which is a distinguishable
+    /// nine flat zeros and no entries-trimmed series, which is a distinguishable
     /// reading rather than an absent one.
     /// </para>
     /// <para>
     /// Recorded once per shard per pass, so a tree with eight shards contributes
-    /// eight increments per pass and the arms sum to the shard count. It is
-    /// diagnostic only and never changes what a pass is allowed to trim.
+    /// eight increments per pass and the arms sum to the shard count. Diagnostic
+    /// only for every arm but <c>durability_hold</c> and
+    /// <c>durable_offset_refusal</c>, which report stops the collector chose
+    /// rather than ones it merely observed (issue #3300).
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
-            description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, durability_unverified, exhausted or empty.");
+            description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, durability_unverified, durability_hold, durable_offset_refusal, exhausted or empty.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
@@ -2470,6 +2474,23 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> ReasonTrimDurabilityHold =
         new(TagReason, "durability_hold");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>durable_offset_refusal</c> - the scan stopped
+    /// at an entry the consumer cursor would have admitted and the durable
+    /// materialiser offset floor overruled
+    /// (<see cref="WalGcTrimStopReason.DurableOffsetRefusal"/>, issue #3300).
+    /// <para>
+    /// Read against <see cref="ReasonTrimOffsetFloor"/> rather than alongside it.
+    /// <c>offset_floor</c> means the scan walked up to the floor and stopped at
+    /// its edge; this means it stopped BELOW the floor because a consumer the
+    /// floor does not speak for still needs the entry. A sustained run indicts a
+    /// leaf whose durable checkpoint or snapshot coverage has stopped advancing,
+    /// not a consumer that is merely behind.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonTrimDurableOffsetRefusal =
+        new(TagReason, "durable_offset_refusal");
 
     /// <summary>
     /// Counter of WAL garbage-collection passes for which no retained-byte

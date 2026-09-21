@@ -199,7 +199,7 @@ public sealed partial class LatticeWalGcTrimStopReasonTests
                 .ToArray()))
             .ToList();
 
-        var expected = new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "empty", "exhausted", "offset_floor" };
+        var expected = new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "durable_offset_refusal", "empty", "exhausted", "offset_floor" };
 
         Assert.Multiple(() =>
         {
