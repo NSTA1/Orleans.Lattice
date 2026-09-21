@@ -84,6 +84,10 @@ jobs:
       - name: Build MAUI Windows head
         run: dotnet build src/lattice.explorer/Maui/Orleans.Lattice.Explorer.csproj --configuration Release -f net10.0-windows10.0.19041.0
 
+      # tla-toolchain: not-required - this lane runs only
+      # test/lattice.explorer, which contains no `Tlc`-category fixture, and it
+      # runs on windows-latest where the ubuntu provisioning steps would not
+      # apply. See spec/README.md and CiTlaToolchainProvisioningTests.
       - name: Test explorer
         run: dotnet test test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=explorer-windows.trx"
 
