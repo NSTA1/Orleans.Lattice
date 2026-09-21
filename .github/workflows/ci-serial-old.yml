@@ -1082,6 +1082,35 @@ jobs:
             done
           done
 
+      # The TLA+ toolchain for the `Tlc` category in test/lattice. See
+      # spec/README.md and issue #2323. This lane is the manual-dispatch serial
+      # fallback for the sharded matrix in ci.yml, and its deterministic step
+      # below carries the same `Tlc`-admitting filter, so it needs the same
+      # provisioning: TlcModelCheckTests FAILS (never skips) when the toolchain
+      # is absent under GITHUB_ACTIONS. Unconditional for the same reason as in
+      # ci.yml - which packages the run selects is decided at run time.
+      # `CiTlaToolchainProvisioningTests` fails if any lane drifts.
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch TLA+ tools
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-all-errors \
+            --output tools/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          # Pinned by digest, not merely by tag. A release asset can be replaced
+          # in place, and an unverified jar on the classpath of a verification
+          # gate is the one dependency where a silent substitution would be
+          # least visible.
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
+            | sha256sum --check --strict
+
       - name: Test changed packages (deterministic)
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # The leaf-side projection-digest publish is coalesced behind a

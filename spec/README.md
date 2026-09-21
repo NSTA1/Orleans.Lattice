@@ -241,6 +241,17 @@ complement shard, so a new namespace is picked up without editing the shard
 config. The workflow provisions a Temurin 17 JRE and a digest-pinned
 `tla2tools.jar` before the leg runs.
 
+Every lane that runs .NET tests has to do the same, because the `Tlc` category
+is selected by any ordinary filter rather than opted into by name, and the
+fixture fails closed when the toolchain is missing. That obligation was implicit
+once, and the coverage lane duly ran without the toolchain and failed the whole
+core suite at `OneTimeSetUp`. It is now explicit:
+`CiTlaToolchainProvisioningTests` (in `test/lattice/Hygiene/`) requires each
+workflow that runs tests either to provision the toolchain - pinned to the same
+release and digest as the others, and digest-verified - or to carry a
+`# tla-toolchain: not-required - <reason>` marker saying why it cannot select
+the category.
+
 This reverses an earlier decision recorded here, which is worth stating plainly
 rather than quietly overwriting. That decision rested on two premises: that the
 .NET build image carries no Java runtime, and that the specification tracks the
