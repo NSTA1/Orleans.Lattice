@@ -26,3 +26,12 @@ BenchmarkDotNet.Artifacts/
 docs/
 test/
 **/*.log
+
+# Local-only artefact trees. These are gitignored, so they are invisible to a
+# `git status` sanity check but are very much visible to the build daemon: on a
+# working clone `.deploy/` alone reached ~19 GB of volume and image tarballs,
+# which a repo-root-context build would upload in full before running a single
+# instruction. `.run/` holds per-run benchmark state written while a rig is up.
+.deploy/
+**/node_modules/
+**/.run/

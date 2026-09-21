@@ -15,7 +15,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Engine\VehicleFleetSimulator.AzureThroughput.Engine.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
   </ItemGroup>
 
 </Project>

@@ -1,3 +1,5 @@
+namespace VehicleFleetSimulator.AzureThroughput.Engine;
+
 /// <summary>
 /// Classifies exceptions thrown by the silo's proactive shard warm-up loop
 /// so a transient, self-healing failure can be retried instead of aborting

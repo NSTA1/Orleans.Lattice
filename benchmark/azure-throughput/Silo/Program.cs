@@ -169,6 +169,7 @@
 
 using System.Diagnostics;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
@@ -307,6 +308,25 @@ var saturationDispatchTimeoutThreshold = ReadInt(
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
+var clusteringMode = (Environment.GetEnvironmentVariable("BENCH_CLUSTERING") ?? "localhost").Trim().ToLowerInvariant();
+if (clusteringMode is not ("localhost" or "azuretable"))
+{
+    Console.Error.WriteLine($"[silo] FATAL: BENCH_CLUSTERING='{clusteringMode}' is invalid; expected 'localhost' or 'azuretable'.");
+    Environment.Exit(2);
+    return;
+}
+var ingestMode = (Environment.GetEnvironmentVariable("BENCH_INGEST_MODE") ?? "tcp").Trim().ToLowerInvariant();
+if (ingestMode is not ("tcp" or "cluster"))
+{
+    Console.Error.WriteLine($"[silo] FATAL: BENCH_INGEST_MODE='{ingestMode}' is invalid; expected 'tcp' or 'cluster'.");
+    Environment.Exit(2);
+    return;
+}
+var clusteringConn = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_CONNECTION_STRING");
+var clusteringTableServiceUri = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE_SERVICE_URI");
+var clusteringTable = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE") ?? "OrleansSiloInstances";
+var siloClusterPort = ReadInt("BENCH_SILO_CLUSTER_PORT", 11111);
+var gatewayPort = ReadInt("BENCH_GATEWAY_PORT", 30000);
 var leafStorageKind = (Environment.GetEnvironmentVariable("BENCH_LEAF_STORAGE_KIND") ?? "azure").Trim().ToLowerInvariant();
 if (leafStorageKind is not ("azure" or "memory" or "null"))
 {
@@ -330,7 +350,7 @@ var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
 // multi-tree (cross-tree) atomic-write throughput at matched batch sizes;
 // the cross-tree modes commit across a sibling `{treeId}-b` tree via
 // `IGrainFactory.BeginAtomicWrite(...).CommitAsync()`.
-var workloadMode = ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
+var workloadMode = BenchWorkloadMetadata.ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
 // Per-saga batch size used only when `workloadMode == SetManyAtomic`.
 // A 4096-key atomic saga is not a realistic shape; 64 reflects audience-
 // relevant atomic-write usage. Falls back to `batchSize` (4096) when the
@@ -349,6 +369,14 @@ var preseedKeyCount = ReadIntAllowZero("BENCH_VEHICLE_COUNT", 0);
 if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageConn))
 {
     Console.Error.WriteLine("[silo] FATAL: set BENCH_STORAGE_URI (managed identity) or BENCH_STORAGE_CONN (connection string).");
+    Environment.Exit(2);
+    return;
+}
+if (clusteringMode == "azuretable"
+    && string.IsNullOrWhiteSpace(clusteringConn)
+    && string.IsNullOrWhiteSpace(clusteringTableServiceUri))
+{
+    Console.Error.WriteLine("[silo] FATAL: BENCH_CLUSTERING=azuretable requires BENCH_CLUSTERING_CONNECTION_STRING or BENCH_CLUSTERING_TABLE_SERVICE_URI.");
     Environment.Exit(2);
     return;
 }
@@ -385,7 +413,7 @@ var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
 // it later does the override path must update these tokens too.
 var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
 var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} clustering={clusteringMode} ingestMode={ingestMode} siloClusterPort={siloClusterPort} gatewayPort={gatewayPort} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 // F-086: echo the saturation knobs so the cohort log shows the exact
 // values the TCP-read gating + the silo's sampler use. A "default"
@@ -442,7 +470,7 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
 
 builder.UseOrleans(silo =>
 {
@@ -468,8 +496,24 @@ builder.UseOrleans(silo =>
         o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
     });
 
-    // In-memory single-silo clustering: no Azure Storage clustering table, no peer discovery.
-    silo.UseLocalhostClustering();
+    if (clusteringMode == "azuretable")
+    {
+        silo.UseAzureStorageClustering(o =>
+        {
+            o.TableName = clusteringTable;
+            o.TableServiceClient = !string.IsNullOrWhiteSpace(clusteringConn)
+                ? new TableServiceClient(clusteringConn)
+                : new TableServiceClient(new Uri(clusteringTableServiceUri!), new DefaultAzureCredential());
+        });
+        var advertisedAddress = ResolveContainerIPv4Address();
+        silo.ConfigureEndpoints(advertisedAddress, siloClusterPort, gatewayPort, listenOnAnyHostAddress: true);
+        Console.WriteLine($"[silo] clustering=azuretable table={clusteringTable} advertisedAddress={advertisedAddress} siloPort={siloClusterPort} gatewayPort={gatewayPort}");
+    }
+    else
+    {
+        // In-memory single-silo clustering: no Azure Storage clustering table, no peer discovery.
+        silo.UseLocalhostClustering();
+    }
 
     // Reminders: LatticeGrain.EnsureCompactionReminderAsync() registers a reminder on the
     // first write, so a reminder service must be wired even on a single-silo benchmark.
@@ -752,24 +796,37 @@ static bool ReadBool(string name, bool @default)
     };
 }
 
+static IPAddress ResolveContainerIPv4Address()
+{
+    foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+    {
+        if (nic.OperationalStatus != OperationalStatus.Up)
+        {
+            continue;
+        }
+
+        var properties = nic.GetIPProperties();
+        foreach (var address in properties.UnicastAddresses)
+        {
+            var ip = address.Address;
+            if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+            {
+                return ip;
+            }
+        }
+    }
+
+    throw new InvalidOperationException("No non-loopback IPv4 address is available for Orleans endpoint advertisement.");
+}
+
 // Throughput-capture (step 2): parse the BENCH_WORKLOAD_MODE env-var.
 // Accepts case-insensitive kebab-case (set-many, set-many-atomic,
 // set-point, get-point, get-many). Null/empty/unknown falls back to
 // SetMany so a missing env-var preserves the legacy bench shape.
-static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
-    string.IsNullOrWhiteSpace(raw) ? BenchWorkloadMode.SetMany : raw.Trim().ToLowerInvariant() switch
-    {
-        "set-many" or "setmany" => BenchWorkloadMode.SetMany,
-        "set-many-atomic" or "setmanyatomic" => BenchWorkloadMode.SetManyAtomic,
-        "set-many-atomic-2" or "setmanyatomic2" => BenchWorkloadMode.SetManyAtomic2,
-        "cross-tree-atomic-2" or "crosstreeatomic2" => BenchWorkloadMode.CrossTreeAtomic2,
-        "cross-tree-atomic-64" or "crosstreeatomic64" => BenchWorkloadMode.CrossTreeAtomic64,
-        "set-point-mv" or "setpointmv" => BenchWorkloadMode.SetPointMv,
-        "set-point" or "setpoint" or "set" => BenchWorkloadMode.SetPoint,
-        "get-point" or "getpoint" or "get" => BenchWorkloadMode.GetPoint,
-        "get-many" or "getmany" => BenchWorkloadMode.GetMany,
-        _ => BenchWorkloadMode.SetMany,
-    };
+// Throughput-capture (step 2): the BENCH_WORKLOAD_MODE parser lives on
+// BenchWorkloadMetadata.ParseWorkloadMode alongside its formatter, so the
+// silo and the Orleans-client producer cannot drift apart on what a given
+// env-var value means.
 
 // Throughput-capture (step 2): kebab-case rendering for the startup
 // echo line and any future diagnostic surfaces lives on
@@ -822,6 +879,12 @@ internal sealed class TcpIngestService(
         // synchronously already complete, so the poll is a no-op.
         if (settings.ShardCountOverride > 0)
         {
+            // Layer 3 silos must run with BENCH_SHARD_COUNT=0. In a
+            // multi-replica cluster, racing this block from every silo
+            // makes the first replica grow the tree and the rest hit the
+            // grow-only ArgumentOutOfRangeException path below, crashlooping
+            // otherwise healthy replicas. The Orleans-client producer owns
+            // the one-shot reshard in that topology.
             // The very first call into a freshly-activated LatticeGrain
             // races the Orleans client directory cache and routinely fails
             // with OrleansMessageRejectionException ("Unable to create
@@ -1043,6 +1106,12 @@ internal sealed class TcpIngestService(
             var msg = $"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}.";
             Console.WriteLine(msg);
             throw new InvalidOperationException(msg, lastWarmUpException);
+        }
+
+        if (settings.IngestMode == "cluster")
+        {
+            Console.WriteLine("[silo] ingest mode=cluster; TCP listener disabled, producer drives the cluster as an Orleans client");
+            return;
         }
 
         // Multi-account WAL placement spread (experiment independent variable).

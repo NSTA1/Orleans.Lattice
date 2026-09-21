@@ -1,4 +1,4 @@
-using VehicleFleetSimulator.AzureThroughput.Silo;
+using VehicleFleetSimulator.AzureThroughput.Engine;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;
 
