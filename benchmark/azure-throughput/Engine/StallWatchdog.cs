@@ -1,7 +1,7 @@
 using System.Text;
 using Microsoft.Diagnostics.Runtime;
 
-namespace VehicleFleetSimulator.AzureThroughput.Silo;
+namespace VehicleFleetSimulator.AzureThroughput.Engine;
 
 /// <summary>
 /// In-process stall watchdog for the Azure-throughput bench silo.

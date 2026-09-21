@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VehicleFleetSimulator.AzureThroughput.Engine</RootNamespace>
+    <AssemblyName>VehicleFleetSimulator.AzureThroughput.Engine</AssemblyName>
+    <!--
+      Shared ingest/measurement engine for the Azure throughput benchmark
+      harness. Extracted from the silo's Program.cs so the identical
+      drain, flush, dispatch and reporting code runs in BOTH hosts:
+
+        - the single-silo rig (Layer 2), where the silo reads a TCP
+          socket and drives ILattice in-process, and
+        - the multi-silo rig (Layer 3), where a separate producer
+          process joins the cluster as an Orleans CLIENT and drives the
+          same ILattice through IClusterClient.
+
+      The extraction is possible because every op in the engine is
+      expressed against IGrainFactory / ILattice, and IClusterClient
+      implements IGrainFactory - so one engine serves both hosts with no
+      per-host branching. That is what keeps the two layers comparable:
+      the measured code path is literally the same assembly, so a
+      Layer 2 vs Layer 3 delta is attributable to the topology rather
+      than to a reimplementation.
+
+      Built via `dotnet publish` from each host's Dockerfile; never
+      packed.
+    -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <!--
+      In-process stall watchdog (StallWatchdog.cs): when the WAL write
+      pipeline wedges at WalMaxPendingBatches the only exfil channel is
+      stdout, so the watchdog self-snapshots with ClrMD and prints the
+      parked async state-machine chain - the in-process equivalent of
+      `dumpasync` - rather than writing a core dump we have no mount to
+      retrieve. It moved here with the engine because in the multi-silo
+      topology the PRODUCER is the measurement point, so the producer is
+      the process whose wedge most needs diagnosing.
+    -->
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.726401" />
+  </ItemGroup>
+
+  <!--
+    Expose internal types (BenchIngestEngine, StallWatchdog, BenchMetrics,
+    ...) to both hosts and to the sibling test project, rather than
+    widening the public surface of a benchmark-only assembly. Matches the
+    grant the silo project already makes to its own tests.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="VehicleFleetSimulator.AzureThroughput.Silo" />
+    <InternalsVisibleTo Include="VehicleFleetSimulator.AzureThroughput.Producer" />
+    <InternalsVisibleTo Include="VehicleFleetSimulator.AzureThroughput.Silo.Tests" />
+  </ItemGroup>
+
+</Project>
