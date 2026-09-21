@@ -4973,6 +4973,30 @@ public static class LatticeMetrics
         new(TagReason, "recheck_cadence_not_reached");
 
     /// <summary>
+    /// <see cref="TagReason"/> value for the coverage-lag timer finding this
+    /// leaf holding rows with NO durable checkpoint on any partition, and
+    /// routing it to the starvation drive rather than declining (issue #3300).
+    /// <para>
+    /// Split out of <see cref="DriverDeclineRecheckCoverageCurrent"/>, and the
+    /// split is the point. That arm means "every partition's coverage already
+    /// matches its checkpoint", which on a never-checkpointed leaf is
+    /// vacuously true - <c>-1 &gt; -1</c> is false - so the starved leaf was
+    /// counted on the one arm documented as the healthy majority. The two
+    /// states are opposite in consequence and were indistinguishable in
+    /// telemetry: a tree that had never made anything durable reported the
+    /// same arm as a tree that had made everything durable.
+    /// </para>
+    /// <para>
+    /// A non-zero rate here is not itself a fault - it is the timer doing its
+    /// job on a leaf that has not yet replayed. A rate that does not fall
+    /// toward zero is, because it means the drive it routes to is not
+    /// supplying a checkpoint.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckNoDurableCheckpoint =
+        new(TagReason, "recheck_no_durable_checkpoint");
+
+    /// <summary>
     /// Counter of leaf snapshot capture DRIVERS that declined to drive a capture,
     /// tagged <see cref="TagTree"/> and <see cref="TagReason"/> (issue #3185).
     /// <para>

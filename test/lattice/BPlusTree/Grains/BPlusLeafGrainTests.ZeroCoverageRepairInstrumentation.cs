@@ -712,6 +712,209 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
+    /// Issue #3300 ("S2"). A leaf holding rows with NO durable checkpoint on
+    /// any partition must be routed to the starvation drive, not reported as
+    /// coverage-current.
+    /// <para>
+    /// This is the silent half of the defect. With <c>checkpoint(p) &lt; 0</c>
+    /// everywhere, the zero-coverage repair declines - its predicate is
+    /// "checkpointed WITHOUT coverage" and nothing is checkpointed - and the
+    /// per-partition capture debounce then evaluates
+    /// <c>checkpoint(p) &gt; covered(p)</c> as <c>-1 &gt; -1</c>, which is false
+    /// for ever. The tick therefore declined on
+    /// <c>recheck_coverage_current</c>, the arm documented as the healthy
+    /// majority meaning "every partition's coverage already matches its
+    /// checkpoint". On this leaf that is vacuously true and materially false:
+    /// there is no coverage, no checkpoint, and no route to either.
+    /// </para>
+    /// <para>
+    /// The consequence measured on a live deployment was a tree that produced
+    /// no durable checkpoint by ANY path for a whole process lifetime -
+    /// thousands of declines on these two arms, no <c>leaf.snapshot.capture</c>
+    /// series at all, and a durable materialiser pin still sitting on its birth
+    /// value - with every counter reading healthy.
+    /// </para>
+    /// <para>
+    /// The assertion is deliberately on the CLASSIFICATION rather than on a
+    /// captured blob. A capture taken from this state can make no coverage
+    /// claim and is correctly declined one level down, so asserting that a blob
+    /// appeared would demand the very fail-open write
+    /// <c>CaptureSnapshotCoreAsync</c> refuses to make. What must change is
+    /// that the leaf stops being counted as healthy and starts being handed to
+    /// the drive that replays the WAL and so supplies the missing checkpoint.
+    /// </para>
+    /// <para>
+    /// The listener is filtered to this fixture's own tree. An unfiltered one
+    /// would let a sibling fixture's ordinary <c>recheck_coverage_current</c>
+    /// decline satisfy the negative assertion below, which would make this test
+    /// fail for reasons that have nothing to do with the leaf it built.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Coverage_lag_tick_routes_a_starved_leaf_to_the_drive_rather_than_reporting_coverage_current()
+    {
+        var treeId = UniqueCoverageRepairTreeId("starved-no-checkpoint");
+
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: null,
+            treeId: treeId);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+
+        // The row is what makes this the losing population rather than an empty
+        // leaf with nothing at stake. ComputePartitionsWithLiveData reads the
+        // cache, so without it the starved predicate is correctly false and the
+        // test would assert the healthy path under a misleading name.
+        SeedRow(grain);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.LessThan(0L),
+                "precondition: no partition is checkpointed. This is the whole shape under test - "
+                + "a non-negative checkpoint here would make every driver satisfiable and the "
+                + "circularity would not exist to be asserted");
+
+            Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.LessThan(0L),
+                "precondition: coverage is ABSENT, not merely stale. A stale-but-present coverage "
+                + "is the #3185 population, which the debounce already handles correctly");
+        });
+
+        var reasons = new List<string>();
+        using (ListenForDriverDeclinesOnTree(treeId, reasons))
+        {
+            await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+        }
+
+        Assert.That(reasons, Is.Not.Empty,
+            "input count: the tick must have reached the driver at all. An empty list would make "
+            + "the ordering assertion below pass vacuously, which is exactly the failure mode "
+            + "that let this defect survive in production telemetry");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                reasons[0],
+                Is.EqualTo(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint.Value),
+                "the tick's FIRST act on a starved leaf must be to classify it as starved and hand "
+                + "it to the drive. Before the fix the first - and only - arm was "
+                + "'recheck_coverage_current', which is the defect: a tree that had never made "
+                + "anything durable was indistinguishable, in every counter, from one that had "
+                + "made everything durable");
+
+            Assert.That(
+                reasons.Take(1),
+                Does.Not.Contain(LatticeMetrics.DriverDeclineRecheckCoverageCurrent.Value),
+                "and specifically it must not be counted on the healthy-majority arm first. The "
+                + "assertion is scoped to the leading decline on purpose: the drive runs its own "
+                + "recheck once its replay finishes, so on a fixture whose commit-log stub has "
+                + "nothing to replay a trailing 'recheck_coverage_current' is the drive reporting "
+                + "honestly that it found no work - a real WAL would have supplied the checkpoint "
+                + "the recheck then acts on. Asserting its total absence would pin the stub's "
+                + "emptiness rather than the classification under test");
+        });
+    }
+
+    /// <summary>
+    /// The discriminating control. The SAME tick, on a leaf whose coverage is
+    /// genuinely current, must still report <c>recheck_coverage_current</c> and
+    /// must not be charged a starvation drive.
+    /// <para>
+    /// Without this, the fix above could be "always take the new arm", which
+    /// would replace a silent stall with a WAL replay on every tick of every
+    /// healthy leaf in the estate. The two fixtures differ in exactly one
+    /// variable - whether the leaf ever reached a checkpoint - so a pass here
+    /// is evidence about the predicate rather than about the harness.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Coverage_lag_tick_still_reports_coverage_current_on_a_leaf_that_has_checkpointed()
+    {
+        var treeId = UniqueCoverageRepairTreeId("starved-control");
+
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: null,
+            treeId: treeId);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        SeedRow(grain);
+
+        // One persist. The zero-coverage repair consumes it and stamps coverage,
+        // which is precisely the transition out of the starved state: the leaf
+        // now has both a checkpoint and coverage, so the debounce's
+        // checkpoint > covered is false for the ordinary, healthy reason.
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(4L),
+                "precondition: this leaf HAS checkpointed, which is the single variable that "
+                + "separates it from the starved fixture above");
+
+            Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(4L),
+                "precondition: and its coverage is genuinely current at that checkpoint");
+        });
+
+        var reasons = new List<string>();
+        using (ListenForDriverDeclinesOnTree(treeId, reasons))
+        {
+            await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                reasons,
+                Does.Contain(LatticeMetrics.DriverDeclineRecheckCoverageCurrent.Value),
+                "the healthy arm must survive the fix. Losing it would remove the control that "
+                + "makes a zero on every other arm readable as 'nothing needed doing' rather "
+                + "than 'the recheck never ran'");
+
+            Assert.That(
+                reasons,
+                Does.Not.Contain(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint.Value),
+                "and a healthy leaf must never be routed to the starvation drive. That route "
+                + "costs a WAL replay, so a predicate that fired here would turn a silent stall "
+                + "into estate-wide replay load on every coverage-lag tick");
+        });
+    }
+
+    /// <summary>
+    /// Collects the <c>reason</c> tag of every driver decline recorded for
+    /// <paramref name="treeId"/> while the returned listener is alive.
+    /// </summary>
+    private static IDisposable ListenForDriverDeclinesOnTree(string treeId, List<string> reasons) =>
+        MeterListening.StartForInstrument(
+            LatticeMetrics.LeafSnapshotDriverDeclines,
+            l => l.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                var matchesTree = false;
+                string? reason = null;
+                foreach (var t in tags)
+                {
+                    if (t.Key == "tree" && (t.Value as string) == treeId)
+                    {
+                        matchesTree = true;
+                    }
+                    else if (t.Key == "reason" && t.Value is string value)
+                    {
+                        reason = value;
+                    }
+                }
+
+                if (matchesTree && reason is not null)
+                {
+                    lock (reasons)
+                    {
+                        reasons.Add(reason);
+                    }
+                }
+            }));
+
+    /// <summary>
     /// The per-leaf first-tick jitter spreads across the WHOLE configured
     /// period, at every supported lag - including the values that the original
     /// 32-bit arithmetic could not express.

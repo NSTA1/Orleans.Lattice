@@ -638,6 +638,74 @@ internal sealed partial class BPlusLeafGrain
         => GetCurrentCheckpointForPartition(partition) >= 0;
 
     /// <summary>
+    /// Whether this leaf holds rows yet has no durable checkpoint on ANY
+    /// partition - the starved state in which every recurring capture driver is
+    /// gated on a precondition the leaf cannot satisfy (issue #3300, "S2").
+    /// <para>
+    /// The three drivers are individually correct and jointly leave a hole.
+    /// With <c>checkpoint(p) &lt; 0</c> for every <c>p</c>:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// the #2692 zero-coverage repair declines, because its predicate is
+    /// "checkpointed WITHOUT coverage" and nothing is checkpointed;
+    /// </description></item>
+    /// <item><description>
+    /// the per-partition capture debounce declines, because
+    /// <c>checkpoint(p) &gt; covered(p)</c> is <c>-1 &gt; -1</c>, which is false
+    /// forever - and it reports that as <c>recheck_coverage_current</c>, a
+    /// HEALTHY-looking arm meaning "everything is already covered" when the
+    /// truth is "there is no coverage and no route to any";
+    /// </description></item>
+    /// <item><description>
+    /// <c>DriveStarvedCheckpointCoreAsync</c> - the one driver that CAN break
+    /// the loop, because it replays the WAL and so supplies the missing
+    /// checkpoint - is reached only from the WAL GC's blocked-leaf sweep, which
+    /// requires a blocking pin the collector has found. A leaf that is never
+    /// collected is never swept.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// So a leaf that stays permanently activated and has never replayed
+    /// produces no durable checkpoint by any path for the whole process
+    /// lifetime, and every counter reports the state as healthy. That was
+    /// measured on a live deployment: thousands of
+    /// <c>recheck_coverage_current</c> and
+    /// <c>no_checkpointed_uncovered_partition</c> declines, no
+    /// <c>leaf.snapshot.capture</c> series at all, and a durable materialiser
+    /// pin that never advanced off its birth value.
+    /// </para>
+    /// <para>
+    /// This predicate exists to separate that population from the healthy one
+    /// so the coverage-lag timer can route it to the drive that already knows
+    /// how to repair it. It deliberately requires live data: a genuinely empty
+    /// leaf has nothing to lose and must not be charged a WAL replay on every
+    /// tick.
+    /// </para>
+    /// </summary>
+    private bool IsStarvedOfDurableCheckpoint(int partitionCount)
+    {
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (IsPartitionProvenCheckpointed(p))
+            {
+                return false;
+            }
+        }
+
+        var liveData = ComputePartitionsWithLiveData(partitionCount);
+        for (var p = 0; p < liveData.Length; p++)
+        {
+            if (liveData[p])
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Whether a caller-supplied per-partition coverage claim asserts coverage
     /// for at least one partition, and so would produce a blob
     /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> accepts.
@@ -2335,6 +2403,49 @@ internal sealed partial class BPlusLeafGrain
             // keep ticking against a bound the operator has withdrawn.
             var disabled = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
             disabled?.Dispose();
+            return;
+        }
+
+        // Issue #3300 ("S2"). A leaf holding rows with no durable checkpoint on
+        // any partition cannot be repaired by the recheck below, and - worse -
+        // the recheck reports it as healthy. Every arm it would reach is gated
+        // on a checkpoint this leaf has never had: the #2692 zero-coverage
+        // repair needs "checkpointed without coverage", and the per-partition
+        // debounce needs checkpoint > covered, which is -1 > -1. It therefore
+        // declines on recheck_coverage_current, the arm documented as the
+        // healthy majority, and the leaf produces no durable checkpoint by any
+        // path for the entire process lifetime while nothing reports a problem.
+        //
+        // The remedy already exists and is already proven: the starvation drive
+        // replays the WAL since the checkpoint, which SUPPLIES the missing
+        // checkpoint, then runs this very recheck - whose zero-coverage repair
+        // can now fire - and finally republishes the durable pin. Its only
+        // caller is the WAL GC's blocked-leaf sweep, which reaches a leaf the
+        // collector has recycled. That is the exact complement of the
+        // population this timer reaches, and between the two sits a leaf that
+        // is permanently activated and has never replayed: the GC never sweeps
+        // it because it is never dormant, and the timer never repairs it
+        // because the recheck alone cannot. Routing that leaf here closes the
+        // gap with the existing remedy instead of adding a second one.
+        //
+        // Nothing is relaxed. The drive advances the checkpoint only from
+        // offsets it actually read out of the WAL, so this adds no route to
+        // stamping coverage the leaf has not earned - the hazard the capture
+        // path's live-data fall-through is careful to decline. The drive owns
+        // its own permit, budget, timeout, memory-refusal handling and
+        // single-flight latch, so a tick cannot stack drives or outlive its
+        // bound, and it short-circuits to NotDriven on a leaf with no tree id.
+        var starvationPartitionCount = Math.Max(1, resolved.WalPartitions);
+        if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
+        {
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);
+
+            // The drive runs MaybeRunPeriodicSnapshotRecheckAsync itself, after
+            // the replay that makes the recheck's arms satisfiable. Returning
+            // here rather than falling through is what keeps that a single
+            // evaluation on the post-replay state instead of two, the second of
+            // which would re-decline on the pre-replay reading.
+            await DriveStarvedCheckpointAsync();
             return;
         }
 
