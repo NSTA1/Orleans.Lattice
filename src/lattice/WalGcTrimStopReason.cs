@@ -31,9 +31,16 @@ namespace Orleans.Lattice;
 /// before the value existed. The exception is
 /// <see cref="DurabilityHold"/>, added by issue #3300, which reports a stop the
 /// collector performs <i>because</i> of a configured durability hold and which
-/// therefore does narrow the predicate - but only when
-/// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> is set, which it
-/// is not by default. This distinction is called out rather than left implicit
+/// therefore does narrow the predicate. It is reachable by DEFAULT as of the
+/// issue #3300 default-on change, but only on a tree whose every admitting
+/// cursor is a leaf materialiser with no durable offset coverage - a tree on
+/// which the collector otherwise releases records nothing outside the process
+/// has attested to. A deployment with a materialiser wired, or any consumer
+/// that reports a cursor from outside this process (a replication shipper, a
+/// view maintainer, a log subscriber, the backup capture service), never
+/// reaches it. Setting
+/// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> to zero disables
+/// it outright. This distinction is called out rather than left implicit
 /// because "diagnostic only" was a load-bearing guarantee of this enum, and a
 /// member that quietly stopped honouring it would be exactly the kind of
 /// unstated behaviour change the rest of these comments exist to prevent.
@@ -212,17 +219,27 @@ internal enum WalGcTrimStopReason
     DurabilityUnverified = 6,
 
     /// <summary>
-    /// The scan stopped at the shard's first entry because no durable
-    /// materialiser offset floor existed for the tree and a durability hold
-    /// (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) is
-    /// configured and not yet exhausted, so nothing was reclaimed
-    /// (issue #3300).
+    /// The scan stopped at the shard's first entry because the durability hold
+    /// engaged: every cursor admitting the trim was a leaf materialiser the
+    /// durable offset floor does not speak for, and the hold
+    /// (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) is not yet
+    /// exhausted, so nothing was reclaimed (issue #3300).
     /// <para>
     /// <b>The one arm on this enum that reports a stop the collector chose
     /// rather than one it merely observed.</b> Every other member labels a
     /// decision the scan would have taken regardless; this one exists only
-    /// because the hold is switched on, and with the hold unconfigured - the
-    /// default - it is unreachable and the pass behaves exactly as before.
+    /// because the hold engaged. Setting the hold ceiling to zero makes it
+    /// unreachable and the pass behaves exactly as before.
+    /// </para>
+    /// <para>
+    /// The arm does not say WHICH durability condition held the scan. A tree
+    /// that has never pinned a durable floor is stalled and holds until its
+    /// ceiling forces it; a tree whose floor regressed is mid-upgrade and
+    /// clears itself. Those need opposite operator responses, so the
+    /// distinction is carried by
+    /// <c>orleans.lattice.wal.gc.durability_hold_engaged</c>'s <c>reason</c>
+    /// tag rather than smuggled into this enum, whose members name where a scan
+    /// stopped and not why the tree is in that state.
     /// </para>
     /// <para>
     /// Distinct from <see cref="DurabilityUnverified"/>, and the pair is

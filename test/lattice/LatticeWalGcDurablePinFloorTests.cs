@@ -55,7 +55,12 @@ public sealed class LatticeWalGcDurablePinFloorTests
     private static IOptionsMonitor<LatticeOptions> Monitor()
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1 };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree in this fixture. This fixture asserts the HLC durable-pin floor,
+        // a different axis, so opt out explicitly (0 disables the hold) rather
+        // than depending on a default that has since changed.
+        var options = new LatticeOptions { WalPartitions = 1, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

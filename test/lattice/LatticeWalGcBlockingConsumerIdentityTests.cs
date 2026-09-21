@@ -68,7 +68,12 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
     private static IOptionsMonitor<LatticeOptions> Monitor(int partitions = 1)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = partitions };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree in this fixture. This fixture asserts blocking-consumer identity,
+        // a different axis, so opt out explicitly (0 disables the hold) rather
+        // than depending on a default that has since changed.
+        var options = new LatticeOptions { WalPartitions = partitions, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

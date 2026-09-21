@@ -84,7 +84,12 @@ public sealed class LatticeWalGcOffsetEntitlementTests
     private static IOptionsMonitor<LatticeOptions> Monitor(int partitions = 1)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = partitions };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is the very state
+        // these tests construct in order to assert that the offset axis admits
+        // nothing. The hold would stop the trim before that assertion is
+        // reached, so opt out explicitly (0 disables the hold).
+        var options = new LatticeOptions { WalPartitions = partitions, WalDurabilityHoldCeilingBytes = 0 };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

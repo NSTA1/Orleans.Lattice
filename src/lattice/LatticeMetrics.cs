@@ -2088,11 +2088,11 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
-    /// with <b>no durable materialiser offset floor</b> only because the
-    /// configured durability hold
-    /// (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) had been
-    /// exhausted by the tree's retained bytes, tagged with
-    /// <see cref="TagTree"/> (issue #3300).
+    /// with <b>no durable materialiser offset floor</b> despite the durability
+    /// hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) - either
+    /// because the hold engaged and exhausted its ceiling, or because it could
+    /// not engage at all - tagged with <see cref="TagTree"/> and
+    /// <see cref="TagReason"/> (issue #3300).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -2111,16 +2111,93 @@ public static class LatticeMetrics
     /// discarded, that one says for how long the cause has been present.
     /// </para>
     /// <para>
-    /// Zero, here, is genuinely good news rather than an absence of news, but
-    /// only when the hold is configured. With
-    /// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> unset the hold
-    /// never engages and this counter can never fire, so a flat zero then means
-    /// the check is switched off, not that it passed.
+    /// Zero, here, is genuinely good news rather than an absence of news,
+    /// because the hold is on by default
+    /// (<see cref="LatticeOptions.DefaultWalDurabilityHoldCeilingBytes"/>): a
+    /// flat zero means the check ran and found nothing to force. That holds only
+    /// while the ceiling is left positive - set it to <c>0</c> and the hold never
+    /// engages, so zero reverts to meaning the check is switched off rather than
+    /// that it passed.
+    /// </para>
+    /// <para>
+    /// <see cref="TagReason"/> says which way the hold failed to protect the
+    /// partition, and the two arms are not interchangeable.
+    /// <see cref="ReasonHoldForcedCeilingExhausted"/> means the hold engaged,
+    /// retained up to its ceiling and then yielded - the fault is that the floor
+    /// never arrived, and the ceiling merely bounded the damage.
+    /// <see cref="ReasonHoldForcedUnmeasurableFootprint"/> means the hold never
+    /// engaged at all, because the provider reports no retained bytes and a hold
+    /// with nothing to bound it cannot be allowed to run by default. The second
+    /// is a deployment defect in the storage provider and raising the ceiling
+    /// will not touch it. Collapsing the two would repeat the conflation issue
+    /// #3309 was raised to undo, where one arm meant both "checked and exhausted"
+    /// and "never checked".
     /// </para>
     /// </remarks>
     public static readonly Counter<long> WalGcDurabilityHoldForced =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.durability_hold_forced",
-            description: "WAL garbage-collection partition scans that trimmed without a durable materialiser offset floor because the configured durability-hold ceiling was exhausted, tagged by tree.");
+            description: "WAL garbage-collection partition scans that trimmed without a durable materialiser offset floor despite the durability hold, tagged by tree and by reason: ceiling_exhausted or unmeasurable_footprint.");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>ceiling_exhausted</c> - the durability hold
+    /// engaged, retained to
+    /// <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/> and then
+    /// yielded, trimming records with no durable floor.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldForcedCeilingExhausted =
+        new(TagReason, "ceiling_exhausted");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>unmeasurable_footprint</c> - the durability
+    /// hold did not engage because the provider reports no retained-byte figure,
+    /// leaving the ceiling with nothing to measure and the hold with no bound.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldForcedUnmeasurableFootprint =
+        new(TagReason, "unmeasurable_footprint");
+
+    /// <summary>
+    /// Counter of WAL garbage-collection passes on which the durability hold
+    /// actually engaged and retained a scan, tagged with <see cref="TagTree"/>
+    /// and with <see cref="TagReason"/> = <c>never_pinned</c> or
+    /// <c>pin_regressed</c> (issue #3300).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Distinct from <see cref="WalGcDurabilityHoldForced"/>, which counts the
+    /// hold <i>yielding</i>. This counts it <i>working</i>, and exists because
+    /// the <see cref="WalGcTrimStopReason.DurabilityHold"/> stop reason cannot
+    /// say which of two very different conditions produced it.
+    /// </para>
+    /// <para>
+    /// <c>never_pinned</c> is a tree on which no durable materialiser offset
+    /// floor has ever been observed in this process: it is stalled, it will hold
+    /// until its ceiling forces it, and it needs an operator to wire or repair a
+    /// materialiser. <c>pin_regressed</c> is a tree whose floor existed and is
+    /// currently absent - a rolling upgrade or leaf churn - which resolves
+    /// without intervention as the leaves re-pin. Reporting both on one arm
+    /// would tell an operator mid-upgrade that they had an outage.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> WalGcDurabilityHoldEngaged =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.durability_hold_engaged",
+            description: "WAL garbage-collection passes on which the durability hold engaged and retained the scan, tagged by tree and by reason: never_pinned or pin_regressed.");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>never_pinned</c> - the durability hold
+    /// engaged on a tree for which no durable materialiser offset floor has ever
+    /// been observed. Stalled; it will not clear without intervention.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldEngagedNeverPinned =
+        new(TagReason, "never_pinned");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>pin_regressed</c> - the durability hold
+    /// engaged on a tree whose durable materialiser offset floor was observed
+    /// earlier in this process and is absent now. A bounded transient (rolling
+    /// upgrade, leaf churn) that clears itself when the leaves re-pin.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldEngagedPinRegressed =
+        new(TagReason, "pin_regressed");
 
     /// <summary>
     /// <see cref="TagStatus"/> = <c>advanced</c> (the durable materialiser offset

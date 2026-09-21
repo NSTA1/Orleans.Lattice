@@ -88,7 +88,17 @@ public sealed class LatticeWalGcRetentionFallOffTests
     private static IOptionsMonitor<LatticeOptions> Monitor(TimeSpan? walRetention)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var options = new LatticeOptions { WalPartitions = 1, WalRetention = walRetention };
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree in this fixture. This fixture asserts wall-clock retention
+        // fall-off, a different axis, so opt out explicitly (0 disables the
+        // hold) rather than depending on a default that has since changed.
+        var options = new LatticeOptions
+        {
+            WalPartitions = 1,
+            WalRetention = walRetention,
+            WalDurabilityHoldCeilingBytes = 0,
+        };
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;

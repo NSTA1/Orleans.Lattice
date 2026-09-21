@@ -23,6 +23,13 @@ public sealed class LatticeWalGcBytePressureTests
 
     private static IOptionsMonitor<LatticeOptions> Monitor(LatticeOptions options)
     {
+        // Issue #3300: the durability hold engages by default for any tree that
+        // has never published a durable offset floor, which is true of every
+        // tree in this fixture. The byte-pressure policy is a different axis and
+        // is asserted post-trim, so a hold would mask it. Opt out for the whole
+        // fixture (0 disables the hold) rather than depending on a default that
+        // has since changed.
+        options.WalDurabilityHoldCeilingBytes = 0;
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
