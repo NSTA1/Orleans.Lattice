@@ -258,4 +258,49 @@ internal enum WalGcTrimStopReason
     /// </para>
     /// </summary>
     DurabilityHold = 7,
+
+    /// <summary>
+    /// The scan stopped because the first entry it could not trim was one the
+    /// consumer cursor would have admitted and the durable materialiser offset
+    /// floor overruled: the cursor dominates the entry, no retention TTL ceiling
+    /// covers it, and the partition's <see cref="WalGcOffsetAdmission"/> declined
+    /// it (issue #3300).
+    /// <para>
+    /// Indicts the <b>durable materialiser</b>. Every other stop on this enum
+    /// names something that has not advanced far enough; this one names a tree
+    /// where the in-memory consumer cursor HAS advanced past what any durable
+    /// evidence supports. That cursor tracks what a leaf folded into its cache,
+    /// so it moves the instant a write lands - and while the offset axis could
+    /// only ever ADD entitlement, the collector released the entry on that alone,
+    /// destroying the only copy. The rows then survived in memory until the next
+    /// process boundary and vanished there, with every published series reading
+    /// healthy.
+    /// </para>
+    /// <para>
+    /// Like <see cref="DurabilityHold"/> and unlike every other arm, this reports
+    /// a stop the predicate CHOSE rather than one it merely observed. It is
+    /// reachable only where a durable offset floor was actually established for
+    /// the partition, so a tree that reports no offsets never sees it, and a
+    /// configured retention TTL still admits independently, so an operator's
+    /// retention window is honoured against a floor that has stalled.
+    /// </para>
+    /// <para>
+    /// Distinct from <see cref="OffsetFloor"/>, and the pair is easy to conflate.
+    /// That one means the entry lay strictly ABOVE the floor - the scan reached
+    /// the floor's edge and stopped, which is an honest boundary. This one means
+    /// the entry lay at or below the floor and was still refused, because a
+    /// consumer the floor does not speak for still needs it. Distinct from
+    /// <see cref="CursorFloor"/> for the converse reason: there the cursor
+    /// refused, here the cursor accepted and was overruled.
+    /// </para>
+    /// <para>
+    /// Counted as a retention stop, so a tree held here reports a WAL backlog and
+    /// is visible to the byte-pressure advisory rather than presenting as idle.
+    /// A sustained run with nothing reclaimed is a leaf whose durable checkpoint
+    /// or snapshot coverage has stopped advancing; naming it is the whole point,
+    /// because a silent hold would be indistinguishable from the stalled-floor
+    /// state of issue #3094 and the two demand opposite responses.
+    /// </para>
+    /// </summary>
+    DurableOffsetRefusal = 8,
 }

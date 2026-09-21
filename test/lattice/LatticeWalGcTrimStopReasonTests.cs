@@ -283,7 +283,7 @@ public sealed partial class LatticeWalGcTrimStopReasonTests
 
         Assert.That(
             stops.Select(static s => s.Reason).Distinct().OrderBy(static r => r, StringComparer.Ordinal),
-            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "empty", "exhausted", "offset_floor" }),
+            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "durable_offset_refusal", "empty", "exhausted", "offset_floor" }),
             "Every arm must carry a series after a single pass, whether or not it advanced.");
 
         Assert.That(stops.Select(static s => s.Tree), Is.All.EqualTo(Tree),
@@ -312,7 +312,7 @@ public sealed partial class LatticeWalGcTrimStopReasonTests
         Assert.That(Advanced(stops), Is.Empty, "A pass that never scanned must not advance any arm.");
         Assert.That(
             stops.Select(static s => s.Reason).Distinct().OrderBy(static r => r, StringComparer.Ordinal),
-            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "empty", "exhausted", "offset_floor" }),
+            Is.EqualTo(new[] { "block_pin", "causal_frontier", "cursor_floor", "durability_hold", "durability_unverified", "durable_offset_refusal", "empty", "exhausted", "offset_floor" }),
             "The arms are primed above the early return, not merely inside the trim loop.");
     }
 

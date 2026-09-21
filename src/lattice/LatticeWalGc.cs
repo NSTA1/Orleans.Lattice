@@ -2378,6 +2378,7 @@ public sealed class LatticeWalGc(
             WalGcTrimStopReason.BlockPin => LatticeMetrics.ReasonTrimBlockPin,
             WalGcTrimStopReason.DurabilityUnverified => LatticeMetrics.ReasonTrimDurabilityUnverified,
             WalGcTrimStopReason.DurabilityHold => LatticeMetrics.ReasonTrimDurabilityHold,
+            WalGcTrimStopReason.DurableOffsetRefusal => LatticeMetrics.ReasonTrimDurableOffsetRefusal,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(reason), reason, "Unarmed WAL GC trim stop reason."),
         };
@@ -2456,7 +2457,7 @@ public sealed class LatticeWalGc(
     /// Primed across the whole partition range rather than only the partitions
     /// this silo resolves a provider for, because a partition pinned to a
     /// provider key this silo cannot resolve is skipped inside the loop and
-    /// would otherwise publish no arm at all. Primed, it publishes eight flat
+    /// would otherwise publish no arm at all. Primed, it publishes nine flat
     /// zeros and no entries-trimmed series, which is a distinguishable and
     /// honest reading; a shard this silo does scan and cannot release advances
     /// an arm instead.
@@ -2474,6 +2475,7 @@ public sealed class LatticeWalGc(
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.BlockPin, 0);
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.DurabilityUnverified, 0);
             RecordTrimStop(treeName, partition, WalGcTrimStopReason.DurabilityHold, 0);
+            RecordTrimStop(treeName, partition, WalGcTrimStopReason.DurableOffsetRefusal, 0);
         }
     }
 
@@ -2488,6 +2490,7 @@ public sealed class LatticeWalGc(
             WalGcTrimEligibility.CursorFloor => WalGcTrimStopReason.CursorFloor,
             WalGcTrimEligibility.CausalFrontier => WalGcTrimStopReason.CausalFrontier,
             WalGcTrimEligibility.BlockPin => WalGcTrimStopReason.BlockPin,
+            WalGcTrimEligibility.DurableOffsetRefusal => WalGcTrimStopReason.DurableOffsetRefusal,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(eligibility), eligibility, "An eligible entry does not stop the scan."),
         };
