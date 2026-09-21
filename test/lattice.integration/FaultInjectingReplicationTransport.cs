@@ -72,6 +72,32 @@ internal sealed class FaultInjectingReplicationTransport : IReplicationTransport
     private static readonly ConcurrentDictionary<string, ConcurrentQueue<DeliveryRecord>> DeliveriesByTree =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The highest <see cref="WalRecord.Timestamp"/> this transport has ever
+    /// handed to a receiver for a tree. Unlike
+    /// <see cref="AcceptedAckCountByTree"/> - which counts acknowledgements at
+    /// the moment the receiver produces them, before the sender has seen, let
+    /// alone durably recorded, any of them - this is the watermark a sender's
+    /// durable ship cursor must reach before a restart of that sender can be
+    /// guaranteed not to re-deliver. See <see cref="HighestShippedHlc"/>.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, HybridLogicalClock> HighestShippedHlcByTree =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How many times this transport has handed a given <c>(tree, key)</c> to a
+    /// receiver, counting every WAL entry in every batch.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DeliveryCountByTree"/> counts batch sends, so it moves for
+    /// reasons unrelated to any one write: a batch boundary that falls
+    /// differently, or a send in the opposite direction on the same tree. A
+    /// test asserting that a specific entry was not re-delivered must count
+    /// that entry, not the batches that happened to carry it.
+    /// </remarks>
+    private static readonly ConcurrentDictionary<(string Tree, string Key), int> EntryDeliveryCountByTreeAndKey =
+        new();
+
     private static readonly ConcurrentQueue<DroppedSendRecord> DroppedSends = new();
 
     /// <summary>
@@ -119,6 +145,8 @@ internal sealed class FaultInjectingReplicationTransport : IReplicationTransport
         DeliveryCountByTree.Clear();
         AcceptedAckCountByTree.Clear();
         DeliveriesByTree.Clear();
+        HighestShippedHlcByTree.Clear();
+        EntryDeliveryCountByTreeAndKey.Clear();
         while (DroppedSends.TryDequeue(out _)) { }
     }
 
@@ -211,10 +239,51 @@ internal sealed class FaultInjectingReplicationTransport : IReplicationTransport
     }
 
     /// <summary>The number of successful acknowledgements returned for <paramref name="treeName"/>.</summary>
+    /// <remarks>
+    /// This counter is incremented on the <em>receiver</em> side, inside
+    /// <see cref="SendAsync"/>, immediately before the acknowledgement is
+    /// returned. It therefore says nothing about whether the sending shipper
+    /// has received that acknowledgement, advanced its cursor, or - the
+    /// property that actually survives a restart - durably persisted the
+    /// advance. A test that needs the latter must observe the sender's durable
+    /// cursor registry; see <see cref="HighestShippedHlc"/>.
+    /// </remarks>
     public static int AcceptedAckCount(string treeName)
     {
         ArgumentNullException.ThrowIfNull(treeName);
         return AcceptedAckCountByTree.TryGetValue(treeName, out var count) ? count : 0;
+    }
+
+    /// <summary>
+    /// The highest WAL-entry timestamp ever delivered to a receiver for
+    /// <paramref name="treeName"/>, or <see cref="HybridLogicalClock.Zero"/>
+    /// when nothing has been delivered. A sender whose durable ship cursor
+    /// has reached this watermark cannot re-deliver anything after a restart,
+    /// which makes it the precondition to wait on before cold-restarting a
+    /// sender and asserting that no re-delivery occurs.
+    /// </summary>
+    public static HybridLogicalClock HighestShippedHlc(string treeName)
+    {
+        ArgumentNullException.ThrowIfNull(treeName);
+        return HighestShippedHlcByTree.TryGetValue(treeName, out var hlc) ? hlc : HybridLogicalClock.Zero;
+    }
+
+    /// <summary>
+    /// How many times the WAL entry for <paramref name="key"/> on
+    /// <paramref name="treeName"/> has been handed to a receiver.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this over <see cref="DeliveryCount"/> when the property under
+    /// test is about a particular write. It counts entries rather than
+    /// batches, so it does not move when an unrelated batch boundary falls
+    /// differently or when the peer ships in the opposite direction on the
+    /// same tree.
+    /// </remarks>
+    public static int EntryDeliveryCount(string treeName, string key)
+    {
+        ArgumentNullException.ThrowIfNull(treeName);
+        ArgumentNullException.ThrowIfNull(key);
+        return EntryDeliveryCountByTreeAndKey.TryGetValue((treeName, key), out var count) ? count : 0;
     }
 
     /// <summary>Every completed delivery for <paramref name="treeName"/>, in arrival order.</summary>
@@ -302,6 +371,26 @@ internal sealed class FaultInjectingReplicationTransport : IReplicationTransport
         DeliveryCountByTree.AddOrUpdate(batch.TreeName, 1, static (_, count) => count + 1);
         DeliveriesByTree.GetOrAdd(batch.TreeName, static _ => new ConcurrentQueue<DeliveryRecord>())
             .Enqueue(new DeliveryRecord(batch.TargetClusterId, batch.TreeName, batch.OriginClusterId, decoded.Length, result));
+
+        // Record the delivered watermark alongside the count. Taken from the
+        // decoded entries rather than the apply result's high-water mark, so
+        // it reflects only what this send actually carried and is unaffected
+        // by any other origin's writes to the same tree.
+        foreach (var record in decoded)
+        {
+            HighestShippedHlcByTree.AddOrUpdate(
+                batch.TreeName,
+                record.Timestamp,
+                (_, existing) => record.Timestamp.CompareTo(existing) > 0 ? record.Timestamp : existing);
+
+            if (record.Key is { } key)
+            {
+                EntryDeliveryCountByTreeAndKey.AddOrUpdate(
+                    (batch.TreeName, key),
+                    1,
+                    static (_, count) => count + 1);
+            }
+        }
 
         if (PendingRejectAfterApplyByTree.TryRemove(batch.TreeName, out _))
         {

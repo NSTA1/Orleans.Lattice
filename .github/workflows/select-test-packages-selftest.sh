@@ -68,7 +68,24 @@ packages=()
 for dir in src/*/; do
   packages+=("$(basename "$dir")")
 done
+
+# MIRROR of TEST_ONLY_PACKAGES in select-test-packages.sh section 1. This
+# self-test re-derives the package set independently of the selector - that
+# independence is the point - so the allow-list has to be restated here.
+# Change the two together; a drift shows up as a fanout row-count or
+# root-file-selection mismatch below, not as a helpful message.
+TEST_ONLY_PACKAGES=(lattice.integration)
+for name in "${TEST_ONLY_PACKAGES[@]}"; do
+  packages+=("$name")
+done
 packageCount=${#packages[@]}
+
+# True when <name> is a package directory in the selector's sense: a src/
+# subdirectory, or a test-only package from the allow-list above.
+is_package_name() {
+  [ -d "src/$1" ] && return 0
+  contains "$1" "${TEST_ONLY_PACKAGES[@]}"
+}
 
 # ---------------------------------------------------------------------------
 # 0. Denominator of this self-test itself.
@@ -80,9 +97,9 @@ packageCount=${#packages[@]}
 # ---------------------------------------------------------------------------
 check
 if [ "$packageCount" -lt 10 ]; then
-  fail "discovered only ${packageCount} package(s) under src/ - the self-test would be near-vacuous."
+  fail "discovered only ${packageCount} package(s) - the self-test would be near-vacuous."
 else
-  pass "discovered ${packageCount} packages under src/."
+  pass "discovered ${packageCount} packages (src/ subdirectories plus ${#TEST_ONLY_PACKAGES[@]} test-only)."
 fi
 
 # ---------------------------------------------------------------------------
@@ -182,7 +199,7 @@ fi
 expectedOrphans=()
 for dir in test/*/; do
   name="$(basename "$dir")"
-  [ -d "src/${name}" ] && continue
+  is_package_name "$name" && continue
   found="$(find "$dir" -name '*.Tests.csproj' -type f)"
   [ -n "$found" ] && expectedOrphans+=("$name")
 done
@@ -254,7 +271,7 @@ closure_from_node() {
     case "$n" in
       src/*/*|test/*/*)
         owner="${n#*/}"; owner="${owner%%/*}"
-        [ -d "src/${owner}" ] && owners["$owner"]=1
+        is_package_name "$owner" && owners["$owner"]=1
         ;;
     esac
   done

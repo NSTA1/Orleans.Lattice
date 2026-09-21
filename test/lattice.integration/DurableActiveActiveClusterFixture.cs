@@ -324,6 +324,67 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
         return snapshot.Any(cursor => cursor.ConsumerId == $"view:{viewName}");
     }
 
+    /// <summary>
+    /// Returns <paramref name="site"/>'s <em>durable</em> ship cursor for
+    /// <paramref name="treeId"/> - the position its shipper would resume from
+    /// after a cold restart - or <see cref="HybridLogicalClock.Zero"/> when it
+    /// has never flushed one.
+    /// <para>
+    /// This is the only sound observable for "the sender will not re-deliver
+    /// after a restart", because the shipper reports to the cursor registry
+    /// strictly <em>after</em> <c>WriteStateAsync</c> succeeds
+    /// (<c>ReplicationShipperGrain.FlushCursorAsync</c>). Every other signal
+    /// available to a test - a transport acknowledgement count, a converged
+    /// read on the receiver - is produced before that write and so cannot
+    /// order anything against it.
+    /// </para>
+    /// </summary>
+    public async Task<HybridLogicalClock> DurableShipCursorAsync(Site site, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var registry = ServicesFor(site).GetRequiredService<IWalCursorRegistry>();
+        var snapshot = await registry.SnapshotAsync(treeId).ConfigureAwait(false);
+
+        // The ship loop reports under the peer cluster id as its consumer id.
+        var peerClusterId = ClusterIdFor(site == Site.A ? Site.B : Site.A);
+        foreach (var cursor in snapshot)
+        {
+            if (string.Equals(cursor.ConsumerId, peerClusterId, StringComparison.Ordinal))
+            {
+                return cursor.Cursor;
+            }
+        }
+
+        return HybridLogicalClock.Zero;
+    }
+
+    /// <summary>
+    /// Blocks until <paramref name="site"/>'s durable ship cursor for
+    /// <paramref name="treeId"/> covers every entry the transport has already
+    /// delivered for it - the precondition for cold-restarting that site and
+    /// asserting it re-delivers nothing.
+    /// <para>
+    /// This is the only barrier that settles a delivery count, and it settles
+    /// two distinct races at once. It orders the restart after the shipper's
+    /// durable cursor write, and it also drains any delivery still owed for an
+    /// earlier, already-converged write - a retry after an injected lost ack,
+    /// for instance, which a value-convergence probe on the receiver cannot
+    /// observe at all because the receiver applied the value before the ack
+    /// was rejected and its state therefore never changes when the retry
+    /// finally lands.
+    /// </para>
+    /// </summary>
+    public Task WaitForDurableShipCursorToCoverDeliveriesAsync(Site site, string treeId, string description)
+        => WaitForConvergenceAsync(
+            async () =>
+            {
+                var durableCursor = await DurableShipCursorAsync(site, treeId).ConfigureAwait(false);
+                var delivered = FaultInjectingReplicationTransport.HighestShippedHlc(treeId);
+                return durableCursor.CompareTo(delivered) >= 0;
+            },
+            description);
+
     /// <summary>Drops every send from <paramref name="from"/> to <paramref name="to"/> until healed.</summary>
     public void Partition(Site from, Site to) => FaultInjectingReplicationTransport.Partition(ClusterIdFor(from), ClusterIdFor(to));
 
