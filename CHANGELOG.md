@@ -26,6 +26,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Docs - Operator guides.** The persistent-503 narrowing ladder gains the discriminators it lacked, the tracked Dockerfile build and stamped-commit verification are documented, and two false-green test shapes are named. ([#2366](https://github.com/NSTA1/Orleans.Lattice/issues/2366), [#2707](https://github.com/NSTA1/Orleans.Lattice/issues/2707), [#2716](https://github.com/NSTA1/Orleans.Lattice/issues/2716), [#2738](https://github.com/NSTA1/Orleans.Lattice/pull/2738)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **WAL - Runtime-configurable retention ceiling.** A tree's `WalMaxRetainedBytes` ceiling can be raised or lowered at runtime through the tree-admin facade, taking effect without a host restart or redeploy; a tree with no override keeps its configured value. ([#3333](https://github.com/NSTA1/Orleans.Lattice/issues/3333)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
+
 ### Changed
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
