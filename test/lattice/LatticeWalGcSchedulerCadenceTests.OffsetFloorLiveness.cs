@@ -55,8 +55,11 @@ namespace Orleans.Lattice.Tests;
 /// is left over: such a tree's "WAL floor is held by a pin that is healthy and
 /// simply old, which is a frontier-advance question rather than a coverage one".
 /// This is that question answered on the offset axis. Nothing here asserts a
-/// coverage hole, and a coverage-unknown pin sitting ABOVE the floor is still
-/// not driven at all - it is not in the way.
+/// coverage hole. Since issue #3310 a coverage-unknown pin above the floor IS
+/// driven, but only once the floor's own holder has been admitted on the same
+/// sweep - those pins are the next floors in the order they will become the
+/// floor, so driving them is prefetch, while a tree whose floor holder is
+/// inadmissible still drives nothing because its floor can never drain.
 /// </para>
 /// <para>
 /// <b>What it costs not to fix.</b> <c>LatticeWalGcScheduler</c>'s cadence rule
@@ -141,16 +144,30 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
-    public async Task A_usable_floor_holder_above_the_offset_floor_is_not_driven()
+    public async Task A_usable_holder_above_an_admitted_floor_holder_is_driven_as_prefetch()
     {
-        // The narrowness guard, and the assertion that separates this change
-        // from simply driving the coverage_unknown population - which is what
-        // issue #3168 measured costing 4,424 wasted activations. A pin above the
-        // floor is by definition not what the trim stopped at, so driving it
-        // spends an activation to move something that was never in the way.
+        // Issue #3310, and the fixture that previously asserted the opposite.
+        // It was the deliberate narrowness guard for issue #3168, and it is
+        // reversed here on purpose rather than deleted, because the reason it
+        // was written is still sound and only its scope was wrong.
         //
-        // Equality with the floor is the discriminator #3168 did not have: its
-        // sample applied no usability filter and no floor filter at all.
+        // #3168's argument was that a pin above the floor "is by definition not
+        // what the trim stops at", so driving it wastes an activation. True of
+        // ONE sweep. False over an episode, because the offsets above the floor
+        // are not an unrelated population - they are the next floors, in the
+        // order they will become the floor. Drive only the floor and this pin is
+        // the floor on the next sweep, having waited a full
+        // ReactivationMinBlockAge to be allowed to matter. Driving it now is
+        // prefetch, not waste.
+        //
+        // What made that scope error expensive: under equality the admitted set
+        // is "every pin sitting on exactly one offset", so its width is set by
+        // pin offset DISTRIBUTION and nothing else. Measured on the live estate,
+        // repo-context-vector-metadata (pins sharing one offset) admitted 166
+        // per sweep while repo-context-vector-index (nine distinct offsets)
+        // admitted 1 to 3 - same binary, same silo, same sweep - and the latter
+        // grew its WAL to 120.8% of its ceiling with zero decreasing intervals
+        // in sixty minutes.
         var storage = new LeafStateBook();
         storage.PutLive(LivenessLeafGrainId(0), OrphanSweepTree);
         storage.PutLive(LivenessLeafGrainId(1), OrphanSweepTree);
@@ -164,13 +181,49 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Assert.Multiple(() =>
         {
             Assert.That(leaves.Touched, Does.Contain(LivenessLeafGrainId(0)),
-                "the holder ON the floor must be driven, or the guard has simply disabled the remedy.");
-            Assert.That(leaves.Touched, Does.Not.Contain(LivenessLeafGrainId(1)),
-                "and the holder above it must not be. Both pins are identical in every respect the "
-                    + "classifier can see - same state, same frontier, same live leaf - so only the offset "
-                    + "comparison can tell them apart, which is what makes this the arm that reddens if "
-                    + "the gate is widened from the floor to the whole coverage_unknown population.");
+                "the holder ON the floor must still be driven; widening the gate must not displace the "
+                    + "candidate that is actually holding the WAL.");
+            Assert.That(leaves.Touched, Does.Contain(LivenessLeafGrainId(1)),
+                "and the holder above it must now be driven too, because the floor's holder was admitted "
+                    + "and so this pin becomes the floor as soon as that one advances. This is the arm "
+                    + "that reddens if the gate is ever re-narrowed to equality, which on a tree whose "
+                    + "pins do not share an offset starves the drive to one level per sweep.");
         });
+    }
+
+    [Test]
+    public async Task A_usable_holder_above_an_INADMISSIBLE_floor_holder_is_still_not_driven()
+    {
+        // The precondition on the prefetch argument, and the arm that keeps
+        // issue #3168's finding intact rather than overruling it.
+        //
+        // Prefetch is only prefetch if the floor is going to drain. Here it
+        // cannot: the floor is held by a never-checkpointed leaf, which must
+        // never be driven at any offset, so the level never clears and the pin
+        // above it is genuinely not in the way and never will be. Driving it
+        // would be exactly the waste #3168 measured, with none of the
+        // justification the fixture above relies on.
+        //
+        // This is also what preserves issue #3258, whose instrument rests on
+        // "if the floor's own holder is inadmissible, nothing on the tree can be
+        // admitted". Widening without this precondition would make that false
+        // and quietly demote a wedge detector into a sweep counter.
+        var storage = new LeafStateBook();
+        storage.PutNeverCheckpointed(LivenessLeafGrainId(0), OrphanSweepTree);
+        storage.PutLive(LivenessLeafGrainId(1), OrphanSweepTree);
+
+        var pins = new FakePinStore();
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(0), UsablePin, FloorOffset);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(1), UsablePin, AboveFloorOffset);
+
+        var leaves = await DriveAsync(pins, storage);
+
+        Assert.That(leaves.Touched, Is.Empty,
+            "nothing may be driven on a tree whose floor is held by a leaf the gate cannot drive. THIS IS "
+                + "THE ARM THAT REDDENS if the issue #3310 widening is ever applied unconditionally: the "
+                + "tree would spend activations on pins above a floor that can never drain, which is "
+                + "issue #3168's waste reintroduced, and issue #3258's wedge signal would read 'admitted' "
+                + "on a permanently unreleasable tree.");
     }
 
     [Test]
