@@ -308,16 +308,21 @@ services:
       # never disarms either, leaving a permanently armed advisory alarm that
       # cannot distinguish pathological growth from normal size.
       #
-      # 8 GiB against a measured 2,226 MB logical on repo-context-vector-index:
-      # designed steady state lands near 4.4 GiB and the 6.4 GiB disarm point
-      # sits above it, so the hysteresis band works. Every other tree is under
-      # 40 MB, so the ceiling is inert on them, which is correct for a disaster
-      # backstop; they still pay one physical-size probe per partition per GC
-      # pass. The volume has ~598 GB free, so this is not disk-constrained.
+      # 20 GiB against repo-context-vector-index measured 2026-09-21. Logical was
+      # not read directly - it is BOUNDED BY INFERENCE from the alarm itself,
+      # which is the cheaper measurement and is exact enough to size against.
+      # CeilingUnsatisfiable fires iff ceiling < 2x logical (LatticeWalGc.cs
+      # L1997-2001), and it was firing against 8 GiB, so logical EXCEEDS 4 GiB.
+      # Physical was 5.864 GiB and rising at ~0.82 GiB/h, and logical <= physical,
+      # so 2x logical lies in (8.0, 11.7) GiB. 20 GiB clears the top of that band
+      # with ~1.7x headroom. Every other tree is under 40 MB, so the ceiling is
+      # inert on them, which is correct for a disaster backstop; they still pay
+      # one physical-size probe per partition per GC pass. The volume has ~681 GB
+      # free, so this is not disk-constrained.
       #
-      # THIS VALUE HAS BEEN WRONG TWICE, FOR TWO DIFFERENT REASONS. Read both
-      # before changing it, because the rule above is easy to satisfy on the day
-      # and hard to keep satisfied.
+      # THIS VALUE HAS BEEN WRONG THREE TIMES, FOR THREE DIFFERENT REASONS. Read
+      # all three before changing it, because the rule above is easy to satisfy
+      # on the day and hard to keep satisfied.
       #
       # 1 GiB was sized from occupancy measured WHILE the #3229 starvation
       # defect was active (it cited vector-index 1710 MB and vector-payload
@@ -336,6 +341,18 @@ services:
       # distinguish lagging consumers from an arithmetically unreachable
       # ceiling. See #3242, which adds the missing in-band signal.
       #
+      # 8 GiB repeated the 4 GiB mistake at a larger number, and the repetition
+      # is the point: it was calibrated against the same 2,226 MB logical figure
+      # that 4 GiB was, so it bought a 2x multiple of a reading that was already
+      # moving. It survived roughly two days. By 2026-09-21 the same tree was
+      # unsatisfiable again, with wal_gc_ceiling_unsatisfiable climbing steadily
+      # (40 -> 54 over one 36-minute window) - the in-band signal #3242 added,
+      # doing exactly its job and reporting a ceiling arithmetically unreachable
+      # rather than a lagging consumer. Note what did NOT happen: byte pressure
+      # never armed (over_ceiling stayed 0), so nothing was ever trimmed harder
+      # on account of this value being wrong, and the only cost was a misleading
+      # alarm - which is precisely the failure mode the paragraph above predicts.
+      #
       # THE LESSON, WHICH IS THE ONLY DURABLE PART: this ceiling is expressed as
       # a multiple of a MEASURED quantity, so it acquires an expiry date the
       # moment the workload can grow. Re-measure logical retained per tree
@@ -346,7 +363,7 @@ services:
       # frontier WITHIN the frontier that was already safe, never past a live
       # consumer cursor. Setting it to "0" restores the library default and is a
       # safe rollback that over-retains rather than over-trims.
-      LATTICE_WAL_MAX_RETAINED_BYTES: "8589934592"
+      LATTICE_WAL_MAX_RETAINED_BYTES: "21474836480"
       # Absolute per-SHARD ceiling on dead (trimmed but not yet physically
       # reclaimed) WAL bytes, above which a compaction evaluation rewrites the
       # shard whatever the ratio above says.
