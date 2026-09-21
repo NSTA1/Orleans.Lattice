@@ -233,8 +233,8 @@ public interface ILatticeTreeAdmin
     /// <summary>
     /// Applies a partial update to <paramref name="treeId"/>'s per-tree runtime
     /// configuration (publish-events, projection-digest maintenance, durable-history
-    /// retention), after authorizing whole-tree administration on the tree
-    /// fail-closed. Each dimension is written only when its <c>Apply*</c> flag is set;
+    /// retention, WAL retained-byte ceiling), after authorizing whole-tree administration
+    /// on the tree fail-closed. Each dimension is written only when its <c>Apply*</c> flag is set;
     /// a <see langword="null"/> value on an applied dimension clears that override.
     /// Reserved system tree ids are rejected. Returns the resulting configuration.
     /// </summary>
@@ -244,7 +244,7 @@ public interface ILatticeTreeAdmin
     /// <returns>The configuration snapshot after the update.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="update"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">An applied history-retention window is not strictly positive.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An applied history-retention window, or an applied WAL retained-byte ceiling, is not strictly positive.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
     Task<TreeConfigurationReport> SetTreeConfigAsync(
         string treeId, TreeConfigurationUpdate update, CancellationToken cancellationToken = default);
