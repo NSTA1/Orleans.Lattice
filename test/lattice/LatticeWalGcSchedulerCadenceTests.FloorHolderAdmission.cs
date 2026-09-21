@@ -13,13 +13,16 @@ namespace Orleans.Lattice.Tests;
 /// offset floor as the head of an ascending offset sample, so the floor is
 /// defined by one of the candidates being classified and every other candidate
 /// sits strictly above it. The admission gate then admits a
-/// <c>CheckpointedCoverageUnknown</c> candidate only on <i>equality</i> with
-/// that floor. Those two facts compose into a property that is easy to miss and
-/// decisive: <b>if the floor's own holder is inadmissible, no candidate on the
-/// tree can ever be admitted</b>, the tree is dropped from the repairable set,
-/// and the reactivation drive is never entered. Not on this sweep - ever, since
-/// the durable pin store merges monotonic-max on both axes, so nothing the tree
-/// subsequently does can lower the offset that excluded it.
+/// <c>CheckpointedCoverageUnknown</c> candidate at that floor, and since issue
+/// #3310 also above it - but only once one AT the floor has been admitted on
+/// the same sweep. Those two facts still compose into the property that is easy
+/// to miss and decisive: <b>if the floor's own holder is inadmissible, no
+/// candidate on the tree can ever be admitted</b>, the tree is dropped from the
+/// repairable set, and the reactivation drive is never entered. Not on this
+/// sweep - ever, since the durable pin store merges monotonic-max on both axes,
+/// so nothing the tree subsequently does can lower the offset that excluded it.
+/// That the widening preserves this rather than voiding it is exactly why it is
+/// gated on the floor having been admitted first.
 /// </para>
 /// <para>
 /// <b>What was unmeasurable before this.</b> Nothing in the process
@@ -247,8 +250,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Assert.Multiple(() =>
         {
             Assert.That(leaves.Touched, Is.Empty,
-                "precondition: an admissible candidate above the floor is not in the way and is correctly "
-                    + "not driven (the issue #3168 narrowness guard).");
+                "precondition: nothing is driven. The issue #3310 widening admits candidates above the "
+                    + "floor only once the floor's OWN holder has been admitted, and here it never is, so "
+                    + "the admissible candidate above it stays undriven - it is not in the way and, with "
+                    + "the floor unable to drain, never will be (the issue #3168 narrowness guard).");
             Assert.That(admission.Blocked, Is.GreaterThan(0),
                 "the tree must still read blocked. A signal keyed on 'was any candidate admissible' rather "
                     + "than 'was the FLOOR'S candidate admitted' would read healthy here, and this is the "
