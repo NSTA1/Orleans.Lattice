@@ -500,14 +500,41 @@ internal sealed class LeafCursorReporter(
         // real frontier is produced by the deactivation flush, dropping it leaves
         // no durable floor at all, which is the cold-restart
         // LeafProjectionStaleException of issue #1464.
-        if (sheddable && WalMaterialiserPinPressure.ShouldShed(grainKey))
+        //
+        // Bounded since issue #3310. "A skipped report retains more WAL" is a
+        // claim about durability, not about boundedness: because the report is
+        // dropped rather than deferred, and because the exempt paths above record
+        // their own duration into the very gate they skip, a shard under
+        // sustained pressure can re-open its window indefinitely and stop
+        // restamping coverage altogether while the checkpoint advances past it.
+        // WalMaterialiserPinShedCeiling caps the continuous run and forces one
+        // report through, loudly. Forcing cannot overstate durability: the offset
+        // was clamped to min(checkpoint, durable coverage) in the leaf before it
+        // reached this method.
+        if (sheddable)
         {
             var shedTreeId = WalMaterialiserPinRouting.TreeNameFromKey(grainKey);
-            LatticeMetrics.MaterialiserPinReportsShed.Add(
-                bucket.Count,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
-                LatticeTenantLabel.ForTree(shedTreeId));
-            return false;
+            var shedShard = WalMaterialiserPinRouting.ShardIndexFromKey(grainKey);
+            var decision = WalMaterialiserPinPressure.EvaluateShed(grainKey, ResolvePinShedCeilingMs());
+
+            if (decision == WalMaterialiserPinPressure.PinShedDecision.Shed)
+            {
+                LatticeMetrics.MaterialiserPinReportsShed.Add(
+                    bucket.Count,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
+                    LatticeTenantLabel.ForTree(shedTreeId));
+                return false;
+            }
+
+            if (decision == WalMaterialiserPinPressure.PinShedDecision.Forced)
+            {
+                LatticeMetrics.MaterialiserPinShedForced.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
+                    LatticeTenantLabel.ForTree(shedTreeId));
+            }
         }
 
         var latencyThresholdMs = ResolvePinLatencyThresholdMs();
@@ -566,6 +593,27 @@ internal sealed class LeafCursorReporter(
         => options?.Get(string.Empty).WalSaturationMaterialiserPinLatencyThreshold is { } threshold
             ? (long)threshold.TotalMilliseconds
             : null;
+
+    /// <summary>
+    /// Resolves <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/> in
+    /// milliseconds, or <c>null</c> when the bound is disarmed (the default) or
+    /// no options monitor is wired in.
+    /// <para>
+    /// A non-positive configured value resolves to <c>null</c> rather than to
+    /// zero. Zero would force every single report through a live shed window,
+    /// disabling the issue #2012 shedding entirely and re-saturating the pin
+    /// grain's non-reentrancy queue - turning a misconfiguration into the
+    /// outage the shedding exists to prevent. Refusing it degrades to the
+    /// documented default instead, and
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/> still
+    /// reports the stall, so the mistake is visible rather than catastrophic.
+    /// </para>
+    /// </summary>
+    private long? ResolvePinShedCeilingMs()
+        => options?.Get(string.Empty).WalMaterialiserPinShedCeiling is { } ceiling
+            && ceiling > TimeSpan.Zero
+                ? (long)ceiling.TotalMilliseconds
+                : null;
 
     /// <summary>
     /// Teardown fallback for <see cref="SeedShardAsync"/>: writes
@@ -851,18 +899,36 @@ internal sealed class LeafCursorReporter(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        try
+
+        // Remove from every key the GC reads, not only the one the current
+        // build writes. Routing composes the write key from the current
+        // separator and shard count, so a pin persisted under an earlier
+        // routing lives at a key this path would never address - and the GC
+        // still reads it. Removing only the write key leaves that row behind
+        // to floor the tree's trim forever (issue #2433). The tree-deletion
+        // purge above already clears every read key for exactly this reason;
+        // this is the same rule applied to the single-consumer path. Each key
+        // is attempted independently so one failure cannot abandon the rest.
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+        for (var i = 0; i < keys.Count; i++)
         {
-            await PinGrain(treeName, consumerId).RemoveAsync(consumerId).ConfigureAwait(false);
-            _durableDebounce.TryRemove((treeName, consumerId), out _);
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await grainFactory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).RemoveAsync(consumerId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at shard key {GrainKey}.",
+                    treeName,
+                    consumerId,
+                    keys[i]);
+            }
         }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(
-                ex,
-                "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId}.",
-                treeName,
-                consumerId);
-        }
+
+        _durableDebounce.TryRemove((treeName, consumerId), out _);
     }
 }

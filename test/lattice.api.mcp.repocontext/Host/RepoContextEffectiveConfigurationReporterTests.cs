@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class RepoContextEffectiveConfigurationReporterTests
+public sealed partial class RepoContextEffectiveConfigurationReporterTests
 {
     private const string UnknownKey = "LATTICE_SOMETHING_NOBODY_HAS_CLASSIFIED";
 
@@ -79,7 +79,8 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
         var line = RepoContextEffectiveConfiguration.DescribeSetting(
             "LATTICE_POSTGRES_CONNECTION_STRING",
             SuppliedSecret,
-            null);
+            null,
+            RepoContextSettingProvenance.Declared);
 
         Assert.Multiple(() =>
         {
@@ -99,16 +100,26 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
     public void A_classified_setting_states_the_value_the_process_resolved()
         => Assert.That(
             RepoContextEffectiveConfiguration.DescribeSetting(
-                RepoContextHostConfiguration.McpPortKey, "8080", "8080"),
-            Is.EqualTo("LATTICE_MCP_PORT = 8080"),
-            "an un-overridden setting carries no marker, so the overridden ones stand out");
+                RepoContextHostConfiguration.McpPortKey,
+                "8080",
+                "8080",
+                RepoContextSettingProvenance.Declared),
+            Is.EqualTo("LATTICE_MCP_PORT = 8080 (DECLARED)"),
+            "an un-overridden setting carries no OVERRIDDEN marker, so the overridden ones "
+            + "stand out - but it still states where the value came from, because a value "
+            + "equal to the default may have been written down by an operator or reached "
+            + "because nobody wrote anything, and issue #2586 is what conflating the two "
+            + "costs");
 
     [Test]
     public void An_overridden_setting_is_marked_and_carries_the_default_it_departed_from()
         => Assert.That(
             RepoContextEffectiveConfiguration.DescribeSetting(
-                RepoContextHostConfiguration.DataRootKey, "/mnt/data", "/data"),
-            Is.EqualTo("LATTICE_DATA_ROOT = /mnt/data [OVERRIDDEN, default /data]"),
+                RepoContextHostConfiguration.DataRootKey,
+                "/mnt/data",
+                "/data",
+                RepoContextSettingProvenance.Declared),
+            Is.EqualTo("LATTICE_DATA_ROOT = /mnt/data (DECLARED) [OVERRIDDEN, default /data]"),
             "this is the evidence shape #2294 was actually proved with - a resolved value "
             + "read against an expected one - and the marker is what makes the overridden "
             + "subset greppable instead of a twenty-line eyeball diff");
@@ -150,9 +161,87 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
     [Test]
     public void Every_LATTICE_key_this_host_declares_is_covered_by_the_report()
     {
-        var declared = typeof(RepoContextHostConfiguration).Assembly
-            .GetTypes()
-            .Where(t => t.Namespace == typeof(RepoContextHostConfiguration).Namespace)
+        var declared = DeclaredLatticeConstants();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                declared,
+                Is.Not.Empty,
+                "the scan must find the key constants; a scan that matched nothing "
+                + "would pass vacuously and guard nothing at all");
+            Assert.That(
+                declared.Where(v => !Covered(v)),
+                Is.Empty,
+                "a key this host reads but the report does not list would be reported as "
+                + "'supplied but not read', which is exactly backwards. This test is the "
+                + "reason the report cannot become the stale claim about configuration that "
+                + "#2294 was filed about");
+        });
+    }
+
+    /// <summary>
+    /// The scan's own reach, asserted rather than assumed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the assertion whose absence caused issue #2460. The guard above scanned only
+    /// the host assembly's namespace while <see cref="RepoContextEffectiveConfigurationReporter.KnownKeys"/>
+    /// claimed to cover every variable the host resolves - including the eleven the
+    /// repository-context package resolves. The claim was broader than the check, the gap
+    /// was invisible from either side, and the guard passed for years while every one of
+    /// those keys was reported <c>[SUPPLIED BUT NOT READ BY THIS HOST]</c>.
+    /// </para>
+    /// <para>
+    /// Widening the scan alone would not stop that recurring: a future key in a third
+    /// assembly would be outside the widened scan exactly as it was outside the narrow one.
+    /// Pinning the scanned assemblies makes the reach a reviewable decision, so adding an
+    /// assembly the host reads configuration from fails here until somebody says so.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void The_coverage_scan_reaches_both_assemblies_that_declare_keys()
+    {
+        var scanned = ScannedAssemblies.Select(a => a.GetName().Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                scanned,
+                Is.EquivalentTo(new[]
+                {
+                    "Orleans.Lattice.Api.Mcp.RepoContext.Host",
+                    "Orleans.Lattice.Api.Mcp.RepoContext",
+                }),
+                "the scan's reach is pinned because a coverage guard is only as strong as "
+                + "the surface it looks at, and #2460 is what a guard narrower than its own "
+                + "claim costs");
+
+            Assert.That(
+                DeclaredLatticeConstants(),
+                Has.Some.EqualTo(RepoContextIndexingOptions.ReconcileIntervalSecondsKey),
+                "a positive control on the widened half: without it, a scan that silently "
+                + "stopped reaching the package assembly would still pass the guard above");
+        });
+    }
+
+    /// <summary>
+    /// The assemblies the coverage scan reads key constants from: this host, and the
+    /// repository-context package whose options classes the host composes.
+    /// </summary>
+    private static IReadOnlyList<Assembly> ScannedAssemblies { get; } =
+    [
+        typeof(RepoContextHostConfiguration).Assembly,
+        typeof(RepoContextEnvironmentVariables).Assembly,
+    ];
+
+    /// <summary>
+    /// Every <c>LATTICE_</c>-prefixed string constant declared by the scanned assemblies,
+    /// which is the set the report must account for one way or another.
+    /// </summary>
+    private static IReadOnlyList<string> DeclaredLatticeConstants()
+        => ScannedAssemblies
+            .SelectMany(a => a.GetTypes())
             .SelectMany(t => t.GetFields(BindingFlags.Public | BindingFlags.Static))
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string?)f.GetRawConstantValue())
@@ -163,22 +252,15 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                declared,
-                Is.Not.Empty,
-                "the scan must find the host's key constants; a scan that matched nothing "
-                + "would pass vacuously and guard nothing at all");
-            Assert.That(
-                declared.Except(RepoContextEffectiveConfigurationReporter.KnownKeys, StringComparer.OrdinalIgnoreCase),
-                Is.Empty,
-                "a key this host reads but the report does not list would be reported as "
-                + "'supplied but not read', which is exactly backwards. This test is the "
-                + "reason the report cannot become the stale claim about configuration that "
-                + "#2294 was filed about");
-        });
-    }
+    /// <summary>
+    /// Whether the report accounts for a declared constant, either by naming it or by
+    /// publishing it as a prefix under which a run-time-named family is read.
+    /// </summary>
+    private static bool Covered(string declared)
+        => RepoContextEffectiveConfigurationReporter.KnownKeys
+               .Contains(declared, StringComparer.OrdinalIgnoreCase)
+           || RepoContextEffectiveConfigurationReporter.KnownKeyPrefixes
+               .Contains(declared, StringComparer.OrdinalIgnoreCase);
 
     [Test]
     public void Every_covered_key_is_classified_one_way_or_the_other_and_the_split_is_pinned()
@@ -193,11 +275,16 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
             Is.EqualTo(new[]
             {
                 RepoContextHostConfiguration.AzureConnectionKey,
+                RepoContextBackup.BlobConnectionStringKey,
                 RepoContextHostConfiguration.PostgresConnectionKey,
             }),
             "the redacted set is pinned so that widening it is a deliberate, reviewable "
             + "edit rather than a side effect; if a new key belongs here, this assertion is "
-            + "where that decision gets recorded");
+            + "where that decision gets recorded. The backup sink's connection string is "
+            + "the third member and belongs here for the same reason as the other two: it "
+            + "carries a storage account key, and the sink it addresses holds the one tree "
+            + "in this host that cannot be rebuilt from anything, so printing it would put "
+            + "read AND delete access to the only copy of agent memory into the log");
     }
 
     [Test]
@@ -212,7 +299,8 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
 
         Assert.That(
             logger.Messages,
-            Has.Exactly(1).Contains("LATTICE_DATA_ROOT = /mnt/data [OVERRIDDEN, default /data]"),
+            Has.Exactly(1).Contains(
+                "LATTICE_DATA_ROOT = /mnt/data (DECLARED) [OVERRIDDEN, default /data]"),
             "the default is derived by resolving the same configuration class against an "
             + "empty configuration, so it cannot drift from the code that applies it");
     }
@@ -335,6 +423,18 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
     {
         public List<string> Messages { get; } = [];
 
+        /// <summary>
+        /// The subset of <see cref="Messages"/> logged at warning or above.
+        /// </summary>
+        /// <remarks>
+        /// Captured separately because "the report states this" and "the report shouts
+        /// this" are different claims, and the second is the one issue #2596 turns on: the
+        /// runtime already stated the collector flavour at information level and it went
+        /// unread through two failed gate runs. A fixture that only inspected message text
+        /// could not tell a hazard from a value line.
+        /// </remarks>
+        public List<string> Warnings { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
@@ -348,7 +448,13 @@ public sealed class RepoContextEffectiveConfigurationReporterTests
             Func<TState, Exception?, string> formatter)
         {
             ArgumentNullException.ThrowIfNull(formatter);
-            Messages.Add(formatter(state, exception));
+            var message = formatter(state, exception);
+            Messages.Add(message);
+
+            if (logLevel >= LogLevel.Warning)
+            {
+                Warnings.Add(message);
+            }
         }
     }
 }

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// activation's lifetime and has no cross-activation sharing.
 /// </para>
 /// </summary>
-internal sealed class LeafEntryCache
+internal sealed partial class LeafEntryCache
 {
     // UTF-8 scratch size for a key seek. Comfortably covers every ordinary
     // Lattice key, so a seek stays allocation-free; a longer key rents.
@@ -90,6 +90,21 @@ internal sealed class LeafEntryCache
     private long _detachedBytesRead;
     private long _detachedRowsMaterialised;
     private long _detachedSeeks;
+    private LeafSnapshotDetachSeam _lastDetachSeam;
+
+    /// <summary>
+    /// The cache surface that released this cache's lazily hydrated snapshot
+    /// frame, or <see cref="LeafSnapshotDetachSeam.None"/> when no frame has
+    /// been released.
+    /// <para>
+    /// Detaching is irreversible for the life of the activation, so this is the
+    /// only signal that distinguishes a leaf which never attached a frame - one
+    /// replayed from the write-ahead log, whose rows are already resident - from
+    /// one whose frame an unrelated whole-leaf operation consumed. The split
+    /// seam cannot tell those apart on its own, and their costs are opposite.
+    /// </para>
+    /// </summary>
+    internal LeafSnapshotDetachSeam LastDetachSeam => _lastDetachSeam;
 
     /// <summary>
     /// Wraps an existing sorted dictionary of leaf rows. The cache does not copy
@@ -141,26 +156,6 @@ internal sealed class LeafEntryCache
     /// late, so it is safe for best-effort admission control.
     /// </summary>
     internal long LiveCount => _liveCount + _residualLiveCount;
-
-    /// <summary>
-    /// One-shot backfill seam for activations whose persisted
-    /// <c>LeafStateBytes</c> slot was written before
-    /// incremental accounting was added. The activation path calls this
-    /// once after the cache has been populated (snapshot rehydrate + WAL
-    /// tail replay), at which point the running counter matches a fresh
-    /// walk by construction. Idempotent.
-    /// <para>
-    /// Forces a lazily hydrated snapshot to materialise first: the supplied
-    /// figure describes the whole projection, so it may only replace the
-    /// running counter once that counter also describes the whole projection
-    /// and no residual remains to be added to it.
-    /// </para>
-    /// </summary>
-    internal void OverwriteStateBytesForBackfill(long value)
-    {
-        HydrateAll();
-        _stateBytes = value;
-    }
 
     /// <summary>
     /// Computes the per-entry logical-payload contribution to
@@ -384,7 +379,7 @@ internal sealed class LeafEntryCache
 
     /// <summary>Clears all rows from the cache, including every typed shadow
     /// and any lazily hydrated snapshot backing.</summary>
-    internal void Clear()
+    internal void Clear(LeafSnapshotDetachSeam seam = LeafSnapshotDetachSeam.Clear)
     {
         _rows.Clear();
         _typedShadows?.Clear();
@@ -393,7 +388,7 @@ internal sealed class LeafEntryCache
         _mergeModes?.Clear();
         _stateBytes = 0;
         _liveCount = 0;
-        DetachSnapshot();
+        DetachSnapshot(seam);
         _detachedBytesRead = 0;
         _detachedRowsMaterialised = 0;
         _detachedSeeks = 0;
@@ -481,9 +476,15 @@ internal sealed class LeafEntryCache
     /// <summary>
     /// Returns the recorded per-key <see cref="LatticeMergeMode"/> for
     /// <paramref name="key"/>, or <see langword="null"/> when the key is a plain
-    /// last-writer-wins row (or no mode has been recorded). The
-    /// snapshot-baseline capture path stamps this onto the durable
-    /// <see cref="State.LeafSnapshotRow.MergeMode"/> discriminator.
+    /// last-writer-wins row (or no mode has been recorded). Hydrates the key's
+    /// block first, so it answers for a row a lazily hydrated snapshot still
+    /// owns.
+    /// <para>
+    /// That hydration ends in a trim, which can evict rows, so this must not be
+    /// called from inside an <see cref="EnumerateRange"/> walk - use
+    /// <see cref="GetMergeModeWithoutHydrating"/> there, which reads the
+    /// side-map directly and is equivalent for a row the walk has just yielded.
+    /// </para>
     /// </summary>
     /// <param name="key">The entry key.</param>
     internal LatticeMergeMode? GetMergeMode(string key)
@@ -511,7 +512,7 @@ internal sealed class LeafEntryCache
     {
         get
         {
-            HydrateAll();
+            HydrateAll(LeafSnapshotDetachSeam.KeysAccessor);
             return _rows.Keys;
         }
     }
@@ -530,7 +531,7 @@ internal sealed class LeafEntryCache
     /// </summary>
     internal IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> EnumerateRows()
     {
-        HydrateAll();
+        HydrateAll(LeafSnapshotDetachSeam.EnumerateRowsAccessor);
         DrainDeferred();
         return _rows;
     }
@@ -596,7 +597,7 @@ internal sealed class LeafEntryCache
     {
         get
         {
-            HydrateAll();
+            HydrateAll(LeafSnapshotDetachSeam.UnderlyingRowsAccessor);
             DrainDeferred();
             return _rows;
         }
@@ -660,14 +661,54 @@ internal sealed class LeafEntryCache
     /// <summary>Key seeks performed against a lazily hydrated snapshot since this cache was last cleared.</summary>
     internal long SnapshotSeeks => _detachedSeeks + (_hydration?.Seeks ?? 0L);
 
-    /// <summary>Hydration blocks evicted under the resident-footprint budget.</summary>
+    /// <summary>
+    /// Hydration blocks evicted under the resident-footprint budget.
+    /// <para>
+    /// Like <see cref="PendingHydrationRowCount"/>, <see cref="HydratedRowCount"/>,
+    /// <see cref="SnapshotBytesRead"/>, <see cref="SnapshotRowsMaterialised"/> and
+    /// <see cref="SnapshotSeeks"/>, this is a read window onto a counter the
+    /// production path maintains rather than a value production reads back.
+    /// Fixtures observe the family through <c>BPlusLeafGrain.CacheForTest</c>,
+    /// which is the documented alternative to <c>EntriesForTest</c> precisely
+    /// because it does not detach the frame. Several of them use this counter as
+    /// a non-vacuity anchor ("the resident budget must actually bite"), so it is
+    /// load-bearing despite having no caller in <c>src/</c>.
+    /// </para>
+    /// </summary>
     internal long EvictedBlockCount => _evictedBlocks;
+
+    /// <summary>
+    /// Total bytes this cache keeps resident for as long as its activation
+    /// lives: decoded rows, plus the encoded snapshot frame if one is still
+    /// attached.
+    /// <para>
+    /// The frame term is the one that matters and the one that is easy to miss.
+    /// An attached <see cref="LeafSnapshotHydrationSource"/> retains the
+    /// <b>entire</b> encoded snapshot so that not-yet-hydrated blocks stay
+    /// seekable, and it is released only when the snapshot becomes fully
+    /// hydrated or the cache is cleared. A leaf that attaches a snapshot and is
+    /// then never read therefore holds 100% of that snapshot having taken none
+    /// of its benefit, and <see cref="StateBytes"/> - which counts decoded rows
+    /// - reports that leaf as costing nothing. Measured on the activation path
+    /// this accounts for effectively all of the resident growth: 1.008x frame
+    /// size per retained activation at zero rows materialised (issue #2767).
+    /// </para>
+    /// </summary>
+    internal long ResidentFootprintBytes => StateBytes + (_hydration?.Frame.Length ?? 0L);
 
     /// <summary>
     /// Materialises every row a lazily hydrated snapshot still owns. A no-op
     /// when nothing is pending, so a fully hydrated cache pays a null check.
+    /// <para>
+    /// Ends in <c>DetachSnapshot</c> and is therefore irreversible: once it
+    /// runs, every row is resident for the life of the activation and no later
+    /// eviction can recover the footprint. <paramref name="seam"/> records
+    /// which surface paid that cost, so a later operation - a division in
+    /// particular - can attribute a frame it did not find.
+    /// </para>
     /// </summary>
-    internal void HydrateAll()
+    /// <param name="seam">The cache surface requesting whole-cache hydration.</param>
+    internal void HydrateAll(LeafSnapshotDetachSeam seam)
     {
         var source = _hydration;
         if (source is null)
@@ -675,12 +716,18 @@ internal sealed class LeafEntryCache
             return;
         }
 
+        // The seam must be carried into HydrateBlock rather than relied upon
+        // below: hydrating the final block completes the source, and
+        // HydrateBlock detaches there and then. The trailing call is reached
+        // only by a source that is somehow not fully hydrated after the loop,
+        // so attributing the seam here alone would report every whole-cache
+        // detach as a ranged hydration that happened to finish.
         for (var block = 0; block < source.BlockCount; block++)
         {
-            HydrateBlock(source, block);
+            HydrateBlock(source, block, seam);
         }
 
-        DetachSnapshot();
+        DetachSnapshot(seam);
     }
 
     /// <summary>
@@ -710,7 +757,7 @@ internal sealed class LeafEntryCache
         var lastBlock = LeafSnapshotHydrationSource.BlockOf(lastExclusive - 1);
         for (var block = firstBlock; block <= lastBlock; block++)
         {
-            HydrateBlock(source, block);
+            HydrateBlock(source, block, LeafSnapshotDetachSeam.RangeHydrationCompleted);
         }
 
         TrimToBudget(firstBlock, lastBlock);
@@ -736,7 +783,7 @@ internal sealed class LeafEntryCache
         }
 
         var block = LeafSnapshotHydrationSource.BlockOf(index);
-        HydrateBlock(source, block);
+        HydrateBlock(source, block, LeafSnapshotDetachSeam.RangeHydrationCompleted);
         if (pin)
         {
             _hydration?.Pin(block);
@@ -821,7 +868,24 @@ internal sealed class LeafEntryCache
         }
     }
 
-    private void HydrateBlock(LeafSnapshotHydrationSource source, int block)
+    // `seam` attributes the detach that completing the source triggers. It is
+    // the calling surface, not the mechanism: a whole-cache accessor reaches
+    // the same line a ranged hydration does, and only the seam distinguishes a
+    // forfeited division fast path from a bounded read that finished the leaf.
+    //
+    // #2843: completing a ranged/keyed hydration (seam
+    // RangeHydrationCompleted) must NOT detach the frame. Every leaf division
+    // was forfeiting its bisect because the windowed conversions correctly
+    // avoid the whole-cache accessors, yet the frame was still released the
+    // moment ranged hydration completed - so the split path could no longer
+    // take a pivot from the frame's ordinal index. Guarding the completion
+    // detach on the ranged seam keeps the frame attached (and still evictable
+    // via TrimToBudget) so TryGetBisectingKeyWithoutHydrating succeeds. Whole-
+    // cache accessors (KeysAccessor / EnumerateRowsAccessor /
+    // UnderlyingRowsAccessor) are unaffected: their seam
+    // is never RangeHydrationCompleted, so they still detach here, and
+    // HydrateAll additionally detaches on its own trailing path.
+    private void HydrateBlock(LeafSnapshotHydrationSource source, int block, LeafSnapshotDetachSeam seam)
     {
         if (source.IsHydrated(block))
         {
@@ -850,9 +914,19 @@ internal sealed class LeafEntryCache
         }
 
         source.CommitHydrated(block);
-        if (source.IsFullyHydrated)
+
+        // The `IsFullyHydrated` conjunct is the pre-existing completion gate and
+        // must stay: the frame is the ONLY source for blocks not yet
+        // materialised, so detaching before every block is resident would lose
+        // the un-hydrated rows. It is load-bearing, not a redundant guard a
+        // future maintainer can drop - and note MarkEvicted decrements the
+        // hydrated-block count, so `IsFullyHydrated` is only ever reached by a
+        // walk that completed WITHOUT eviction (a budget generous enough to hold
+        // the whole leaf). The `seam !=` conjunct is the #2843 refinement: even
+        // at that completion moment, a ranged/keyed completion keeps the frame.
+        if (source.IsFullyHydrated && seam != LeafSnapshotDetachSeam.RangeHydrationCompleted)
         {
-            DetachSnapshot();
+            DetachSnapshot(seam);
         }
     }
 
@@ -884,7 +958,7 @@ internal sealed class LeafEntryCache
     private void DecodeWholeFrameAndDetach(LeafSnapshotHydrationSource source)
     {
         var frame = source.Frame;
-        Clear();
+        Clear(LeafSnapshotDetachSeam.FrameDecodeFallback);
         foreach (var row in LeafSnapshotRowSequence.FromFrame(frame))
         {
             StoreRow(row.Key, row.Value);
@@ -939,7 +1013,7 @@ internal sealed class LeafEntryCache
         _evictedBlocks++;
     }
 
-    private void DetachSnapshot()
+    private void DetachSnapshot(LeafSnapshotDetachSeam seam)
     {
         if (_hydration is { } source)
         {
@@ -950,6 +1024,13 @@ internal sealed class LeafEntryCache
             _detachedRowsMaterialised += source.RowsMaterialised;
             _detachedSeeks += source.Seeks;
             source.Release();
+
+            // Recorded only when a frame was actually released. A detach call
+            // against a cache that never attached one must leave this None, or
+            // it would report a forfeiture that did not happen and make a leaf
+            // replayed from the write-ahead log indistinguishable from one whose
+            // frame a whole-cache operation consumed.
+            _lastDetachSeam = seam;
         }
 
         _hydration = null;

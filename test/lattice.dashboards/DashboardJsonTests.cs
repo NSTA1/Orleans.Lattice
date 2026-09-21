@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Dashboards.Tests;
 /// We intentionally use <em>forward</em> mapping (live instrument name to
 /// expected PromQL token forms) rather than reverse mapping (PromQL token
 /// to instrument name), because many instrument names embed underscores
-/// (for example <c>orleans.lattice.replication.apply.dependency_wait_ms</c>
+/// (for example <c>orleans.lattice.replication.apply.dependency_wait</c>
 /// and <c>orleans.lattice.replication.wal.entries_shipped</c>) and the
 /// reverse direction is fundamentally ambiguous once dot-separated
 /// segments and embedded-underscore segments are both translated to
@@ -57,6 +57,33 @@ public sealed class DashboardJsonTests
             // direct operators to. Documented in both reference docs; left off
             // the bundled panels deliberately.
             "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
+
+            // The three registry fan-in gate state histograms (issue #3266) are
+            // instrument-grade diagnostics, not operator-facing signals. They
+            // exist to answer one question a rig asks and an operator does not:
+            // "did this measurement reach the regime in which the bound binds?"
+            // The bound was merged behind a benchmark rig that reported a gate
+            // width of 1.9-3.2 against a bound of 16, a ~0.002 ms admission
+            // wait, and 0.7% batched - readings that are equally consistent with
+            // a comfortable bound and with a gate that was never entered,
+            // because the permit count had no instrument at all. These three
+            // close that gap.
+            //
+            // They are deliberately NOT charted. The operator-facing signal for
+            // this gate is already on the Overview dashboard as
+            // orleans.lattice.registry.admission.wait, which is the one that
+            // sees a stall relocated out of the registry onto its callers. A
+            // permit count, a queue depth and a batch size sit flat and
+            // uninformative on a healthy deployment, and charting them would
+            // give every operator three permanently-dull graphs to explain the
+            // one that matters. Their consumer is
+            // benchmark/registry-fanin/scripts/collect-window.ps1, which reads
+            // them into the AdmissionGate block, and
+            // RegistryFanInRegimeTests, which asserts on them every CI build.
+            // Both reference docs carry rows marking them *(not charted)*.
+            "orleans.lattice.registry.admission.in_flight",
+            "orleans.lattice.registry.admission.batch.size",
+            "orleans.lattice.registry.admission.queue.depth",
         };
 
     private static IReadOnlyDictionary<string, string> ExpectedTokenToMeter { get; } =
@@ -96,6 +123,22 @@ public sealed class DashboardJsonTests
         // preserves any underscores already present in the .NET name.
         var underscored = instrumentName.Replace('.', '_');
 
+        // Only a Histogram<T> ever exports bucket series; every other instrument
+        // kind exports a single sample per series under every exporter. Registering
+        // a "_bucket" form for a counter would assert that a form exists without
+        // establishing that anything can produce it, which is exactly how a panel
+        // reading buckets off a counter used to pass this name check silently.
+        // DashboardHistogramQuantileTests states that invariant directly and is
+        // where such a panel is now reported; narrowing here stops this map from
+        // vouching for a series no exporter emits.
+        //
+        // An instrument absent from the source registry stays permissive: the
+        // histogram gate reports an unresolvable bucket token itself, with a
+        // message naming the real cause, and duplicating it here would only
+        // obscure that.
+        var bucketed = !DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var declaredKind)
+            || declaredKind == DeclaredInstrumentKind.Histogram;
+
         // Counter: name + "_total"
         map[underscored + "_total"] = meterName;
 
@@ -132,10 +175,20 @@ public sealed class DashboardJsonTests
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
 
-        // Histogram with no explicit unit (the .NET name itself encodes the unit,
-        // e.g. ".apply.dependency_wait_ms"): the exporter appends the suffix
+        // Histogram with no explicit unit: the exporter appends the suffix
         // directly to the underscored name without inserting a unit segment.
-        map[underscored + "_bucket"] = meterName;
+        //
+        // This arm is deliberately not illustrated with a name that merely
+        // looks unit-bearing. A .NET name ending in a unit alias (say "_ms")
+        // does not mean the declaration omitted the unit, and the exporter
+        // keys its suppression on the mapped form ("milliseconds"), never on
+        // the alias - so such a name takes the unit-segment arm above and
+        // doubles (issue #2920), rather than this one.
+        if (bucketed)
+        {
+            map[underscored + "_bucket"] = meterName;
+        }
+
         map[underscored + "_count"] = meterName;
         map[underscored + "_sum"] = meterName;
 

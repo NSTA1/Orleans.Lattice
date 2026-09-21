@@ -83,18 +83,21 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            StandDownIfCeilingFired(scan);
+            StandDownIfCeilingFired(scan, leafId);
             cancellationToken.ThrowIfCancellationRequested();
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
 
-            // Read the next-sibling pointer BEFORE driving the rebuild
-            // because RebuildProjectionFromWalAsync deactivates the
-            // grain; any subsequent call on the same grain handle would
-            // simply reactivate it (wasting an activation) and we
-            // already have everything we need from the pre-rebuild
-            // state to continue the chain walk.
+            // Read the next-sibling pointer and this leaf's key range BEFORE
+            // driving the rebuild, because RebuildProjectionFromWalAsync
+            // deactivates the grain; any subsequent call on the same grain
+            // handle would simply reactivate it (wasting an activation) and we
+            // already have everything we need from the pre-rebuild state to
+            // continue the chain walk. The range is read on every leaf rather
+            // than only at a yield point, so that a walk the page-fill ceiling
+            // abandons still has a resume position to bank (issue 2807).
             var next = await leaf.GetNextSiblingAsync();
+            var bounds = await leaf.GetKeyRangeAsync();
 
             scan.Budget.RecordLeafVisited();
 
@@ -106,11 +109,10 @@ internal sealed partial class ShardRootGrain
             // reported nothing (issue 1992). The budget's duration component
             // therefore excludes the current leaf's rebuild, which costs at
             // most one extra leaf per batch.
-            string? resumeFrom = null;
-            if (next is not null && scan.Budget.ShouldYield())
-            {
-                resumeFrom = await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null);
-            }
+            var boundary = next is null
+                ? null
+                : ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            var resumeFrom = boundary is not null && scan.Budget.ShouldYield() ? boundary : null;
 
             await leaf.RebuildProjectionFromWalAsync();
             rebuilt++;
@@ -129,6 +131,19 @@ internal sealed partial class ShardRootGrain
                     LeavesRebuilt = rebuilt,
                     ResumeFromInclusive = resumeFrom,
                 };
+            }
+
+            // Bankable checkpoint (issue 2807). Safe to resume from precisely
+            // because a projection rebuild is idempotent: a leaf rebuilt twice
+            // replays the same WAL to the same projection state, so the worst
+            // a re-read boundary costs is repeated work, never a wrong answer.
+            if (boundary is not null)
+            {
+                PublishScanPagePartial(scan, new ShardProjectionRebuildPage
+                {
+                    LeavesRebuilt = rebuilt,
+                    ResumeFromInclusive = boundary,
+                });
             }
 
             // Either the budget is unspent, or it is spent at a leaf that
@@ -265,7 +280,7 @@ internal sealed partial class ShardRootGrain
 
         while (walk.HasLeaf)
         {
-            StandDownIfCeilingFired(scan);
+            StandDownIfCeilingFired(scan, walk.CurrentLeafId!.Value);
             cancellationToken.ThrowIfCancellationRequested();
 
             // GetProjectionCheckpointOffsetAsync returns the legacy
@@ -285,6 +300,19 @@ internal sealed partial class ShardRootGrain
                 minCheckpoint = legacyCheckpoint;
 
             if (!await walk.MoveNextAsync()) break;
+
+            // Bankable checkpoint (issue 2807). perPartitionHeads has to ride
+            // along or a banked first batch loses the heads entirely and the
+            // driver measures every checkpoint against nothing.
+            if (walk.BankableResumeKey is { } boundary)
+            {
+                PublishScanPagePartial(scan, new ShardMaterialiserLagPage
+                {
+                    WalHeadOffsets = perPartitionHeads,
+                    MinCheckpointOffset = minCheckpoint,
+                    ResumeFromInclusive = boundary,
+                });
+            }
         }
 
         return new ShardMaterialiserLagPage
@@ -395,7 +423,7 @@ internal sealed partial class ShardRootGrain
             var leafId = leftmostId.Value;
             while (true)
             {
-                StandDownIfCeilingFired(scan);
+                StandDownIfCeilingFired(scan, leafId);
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
                 var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
@@ -479,6 +507,10 @@ internal sealed partial class ShardRootGrain
                 for (var i = 0; i < frozen.Count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // The non-recording overload on purpose (issue 2365): this
+                    // pass is fanned out, so no single leaf is "the read in
+                    // flight", and the ordinal freshness test cannot work here
+                    // because the fold pass never advances LeavesVisited.
                     StandDownIfCeilingFired(scan);
                     var slot = i % window;
                     var rows = await inFlight[slot];

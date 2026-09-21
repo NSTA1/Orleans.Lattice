@@ -20,7 +20,10 @@ internal sealed class FileWalShard : IDisposable
 
     private readonly string _directory;
     private readonly string _logPath;
+    private readonly string _treeId;
+    private readonly int _shardIndex;
     private readonly FileWalStorageOptions _options;
+    private readonly IWalReadPressureGovernor _governor;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Entries kept sorted ascending by offset. Out-of-order batch arrival
@@ -35,14 +38,59 @@ internal sealed class FileWalShard : IDisposable
     private long _writePosition;
     private long _retainedBytes;
     private long _deadBytes;
+    private long _deadEntries;
     private long _trimWatermark = -1;
 
+    // Built once per shard rather than per emission. The priming pass and the
+    // compaction record site are both on paths that must not allocate to
+    // report, so the three tags every compaction measurement carries are
+    // cached here instead of being constructed at each call.
+    private readonly KeyValuePair<string, object?> _treeTag;
+    private readonly KeyValuePair<string, object?> _tenantTag;
+
+    // Compaction is decided per shard - the ratio test reads this instance's
+    // own _retainedBytes and _deadBytes - so a tree-scoped measurement is the
+    // average of one threshold test per shard and reports a dead fraction no
+    // shard holds. Issue #3206 measured that: three of eight shards holding
+    // 81% of a 1.6 GB WAL had never compacted while the tree-level counters
+    // advanced healthily. LatticeMetrics.TagShard is the correct key rather
+    // than TagPartition, which names the producer-side writer partition and is
+    // reserved for the writer-layer instruments.
+    private readonly KeyValuePair<string, object?> _shardTag;
+
     internal FileWalShard(string directory, FileWalStorageOptions options)
+        : this(directory, options, string.Empty, 0, GcWalReadPressureGovernor.Instance)
+    {
+    }
+
+    internal FileWalShard(
+        string directory,
+        FileWalStorageOptions options,
+        string treeId,
+        int shardIndex,
+        IWalReadPressureGovernor governor)
     {
         _directory = directory;
         _logPath = Path.Combine(directory, "wal.log");
         _options = options;
+        _treeId = treeId;
+        _shardIndex = shardIndex;
+        _governor = governor;
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        _tenantTag = LatticeTenantLabel.ForTree(treeId);
+        _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
     }
+
+    /// <summary>
+    /// Counts reads that had to give up window width to complete: once per
+    /// narrowing step forced by an allocation failure, and once more when
+    /// even a single-entry page was unaffordable. Monotonic. Exposed so the
+    /// degradation path is directly observable in a test rather than only
+    /// inferable from the absence of a crash.
+    /// </summary>
+    internal long ReadPressureDegradations => Interlocked.Read(ref _readPressureDegradations);
+
+    private long _readPressureDegradations;
 
     /// <summary>Appends a dense, non-overlapping batch atomically.</summary>
     internal async Task AppendAsync(IReadOnlyList<PreparedWalRecord> records, CancellationToken cancellationToken)
@@ -70,13 +118,41 @@ internal sealed class FileWalShard : IDisposable
     /// Snapshots up to <paramref name="maxEntries"/> payloads with offset
     /// strictly greater than <paramref name="fromOffsetExclusive"/>, in
     /// ascending offset order, materialising each payload into a
-    /// freshly-owned array.
+    /// freshly-owned array. The page is additionally bounded to
+    /// <paramref name="maxBytes"/> total payload bytes, so a run of large
+    /// records cannot materialise an unbounded page (issue #2689).
     /// </summary>
+    /// <param name="fromOffsetExclusive">Exclusive lower bound on offset.</param>
+    /// <param name="maxEntries">Maximum entries to return; must be at least <c>1</c>.</param>
+    /// <param name="maxBytes">
+    /// Maximum total payload bytes to materialise; must be at least
+    /// <c>1</c>. At least one entry is always returned even when it alone
+    /// exceeds this budget, so the bound can never stall a reader. The
+    /// value is an upper bound only: it is narrowed further, per read, by
+    /// the process's current memory occupancy (issue #2742), and a page
+    /// that still cannot be allocated is retried at a quarter of its width
+    /// down to a single entry before <see cref="WalReadUnderPressureException"/>
+    /// is raised.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     internal async Task<(long[] Offsets, byte[][] Payloads)> SnapshotAsync(
         long fromOffsetExclusive,
         int maxEntries,
+        long maxBytes,
         CancellationToken cancellationToken)
     {
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
+        }
+
+        if (maxBytes < 1L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
+        }
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -96,22 +172,245 @@ internal sealed class FileWalShard : IDisposable
                 return (Array.Empty<long>(), Array.Empty<byte[]>());
             }
 
-            var take = Math.Min(available, maxEntries);
-            var offsets = new long[take];
-            var payloads = new byte[take][];
-            for (var i = 0; i < take; i++)
-            {
-                var entry = _entries[startIndex + i];
-                offsets[i] = entry.Offset;
-                payloads[i] = ReadPayload(entry);
-            }
-
-            return (offsets, payloads);
+            var budget = NarrowBudget(maxBytes);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
+            return MaterialiseOwnedPage(startIndex, take);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Snapshots a page like <see cref="SnapshotAsync"/>, but decodes each
+    /// payload directly from pooled, non-contiguous chunks instead of
+    /// handing the caller an owned <c>byte[]</c> per entry.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape the replay read path uses. The caller wants a
+    /// deserialized record, never the bytes, so materialising a contiguous
+    /// array per entry only to throw it away is pure cost - and it is the
+    /// specific cost that fails first on a nearly-full heap, because a
+    /// contiguous request needs a single free block rather than merely
+    /// enough free memory. Decoding from a <see cref="ReadOnlySequence{T}"/>
+    /// removes the entry-sized contiguous requirement entirely: peak
+    /// additional memory for a page becomes the decoded records plus a
+    /// handful of pooled 64 KiB chunks, whatever the entry size.
+    /// <para>
+    /// <paramref name="decode"/> is invoked while the shard gate is held and
+    /// must not retain the sequence: the chunks behind it are returned to
+    /// the pool as soon as it returns.
+    /// </para>
+    /// </remarks>
+    internal async Task<(long[] Offsets, T[] Values)> SnapshotDecodedAsync<T>(
+        long fromOffsetExclusive,
+        int maxEntries,
+        long maxBytes,
+        Func<ReadOnlySequence<byte>, T> decode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(decode);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
+        }
+
+        if (maxBytes < 1L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            if (fromOffsetExclusive == long.MaxValue)
+            {
+                return (Array.Empty<long>(), Array.Empty<T>());
+            }
+
+            var startIndex = LowerBound(fromOffsetExclusive + 1);
+            var available = _entries.Count - startIndex;
+            if (available <= 0)
+            {
+                return (Array.Empty<long>(), Array.Empty<T>());
+            }
+
+            var budget = NarrowBudget(maxBytes);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
+            return DecodePage(startIndex, take, decode);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private (long[] Offsets, T[] Values) DecodePage<T>(int startIndex, int take, Func<ReadOnlySequence<byte>, T> decode)
+    {
+        while (true)
+        {
+            using var chunks = new PooledPayloadSequence();
+            var entry = default(IndexEntry);
+            try
+            {
+                var offsets = new long[take];
+                var values = new T[take];
+                for (var i = 0; i < take; i++)
+                {
+                    entry = _entries[startIndex + i];
+                    offsets[i] = entry.Offset;
+                    chunks.Fill(_stream!, entry.Position, entry.PayloadLength);
+                    values[i] = decode(chunks.Sequence);
+                }
+
+                return (offsets, values);
+            }
+            catch (OutOfMemoryException) when (take > 1)
+            {
+                take = NarrowAfterAllocationFailure(take);
+            }
+            catch (OutOfMemoryException ex)
+            {
+                throw UnaffordableRead(entry, ex);
+            }
+        }
+    }
+
+    private (long[] Offsets, byte[][] Payloads) MaterialiseOwnedPage(int startIndex, int take)
+    {
+        while (true)
+        {
+            var entry = default(IndexEntry);
+            try
+            {
+                var offsets = new long[take];
+                var payloads = new byte[take][];
+                for (var i = 0; i < take; i++)
+                {
+                    entry = _entries[startIndex + i];
+                    offsets[i] = entry.Offset;
+                    payloads[i] = ReadPayload(entry);
+                }
+
+                return (offsets, payloads);
+            }
+            catch (OutOfMemoryException) when (take > 1)
+            {
+                take = NarrowAfterAllocationFailure(take);
+            }
+            catch (OutOfMemoryException ex)
+            {
+                throw UnaffordableRead(entry, ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Shrinks a read window after an allocation failure, quartering it down
+    /// to a single entry.
+    /// </summary>
+    /// <remarks>
+    /// The pre-read budget is a prediction; this is the correction when the
+    /// prediction was wrong. It has to exist because occupancy is sampled at
+    /// the last collection and hundreds of leaves read concurrently, so a
+    /// window that was affordable when it was chosen can be unaffordable a
+    /// moment later. Quartering rather than halving is deliberate: the
+    /// failure says the estimate was not slightly optimistic but
+    /// categorically so, and each extra attempt is itself an allocation
+    /// burst on an already-failing heap, so converging in four steps from a
+    /// 256-entry page costs less than converging in eight. Partially built
+    /// arrays are dropped by leaving the try block and become collectable
+    /// before the retry allocates.
+    /// </remarks>
+    private int NarrowAfterAllocationFailure(int take)
+    {
+        Interlocked.Increment(ref _readPressureDegradations);
+        var narrowed = take / 4;
+        return narrowed < 1 ? 1 : narrowed;
+    }
+
+    private WalReadUnderPressureException UnaffordableRead(in IndexEntry entry, Exception inner)
+    {
+        Interlocked.Increment(ref _readPressureDegradations);
+        return new WalReadUnderPressureException(_treeId, _shardIndex, entry.Offset, entry.PayloadLength, inner);
+    }
+
+    /// <summary>
+    /// Applies the process-wide memory-pressure narrowing to a configured
+    /// per-read byte ceiling.
+    /// </summary>
+    /// <remarks>
+    /// The configured ceiling answers "how large may a page be?", which is a
+    /// question about the log. It cannot answer "how large may a page be
+    /// <i>here, now</i>?", which is a question about the machine, and that
+    /// is the question that matters when a deployment is already at the edge
+    /// of its heap: a ceiling chosen for healthy operation is exactly the
+    /// wrong one for a process whose reads are failing, because affording it
+    /// is what is no longer possible. Narrowing is one-way - the configured
+    /// value remains an upper bound and is used unchanged whenever the
+    /// machine reports room to work in.
+    /// </remarks>
+    private long NarrowBudget(long maxBytes)
+    {
+        var narrowed = _governor.NarrowBudget(maxBytes);
+        if (narrowed < 1L)
+        {
+            narrowed = 1L;
+        }
+
+        return narrowed > maxBytes ? maxBytes : narrowed;
+    }
+
+    /// <summary>
+    /// Narrows a count-bounded take window to the longest prefix whose
+    /// payload bytes fit <paramref name="maxBytes"/>, always keeping at
+    /// least one entry.
+    /// </summary>
+    /// <remarks>
+    /// The write path bounds a batch by entries AND bytes
+    /// (<see cref="LatticeOptions.WalMaxBatchEntries"/> /
+    /// <see cref="LatticeOptions.WalMaxBatchBytes"/>); before issue #2689
+    /// the read path bounded only entries, so a page of large records was
+    /// unbounded in memory and was held twice - once materialised here into
+    /// <c>byte[][]</c>, then again as the deserializer re-allocated each
+    /// payload.
+    /// <para>
+    /// The window is computed entirely from <see cref="IndexEntry.PayloadLength"/>
+    /// in the in-memory index, so the bound costs no extra I/O: it decides
+    /// how much to read before reading any of it.
+    /// </para>
+    /// <para>
+    /// The always-take-one floor is load-bearing, not a rounding
+    /// convenience. Every reader on this path treats an empty page as
+    /// end-of-stream - <c>WalShardGrain.ReadAsync</c> reports
+    /// <c>NextSequence = fromSequence</c> and <c>WalCommitLogReader</c>
+    /// yields a break - so a page that returned nothing because its first
+    /// entry exceeded the budget would stall replay at that offset
+    /// forever, reproducing the very wedge this bound exists to end. A
+    /// short (but non-empty) page is instead an already-supported
+    /// condition: the same readers resume from the last offset actually
+    /// returned, so truncating a page is a resumption and never a skip.
+    /// </para>
+    /// </remarks>
+    private int Narrow(int startIndex, int take, long maxBytes)
+    {
+        var accumulated = 0L;
+        for (var i = 0; i < take; i++)
+        {
+            var length = _entries[startIndex + i].PayloadLength;
+            if (i > 0 && accumulated + length > maxBytes)
+            {
+                return i;
+            }
+
+            accumulated += length;
+        }
+
+        return take;
     }
 
     /// <summary>Returns the highest live offset, or <c>-1</c> when empty.</summary>
@@ -159,6 +458,56 @@ internal sealed class FileWalShard : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the shard's physical on-disk footprint: every byte the log
+    /// file occupies, including per-record framing and dead (trimmed but
+    /// not yet compacted) payload.
+    /// <para>
+    /// This is the figure that bounds disk, and it is not the one
+    /// <see cref="GetRetainedByteSizeAsync"/> returns. A log-structured
+    /// backend reclaims space only by rewriting the file, so dead bytes are a
+    /// designed-in component of occupancy - up to the compaction threshold's
+    /// share of the file - and a policy that reads only the live payload can
+    /// be satisfied while the file is twice the size it believes.
+    /// </para>
+    /// <para>
+    /// The read is O(1) and exact rather than a <c>FileInfo.Length</c> stat:
+    /// <c>_writePosition</c> tracks the file length by construction, since
+    /// recovery truncates to the last good record end and sets the field to
+    /// it, every append advances both together, and compaction rewrites to
+    /// exactly the new position.
+    /// </para>
+    /// </summary>
+    internal async Task<long> GetPhysicalByteSizeAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            return _writePosition;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Payload bytes belonging to trimmed entries that compaction has not yet
+    /// reclaimed. Exposed so a test can assert on the quantity the ceiling
+    /// bounds rather than inferring it from file size alone.
+    /// </summary>
+    internal long DeadBytes => _deadBytes;
+
+    /// <summary>
+    /// Trimmed entries that compaction has not yet reclaimed. The record-count
+    /// companion to <see cref="DeadBytes"/>: the two together give the dead
+    /// records' mean payload, which is what makes the per-record framing
+    /// overhead computable and so the shard's true dead ratio exact rather than
+    /// bounded (issue #3206).
+    /// </summary>
+    internal long DeadEntries => _deadEntries;
+
     /// <summary>Trims every entry with offset &lt;= <paramref name="throughOffsetInclusive"/>.</summary>
     internal async Task TrimAsync(long throughOffsetInclusive, CancellationToken cancellationToken)
     {
@@ -183,6 +532,7 @@ internal sealed class FileWalShard : IDisposable
             {
                 _retainedBytes -= _entries[firstSurvivor].PayloadLength;
                 _deadBytes += _entries[firstSurvivor].PayloadLength;
+                _deadEntries++;
                 firstSurvivor++;
             }
 
@@ -205,6 +555,66 @@ internal sealed class FileWalShard : IDisposable
     }
 
     /// <summary>
+    /// Evaluates this shard against the compaction policy without trimming
+    /// anything, and compacts if the policy admits.
+    /// <para>
+    /// <see cref="TrimAsync"/> already ends in the same evaluation, and it is
+    /// unconditional there - a trim that removes no entry still evaluates. So
+    /// the gate on every compaction threshold was never "did we trim", it was
+    /// "was <see cref="TrimAsync"/> called at all", and a shard the GC stops
+    /// scanning is a shard for which it is not. This method is the same
+    /// evaluation reached by a path that does not require a release to have
+    /// happened first (issue #3207).
+    /// </para>
+    /// <para>
+    /// <b>What it can and cannot reclaim.</b> A compaction's yield is exactly
+    /// <c>_deadBytes</c>, and that quantity rises in only two places: inside
+    /// <see cref="TrimAsync"/>, and on recovery when a trim marker that
+    /// <see cref="TrimAsync"/> wrote is replayed. No append path marks anything
+    /// dead. So this evaluation completes the shard that <i>has</i> trimmed
+    /// before and is now held at the retention floor: its accumulated dead
+    /// bytes were previously measured against no threshold at all, and are now
+    /// measured against the same policy a trim would have applied. It is
+    /// structurally inert on a shard that has <i>never</i> trimmed, whose
+    /// <c>_deadBytes</c> is pinned at zero in perpetuity, and that is correct
+    /// rather than a gap: such a shard's retained bytes are live, not dead, so
+    /// a rewrite would return none of them and only the retention floor
+    /// advancing can. The shard-attributed
+    /// <c>orleans.lattice.wal.gc.trim_stop</c> arm, read against that shard's
+    /// flat <c>orleans.lattice.wal.entries_trimmed</c>, is what names that
+    /// population; no arm derived from <c>_deadBytes</c> can, because the stop
+    /// is what prevents the quantity from ever being written.
+    /// </para>
+    /// <para>
+    /// It moves no watermark and mutates no logical state: the offsets
+    /// readable before the call are exactly those readable after it, whether
+    /// or not a compaction ran. It is therefore safe to call on every pass.
+    /// Note that a threshold-gated evaluation is self-limiting and needs no
+    /// separate frequency bound, which is the reason it is preferred here over
+    /// the threshold-free <see cref="ReconcileAsync"/>: a compaction zeroes
+    /// <c>_deadBytes</c>, so every subsequent evaluation returns at the
+    /// minimum-dead floor until further trims accumulate, and an evaluation
+    /// that declines rewrites nothing. Calling <see cref="ReconcileAsync"/>
+    /// here instead would rewrite the whole shard file on every pass that
+    /// reached it, trading unbounded WAL growth for unbounded write
+    /// amplification.
+    /// </para>
+    /// </summary>
+    internal async Task EvaluateCompactionAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            CompactIfNeeded();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Activation-time recovery. Forces a load (which rolls forward every
     /// committed batch and discards any torn/uncommitted tail) and then
     /// reclaims trimmed on-disk space via compaction.
@@ -217,7 +627,7 @@ internal sealed class FileWalShard : IDisposable
             EnsureLoaded();
             if (_deadBytes > 0)
             {
-                Compact();
+                Compact(LatticeMetrics.WalCompactionTriggerReconcile);
             }
         }
         finally
@@ -239,6 +649,47 @@ internal sealed class FileWalShard : IDisposable
         _stream = new FileStream(_logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         RecoverFromDisk();
         _loaded = true;
+        PrimeCompactionCounters();
+    }
+
+    /// <summary>
+    /// Writes a zero on every arm of the compaction counters the first time a
+    /// shard is loaded.
+    /// <para>
+    /// Without it, a deployment whose WAL has simply never needed compacting
+    /// is indistinguishable on a scrape from one where this provider is not
+    /// registered at all - both render as an absent series. That was exactly
+    /// the reading that made issue #3107 take as long to diagnose as it did,
+    /// so the arms are armed before anything can fire them.
+    /// </para>
+    /// <para>
+    /// The zeros carry this shard's own <see cref="LatticeMetrics.TagShard"/>,
+    /// so the priming guarantee holds per shard rather than per tree. A
+    /// tree-scoped prime would leave "this shard has never compacted"
+    /// indistinguishable from "this shard is not reporting" the moment one
+    /// sibling compacted, which is the ambiguity issue #3206 measured on a
+    /// live estate and exists to remove.
+    /// </para>
+    /// </summary>
+    private void PrimeCompactionCounters()
+    {
+        if (_treeId.Length == 0)
+        {
+            // A bare shard constructed directly by a test has no tree
+            // identity to attribute a measurement to.
+            return;
+        }
+
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
+        LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, _tenantTag);
+
+        // The gate-input samples are armed from the shard's true post-recovery
+        // state rather than a synthetic zero, so the very first scrape after a
+        // load already carries this shard's retained and dead figures even if
+        // it is never trimmed again.
+        RecordCompactionEvaluation();
     }
 
     private void RecoverFromDisk()
@@ -248,6 +699,7 @@ internal sealed class FileWalShard : IDisposable
         _entries.Clear();
         _retainedBytes = 0;
         _deadBytes = 0;
+        _deadEntries = 0;
         _trimWatermark = -1;
 
         var committed = new List<IndexEntry>();
@@ -308,6 +760,7 @@ internal sealed class FileWalShard : IDisposable
             if (entry.Offset <= watermark)
             {
                 _deadBytes += entry.PayloadLength;
+                _deadEntries++;
                 continue;
             }
 
@@ -408,7 +861,7 @@ internal sealed class FileWalShard : IDisposable
     private byte[] ReadPayload(in IndexEntry entry)
     {
         var stream = _stream!;
-        var buffer = new byte[entry.PayloadLength];
+        var buffer = _governor.Allocate(entry.PayloadLength);
         if (entry.PayloadLength > 0)
         {
             stream.Seek(entry.Position, SeekOrigin.Begin);
@@ -420,6 +873,12 @@ internal sealed class FileWalShard : IDisposable
 
     private void CompactIfNeeded()
     {
+        // Sampled before any arm is tested, so every evaluation is reported
+        // whichever way it goes. That ordering is the point: an absent sample
+        // now means the shard was never evaluated, which is a different fault
+        // from a shard that is evaluated every sweep and correctly declines.
+        RecordCompactionEvaluation();
+
         if (_deadBytes < _options.CompactionMinimumDeadBytes)
         {
             return;
@@ -431,16 +890,29 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
+        // The absolute ceiling is checked first and independently of the
+        // ratio. That ordering is the entire point of the option: the ratio
+        // bounds waste only relative to live data, so on a large shard it
+        // can sit far below its threshold while holding an amount of dead
+        // space that is, in absolute terms, unacceptable.
+        var ceiling = _options.CompactionMaximumDeadBytes;
+        if (ceiling > 0L && _deadBytes >= ceiling)
+        {
+            Compact(LatticeMetrics.WalCompactionTriggerCeiling);
+            return;
+        }
+
         if ((double)_deadBytes / totalPayload < _options.CompactionThreshold)
         {
             return;
         }
 
-        Compact();
+        Compact(LatticeMetrics.WalCompactionTriggerRatio);
     }
 
-    private void Compact()
+    private void Compact(KeyValuePair<string, object?> trigger)
     {
+        var reclaimed = _deadBytes;
         var stream = _stream!;
         var tempPath = _logPath + ".compacting";
 
@@ -498,6 +970,80 @@ internal sealed class FileWalShard : IDisposable
         _entries.AddRange(newEntries);
         _writePosition = newWritePosition;
         _deadBytes = 0;
+        _deadEntries = 0;
+        RecordCompaction(trigger, reclaimed);
+    }
+
+    /// <summary>
+    /// Records one completed compaction and the dead bytes it released.
+    /// <para>
+    /// Both instruments are monotonic counters rather than an
+    /// <c>UpDownCounter</c> of outstanding dead bytes, for the reason issue
+    /// #2700 established: an up-down counter is process-lifetime state, so a
+    /// lost compensating write - a disposed shard, a re-created provider, a
+    /// torn activation - ratchets the series permanently and makes real waste
+    /// indistinguishable from accumulated drift, which is the one question
+    /// the instrument exists to answer. Present occupancy is reported instead
+    /// as derived truth, by <see cref="GetPhysicalByteSizeAsync"/>.
+    /// </para>
+    /// <para>
+    /// Both carry this shard's <see cref="LatticeMetrics.TagShard"/>, because
+    /// the trigger that produced the measurement is shard-local: the ratio
+    /// test compares this instance's own dead bytes against its own payload.
+    /// The pre-#3206 tree-scoped tagging forced a reader to sum across shards,
+    /// which averages one threshold test per shard and hides a stranded
+    /// majority behind an active minority.
+    /// </para>
+    /// </summary>
+    private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
+    {
+        if (_treeId.Length == 0)
+        {
+            return;
+        }
+
+        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, trigger, _tenantTag);
+        if (reclaimedBytes > 0)
+        {
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, _tenantTag);
+        }
+    }
+
+    /// <summary>
+    /// Samples the four quantities the shard-local compaction gate tests, at
+    /// the moment it tests them and before any arm fires.
+    /// <para>
+    /// Publishing the decision's inputs rather than only its outcome is what
+    /// lets a reader reconstruct the gate from outside the process. Issue #3206
+    /// established that the outcome counters alone cannot settle the question
+    /// they are asked: a shard whose series is flat may be declining correctly
+    /// every sweep or may never be reaching the evaluation at all, and those
+    /// have opposite remedies. It further established that the byte figures
+    /// alone cannot settle it either, because both track <b>payload</b> length
+    /// while the file stores <b>framed</b> records, so any ratio derived by
+    /// subtracting published byte totals carries the framing overhead in
+    /// numerator and denominator alike and is strictly an upper bound. The
+    /// entry counts make mean payload observable, and mean payload is what
+    /// turns that bound back into the exact figure.
+    /// </para>
+    /// <para>
+    /// Sampled unconditionally, including when every quantity is zero, for the
+    /// same reason <see cref="PrimeCompactionCounters"/> arms the outcome
+    /// counters: an absent series must mean "this shard is not reporting" and
+    /// nothing else.
+    /// </para>
+    /// </summary>
+    private void RecordCompactionEvaluation()
+    {
+        if (_treeId.Length == 0)
+        {
+            return;
+        }
+
+        LatticeMetrics.WalCompactionEvalRetainedBytes.Record(_retainedBytes, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalDeadBytes.Record(_deadBytes, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalRetainedEntries.Record(_entries.Count, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionEvalDeadEntries.Record(_deadEntries, _treeTag, _shardTag, _tenantTag);
     }
 
     private int LowerBound(long target)

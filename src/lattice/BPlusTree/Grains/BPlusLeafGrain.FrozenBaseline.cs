@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -35,6 +36,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken)
     {
+        await AwaitReplayBarrierAsync();
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = await GetOptionsAsync();
@@ -58,10 +61,40 @@ internal sealed partial class BPlusLeafGrain
         // Copy the committed cache rows under this single grain turn; the
         // resulting list is a self-contained value snapshot that survives
         // subsequent foreground mutations on this activation.
+        //
+        // Walked in bounded key windows rather than over the whole-cache view.
+        // This seam does genuinely retain every row - `rows` is the return
+        // value, and the shard root unions it into the durable per-shard
+        // baseline - so the copy itself is unavoidably a function of the leaf's
+        // size and no walk can change that. What the window walk removes is the
+        // SECOND, permanent copy. The whole-cache view calls HydrateAll, which
+        // ends in DetachSnapshot, so a freeze also left every row resident in
+        // the leaf's own cache for the life of the activation, with the lazily
+        // hydrated frame gone for good and no later eviction able to recover
+        // the footprint.
+        //
+        // That is what forfeits the leaf's cheap division (issue #2771): an
+        // oversized leaf can be divided from frame keys alone while the frame
+        // is attached, and only then. Baseline capture is the worst possible
+        // place to lose it, because ShardRootGrain.CaptureSnapshotBaselineAsync
+        // drives this call across every leaf in the shard - so one capture pass
+        // detached the whole chain at once, and the oversized leaves it was
+        // meant to make durable could no longer divide.
+        //
+        // The windows are disjoint and exhaustive, so every row is still
+        // visited exactly once and `rows` is element-for-element what the
+        // one-pass walk produced, in the same ascending key order.
         var rows = new List<LeafSnapshotRow>(Cache.Count);
-        foreach (var kv in Cache.EnumerateRows())
+        foreach (var (startInclusive, endExclusive) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key)));
+            foreach (var kv in Cache.EnumerateRange(startInclusive, endExclusive))
+            {
+                // GetMergeModeWithoutHydrating, not GetMergeMode: the latter
+                // ends in TrimToBudget, which evicts rows from the dictionary
+                // this loop's enumerator is walking. The key is resident by
+                // construction - the walk just yielded it - so the two agree.
+                rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeModeWithoutHydrating(kv.Key)));
+            }
         }
 
         // Per-partition frontier the cache already reflects, expressed as the
@@ -131,6 +164,8 @@ internal sealed partial class BPlusLeafGrain
         long[] capturedHead,
         CancellationToken cancellationToken)
     {
+        await AwaitReplayBarrierAsync();
+
         ArgumentNullException.ThrowIfNull(freeze);
         ArgumentNullException.ThrowIfNull(capturedHead);
         cancellationToken.ThrowIfCancellationRequested();
@@ -175,14 +210,33 @@ internal sealed partial class BPlusLeafGrain
             var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                 $"{treeId}/{partition}");
 
+            // Issue #2899. This site is one of the two that kept the constant
+            // while the activation-time replay learned to narrow, and it is
+            // fanned out across every frozen leaf of the shard with no replay
+            // permit held, so both terms of the peak-memory product were
+            // unbounded here. The reader supplies the narrowing, the widening
+            // and the counter's priming together, starting at the configured
+            // width (issue #2898).
+            var sliceReader = new ReplaySliceReader(
+                coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget);
+
             while (fromExclusive < toInclusive)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var slice = await coordinator.ReadSliceAsync(
+                var slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
                     toInclusive,
-                    ReplaySliceBudget,
+                    (ex, narrowedTo) => ReplayLogger(context)?.LogWarning(
+                        ex,
+                        "Leaf {GrainId} baseline tail fold of tree {TreeId} partition {Partition} could not "
+                        + "afford a commit-log read from offset {FromExclusive}; narrowing the slice budget to "
+                        + "{SliceBudget} entries and retrying the same range.",
+                        context.GrainId,
+                        treeId,
+                        partition,
+                        fromExclusive,
+                        narrowedTo),
                     cancellationToken);
 
                 if (slice.Count == 0)

@@ -52,6 +52,26 @@ public sealed class TreeAdminGrpcDtoSerializationTests
         });
     }
 
+    /// <summary>
+    /// The resume token is what makes a bounded orphaned-leaf pass drivable to
+    /// completion across the wire (issue 3302), so both its present and absent
+    /// forms have to survive a round trip: a token dropped in transit strands
+    /// the pass on its first batch, and a null that arrived as an empty string
+    /// would be rejected as a malformed token rather than read as "start".
+    /// </summary>
+    [Test]
+    public void TreeAdminOrphanedLeafRequest_round_trips()
+    {
+        var resuming = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders", ResumeFrom = "olp1:3:kb3JkZXJz" });
+        var starting = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders" });
+        Assert.Multiple(() =>
+        {
+            Assert.That(resuming.TreeId, Is.EqualTo("orders"));
+            Assert.That(resuming.ResumeFrom, Is.EqualTo("olp1:3:kb3JkZXJz"));
+            Assert.That(starting.ResumeFrom, Is.Null);
+        });
+    }
+
     [Test]
     public void TreeAdminDiagnosticsRequest_round_trips()
     {
@@ -569,6 +589,50 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             Assert.That(copy.PartitionCount, Is.EqualTo(1));
             Assert.That(copy.AllResolvableOnThisSilo, Is.False);
             Assert.That(copy.KnownProviderKeys, Is.EquivalentTo(new[] { "wal-primary", "wal-secondary" }));
+        });
+    }
+
+    [Test]
+    public void TreeOrphanedLeafReport_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeOrphanedLeafReport
+        {
+            TreeId = "orders",
+            DryRun = true,
+            LeavesWalked = 11,
+            Findings = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeOrphanedLeafFinding
+                {
+                    ShardIndex = 2,
+                    LeafId = "leaf-7",
+                    LowKeyInclusive = "a",
+                    HighKeyExclusive = "m",
+                    KeyCount = 4,
+                    VerifiedKeyCount = 4,
+                    Disposition = TreeOrphanedLeafDisposition.Repairable,
+                },
+                new TreeOrphanedLeafFinding
+                {
+                    ShardIndex = 3,
+                    LeafId = "leaf-8",
+                    KeyCount = 4,
+                    VerifiedKeyCount = 1,
+                    Disposition = TreeOrphanedLeafDisposition.RefusedUnverifiedKeys,
+                    UnverifiedKey = "zebra",
+                }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.DryRun, Is.True);
+            Assert.That(copy.LeavesWalked, Is.EqualTo(11));
+            Assert.That(copy.Findings, Has.Length.EqualTo(2));
+            Assert.That(copy.Findings[0].LowKeyInclusive, Is.EqualTo("a"));
+            Assert.That(copy.Findings[0].Disposition, Is.EqualTo(TreeOrphanedLeafDisposition.Repairable));
+            Assert.That(copy.Findings[1].UnverifiedKey, Is.EqualTo("zebra"));
+            Assert.That(copy.Findings[1].IsRefusal, Is.True);
+            Assert.That(copy.RefusedCount, Is.EqualTo(1));
         });
     }
 

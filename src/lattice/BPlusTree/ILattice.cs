@@ -32,6 +32,65 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/> exactly as
+    /// <see cref="GetManyAsync"/> does, together with the number of keys the
+    /// read-path access gate pruned before fan-out.
+    /// <para>
+    /// Use this overload instead of <see cref="GetManyAsync"/> when the caller
+    /// draws a conclusion from a key's <em>absence</em> from the result. A pruned
+    /// key and a key that was never written are the same observation through
+    /// <see cref="GetManyAsync"/> - both are simply missing - so a caller that
+    /// reads absence as "no such entry" silently misclassifies every entry an
+    /// active gate hides from it. When
+    /// <see cref="GatedMultiReadResult.PrunedByAccessGate"/> is <c>0</c> that
+    /// reading is sound; when it is non-zero the caller must not classify on
+    /// absence at all.
+    /// </para>
+    /// <para>
+    /// The count never names the pruned keys. Identities would disclose the keys
+    /// the caller is not authorized to see.
+    /// </para>
+    /// </summary>
+    /// <param name="keys">The keys to read. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the routing and shard dispatch.</param>
+    Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(List<string> keys, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports how much of the half-open range
+    /// <c>[<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)</c>
+    /// the read-path access gate admits, so a caller can tell an <em>empty</em>
+    /// range read from a <em>restricted</em> one.
+    /// <para>
+    /// Every gated range read on this interface - <see cref="KeysAsync"/>,
+    /// <see cref="EntriesAsync"/>, their predicate overloads,
+    /// <see cref="CountAsync(CancellationToken)"/>,
+    /// <see cref="CountAsync(string, string, CancellationToken)"/> and the
+    /// snapshot cursors - reports a denial as a clean empty result rather than by
+    /// throwing, because a denied range resolves to a reject-all key filter. That
+    /// is deliberate and is not changed by this method: it keeps a denied scan
+    /// cheap and non-fatal. The cost is that emptiness alone is uninterpretable,
+    /// so a caller that concludes anything from "no rows" must call this to
+    /// confirm the range was
+    /// <see cref="LatticeRangeReadGateCoverage.Unrestricted"/> first.
+    /// </para>
+    /// <para>
+    /// Intended to be called <em>only when a range read came back empty</em> and
+    /// the caller is about to act on that emptiness. On the normal non-empty path
+    /// it is unnecessary, so the scan hot path pays nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="startInclusive">
+    /// Inclusive lower bound, or <see langword="null"/> for unbounded. Must match
+    /// the bounds of the range read whose emptiness is being interpreted.
+    /// </param>
+    /// <param name="endExclusive">Exclusive upper bound, or <see langword="null"/> for unbounded.</param>
+    /// <param name="cancellationToken">Cancels the authorization call.</param>
+    Task<LatticeRangeReadGateCoverage> GetRangeReadGateCoverageAsync(
+        string? startInclusive = null,
+        string? endExclusive = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 
@@ -403,10 +462,19 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
-    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
-    /// idle expiry, or scale-down). For long-running scans prefer
-    /// <see cref="LatticeExtensions.ScanKeysAsync"/>, which transparently recovers
-    /// from that abort and resumes deterministically (no duplicates, no gaps).
+    /// if the remote enumerator is reclaimed mid-scan. Four of the five causes
+    /// are rare environmental events - silo failover, cold start, enumerator
+    /// idle expiry, scale-down. The fifth is not: the tree grain behind this
+    /// interface is <c>[StatelessWorker]</c>, and Orleans keeps enumerator state
+    /// on the activation that served <c>StartEnumeration</c> while routing every
+    /// subsequent <c>MoveNext</c> independently, so a <c>MoveNext</c> can land on
+    /// a sibling worker that has no record of the enumeration. That cause is
+    /// <b>load-proportional rather than environmental</b>: it rises with
+    /// concurrency on the tree, not with the age or duration of the scan, and it
+    /// is a steady-state background rate rather than an incident. Prefer
+    /// <see cref="LatticeExtensions.ScanKeysAsync"/> for scans of any length,
+    /// which transparently recovers from that abort and resumes deterministically
+    /// (no duplicates, no gaps).
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -419,6 +487,10 @@ public interface ILattice : IGrainWithStringKey
     /// argument (not ambient state), so it is applied consistently on every
     /// per-shard page and reconciliation drain across the whole scan.
     /// </summary>
+    /// <remarks>
+    /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
+    /// Prefer <c>LatticeExtensions.ScanKeysWhereAsync</c>.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
@@ -434,11 +506,12 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
-    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
-    /// idle expiry, or scale-down). For long-running exports prefer
-    /// <see cref="LatticeExtensions.ScanEntriesAsync"/>, which transparently
-    /// recovers from that abort and resumes deterministically (no duplicates,
-    /// no gaps).
+    /// if the remote enumerator is reclaimed mid-scan; see
+    /// <see cref="KeysAsync"/> for the five causes, one of which - per-message
+    /// stateless-worker mis-routing - is load-proportional rather than
+    /// environmental. Prefer <see cref="LatticeExtensions.ScanEntriesAsync"/> for
+    /// exports of any length, which transparently recovers from that abort and
+    /// resumes deterministically (no duplicates, no gaps).
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -452,6 +525,10 @@ public interface ILattice : IGrainWithStringKey
     /// consistently on every per-shard page and reconciliation drain across the
     /// whole scan.
     /// </summary>
+    /// <remarks>
+    /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
+    /// Prefer <c>LatticeExtensions.ScanEntriesWhereAsync</c>.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
@@ -1024,6 +1101,110 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancels the per-shard fan-out before the next shard.</param>
     Task<long> GetMaterialiserLagAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports every leaf in this tree that is spliced into a shard's sibling
+    /// chain but unreachable by descent from that shard's root, without
+    /// changing anything.
+    /// <para>
+    /// Such a leaf - an <i>orphan</i> - is left behind by a split interrupted
+    /// after it linked the new sibling into the chain but before its parent
+    /// learned about it. It is not cosmetic. Every leaf publishes a
+    /// write-ahead-log materialiser pin and the trim floor is the minimum over
+    /// all of them, so a leaf nothing routes to never checkpoints, its pin
+    /// never advances, and the floor never rises. The WAL then never trims,
+    /// and because compaction runs strictly downstream of trim it never
+    /// compacts: <b>one orphan removes every bound on the tree's WAL
+    /// growth</b>, permanently, and no amount of ordinary maintenance recovers
+    /// it. The cause was fixed in issue 3265; this pair of verbs is the repair
+    /// path for a tree that had already acquired one (issue 3269).
+    /// </para>
+    /// <para>
+    /// This verb reaches its verdict with the same code
+    /// <see cref="RepairOrphanedLeavesAsync"/> uses, so a leaf reported
+    /// <see cref="OrphanedLeafDisposition.Repairable"/> here is one the repair
+    /// would act on, and a refusal here is the refusal the repair would make.
+    /// Run it first.
+    /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch.</b> It walks until its work budget is
+    /// spent and then returns, naming where to resume in
+    /// <see cref="OrphanedLeafRepairReport.ResumeFrom"/>; drive it until
+    /// <see cref="OrphanedLeafRepairReport.IsComplete"/> is
+    /// <see langword="true"/>. Until then an empty
+    /// <see cref="OrphanedLeafRepairReport.Findings"/> says only that the part
+    /// of the tree this batch reached was clean, which is not the same claim.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="OrphanedLeafRepairReport.ResumeFrom"/>,
+    /// passed back unaltered, or <see langword="null"/> to start a new pass at
+    /// the first shard. Rejected if it is not a token this surface produced.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
+    Task<OrphanedLeafRepairReport> InspectOrphanedLeavesAsync(
+        string? resumeFrom = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Unsplices the descent-unreachable leaves of this tree that can be
+    /// proven safe to remove, retiring the write-ahead-log materialiser pins
+    /// that were gating the trim floor, and reports what it did.
+    /// <para>
+    /// See <see cref="InspectOrphanedLeavesAsync"/> for what an orphaned leaf
+    /// is and why one is worth an operator's attention. Run that verb first:
+    /// it makes the same decisions this one does and mutates nothing.
+    /// </para>
+    /// <para>
+    /// <b>It fails closed, and that is the load-bearing property.</b> A leaf
+    /// is removed only once this has proven that no descent reaches it - which
+    /// makes its rows frozen, because routing is a total function and nothing
+    /// can be routed there - and, key by key, that every row it holds is
+    /// readable from the descent-reachable leaf that owns that key. A leaf
+    /// that fails any check is left exactly as it was found and reported with
+    /// a <see cref="OrphanedLeafDisposition"/> saying which check it failed.
+    /// Nothing is assumed about whether an orphan's keys are duplicated
+    /// elsewhere; they are checked.
+    /// </para>
+    /// <para>
+    /// Safe to re-run, and that is what makes a retry safe rather than
+    /// dangerous. A leaf already removed is gone from the chain, a leaf
+    /// refused is refused again on the same evidence, and an interrupted
+    /// removal is completed by the next pass. Re-running from
+    /// <see langword="null"/> therefore cannot double-repair anything; it costs
+    /// only the walk.
+    /// </para>
+    /// <para>
+    /// <b>One call is one bounded batch, and this is the fix for issue
+    /// 3302.</b> An earlier revision drove every shard and every batch inside
+    /// one grain call, so on a damaged tree it outran the client's response
+    /// deadline: the caller was handed a <c>TimeoutException</c> while the
+    /// grain went on to complete the repair, discarding the report of what it
+    /// had done. Drive this verb until
+    /// <see cref="OrphanedLeafRepairReport.IsComplete"/> is
+    /// <see langword="true"/>, passing each report's
+    /// <see cref="OrphanedLeafRepairReport.ResumeFrom"/> to the next call.
+    /// </para>
+    /// <para>
+    /// <b>If you do see a timeout, the return value is not authoritative -
+    /// the audit is.</b> A lost reply is indistinguishable from a failure at
+    /// the call site, so do not infer from it that nothing happened. Run
+    /// <see cref="InspectOrphanedLeavesAsync"/>, which mutates nothing and
+    /// reaches its verdict with this same code, and let it establish the true
+    /// state before deciding anything. The whole loop is
+    /// <c>audit -&gt; repair to completion -&gt; re-audit</c>, and the
+    /// re-audit is not optional.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFrom">
+    /// The previous batch's <see cref="OrphanedLeafRepairReport.ResumeFrom"/>,
+    /// passed back unaltered, or <see langword="null"/> to start a new pass at
+    /// the first shard. Rejected if it is not a token this surface produced.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk before the next batch.</param>
+    Task<OrphanedLeafRepairReport> RepairOrphanedLeavesAsync(
+        string? resumeFrom = null,
+        CancellationToken cancellationToken = default);
 
     // ── Stateful cursors ────────────────────────────────
 

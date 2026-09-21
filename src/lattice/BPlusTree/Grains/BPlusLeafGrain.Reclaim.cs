@@ -92,6 +92,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<LeafReclaimProbe> GetReclaimProbeAsync()
     {
+        await AwaitReplayBarrierAsync();
+
         // Reuse CountAsync rather than reading Cache.Count directly: it is the
         // method that already knows about expiry, tombstones, the in-progress
         // split boundary and prepared-but-uncommitted rows. A leaf that looks
@@ -114,7 +116,17 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<bool> TryBeginRetirementAsync()
     {
-        // Latch FIRST, before any await. Everything that makes this decision
+        await AwaitReplayBarrierAsync();
+
+        // Latch FIRST, before any await THAT COULD CARRY AN OBSERVATION ACROSS
+        // IT. The replay-gate await above is deliberately outside that rule and
+        // does not weaken it: nothing has been observed at that point, so there
+        // is no judgement for a concurrent mutation to invalidate. Its effect is
+        // only to delay the whole decision until the projection is real, which
+        // is required - a retirement decision taken against an un-replayed
+        // projection would see an empty leaf and retire a populated one.
+        //
+        // Everything that makes this decision
         // sound depends on the leaf being frozen while it is taken, and the
         // latch is the only thing that freezes it.
         //
@@ -169,6 +181,74 @@ internal sealed partial class BPlusLeafGrain
     {
         _reclaimRetired = 0;
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryBeginOrphanRetirementAsync()
+    {
+        await AwaitReplayBarrierAsync();
+
+        // Latch FIRST, for exactly the reason TryBeginRetirementAsync latches
+        // first, and the reasoning there is the reasoning here - read it. The
+        // only difference between the two methods is WHICH judgement the latch
+        // freezes, so the freeze itself has to happen identically.
+        _reclaimRetired = 1;
+
+        var retire = false;
+        try
+        {
+            // A mutation admitted before the latch is not refused by it.
+            //
+            // Here that is not merely a race to close, it is EVIDENCE AGAINST
+            // THE PREMISE. Routing is a total function, so nothing should be
+            // able to route a write to a leaf no descent reaches; a mutation
+            // in flight on one means the caller's unreachability finding and
+            // this leaf's own experience disagree. Refuse and let the caller
+            // report it rather than reasoning past a contradiction.
+            if (_mutationsInFlight != 0) return false;
+
+            // Split, seal and prepared-transaction state can all resurrect
+            // rows this leaf does not currently hold, and the caller's
+            // key-duplication proof is taken against the rows it holds NOW.
+            // A leaf that can acquire more rows later invalidates that proof
+            // after the fact, so it is refused on the same evidence an
+            // empty-leaf fold refuses it.
+            if (HasReclaimBlockingState()) return false;
+
+            // NOTE THE ABSENCE, because it is the whole point of this method
+            // existing separately: there is NO emptiness check here.
+            //
+            // TryBeginRetirementAsync requires CountAsync == 0 and derives its
+            // entire safety from it - what is measured empty is what is
+            // destroyed. An orphan is characteristically NOT empty: rows
+            // materialise at activation by replaying the WAL through
+            // ShouldApplyDuringReplay, whose predicate keys on
+            // (ShardIndex, LowKeyInclusive, HighKeyExclusive) and never on leaf
+            // identity, so an orphan sharing bounds with a live leaf
+            // materialises a full shadow copy of its range. Gating on
+            // emptiness therefore refuses precisely the leaves that need
+            // retiring, which is why the empty-leaf pass has never been able
+            // to dispose of one (issue 3269).
+            //
+            // The safety argument is replaced, not dropped, and it is the
+            // CALLER'S to make, because it needs the tree and this leaf can
+            // only see itself. ShardRootGrain.OrphanRepair must have proven,
+            // before it calls this, that (a) no descent reaches this leaf and
+            // (b) every key this leaf holds is readable from the
+            // descent-reachable leaf that owns it. Under (a) no write can
+            // arrive, so the row set is frozen without needing the latch to
+            // freeze it; under (b) clearing this leaf destroys no uniquely
+            // held row. Calling this method without both proofs is a data-loss
+            // bug, so it is internal to the tree and has exactly one caller.
+            retire = true;
+            return true;
+        }
+        finally
+        {
+            // Unlatch on every path that did not commit, including an
+            // exceptional one, for the same reason as the empty-leaf latch.
+            if (!retire) _reclaimRetired = 0;
+        }
     }
 
     /// <summary>
@@ -231,7 +311,11 @@ internal sealed partial class BPlusLeafGrain
     {
         if (state.State.SplitKey is not { } splitKey) return false;
 
-        if (state.State.SplitState == SplitState.SplitInProgress) return false;
+        // Issue #3265: HasInterruptedSplit, not the dead equality test. This
+        // arm clears SplitKey and SplitSiblingId, which are precisely the
+        // fields a resumed division needs, so answering "no split in flight"
+        // on a leaf that has one destroys the evidence recovery runs on.
+        if (HasInterruptedSplit) return false;
 
         // A widen that stops at or below the boundary has not absorbed it,
         // and the successor still owns the keys above it.
@@ -257,7 +341,10 @@ internal sealed partial class BPlusLeafGrain
         // that are mid-flight between this leaf and a sibling that may not
         // exist yet. The row count above can legitimately read zero in that
         // window, so it is exactly the case the count cannot detect.
-        if (state.State.SplitState == SplitState.SplitInProgress)
+        // Issue #3265: HasInterruptedSplit, not the dead equality test, or the
+        // window this comment describes stops being detected on exactly the
+        // leaves that divide most often.
+        if (HasInterruptedSplit)
             return true;
 
         // The moved-away seal is deliberately sticky: it is what stops a
@@ -297,6 +384,13 @@ internal sealed partial class BPlusLeafGrain
     /// Issue #2143 is the report that only the first question was ever being
     /// asked, so a sealed predecessor could be widened into the legitimate
     /// owner of keys it would then refuse to serve.
+    /// </para>
+    /// <para>
+    /// There is a third question neither of these can answer, because both
+    /// concern leaves that already exist: may a NEW leaf be minted over part of a
+    /// sealed leaf's range without the seal? That is a division, and it is
+    /// answered at the birth seam by <see cref="MovedAwaySealInheritance"/>
+    /// instead of by a predicate here (issue 3121).
     /// </para>
     /// <para>
     /// The moved-away seal is the answer to the second question and it is the
@@ -400,6 +494,8 @@ internal sealed partial class BPlusLeafGrain
         GrainId? newNext,
         string? absorbHighKeyExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -449,7 +545,13 @@ internal sealed partial class BPlusLeafGrain
             // took on S on this path (ShardRootGrain.LeafReclaim.cs, the
             // !unlinked arm calls AbandonRetirementAsync), so a declination
             // does not leave S refusing writes.
-            if (state.State.SplitState == SplitState.SplitInProgress
+            // Issue #3265: HasInterruptedSplit, not the dead equality test.
+            // This declination's whole argument is that the evidence lives on
+            // the splitting leaf rather than on S, so reading that evidence
+            // through a predicate that is false on any leaf which has split
+            // before would unlink S on precisely the donors most likely to be
+            // mid-division.
+            if (HasInterruptedSplit
                 && state.State.SplitSiblingId == expectedNext)
             {
                 return false;
@@ -538,6 +640,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task AbsorbSuccessorRangeAsync(string? highKeyExclusive)
     {
+        await AwaitReplayBarrierAsync();
+
         // See SetNextSiblingAsync for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try

@@ -25,12 +25,18 @@ namespace Orleans.Lattice.Api.Mcp;
 /// byte-for-byte unchanged.
 /// </para>
 /// <para>
-/// <b>Administrator-gated end to end.</b> The whole group maps to
-/// <c>LatticeOperation.Admin</c> in the discovery core's capability map, so a
-/// non-administrator session is offered <b>none</b> of these tools. Should a caller
-/// reach an invocation regardless, the facade's own fail-closed schema access gate
-/// refuses it - schema-admin authority for a mutation, read authority for an
-/// inspect. The module itself adds no authorization logic.
+/// <b>Capability-gated end to end, but not on <c>Admin</c> alone.</b> The discovery
+/// core's capability map requires <c>Admin | TreeLifecycle | BulkLoad | Restore</c>
+/// for this group, and <c>AuthAdminMcpPermissionResolver.GroupIsGranted</c> matches
+/// that mask <b>disjunctively</b> - <c>(rule.Operations &amp; mask) != None</c> - so
+/// <b>any one</b> of those four capabilities makes the whole group discoverable. A
+/// caller granted only <c>BulkLoad</c> is therefore offered these tools; it is not
+/// true that the group is offered only to an administrator, and earlier revisions of
+/// this remark saying so were wrong. Should a caller reach an invocation regardless,
+/// the facade's own fail-closed access gate refuses it per tree and per verb, and the
+/// grain re-enforces its own gate behind that. The module itself adds no
+/// authorization logic, which is exactly why the coarse discovery mask must not be
+/// read as the authorization contract.
 /// </para>
 /// <para>
 /// <b>Built once.</b> The tool list is materialised a single time in the
@@ -201,6 +207,28 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "partition pinned to a provider key the silo cannot resolve so configuration drift is caught before "
                 + "WAL shards begin to fail closed. Reports the silo's known provider keys. A pure read with no side "
                 + "effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_audit",
+                "Audit a tree for orphaned leaves",
+                "Audits a tree for orphaned leaves - leaves spliced into a shard's sibling chain but unreachable by "
+                + "descent from that shard's root - and reports what the repair verb would do about each, without "
+                + "changing anything. An orphan is left behind by a split interrupted after it linked the new sibling "
+                + "into the chain but before its parent learned about it, and it is not cosmetic: a leaf nothing "
+                + "routes to never checkpoints, so its write-ahead-log materialiser pin never advances, the trim "
+                + "floor never rises, and the WAL never trims or compacts again. Reports every leaf walked, each "
+                + "orphan's shard, key range and key count, and a disposition saying whether the repair would "
+                + "unsplice it or refuse. Run this before the repair verb, which reaches its verdict with "
+                + "the same code. ONE CALL IS ONE BOUNDED BATCH: it returns when its work budget is spent and "
+                + "reports complete=false with a resume_from token. Pass that token back unaltered to continue, and "
+                + "drive the pass until complete=true. TWO FLAGS GOVERN HOW TO READ THE FINDING LIST. complete says "
+                + "how far the batch got; verdict_complete says whether it could judge what it reached. The pass also "
+                + "reports every region it could NOT establish a verdict over - a shard that declined because it was "
+                + "mid-split or already draining, a sibling chain severed part-way across the keyspace, a leaf whose "
+                + "declared bounds make reachability undecidable - and a region that was not judged contributes zero "
+                + "findings by construction. An empty finding list is a clean bill of health that rules this defect "
+                + "out as the cause of an unbounded WAL ONLY when complete=true AND verdict_complete=true. On a "
+                + "partial batch it says merely that the part of the tree this batch reached was clean; when "
+                + "verdict_complete=false the answer is 'this could not be established', not 'there is nothing "
+                + "here'. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
                 "Preview a WAL partition move",
                 "Computes a read-only preview of moving a WAL partition to a target storage provider key: the offset "
@@ -298,6 +326,26 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
         if (enableLifecycle)
         {
             // ----- Tree lifecycle and registry config (destructive) -----
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_repair",
+                "Repair a tree's orphaned leaves",
+                "Repairs a tree by unsplicing every descent-unreachable leaf whose keys were all shown to be "
+                + "readable elsewhere, releasing the write-ahead-log materialiser pin that was holding the trim "
+                + "floor down and letting the WAL trim and compact again. An irreversible structural change to the "
+                + "tree. Itself fail-closed per leaf: a leaf is unspliced only when every key it holds was verified "
+                + "readable by descent, and any leaf that cannot be shown safe is left exactly as it was and "
+                + "reported as a refusal. THE SAFE LOOP IS: audit, then repair driven to completion, then RE-AUDIT. "
+                + "Run lattice_treeadmin_orphaned_leaves_audit first - it reaches its verdict "
+                + "with the same code, so it reports in advance what this verb would do. ONE CALL IS ONE BOUNDED "
+                + "BATCH: it returns when its work budget is spent and reports complete=false with a resume_from "
+                + "token; pass that token back unaltered until complete=true, then re-audit to confirm the tree is "
+                + "clean. IF YOU SEE A TIMEOUT OR ANY TRANSPORT ERROR, THE RETURN VALUE IS NOT AUTHORITATIVE AND ITS "
+                + "ABSENCE IS NOT EVIDENCE THAT NOTHING HAPPENED - the reply may have been lost after the repair "
+                + "landed. Do not guess: run the audit, which mutates nothing, and let it establish the true state. "
+                + "Re-running the repair is safe and cannot double-repair (a removed leaf is gone from the chain and "
+                + "a refused one is refused again on the same evidence), but the audit is the source of truth, never "
+                + "this verb's own return. Rejected for a reserved "
+                + "system tree id. Requires whole-tree lifecycle authority, which routine admin authority does not "
+                + "confer. Lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.CreateTreeAsync, "lattice_treeadmin_tree_create",
                 "Explicitly create a tree",
                 "Explicitly creates (registers) a tree with an optional initial structural sizing (shard count, "

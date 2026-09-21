@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
@@ -16,14 +17,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class LatticeCursorGrain
 {
     /// <summary>
-    /// In-memory marker that tracks whether the WAL retention pin
-    /// gauge has been incremented for this activation. Pin reports
-    /// happen on every <c>Next*Async</c> page (slide semantics), so
-    /// the bookkeeping flag prevents double-increments. Reset on
-    /// activation; the first successful report on a reactivated
-    /// cursor will re-increment the gauge.
+    /// Per-silo census of live snapshot WAL retention pins, and the source of
+    /// the <see cref="LatticeMetrics.SnapshotPinsGaugeName"/> observable gauge.
+    /// <see langword="null"/> on a host that did not register one; the pin
+    /// itself is unaffected, only its metering.
     /// </summary>
-    private bool _snapshotPinGaugeHeld;
+    private SnapshotPinCensus? SnapshotPins => services.GetService<SnapshotPinCensus>();
 
     /// <summary>
     /// Per-activation cache of the pinned shard map's owned-slot sets,
@@ -172,13 +171,12 @@ internal sealed partial class LatticeCursorGrain
                 SnapshotConsumerId,
                 pinHlc,
                 blockedAtHlc: pinHlc > HybridLogicalClock.Zero ? pinHlc : null);
-            if (!_snapshotPinGaugeHeld)
-            {
-                LatticeMetrics.SnapshotPinCount.Add(1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-                    LatticeTenantLabel.ForTree(state.State.TreeId));
-                _snapshotPinGaugeHeld = true;
-            }
+            // The registry now holds this cursor's pin, so assert its
+            // membership in the census the gauge reports from. Keyed by the
+            // consumer id (stable across activations), not by an
+            // activation-lifetime flag, so a re-report from a reactivated
+            // cursor is idempotent and cannot inflate the series.
+            SnapshotPins?.MarkHeld(state.State.TreeId, SnapshotConsumerId);
         }
         catch (Exception ex)
         {
@@ -202,13 +200,12 @@ internal sealed partial class LatticeCursorGrain
         try
         {
             await registry.UnregisterAsync(state.State.TreeId, SnapshotConsumerId);
-            if (_snapshotPinGaugeHeld)
-            {
-                LatticeMetrics.SnapshotPinCount.Add(-1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-                    LatticeTenantLabel.ForTree(state.State.TreeId));
-                _snapshotPinGaugeHeld = false;
-            }
+            // The pin is out of the registry, so drop it from the census. This
+            // is not a compensating write: if it is lost - the activation dies
+            // between the two statements, or another silo's registry still
+            // holds the entry - the next WAL GC pass re-derives the set from
+            // the registry and the series corrects itself.
+            SnapshotPins?.MarkReleased(state.State.TreeId, SnapshotConsumerId);
         }
         catch (Exception ex)
         {

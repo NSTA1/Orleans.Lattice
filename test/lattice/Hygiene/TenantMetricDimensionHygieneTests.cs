@@ -48,6 +48,10 @@ public sealed class TenantMetricDimensionHygieneTests
         // sharing the hot path's activation cache.
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "LeafAccessMetricTags()", false),
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "tags", false),
+        // (kind, tree, tenant) built per emission on the coordinator phase-tick
+        // failure counter. Built per call rather than cached because the tree id is
+        // a derived-class hook that may only become resolvable after activation.
+        ("src/lattice/BPlusTree/Grains/CoordinatorGrain.cs", "PhaseTickFailureTags()", false),
         // (tree, shard, tenant) built once per replay.
         ("src/lattice/BPlusTree/Grains/SnapshotLeafGrain.cs", "tags", false),
         // (tree, state, previous_state, tenant [, partition][, shard]) built per transition.
@@ -96,9 +100,21 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   caller-chosen name, and an insecure-channel warning is keyed by peer and
     ///   transport; neither carries a tree.</item>
     ///   <item><b>Platform tooling</b> - the repository-context MCP surface meters
-    ///   its own usage, its own retrieval readiness, and which plane its retrieval
-    ///   was served from, all of which are properties of the operator-facing host
-    ///   process rather than of any tenant's traffic.</item>
+    ///   its own usage, its own retrieval readiness, which plane its retrieval
+    ///   was served from, and which arm of an indexing pass faulted, all of which
+    ///   are properties of the operator-facing host process rather than of any
+    ///   tenant's traffic.</item>
+    ///   <item><b>Grain-call observation</b> - the outstanding-call depth and
+    ///   call duration recorded per target grain type describe contention on a
+    ///   shared activation and on this silo's scheduler. The quantity is the
+    ///   aggregate arrival process against one activation, which no single
+    ///   tenant owns; the filter additionally observes grain types outside the
+    ///   lattice, for which no tree - and therefore no tenant - is derivable at
+    ///   all. Deriving a tenant from the target grain key would attribute a
+    ///   shared queue to whichever tenant's call happened to arrive last, which
+    ///   is not a fact about that tenant. A tenant-scoped consumer asking
+    ///   whether its own tree is slow is served by the tree-tagged data-plane
+    ///   instruments instead.</item>
     /// </list>
     /// Adding an instrument here is a deliberate, reviewable act: it declares the
     /// series invisible to every tenant-scoped telemetry query.
@@ -125,6 +141,8 @@ public sealed class TenantMetricDimensionHygieneTests
         "DirectorySearchHits",
         "DirectorySearchMisses",
         "Entries",
+        "GrainCallDuration",
+        "GrainCallOutstandingDepth",
         "GrainsEnrolled",
         "IncrementalLagAge",
         "IncrementalLagEntries",
@@ -138,6 +156,18 @@ public sealed class TenantMetricDimensionHygieneTests
         "ProjectionDuration",
         "ProviderRetryAttempts",
         "ProviderRetryShortCircuited",
+        // Caller-side admission wait on the registry fan-in gate, and the three
+        // gate-state histograms beside it. Sentinels for the same reason as the
+        // two RegistryCall* instruments they sit beside: the registry is cluster
+        // infrastructure addressed by every tree, so a permit count, a queue
+        // depth, a batch size, or a wait measured at the gate belongs to no
+        // single tenant's work.
+        "RegistryAdmissionBatchSize",
+        "RegistryAdmissionInFlight",
+        "RegistryAdmissionQueueDepth",
+        "RegistryAdmissionWait",
+        "RegistryCallDuration",
+        "RegistryCallInFlight",
         "ResolutionCacheHits",
         "ResolutionCacheMisses",
         "RestoreDuration",
@@ -150,6 +180,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "SagaParticipantCommits",
         "SagaParticipantVotes",
         "SagaPhaseDuration",
+        "SchedulerFailures",
         "SchedulerOverruns",
         "SchedulerSkipped",
         "SnapshotRebuilds",
@@ -157,6 +188,65 @@ public sealed class TenantMetricDimensionHygieneTests
         "SweepsCounter",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
+        // orleans.lattice.wal.gc.scheduler.* - the six liveness instruments on the
+        // per-silo WAL GC scheduler (issue #3060). The scheduler is ONE hosted
+        // BackgroundService per silo, running one loop that sweeps every tree
+        // sequentially within a single pass. Whether that loop is alive, where it
+        // is parked, how long its pass took, how it terminated, and what its tree
+        // enumeration returned are all properties of THE SILO'S SCHEDULER rather
+        // than of any tenant: there is exactly one loop, so when it stops it stops
+        // for every tenant at the same instant. A tenant tag would partition a
+        // series that has one value, and worse, it would attribute a silo-wide
+        // stall to whichever tenant's tree happened to be in flight when the loop
+        // died, which is not a fact about that tenant. The per-tree work the loop
+        // performs is tenant-labelled elsewhere: a consumer asking whether its own
+        // tree was collected is served by orleans.lattice.wal.gc.passes and the
+        // tree-tagged wal.gc.* family. These six answer the strictly prior
+        // question, "is the sweeper running at all", which has no tenant.
+        "WalGcSchedulerEnumerations",
+        "WalGcSchedulerPassDuration",
+        "WalGcSchedulerPassesStarted",
+        "WalGcSchedulerTerminations",
+        "WalGcSchedulerWait",
+        // orleans.lattice.wal.replay.permit_adaptations - memory-adaptive backpressure
+        // on the per-silo WAL replay concurrency gate (issue #2781). The gate is a
+        // single process-wide SemaphoreSlim shared by every leaf of every tree, so
+        // its admitted concurrency is a property of THIS SILO'S HEAP and cannot vary
+        // by tenant: the permit a replay is waiting for is the same permit whoever
+        // else is waiting. A tenant tag would partition a series that has one value,
+        // and worse, it would attribute a shared reduction to whichever tenant's
+        // replay happened to fail last - which is not a fact about that tenant. The
+        // instrument is also deliberately untagged by tree for the same reason, so a
+        // tenant dimension could not be derived here even if one were wanted. A
+        // tenant-scoped consumer asking whether its own tree is failing to activate
+        // is served by leaf.activation_failures, which is tree-tagged and tenant-
+        // labelled.
+        // orleans.lattice.wal.gc.pass.reach - the scheduler-wide half of the WAL GC
+        // reachability layer (issue #3075). A pass spans the ENTIRE tree registry, so
+        // it is not an event that belongs to any one tenant, and two of the exits the
+        // layer must cover are the catch arms of the registry enumeration itself -
+        // obtaining the tree list is the operation that failed there, so neither a tree
+        // id nor the tenant it would resolve to exists at that point, and never can.
+        // Deriving a tenant here would mean inventing an attribution rather than
+        // reporting one. The per-tree half of the layer, wal.gc.tree.reach, IS
+        // tenant-derived exactly like its siblings wal.gc.passes and wal.gc.interval;
+        // splitting the two apart is what lets each carry one honest attribution rule
+        // instead of one instrument splitting its series across both.
+        "WalGcPassReach",
+        "WalReplayPermitAdaptations",
+        // wal.gc.scheduler_backoff / wal.gc.scheduler_consecutive_faults - the
+        // SCHEDULER-WIDE backoff level and consecutive-fault streak (issue #3064).
+        // Deliberately not tree-tagged, and no tenant is derivable: both describe one
+        // silo's WAL GC service loop before it has any tree to speak of. The faulted
+        // arm is recorded on a pass whose registry enumeration threw, so the scheduler
+        // does not know which trees exist, let alone which tenants own them; the empty
+        // arm is recorded on a silo that has none. Deriving a tenant would attribute a
+        // silo-wide outage to whichever tenant's tree the scheduler happened to read
+        // last, which is not a fact about that tenant. A tenant-scoped consumer asking
+        // whether its own tree is being collected is served by wal.gc.passes and
+        // wal.gc.interval, both of which are tree-tagged and tenant-labelled.
+        "WalGcSchedulerBackoff",
+        "WalGcSchedulerConsecutiveFaults",
         "WriteFailures",
         // repocontext.retrieval.ann.search - every approximate-plane outcome, tagged by
         // serving state (bootstrapping / exhaustive / approximate). Which plane answered
@@ -167,7 +257,46 @@ public sealed class TenantMetricDimensionHygieneTests
         // point of the instrument is that its state tag is the dimension that carries
         // the signal.
         "_annSearches",
+        // repocontext.retrieval.exact_gather.faults - the fault class that ended an
+        // exact-scan gather, tagged by fault (issue #2749). The exact-scan fallback and
+        // the breaker it feeds are per-HOST: one scan budget, one breaker table, one
+        // probe schedule, shared by every caller regardless of tenant. A tenant tag
+        // would partition a series whose whole purpose is to say whether this process
+        // is shedding load, and the fault tag is the dimension that carries the signal.
+        "_exactGatherFaults",
+        // repocontext.retrieval.duration and repocontext.retrieval.stage.duration -
+        // end-to-end and per-stage retrieval latency, tagged by tool, stage, and the
+        // retrieval path that answered (issue #2624). Latency here is a property of the
+        // HOST PROCESS, not of any tenant: one embedder, one vector plane, and one
+        // store of record serve every caller, so the cost of an embed hop or an index
+        // scan is identical whoever asked for it. A tenant tag would partition a series
+        // that cannot vary by tenant while destroying the one comparison the instrument
+        // exists to support - which stage of which path is slow - because the tool,
+        // stage, and path dimensions are what carry the signal.
+        "_duration",
+        "_stageDuration",
         "_callsCounter",
+        // repocontext.bootstrap.pass_arm_faults - indexing-pass arm faults, tagged by
+        // arm and fault kind. An indexing pass is a single HOST-PROCESS background loop
+        // and the repocontext trees it reconciles are process-wide, shared across every
+        // registered repository, so which arm faulted is a property of this host rather
+        // than of any tenant's traffic. Same reason as _annSweeps. Uniformly the
+        // sentinel by necessity as well as by doctrine: a stalled scan names a tree but
+        // the other faults name none, and an instrument may not mix the two.
+        "_passArmFaults",
+        // repocontext.bootstrap.phase_cancelled and
+        // repocontext.bootstrap.phase_cancelled.discarded_time - indexing runs
+        // cancelled mid-phase and the run time that cancellation discarded, tagged
+        // by phase (issue #2705). Same HOST-PROCESS background loop as
+        // _passArmFaults above, and unscopable for the same reason: the pass
+        // reconciles process-wide repocontext trees shared across every registered
+        // repository, so a cancelled run is a property of this host rather than of
+        // any tenant's traffic. The phase tag is the dimension that carries the
+        // signal, and both series are zero-primed per cancellable phase so a zero
+        // is a measured absence of discarded work rather than an instrument that
+        // never fired.
+        "_phaseCancellations",
+        "_phaseCancelledDiscardedMs",
         // repocontext.retrieval.ready_seconds - time from host start to the retrieval
         // plane first serving. Readiness is a property of the HOST PROCESS, not of any
         // tenant's data: the box either can serve semantic retrieval or it cannot, so
@@ -183,6 +312,131 @@ public sealed class TenantMetricDimensionHygieneTests
         // would partition a series that cannot vary by tenant. The outcome tag is the
         // dimension that carries the signal.
         "_annSweeps",
+        // repocontext.ann.build.corpus - what the approximate-index build coordinator
+        // actually read, partitioned by coverage (nonempty / unrestricted / filtered /
+        // denied / unknown), and repocontext.ann.build.terminal_denials - builds
+        // withheld because the corpus read was refused outright. Both meter the same
+        // HOST-PROCESS build loop as _annSweeps and are unscopable for the same reason:
+        // one build covers every registered repository at once, and the coverage the
+        // read was granted is a property of how this host resolved its own run
+        // authority, not of any tenant's traffic. The coverage tag is the dimension
+        // that carries the signal, and the nonempty arm is what makes a zero on the
+        // denied arm a measured absence rather than a plane that never ran.
+        "_corpusCoverage",
+        "_terminalDenials",
+        // repocontext.ann.build.slice - approximate-index build steps partitioned by
+        // what the step achieved (advanced / starved / idle / faulted), issues #2651
+        // and #2739. It is the
+        // one series on this plane that fires BEFORE a build reaches Ready, which is
+        // what makes "the coordinator is stepping and consuming nothing" separable
+        // from "the coordinator never stepped"; every other instrument here is
+        // terminal, so the whole interval between an armed sweep and Ready was
+        // previously dark and those two faults were byte-identical in telemetry.
+        // Unscopable for the same reason as _partitioning below rather than as
+        // _annSweeps: a step is emitted per PLANE, and a plane is keyed by repository
+        // and embedding space, which is not a lattice tenant. Every repository's
+        // vectors share one tree (RepoContextTrees.VectorIndex), separated only by
+        // key prefix, so LatticeTenantLabel.ForTree would resolve to one constant for
+        // every plane on the host - one series, no discrimination - while falsely
+        // implying a tenant attribution. The progress tag carries the signal, and all
+        // five arms are pre-minted so a zero on the starved arm is a measured absence
+        // rather than an arm that never existed.
+        "_slices",
+        // repocontext.ann.sweep.arming - the sweep's arming calls partitioned by
+        // result (armed / deferred / faulted), counted once per REPOSITORY
+        // VISITED rather than once per sweep, issue #2751. Unscopable for exactly the
+        // same reason as _annSweeps, which it sits beside: it is emitted from the same
+        // single host-process background loop, and the repositories it iterates are
+        // registered at runtime rather than owned by a tenant. It is a separate
+        // instrument from _annSweeps rather than more arms on it because the two
+        // partition different populations - sweeps there, repository visits here - so
+        // neither decomposes the other. That separation is the point: a sweep that
+        // armed one of ten and deferred nine was previously indistinguishable from one
+        // that armed ten of ten, and a sweep on which every coordinator deferred was
+        // counted as 'empty', indistinguishable from an empty store. All four arms are
+        // pre-minted so a zero on the deferred arm is a measured absence.
+        "_armingAttempts",
+        // repocontext.ann.partitioning - whether each approximate plane holds a
+        // trained partitioning, and repocontext.ann.repartition - the outcome of a
+        // threshold-crossing training, issue #2706. Both are the sentinel for a
+        // DIFFERENT reason from _annSweeps above, and the distinction is worth
+        // keeping: these are emitted per PLANE, not from the host-process sweep
+        // loop, so "one iteration covers every repository" is not the argument.
+        // The argument is that a plane has no tenant to attribute it to. A plane is
+        // keyed by repository and embedding space, and a repo-context repository is
+        // not a lattice tenant; every repository's vectors live in ONE shared tree
+        // (RepoContextTrees.VectorIndex), separated only by key prefix, and
+        // CreateStore ignores its repoId and returns that single constant tree. So
+        // LatticeTenantLabel.ForTree would resolve to the same constant for every
+        // plane on the host - one series, no discrimination - while falsely
+        // implying a tenant attribution for a tree that every repository shares.
+        // The state and outcome tags are the dimensions that carry the signal.
+        "_partitioning",
+        "_repartitions",
+        // repocontext.ann.index.load - attempts to load the durable approximate
+        // index into memory, partitioned by whether the attempt started fresh,
+        // resumed progress banked by an earlier faulted attempt, or faulted itself,
+        // issue #2953. Sentinel for exactly the reason _partitioning is: this is
+        // emitted per PLANE, and a plane has no tenant to attribute it to. The load
+        // walks the identifier key map inside RepoContextTrees.VectorIndex, the
+        // single shared tree every repository's vectors live in, separated only by
+        // key prefix - so LatticeTenantLabel.ForTree would resolve to the same
+        // constant for every plane on the host, producing one undiscriminating
+        // series while falsely implying a tenant attribution for a shared tree. The
+        // outcome tag is the dimension that carries the signal, and all three of its
+        // arms are pre-minted so a zero on the resumed arm is a measured absence
+        // rather than a missing series.
+        "_loads",
+        // repocontext.bootstrap.memory_marker_scan - walks of the embedded-memory-key
+        // marker range, partitioned by whether the walk exhausted the range in one pass,
+        // exhausted it after consuming progress banked by an earlier faulted pass, or
+        // banked a page fault to resume from next pass, issue #2071. Sentinel for the
+        // same reason as _loads, which it sits beside: the marker range lives in the one
+        // shared vector-index tree, so LatticeTenantLabel.ForTree would resolve to the
+        // same constant for every repository on the host, yielding a single
+        // undiscriminating series that nevertheless reads as a tenant attribution. The
+        // outcome tag carries the whole signal, and all three arms are pre-minted so the
+        // all-zero reading means the scan was never reached rather than that nothing was
+        // registered - a distinction this instrument exists to make.
+        "_markerScans",
+        // repocontext.bootstrap.coverage_probe - bootstrap coverage resolutions on the
+        // three ingestion arms that stand down when the store's read-path access gate
+        // prunes their membership probe, partitioned by arm and by outcome, issue #2964.
+        // Sentinel for the same reason as _markerScans, which it sits beside: all three
+        // probes read the one shared vector-membership tree, so LatticeTenantLabel.ForTree
+        // would resolve to the same constant for every repository on the host, yielding a
+        // single undiscriminating series that nevertheless reads as a tenant attribution.
+        // The arm and outcome tags carry the whole signal, and all nine pairs are
+        // pre-minted so that an arm reading zero and an arm being absent are different
+        // observations - which is the entire point of an instrument whose subject is a
+        // stand-down that is otherwise silent by design.
+        "_probes",
+        // lattice.repocontext.memory.restore - memory-archive restore attempts
+        // partitioned by outcome (restored / partial / nothing_to_restore /
+        // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS
+        // at startup against the process-wide repo-context memory tree, which is shared
+        // across every registered repository: one attempt covers them all and reaches
+        // one outcome for all of them together, so a tenant tag would partition a series
+        // that cannot vary by tenant. The outcome tag is the dimension that carries the
+        // signal, and every arm is pre-minted at zero so that a zero on the partial arm
+        // is a measured absence rather than a restore path that never ran - the same
+        // reason the nonempty arm exists on _corpusCoverage.
+        "_restores",
+        // repocontext.bootstrap.symbol_walk - passes of the symbol arm's range walk,
+        // partitioned by whether the pass closed a circuit outright, closed one after
+        // consuming progress banked by an earlier faulted pass, or banked a page fault
+        // to resume from next pass, issue #2953. Sentinel for the same reason as
+        // _markerScans: every repository's symbols live in the one shared symbol tree,
+        // separated only by key prefix, so LatticeTenantLabel.ForTree would resolve to
+        // the same constant for every repository on the host - one undiscriminating
+        // series that nevertheless reads as a tenant attribution. The outcome tag
+        // carries the whole signal, and all three arms are pre-minted so that a zero on
+        // the resumed arm is a measured absence rather than a missing series. That
+        // distinction is the instrument's entire purpose: at the tree, a walk that
+        // resumed banked progress is byte-identical to one that silently restarted from
+        // the head, so without a discriminator the re-drive this instrument exists to
+        // observe would be unfalsifiable in the deployment it was found in.
+        "_symbolWalks",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",

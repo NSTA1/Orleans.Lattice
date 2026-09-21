@@ -88,6 +88,32 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   cross-solution non-chaos sweep on every PR, so repeating it locally buys only
   wall-clock; widen the local scope only when the blast radius is genuinely
   unpredictable.
+- **The full non-chaos sweep is CI's job, not the local dev loop's.** CI shards
+  it across parallel legs on every PR, so running the whole suite locally
+  re-proves what the required check is about to prove anyway, at hours of
+  serial wall-clock, and holds the working tree for all of them. Raise the PR
+  and read the legs; when one goes red, run **that leg's filter** - the CI log
+  prints it - rather than the suite that contains it. The carve-out is narrow
+  and is the master's, not a licence to widen by default: a deliberately
+  cross-cutting change to the core public surface whose blast radius you
+  genuinely cannot predict, and even then prefer the specific downstream test
+  projects you expect to be affected.
+- **Exception, and it is not optional: the repository-wide gates.** Some metric
+  gates scan every package irrespective of which test project they sit in, so a
+  per-package pre-PR scope is structurally blind to them - the package suite
+  passes and the gate your change broke never ran. Any change that adds or
+  removes a **metric instrument** in **any** package must therefore also run
+  them, whichever package it touched, using the checked-in runner:
+  `pwsh tools/Invoke-RepositoryWideGates.ps1`. Never hand-compose a
+  `dotnet test --filter` for them - a filter that matches nothing exits 0, so a
+  gate that never ran is byte-identical to a gate that passed. The runner
+  derives its run list from the gate table in
+  `.github/instructions/testing.instructions.md`, runs each gate as its own
+  filter, and fails any gate that executed zero tests. Which fixtures make up
+  that population, how many there are, which test projects they live in, and
+  the per-instrument cost they impose are stated in that file and enforced
+  against the tree by a test - deliberately not restated here, so this file
+  cannot drift from them.
 - **The single master for all testing rules** - the tiered run strategy, the
   exact per-tier filters, the pre-PR run scope, the categorization conventions,
   and the repository hygiene gates - is

@@ -438,6 +438,10 @@ public static class TypedLatticeExtensions
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(serializer);
+        // raw-enumeration-ok: this IS the typed projection of the raw primitive,
+        // hidden from IntelliSense and paired with a resilient ScanEntriesAsync<T>
+        // sibling. Wrapping it here would erase the distinction the pair exists
+        // to offer.
         await foreach (var entry in lattice.EntriesAsync(startInclusive, endExclusive, reverse, prefetch, cancellationToken))
         {
             yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
@@ -453,6 +457,8 @@ public static class TypedLatticeExtensions
         bool reverse = false,
         bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
+        // raw-enumeration-ok: default-serializer forward onto the raw typed
+        // overload above, which carries its own justification.
         lattice.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
 
     /// <summary>
@@ -571,6 +577,8 @@ public static class TypedLatticeExtensions
         ArgumentNullException.ThrowIfNull(predicate);
         ArgumentNullException.ThrowIfNull(serializer);
         var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        // raw-enumeration-ok: typed projection of the raw primitive; the
+        // resilient sibling is ScanKeysAsync<T>.
         await foreach (var key in lattice.KeysWherePredicateAsync(ir, startInclusive, endExclusive, reverse, prefetch, cancellationToken).ConfigureAwait(false))
             yield return key;
     }
@@ -585,6 +593,8 @@ public static class TypedLatticeExtensions
         bool reverse = false,
         bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
+        // raw-enumeration-ok: default-serializer forward onto the raw typed
+        // predicate overload above, which carries its own justification.
         lattice.KeysAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
 
     /// <summary>
@@ -647,6 +657,8 @@ public static class TypedLatticeExtensions
         ArgumentNullException.ThrowIfNull(predicate);
         ArgumentNullException.ThrowIfNull(serializer);
         var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        // raw-enumeration-ok: typed projection of the raw primitive; the
+        // resilient sibling is ScanEntriesAsync<T>.
         await foreach (var entry in lattice.EntriesWherePredicateAsync(ir, startInclusive, endExclusive, reverse, prefetch, cancellationToken).ConfigureAwait(false))
             yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
     }
@@ -661,6 +673,8 @@ public static class TypedLatticeExtensions
         bool reverse = false,
         bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
+        // raw-enumeration-ok: default-serializer forward onto the raw typed
+        // predicate overload above, which carries its own justification.
         lattice.EntriesAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
 
     /// <summary>
@@ -726,6 +740,8 @@ public static class TypedLatticeExtensions
     {
         ArgumentNullException.ThrowIfNull(serializer);
         var ir = predicate is null ? (LatticePredicateNode?)null : LatticePredicatePushdown.Compile(predicate, serializer);
+        // raw-enumeration-ok: typed projection of the raw primitive; the
+        // resilient sibling is ScanValuesAsync<T>.
         var entries = ir is null
             ? lattice.EntriesAsync(startInclusive, endExclusive, reverse, prefetch, cancellationToken)
             : lattice.EntriesWherePredicateAsync(ir.Value, startInclusive, endExclusive, reverse, prefetch, cancellationToken);

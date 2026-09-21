@@ -146,14 +146,19 @@ public sealed class WalGcTrimFloorModel : ICoyoteModel
 
             // Drive the real production predicate: retention (TTL), causal-stable,
             // and blocked-floor clauses are inactive here so the model isolates
-            // the cursor floor the chaos suite pins.
+            // the cursor floor the chaos suite pins. The offset admission is null
+            // for the same reason, which is also the fail-closed arm of #3172:
+            // with no durable offset floor the entitlement rule must be exactly
+            // its pre-#3172 HLC-only self, and this model asserts that it is.
             if (!Orleans.Lattice.WalGcTrimCore.IsEntryEligible(
                     entryTimestamp,
                     entryVectorClock: null,
+                    offset,
                     minCursor,
                     ttlCeiling: null,
                     causalStable: null,
-                    blockedFloor: null))
+                    blockedFloor: null,
+                    offsetAdmission: null))
             {
                 break;
             }

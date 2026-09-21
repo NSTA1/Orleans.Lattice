@@ -124,7 +124,12 @@ internal sealed class LatticeView(
     {
         using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
-        await foreach (var key in tree.KeysAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
+        // ScanKeysAsync, not KeysAsync: the tree behind a view is a
+        // [StatelessWorker] LatticeGrain, whose per-message worker selection can
+        // land a MoveNext on a sibling activation that has no record of the
+        // enumerator. The wrapper reopens from the successor of the last yielded
+        // key, so this projection stays gapless and duplicate-free.
+        await foreach (var key in tree.ScanKeysAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
         {
             yield return key;
         }
@@ -138,7 +143,8 @@ internal sealed class LatticeView(
     {
         using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
-        await foreach (var entry in tree.EntriesAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
+        // ScanEntriesAsync, not EntriesAsync; see KeysAsync above.
+        await foreach (var entry in tree.ScanEntriesAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
         {
             yield return entry;
         }

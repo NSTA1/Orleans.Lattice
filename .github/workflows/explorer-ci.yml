@@ -24,6 +24,32 @@ on:
       - 'test/lattice.explorer/**'
       - '.github/workflows/explorer-ci.yml'
 
+  # Integration-branch lane, mirroring ci.yml's push trigger (#2972). A pull
+  # request INTO a bucket was gated; the bucket itself was not, so its combined
+  # state went unevaluated until the epic's single pull request into `main`.
+  #
+  # ADVISORY, AND MUST NEVER BECOME BRANCH PROTECTION - the same constraint
+  # ci.yml states at length. A bucket exists so members merge in any order
+  # without invalidating each other.
+  #
+  # DISCLOSED LIMIT, because it is narrower than it looks: GitHub evaluates a
+  # `paths:` filter on a push against the PUSH diff, which on a bucket is the
+  # one member that just merged - not the bucket against `main`. So this lane
+  # runs on a push only when THAT merge touched Explorer files, and a bucket
+  # carrying an Explorer change from an earlier member will not re-run it when
+  # a later unrelated member lands. That is weaker than ci.yml's push lane,
+  # which bypasses diff-scoping entirely. It is accepted rather than worked
+  # around: the alternative is running a Windows MAUI build on every bucket
+  # merge, and this lane's value on the integration branch is the Windows head
+  # that ubuntu cannot compile, which is worth having on the merges that
+  # actually touch it.
+  push:
+    branches: ['*/epic/**']
+    paths:
+      - 'src/lattice.explorer/**'
+      - 'test/lattice.explorer/**'
+      - '.github/workflows/explorer-ci.yml'
+
 permissions:
   contents: read
 

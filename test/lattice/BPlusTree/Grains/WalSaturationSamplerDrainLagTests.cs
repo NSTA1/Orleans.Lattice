@@ -4,6 +4,9 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
+using Orleans.Lattice.Tests.Fakes;
+using System.Diagnostics.Metrics;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -14,10 +17,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// that <see cref="WalSaturationSampler"/> computes live every tick from the
 /// in-memory WAL head wall clock
 /// (<see cref="WalCommitLogWriter._walHeadWallClockTicks"/>) minus the slowest
-/// in-memory materialiser cursor (the <see cref="IWalCursorRegistry"/> min) -
+/// fresh in-memory materialiser cursor (the
+/// <see cref="IWalCursorRegistry.GetMinCursorForDrainLagAsync(string, long, CancellationToken)"/> min) -
 /// the direct leaf-materialiser drain-lag back-pressure surface (issue #1030).
-/// The lag is recomputed fresh each tick (no GC dependency, no staleness
-/// window), and a sustained run drives
+/// The lag is recomputed fresh each tick (no GC dependency), and a sustained run drives
 /// <see cref="WalSaturationState.Throttled"/> - a pure back-off - rather than
 /// Saturated, so it never engages the writer admission gate's fast-fail.
 /// </summary>
@@ -38,6 +41,8 @@ public class WalSaturationSamplerDrainLagTests
         WalCommitLogWriter._flushLatencyTripCounts.Clear();
         WalCommitLogWriter._walHeadWallClockTicks.Clear();
         _cursors = Substitute.For<IWalCursorRegistry>();
+        _cursors.SnapshotAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(Array.Empty<WalCursorSnapshot>()));
         _headTicks = DateTimeOffset.UtcNow.UtcTicks;
         _treeId = $"tree-drain-lag-{Interlocked.Increment(ref _treeIdSeed)}";
     }
@@ -54,6 +59,16 @@ public class WalSaturationSamplerDrainLagTests
 
         options.WalSaturationRecoveryWindow = TimeSpan.Zero;
 
+        return CreateSampler(options, TimeProvider.System, _cursors, signal, dispatcher);
+    }
+
+    private static WalSaturationSampler CreateSampler(
+        LatticeOptions options,
+        TimeProvider time,
+        IWalCursorRegistry cursors,
+        WalSaturationSignal signal,
+        WalSaturationObserverDispatcher dispatcher)
+    {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(options);
 
@@ -62,7 +77,8 @@ public class WalSaturationSamplerDrainLagTests
             dispatcher,
             monitor,
             NullLogger<WalSaturationSampler>.Instance,
-            _cursors);
+            time,
+            cursors);
     }
 
     // Drives a fresh per-tick drain-lag of exactly <paramref name="lag"/> for the
@@ -74,7 +90,7 @@ public class WalSaturationSamplerDrainLagTests
         var t = tree ?? _treeId;
         WalCommitLogWriter._walHeadWallClockTicks[t] = _headTicks;
         var frontier = new HybridLogicalClock { WallClockTicks = _headTicks - lag.Ticks, Counter = 0 };
-        _cursors.GetMinCursorAsync(t, Arg.Any<CancellationToken>())
+        _cursors.GetMinCursorForDrainLagAsync(t, Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<HybridLogicalClock?>(frontier));
     }
 
@@ -244,7 +260,7 @@ public class WalSaturationSamplerDrainLagTests
         // branch): the registry returns null. We cannot measure a head-relative
         // lag, so the block-pin contract requires zero lag - never a trip.
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = _headTicks;
-        _cursors.GetMinCursorAsync(_treeId, Arg.Any<CancellationToken>())
+        _cursors.GetMinCursorForDrainLagAsync(_treeId, Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<HybridLogicalClock?>(null));
 
         for (var i = 0; i < 5; i++)
@@ -254,5 +270,306 @@ public class WalSaturationSamplerDrainLagTests
 
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
             "a never-checkpointed leaf (null frontier) must never pin the regime, even with an advancing head");
+    }
+
+    private static MeterListener ListenForDrainLag(
+        List<(double Value, string? Tree)> sink)
+        => MeterListening.StartForInstrument(
+            LatticeMetrics.MaterialiserDrainLag,
+            listener => listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+            {
+                string? tree = null;
+                foreach (var tag in tags)
+                {
+                    if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal))
+                    {
+                        tree = tag.Value as string;
+                    }
+                }
+
+                lock (sink)
+                {
+                    sink.Add((value, tree));
+                }
+            }));
+
+    [Test]
+    public async Task All_consumers_cold_records_zero_lag_and_does_not_trip()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var observedAt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(10);
+        var headTicks = observedAt.UtcTicks;
+        await registry.ReportCursorAsync(
+            _treeId,
+            "cold-leaf",
+            new HybridLogicalClock { WallClockTicks = headTicks - TimeSpan.FromHours(1).Ticks, Counter = 0 },
+            CancellationToken.None);
+
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationRecoveryWindow = TimeSpan.Zero,
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+                WalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5),
+            },
+            new VirtualTimeProvider(observedAt),
+            registry,
+            signal,
+            dispatcher);
+        var sink = new List<(double Value, string? Tree)>();
+        using var listener = ListenForDrainLag(sink);
+        WalCommitLogWriter._walHeadWallClockTicks[_treeId] = headTicks;
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+                "an all-cold lag-plane frontier must read as zero lag, not as a permanent throttle");
+            Assert.That(sink.Where(m => m.Tree == _treeId).Select(m => m.Value), Is.EqualTo(new[] { 0d }),
+                "the histogram must record the checked tree at zero so the recovery path has observable evidence");
+        });
+    }
+
+    [Test]
+    public async Task Zero_freshness_restores_all_consumers_behaviour()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var observedAt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(10);
+        var headTicks = observedAt.UtcTicks;
+        await registry.ReportCursorAsync(
+            _treeId,
+            "cold-leaf",
+            new HybridLogicalClock { WallClockTicks = headTicks - TimeSpan.FromHours(1).Ticks, Counter = 0 },
+            CancellationToken.None);
+
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationRecoveryWindow = TimeSpan.Zero,
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+                WalDrainLagConsumerFreshness = TimeSpan.Zero,
+            },
+            new VirtualTimeProvider(observedAt),
+            registry,
+            signal,
+            dispatcher);
+        WalCommitLogWriter._walHeadWallClockTicks[_treeId] = headTicks;
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "zero freshness must disable cold-consumer exclusion and restore the historical all-consumers drain-lag input");
+    }
+
+    // Marks a consumer that has never reported a cursor. The registry stores
+    // HybridLogicalClock.Zero for these; the min() meet excludes them, and the
+    // lagging-consumer count must exclude them with it.
+    private static readonly TimeSpan NeverReported = TimeSpan.MinValue;
+
+    // Stubs the per-consumer cursor snapshot the sampler reads for a tree it has
+    // already found over threshold. Each consumer's cursor is placed the given
+    // amount behind the same WAL head the aggregate is measured against, so a
+    // consumer's individual lag and the tree's aggregate lag are on one clock.
+    private void SetConsumers(params (string ConsumerId, TimeSpan Lag)[] consumers)
+    {
+        var snapshot = new List<WalCursorSnapshot>(consumers.Length);
+        foreach (var (consumerId, lag) in consumers)
+        {
+            var cursor = lag == NeverReported
+                ? HybridLogicalClock.Zero
+                : new HybridLogicalClock { WallClockTicks = _headTicks - lag.Ticks, Counter = 0 };
+            snapshot.Add(new WalCursorSnapshot(consumerId, cursor, _headTicks));
+        }
+
+        _cursors.SnapshotAsync(_treeId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(snapshot));
+    }
+
+    // Listens for the lagging-consumer count. The instrument is passed as an
+    // argument so its owning type initialiser has necessarily completed before
+    // the listener starts (see Orleans.Lattice.Testing.MeterListening).
+    private static MeterListener ListenForLaggingConsumers(
+        List<(int Value, string? Tree, string? Tenant)> sink)
+        => MeterListening.StartForInstrument(
+            LatticeMetrics.MaterialiserLaggingConsumers,
+            listener => listener.SetMeasurementEventCallback<int>((_, value, tags, _) =>
+            {
+                string? tree = null;
+                string? tenant = null;
+                foreach (var tag in tags)
+                {
+                    if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal))
+                    {
+                        tree = tag.Value as string;
+                    }
+                    else if (string.Equals(tag.Key, LatticeTenantLabel.TagTenant, StringComparison.Ordinal))
+                    {
+                        tenant = tag.Value as string;
+                    }
+                }
+
+                lock (sink)
+                {
+                    sink.Add((value, tree, tenant));
+                }
+            }));
+
+    private WalSaturationSampler CreateLaggingConsumerSampler()
+        => CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+            },
+            out _);
+
+    [Test]
+    public async Task Lagging_consumer_count_is_not_recorded_for_a_tree_under_threshold()
+    {
+        var sampler = CreateLaggingConsumerSampler();
+        var sink = new List<(int Value, string? Tree, string? Tenant)>();
+        using var listener = ListenForLaggingConsumers(sink);
+
+        // The aggregate is under threshold, so the tree is not in the regime the
+        // count exists to decompose - even though a consumer behind the frontier
+        // would count if it were. This is what keeps a healthy estate free of the
+        // snapshot read that backs the instrument.
+        SetLevel(TimeSpan.FromSeconds(1));
+        SetConsumers(("leaf-a", TimeSpan.FromMinutes(9)));
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(sink.Where(m => m.Tree == _treeId), Is.Empty,
+            "a tree whose aggregate drain lag is under threshold must not emit a lagging-consumer count");
+        await _cursors.DidNotReceive().SnapshotAsync(_treeId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Lagging_consumer_count_separates_one_dormant_consumer_from_many_behind()
+    {
+        // The defect this instrument closes (issue #2444): the aggregate is a
+        // min() across consumers, so these two populations produce an identical
+        // drain-lag reading while calling for opposite responses. Both are driven
+        // through the same over-threshold aggregate here, so the only thing that
+        // differs between the assertions is the count.
+        var oneSampler = CreateLaggingConsumerSampler();
+        var oneSink = new List<(int Value, string? Tree, string? Tenant)>();
+        using (var listener = ListenForLaggingConsumers(oneSink))
+        {
+            SetLevel(TimeSpan.FromMinutes(9));
+            SetConsumers(
+                ("leaf-dormant", TimeSpan.FromMinutes(9)),
+                ("leaf-healthy-a", TimeSpan.FromSeconds(1)),
+                ("leaf-healthy-b", TimeSpan.FromSeconds(1)));
+
+            await oneSampler.SampleOnceAsync(CancellationToken.None);
+        }
+
+        Assert.That(oneSink.Where(m => m.Tree == _treeId).Select(m => m.Value), Is.EqualTo(new[] { 1 }),
+            "one consumer past the threshold behind two caught-up ones must count exactly 1");
+
+        _treeId = $"tree-drain-lag-{Interlocked.Increment(ref _treeIdSeed)}";
+        var manySampler = CreateLaggingConsumerSampler();
+        var manySink = new List<(int Value, string? Tree, string? Tenant)>();
+        using (var listener = ListenForLaggingConsumers(manySink))
+        {
+            SetLevel(TimeSpan.FromMinutes(9));
+            SetConsumers(
+                ("leaf-behind-a", TimeSpan.FromMinutes(9)),
+                ("leaf-behind-b", TimeSpan.FromMinutes(7)),
+                ("leaf-behind-c", TimeSpan.FromMinutes(6)));
+
+            await manySampler.SampleOnceAsync(CancellationToken.None);
+        }
+
+        Assert.That(manySink.Where(m => m.Tree == _treeId).Select(m => m.Value), Is.EqualTo(new[] { 3 }),
+            "three consumers past the threshold must count 3, distinguishing a broad stall from a single dormant consumer");
+    }
+
+    [Test]
+    public async Task Lagging_consumer_count_excludes_consumers_that_never_reported_a_cursor()
+    {
+        var sampler = CreateLaggingConsumerSampler();
+        var sink = new List<(int Value, string? Tree, string? Tenant)>();
+        using var listener = ListenForLaggingConsumers(sink);
+
+        // A never-reported consumer sits at HLC zero, which is arbitrarily far
+        // behind any head. It is excluded from the min() meet that produces the
+        // aggregate, so counting it here would report consumers the aggregate
+        // does not answer for - and would read as a broad stall on a tree with a
+        // single genuine laggard.
+        SetLevel(TimeSpan.FromMinutes(9));
+        SetConsumers(
+            ("leaf-behind", TimeSpan.FromMinutes(9)),
+            ("leaf-never-reported-a", NeverReported),
+            ("leaf-never-reported-b", NeverReported));
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(sink.Where(m => m.Tree == _treeId).Select(m => m.Value), Is.EqualTo(new[] { 1 }),
+            "consumers that have never reported a cursor must be excluded, exactly as they are from the min() meet");
+    }
+
+    [Test]
+    public async Task Lagging_consumer_count_is_tagged_by_tree_and_tenant_and_never_by_consumer()
+    {
+        var sampler = CreateLaggingConsumerSampler();
+        var sink = new List<(int Value, string? Tree, string? Tenant)>();
+        var tagKeys = new List<string>();
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.MaterialiserLaggingConsumers,
+            l => l.SetMeasurementEventCallback<int>((_, value, tags, _) =>
+            {
+                string? tree = null;
+                string? tenant = null;
+                foreach (var tag in tags)
+                {
+                    lock (tagKeys)
+                    {
+                        tagKeys.Add(tag.Key);
+                    }
+
+                    if (string.Equals(tag.Key, LatticeMetrics.TagTree, StringComparison.Ordinal))
+                    {
+                        tree = tag.Value as string;
+                    }
+                    else if (string.Equals(tag.Key, LatticeTenantLabel.TagTenant, StringComparison.Ordinal))
+                    {
+                        tenant = tag.Value as string;
+                    }
+                }
+
+                lock (sink)
+                {
+                    sink.Add((value, tree, tenant));
+                }
+            }));
+
+        SetLevel(TimeSpan.FromMinutes(9));
+        SetConsumers(("leaf-behind", TimeSpan.FromMinutes(9)));
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        var measurement = sink.Single(m => m.Tree == _treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(measurement.Tenant, Is.EqualTo(LatticeTenantLabel.ForTree(_treeId).Value),
+                "the count must carry the derived tenant label, as the drain-lag aggregate it decomposes does");
+            Assert.That(tagKeys, Is.EquivalentTo(new[] { LatticeMetrics.TagTree, LatticeTenantLabel.TagTenant }),
+                "consumer identity is unbounded cardinality and must never become a tag: the count is triageable, not diagnosable");
+        });
     }
 }

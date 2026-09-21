@@ -18,7 +18,8 @@ public partial class BPlusLeafGrainTests
         IBPlusLeafGrain? siblingStub = null,
         int maxLeafKeys = 128,
         ICommitLogWriter? commitLog = null,
-        ILatticeMergeModeResolver? mergeModeResolver = null)
+        ILatticeMergeModeResolver? mergeModeResolver = null,
+        ILatticeEnvelopeCodec? envelopeCodec = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -37,15 +38,21 @@ public partial class BPlusLeafGrainTests
         // service provider but deliberately does NOT seed a TreeId: the
         // unseeded-leaf regression tests need a CRDT merge mode on a leaf
         // the shard root has not attached yet.
-        if (commitLog is not null || mergeModeResolver is not null)
+        // A fake ILatticeEnvelopeCodec is wired through the same provider. The
+        // grain caches EnvelopeCodecActive once per activation from
+        // IsActive(state.State.TreeId), so a codec-bearing grain also needs a
+        // non-empty TreeId for the seam to engage.
+        if (commitLog is not null || mergeModeResolver is not null || envelopeCodec is not null)
         {
             var services = Substitute.For<IServiceProvider>();
             if (commitLog is not null)
                 services.GetService(typeof(ICommitLogWriter)).Returns(commitLog);
             if (mergeModeResolver is not null)
                 services.GetService(typeof(ILatticeMergeModeResolver)).Returns(mergeModeResolver);
+            if (envelopeCodec is not null)
+                services.GetService(typeof(ILatticeEnvelopeCodec)).Returns(envelopeCodec);
             context.ActivationServices.Returns(services);
-            if (commitLog is not null && string.IsNullOrEmpty(state.State.TreeId))
+            if ((commitLog is not null || envelopeCodec is not null) && string.IsNullOrEmpty(state.State.TreeId))
                 state.State.TreeId = "test-tree";
         }
 

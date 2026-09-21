@@ -105,12 +105,16 @@ public partial class BPlusLeafGrainTests
         // is now held forever.
         await CheckpointLeafAsync(leaf, "k1", hlcPhysical: 100, offset: 1);
 
-        // Preconditions: the cadence has NOT captured yet, and the
-        // data-bearing-but-uncovered leaf holds a Zero block pin.
-        await snapshotStub.DidNotReceive().SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
-        var beforePins = await pinGrain.GetPinsAsync();
-        Assert.That(beforePins.Values, Has.All.EqualTo(HybridLogicalClock.Zero),
-            "precondition: before deactivation the checkpointed-but-uncovered leaf holds a Zero block pin.");
+        // Preconditions. Issue #2692 changed WHEN the escape happens, not
+        // whether it happens: the zero-coverage repair now fires on the
+        // checkpoint persist above, so the capture this test was written to
+        // demand from deactivation has already occurred by this point. The
+        // comment above is preserved deliberately - "on baseline the block pin
+        // is now held forever" is #2692's mechanism, described verbatim by a
+        // test written for #1537, and making that sentence false is the whole
+        // point of the repair. The contract assertions below are UNCHANGED and
+        // still carry the test: exactly one capture, and a lifted block pin.
+        await snapshotStub.Received(1).SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
 
         await ((IGrainBase)leaf).OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),

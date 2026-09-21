@@ -43,7 +43,7 @@ internal sealed partial class BPlusLeafGrain
     /// unaffected.
     /// </para>
     /// </summary>
-    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys)
+    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes = 0)
     {
         // Non-blocking acquire: the loser of the race does NOT wait for
         // the in-flight split's cross-grain migration to drain. Its
@@ -52,21 +52,283 @@ internal sealed partial class BPlusLeafGrain
         // null here is the same observable outcome the blocking re-check
         // would have produced - minus the convoy wait.
         if (!_splitGate.Wait(0))
+        {
+            RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended);
             return null;
+        }
         try
         {
             // Re-check inside the gate. A concurrent turn may have
             // already split this leaf and removed our overflow's
             // entries to the sibling, leaving Cache.Count back under
             // the threshold; in that case we have nothing to do.
-            if (Cache.Count <= maxLeafKeys)
+            if (!IsLeafOverCapacity(maxLeafKeys, maxLeafBytes))
+            {
+                RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity);
                 return null;
-            return await SplitAsync();
+            }
+
+            var result = await SplitAsync();
+            if (result is null)
+            {
+                // SplitAsync already recorded the decline outcome.
+                return null;
+            }
+            RecordSplitAttempt(LatticeMetrics.LeafSplitDivided);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            // A division that begins and throws must land on an outcome arm,
+            // or it lands on none (issue #2845). The three arms above all
+            // describe a division that declined to START, so without this the
+            // only trace a started-and-failed division leaves on this counter
+            // is the absence of a `divided` - which is indistinguishable from
+            // a leaf nothing ever tried to divide, and is precisely the
+            // collapse LeafSplitAttempts was introduced to prevent.
+            //
+            // The rethrow is unconditional and unchanged, so this seam is
+            // observation only: every caller still sees the exception it would
+            // have seen. `throw;` rather than `throw ex;` keeps the original
+            // stack trace intact.
+            RecordSplitFault(ClassifySplitFault(ex));
+            throw;
         }
         finally
         {
             _splitGate.Release();
         }
+    }
+
+    /// <summary>
+    /// The leaf overflow predicate: whether the leaf exceeds either the
+    /// structural key-count bound or the <see cref="LatticeOptions.MaxLeafBytes"/>
+    /// byte bound. Both call sites on the write path and the snapshot-capture
+    /// self-repair path evaluate it through here, so the two can never drift
+    /// into disagreeing about what "over capacity" means.
+    /// <para>
+    /// The byte arm carries an extra condition the count arm does not need:
+    /// <c>Cache.Count &gt; 1</c>. A split pivots on the median key, so a leaf
+    /// holding one entry has no median: <c>SplitAsync</c> would choose that
+    /// single key as the split key, migrate every entry to the sibling, and
+    /// leave an empty donor. The predicate would then hold on the sibling,
+    /// which would split again, forever, allocating a fresh leaf grain each
+    /// time and never making progress. Excluding the single-entry case makes
+    /// the predicate strictly progress-bounded: every leaf it fires on has at
+    /// least two entries, so a split always leaves both sides non-empty and
+    /// strictly smaller than the original.
+    /// </para>
+    /// <para>
+    /// A value larger than the bound on its own is therefore irreducible by
+    /// splitting and is reported rather than repaired; see
+    /// <see cref="LatticeMetrics.LeafByteOverflowIrreducible"/>.
+    /// </para>
+    /// </summary>
+    private bool IsLeafOverCapacity(int maxLeafKeys, long maxLeafBytes)
+        => Cache.Count > maxLeafKeys
+            || (maxLeafBytes > 0 && Cache.Count > 1 && Cache.StateBytes > maxLeafBytes);
+
+    /// <summary>
+    /// Per-pass ceiling on consecutive byte-overflow splits. Each split halves
+    /// the donor, so the passes needed are logarithmic in the overshoot: eight
+    /// admits a leaf 256 times the bound, which is far beyond anything the
+    /// key-count bound can let accumulate. It exists to keep the loop provably
+    /// terminating rather than because the limit is expected to bind.
+    /// </summary>
+    private const int MaxByteOverflowSplitsPerPass = 8;
+
+    /// <summary>
+    /// Divides a leaf that is over the <see cref="LatticeOptions.MaxLeafBytes"/>
+    /// bound back under it, splitting repeatedly because one split only halves
+    /// the donor and a leaf may be several multiples of the bound.
+    /// <para>
+    /// <b>This is the self-repair half of the byte bound, and it is what makes
+    /// an already-oversized deployment recover without operator action.</b> The
+    /// write-path predicate alone cannot do that: it is only evaluated when a
+    /// leaf is written, so a leaf that grew oversized and then went quiet would
+    /// stay oversized, stay uncapturable, and keep its tree's WAL trim floor
+    /// pinned at zero forever. This entry point is reached from
+    /// <c>CaptureSnapshotCoreAsync</c>, the single seam every snapshot-capture
+    /// driver passes through, so a leaf is divided before its payload is
+    /// materialised whichever driver brought it to capture - including on a
+    /// tree that has stopped taking writes entirely.
+    /// <para>
+    /// It was previously reached only from the zero-coverage repair driver,
+    /// behind that driver's <c>HasCheckpointedPartitionWithoutCoverage</c>
+    /// predicate. A tree with no proven-checkpointed partition never satisfied
+    /// it, so no leaf on such a tree was ever divided and every capture route
+    /// threw <see cref="OutOfMemoryException"/> instead (issue #2733). Do not
+    /// re-add a call behind a driver-specific predicate: the guard is only
+    /// sound where every driver passes.
+    /// </para>
+    /// <para>
+    /// Returns whether any split occurred. A leaf that cannot be divided (one
+    /// entry larger than the bound) is reported on
+    /// <see cref="LatticeMetrics.LeafByteOverflows"/> as <c>irreducible</c> and
+    /// left intact; see <see cref="IsLeafOverCapacity"/> for why splitting it
+    /// anyway would not terminate.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TrySplitForByteOverflowAsync(int maxLeafKeys, long maxLeafBytes)
+    {
+        // Issue #2756. Zero-prime BOTH outcomes before any early return, so a
+        // leaf that reaches this seam and needs no division still mints the
+        // series. A Counter exports nothing at all until its first Add, so
+        // without this an absent leaf_byte_overflow_total spans three states
+        // that a reader cannot tell apart: the hoist of this call to the
+        // capture seam (issue #2733) did not land, or it landed and no leaf is
+        // oversized, or no leaf has activated yet. That ambiguity is not
+        // hypothetical - the absence of this very series was read as evidence
+        // the capture-seam hoist had failed, when it equally indicated success.
+        //
+        // Priming HERE rather than at activation is what makes the series a
+        // reachability proof: this method is reached only through
+        // CaptureSnapshotCoreAsync, so a minted zero says the capture seam ran
+        // and evaluated the bound, which is the property in question. An absent
+        // series then means the seam was never reached, which is a positive
+        // statement rather than silence.
+        //
+        // Primed through RecordLeafByteOverflow rather than by calling Add
+        // directly, so the primed series carries a tag set identical to a real
+        // emission BY CONSTRUCTION. A prime on a divergent tag shape would mint
+        // a second series that never converges with the one actually counting,
+        // leaving a permanently-zero line beside a live counter - worse than
+        // absence, because it reads as a measured zero.
+        RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowSplit, 0);
+        RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible, 0);
+
+        // Prime the split-attempt outcomes here too, for the identical reason
+        // and at the identical seam. Without this, "this leaf is over threshold
+        // and no division was ever sought" is an ABSENCE, indistinguishable
+        // from "the instrument was never reached" - which reproduces exactly
+        // the ambiguity the counter exists to remove, one level up. A reader
+        // asking why an oversized leaf never divided needs "sought zero
+        // divisions" to be a positive statement, not silence.
+        //
+        // This matters more than the byte-overflow prime does, because the
+        // question it answers is asymmetric. A NON-zero refusal count settles
+        // the forfeiture immediately; a zero refusal count settles nothing
+        // unless the attempt count is readable beside it. So the series that
+        // must never be absent is this one.
+        //
+        // Primed through RecordSplitAttempt for the same tag-shape reason: a
+        // prime on a divergent tag set mints a second series that never
+        // converges with the one actually counting, which reads as a measured
+        // zero rather than as absence and is therefore worse than nothing.
+        RecordSplitAttempt(LatticeMetrics.LeafSplitDivided, 0);
+        RecordSplitAttempt(LatticeMetrics.LeafSplitGateContended, 0);
+        RecordSplitAttempt(LatticeMetrics.LeafSplitAlreadyUnderCapacity, 0);
+
+        // Primed for the same reason, and it is the arm where the reasoning
+        // bites hardest: declining a division for want of an admissible pivot
+        // is rare, so absence is the expected reading on a healthy estate. That
+        // is exactly what makes it uninterpretable unprimed - a reader who
+        // finds no line cannot tell "no division was ever declined" from "this
+        // build predates the guard", and the second is the reading they need
+        // when a key has frozen. A measured zero settles it.
+        RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot, 0);
+
+        // The fault arm is primed per failure class, because the class tag is
+        // part of its series identity: priming `faulted` on one class would
+        // leave the other two absent, so a reader could not tell "no division
+        // timed out" from "the timeout class is never recorded". Every arm a
+        // reader may find at zero has to be mintable at zero, or the arm that
+        // is missing is the one they cannot interpret.
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultUnaffordable, 0);
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultTimeout, 0);
+        RecordSplitFault(LatticeMetrics.LeafSplitFaultOther, 0);
+
+        if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
+        {
+            return false;
+        }
+
+        var splits = 0;
+        while (splits < MaxByteOverflowSplitsPerPass
+               && IsLeafOverCapacity(maxLeafKeys, maxLeafBytes))
+        {
+            // A contended gate returns null, as does a re-check that finds the
+            // leaf already back under bound. Either way there is no progress to
+            // make on this turn, so stop rather than spin.
+            if (await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes) is null)
+            {
+                break;
+            }
+
+            splits++;
+        }
+
+        if (splits > 0)
+        {
+            RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowSplit);
+        }
+
+        // Report separately from the split outcome rather than as an else: a
+        // leaf can both split usefully and still end up irreducible, when the
+        // divisions strand a single oversized entry on one side.
+        if (Cache.Count <= 1 && Cache.StateBytes > maxLeafBytes)
+        {
+            RecordLeafByteOverflow(LatticeMetrics.LeafByteOverflowIrreducible);
+
+            // Say it ONCE per activation, not once per capture.
+            //
+            // This seam is now reached by every capture route, and the hottest
+            // of them is the cadence recheck, which fires after every durable
+            // checkpoint flush. On the deployment that motivated issue #2733
+            // that produced 86 identical capture failures in 19 minutes across
+            // 32 leaves - 2,761 OutOfMemoryException lines - each saying the
+            // capture "will retry on next periodic recheck or reactivation".
+            // An irreducible leaf makes that retry loop unbounded and
+            // structurally hopeless: no number of further attempts can divide a
+            // single entry larger than the bound, so repeating the message per
+            // attempt buries the one fact an operator needs.
+            //
+            // The latch is per-activation, which needs no explicit reset: an
+            // Orleans activation is a fresh grain instance, so the field starts
+            // false each time the leaf comes online. That is the behaviour we
+            // want - a condition that survives a restart is re-announced once,
+            // rather than being silenced for the life of the process.
+            if (!_irreducibleByteOverflowAnnounced)
+            {
+                _irreducibleByteOverflowAnnounced = true;
+                ResolveLogger()?.LogWarning(
+                    "Leaf {GrainId} on tree {TreeId} holds a single entry of {StateBytes} bytes, "
+                    + "over the {MaxLeafBytes}-byte MaxLeafBytes bound, and cannot be divided - a "
+                    + "split needs at least two entries to pivot on. Snapshot capture for this "
+                    + "leaf will keep failing if the payload exceeds what can be serialised "
+                    + "contiguously, which holds its tree's WAL trim floor at zero. This is "
+                    + "reported once per activation; the leaf_byte_overflow_total counter carries "
+                    + "the per-attempt series under outcome=irreducible.",
+                    context.GrainId,
+                    state.State.TreeId ?? string.Empty,
+                    Cache.StateBytes,
+                    maxLeafBytes);
+            }
+        }
+
+        return splits > 0;
+    }
+
+    /// <summary>
+    /// Latches the once-per-activation irreducible-leaf warning above. An
+    /// Orleans activation is a fresh grain instance, so this starts false every
+    /// time the leaf comes online and needs no explicit reset.
+    /// </summary>
+    private bool _irreducibleByteOverflowAnnounced;
+
+    /// <summary>
+    /// Records one byte-overflow outcome, or mints its series without moving it
+    /// when <paramref name="delta"/> is zero. Both the real emission and the
+    /// zero-prime go through here so they cannot drift apart in tag shape.
+    /// </summary>
+    private void RecordLeafByteOverflow(KeyValuePair<string, object?> outcome, long delta = 1)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafByteOverflows.Add(
+            delta,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>
@@ -107,11 +369,39 @@ internal sealed partial class BPlusLeafGrain
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            if (state.State.SplitState != Primitives.SplitState.SplitInProgress)
+            // Issue #3265. This re-check is the inverted twin of the callers'
+            // guard, and it must ask the same question they do. Left as
+            // `!= SplitInProgress` it read true on every leaf that had ever
+            // split, so a recovery the caller had correctly decided to enter
+            // returned null here without resuming anything - silently undoing
+            // the fix at the seam it exists to protect.
+            if (!HasInterruptedSplit)
                 return null;
             var recovered = await CompleteSplitAsync();
             await PersistAsync();
             return recovered;
+        }
+        catch (Exception ex)
+        {
+            // The recovery path re-enters a division whose intent is already
+            // durable by construction, so a throw here always leaves the leaf
+            // still holding that half-finished division and must be as visible
+            // as one on the forward path (issue #2845). Without it, a leaf
+            // whose recovery fails on every write reports nothing at all on
+            // this counter while re-entering, re-failing, and staying wedged.
+            // (The forward path carries no such guarantee - a division that
+            // throws before its intent is persisted strands nothing - which is
+            // why the durable reading is `splits - divided` rather than the
+            // fault count. Here alone the two coincide.)
+            //
+            // Only the fault is recorded here, not a matching `divided` on the
+            // success path. A recovery is the continuation of a division this
+            // counter already counted when it was first sought, so counting
+            // its completion again would double-count one division; a fault,
+            // by contrast, is a fresh event each time recovery is re-entered
+            // and re-fails, which is exactly the rate worth watching.
+            RecordSplitFault(ClassifySplitFault(ex));
+            throw;
         }
         finally
         {
@@ -119,16 +409,361 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
-    private async Task<SplitResult> SplitAsync()
+    /// <summary>
+    /// Records that a division was sought on an over-capacity leaf, tagged with
+    /// how it ended.
+    /// <para>
+    /// This is what makes <see cref="LatticeMetrics.LeafBisectRefusals"/>
+    /// readable at zero. A refusal count of zero on an undivided over-threshold
+    /// leaf means either that a division succeeded or that none was ever
+    /// sought, and those have opposite bearing on whether the forfeiture is the
+    /// cause. Counting the attempt separates them.
+    /// </para>
+    /// </summary>
+    private void RecordSplitAttempt(KeyValuePair<string, object?> outcome, long value = 1)
     {
-        // Only the median key is needed to pivot the split, so avoid
-        // materialising every key into a throwaway List<string>. The cache's
-        // Keys view is the backing SortedDictionary's ordered key collection:
-        // its Count is O(1) and enumerating to the midpoint touches half the
-        // keys without copying the whole set into a new array.
-        var keys = Cache.Keys;
-        int mid = keys.Count() / 2;
-        var splitKey = keys.ElementAt(mid);
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafSplitAttempts.Add(value,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            outcome,
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    /// <summary>
+    /// Records that a division began and threw, tagged with the failure class,
+    /// or mints one such series without moving it when <paramref name="value"/>
+    /// is zero.
+    /// <para>
+    /// Separate from <see cref="RecordSplitAttempt"/> because the fault arm
+    /// carries the extra <see cref="LatticeMetrics.TagFailureClass"/> dimension
+    /// that the declining outcomes have no use for. Routing both the real
+    /// emission and the zero-prime through this one method is what keeps the
+    /// primed tag shape identical to a real one BY CONSTRUCTION: a prime on a
+    /// divergent tag set would mint a second series that never converges with
+    /// the one actually counting, leaving a permanently-zero line beside a live
+    /// counter, which reads as a measured zero and is therefore worse than
+    /// absence.
+    /// </para>
+    /// </summary>
+    private void RecordSplitFault(KeyValuePair<string, object?> failureClass, long value = 1)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafSplitAttempts.Add(value,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeMetrics.LeafSplitFaulted,
+            failureClass,
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    /// <summary>
+    /// Sorts a division's failure into the small closed vocabulary on
+    /// <see cref="LatticeMetrics.TagFailureClass"/>. The two named classes are
+    /// the ones that actually occur on an oversized leaf and they have opposite
+    /// remedies, which is the whole reason the dimension exists: a division
+    /// that could not be paid for in memory needs a smaller leaf or a bigger
+    /// budget, while one that ran out of time was affordable and needs the path
+    /// under it examined.
+    /// <para>
+    /// The timeout arm is matched on <see cref="TimeoutException"/> rather than
+    /// on the individual typed deadlines, which is load-bearing: this library's
+    /// own deadline types (<c>ShardActivationTimeoutException</c>,
+    /// <c>ScanPageStalledException</c>) derive from it deliberately so that
+    /// handlers matching the base type keep working, and Orleans surfaces a
+    /// plain response deadline as the base type itself. Enumerating the
+    /// subclasses instead would silently reclassify any future one as
+    /// <c>other</c>.
+    /// </para>
+    /// <para>
+    /// Anything unrecognised is classified rather than dropped. An
+    /// unclassifiable fault is still a fault, and the arm that matters -
+    /// <c>outcome=faulted</c> - must never be conditional on recognising the
+    /// exception.
+    /// </para>
+    /// <para>
+    /// There is deliberately no <c>cancelled</c> class, because no cancellation
+    /// reaches this seam as an <see cref="OperationCanceledException"/>. The
+    /// split path passes <see cref="CancellationToken.None"/> at every seam
+    /// that accepts a token and parks on an untokened gate; the hydration
+    /// admission gate converts its cancellation arms into a non-exceptional
+    /// return rather than propagating them; and the case that looks most like
+    /// orderly shutdown - the WAL writer's drain releasing an append while the
+    /// silo stops - is converted to a <see cref="TimeoutException"/> at source,
+    /// specifically so a catch site can attribute it without source-walking.
+    /// A <c>cancelled</c> arm would therefore be primed at zero and stay there
+    /// forever, which is the permanently-zero-series failure this file warns
+    /// about elsewhere. Revisit this if a cancellable token is ever threaded
+    /// into the split path.
+    /// </para>
+    /// </summary>
+    private static KeyValuePair<string, object?> ClassifySplitFault(Exception exception) => exception switch
+    {
+        // Both mean the same thing to an operator: the division could not be
+        // paid for in memory. The typed exception is the admission gate
+        // declining in advance; the raw one is the allocation failing anyway.
+        LeafSnapshotUnaffordableException or OutOfMemoryException
+            => LatticeMetrics.LeafSplitFaultUnaffordable,
+        TimeoutException => LatticeMetrics.LeafSplitFaultTimeout,
+        _ => LatticeMetrics.LeafSplitFaultOther,
+    };
+
+    /// <summary>
+    /// Records that a division could not pivot from the snapshot frame and is
+    /// about to materialise the whole leaf, tagged with the refusal reason and
+    /// the cache surface that had already released the frame.
+    /// <para>
+    /// This is the only seam at which the forfeiture is observable. The split
+    /// path cannot distinguish a leaf that never attached a frame from one whose
+    /// frame an unrelated whole-leaf operation consumed - both present as a bare
+    /// refusal - yet the first costs nothing and the second costs the whole leaf,
+    /// resident and unsheddable for the life of the activation.
+    /// </para>
+    /// </summary>
+    private void RecordBisectRefusal(LeafBisectRefusalReason reason, LeafSnapshotDetachSeam seam)
+    {
+        var treeId = state.State.TreeId ?? string.Empty;
+        LatticeMetrics.LeafBisectRefusals.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagReason, BisectRefusalTag(reason)),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagDetachSeam, DetachSeamTag(seam)),
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    private static string BisectRefusalTag(LeafBisectRefusalReason reason) => reason switch
+    {
+        LeafBisectRefusalReason.NoSnapshotAttached => "no_snapshot_attached",
+        LeafBisectRefusalReason.TooFewRows => "too_few_rows",
+        LeafBisectRefusalReason.FrameKeyUnreadable => "frame_key_unreadable",
+        LeafBisectRefusalReason.NoKeySortsBelowPivot => "no_key_sorts_below_pivot",
+        _ => "none",
+    };
+
+    /// <summary>
+    /// Projects a detach seam onto the closed vocabulary carried on
+    /// <see cref="LatticeMetrics.TagDetachSeam"/>.
+    /// <para>
+    /// Every member of <see cref="LeafSnapshotDetachSeam"/> has an arm here, and
+    /// that is load-bearing rather than tidy: a member with no arm falls through
+    /// to <c>none</c>, which is the tag value that means "no frame was ever
+    /// attached". A real forfeiture would then be reported as the benign case
+    /// this counter exists to distinguish it from, silently and with no missing
+    /// series to notice. <c>Every_detach_seam_has_its_own_metric_tag</c> pins
+    /// the total mapping so a member added without an arm reddens.
+    /// </para>
+    /// <para>
+    /// Two arms are unreachable in a deployed process and are kept deliberately:
+    /// <see cref="LeafSnapshotDetachSeam.UnderlyingRowsAccessor"/>, whose only
+    /// producer is reached solely through a test accessor, and
+    /// <see cref="LeafSnapshotDetachSeam.RangeHydrationCompleted"/>, which
+    /// nothing assigns since issue #2843. Their absence from a scrape is
+    /// expected and is not evidence that no frame was consumed; see the
+    /// <c>orleans.lattice.leaf.bisect_refusals</c> row in
+    /// <c>docs/lattice/metrics.md</c>.
+    /// </para>
+    /// </summary>
+    private static string DetachSeamTag(LeafSnapshotDetachSeam seam) => seam switch
+    {
+        LeafSnapshotDetachSeam.Clear => "clear",
+        LeafSnapshotDetachSeam.KeysAccessor => "keys_accessor",
+        LeafSnapshotDetachSeam.EnumerateRowsAccessor => "enumerate_rows_accessor",
+        LeafSnapshotDetachSeam.UnderlyingRowsAccessor => "underlying_rows_accessor",
+        LeafSnapshotDetachSeam.RangeHydrationCompleted => "range_hydration_completed",
+        LeafSnapshotDetachSeam.FrameDecodeFallback => "frame_decode_fallback",
+        _ => "none",
+    };
+
+    /// <summary>
+    /// True while a division of this leaf has published durable intent but has
+    /// not yet completed (issue #3265).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Do not simplify this back to <c>SplitState == SplitInProgress</c>.</b>
+    /// That was the defect. <see cref="Primitives.SplitState"/> is a monotone
+    /// max lattice - <c>Unsplit &lt; SplitInProgress &lt; SplitComplete</c>,
+    /// merged with <c>max</c> and never decreasing - so once a leaf completes
+    /// its first division it reads <c>SplitComplete</c> for the rest of its
+    /// life, and the <c>Merge(SplitInProgress)</c> that opens every later
+    /// division is a no-op on it. The field therefore says "complete" while a
+    /// second or later division is actually in flight.
+    /// </para>
+    /// <para>
+    /// The consequence was not a stale flag but lost data reachability. Every
+    /// site that asks "was a split interrupted?" used the equality test, so for
+    /// any leaf that had ever split before, the answer was always no. An
+    /// interrupted second division was not resumed; the next overflow fell
+    /// through to a fresh <c>SplitAsync</c>, which minted a brand-new sibling
+    /// identity from <c>Guid.NewGuid()</c> and spliced it in ahead of the
+    /// previous one. The abandoned sibling stayed durable, stayed in the
+    /// sibling chain, and kept the WAL materialiser pin it published at birth -
+    /// but its separator was overwritten, so nothing ever taught a parent to
+    /// route to it. A leaf no descent reaches receives no writes, so it
+    /// materialises nothing, so it checkpoints nothing, so its pin can never
+    /// advance; and a pin that never advances freezes the shard's trim floor
+    /// permanently. Trim is upstream of compaction, so the tree's write-ahead
+    /// log then grows with no bound.
+    /// </para>
+    /// <para>
+    /// This unreachability was already documented in this repository before
+    /// issue #3265 was raised, by someone solving a different problem:
+    /// <c>BPlusLeafGrain.SpanAdmission.cs</c> records that the forwarding
+    /// guards "are therefore dead code exactly on the leaves that have split
+    /// most, which is the opposite of the population that needs them", and
+    /// keys span admission off the declared span to route around it. That
+    /// workaround was applied at one seam; the ratchet itself was never fixed
+    /// and every recovery guard was left carrying it. This predicate fixes the
+    /// remaining sites rather than routing around them again.
+    /// </para>
+    /// <para>
+    /// <see cref="LeafNodeState.SplitInFlight"/> is the discriminator, and it
+    /// is a dedicated field rather than an inference because every field that
+    /// could have been inferred from is overloaded. <c>OldNextSibling</c> is a
+    /// verbatim copy of <c>NextSibling</c>, so it is null during a division of
+    /// a leaf with no successor; <c>SplitSiblingId</c> and <c>SplitKey</c> are
+    /// nulled by the absorbed-boundary clear on the reclaim path. Conjoining
+    /// overloaded terms inherits every overload rather than cancelling any, so
+    /// only a field no other concern writes can answer this question. The
+    /// legacy marker is still honoured so a division already in flight at
+    /// upgrade time is recovered rather than stranded by the fix.
+    /// </para>
+    /// </remarks>
+    private bool HasInterruptedSplit
+        => state.State.SplitInFlight
+            || state.State.SplitState == Primitives.SplitState.SplitInProgress;
+
+    private async Task<SplitResult?> SplitAsync()
+    {
+        // Issue #3265. A split whose intent is already durable must be RESUMED,
+        // never re-minted.
+        //
+        // Everything below this guard mints a brand-new sibling identity from
+        // Guid.NewGuid(), splices it into the doubly-linked sibling chain, and
+        // persists - and it used to do so unconditionally. A second call
+        // against a leaf whose previous split had persisted its intent but not
+        // finished therefore did not resume that split; it started another one.
+        // The abandoned sibling is not rolled back by that, because nothing
+        // rolls it back: it stays durable, stays spliced into the chain (the
+        // new attempt captures it as OldNextSibling and the completing sibling
+        // re-links to it), and keeps the WAL materialiser pin it published at
+        // birth. What it loses is the only thing that was still outstanding -
+        // the separator that would have taught a parent to route to it - so it
+        // ends up reachable by sibling walk and unreachable by descent.
+        //
+        // A leaf in that state can never advance its pin: no descent reaches
+        // it, so no write routes to it, so it materialises nothing and
+        // checkpoints nothing. Both dispositions of such a pin wedge the tree -
+        // at -1 the block-pin branch stops the trim tree-wide, and at >= 0 it
+        // freezes the durable offset floor - and trim is upstream of
+        // compaction, so the tree's write-ahead log then grows with no bound.
+        // Repeated attempts stack: each one mints another leaf declaring the
+        // SAME [splitKey, High) window and splices it in ahead of the last,
+        // which is why the observed damage was several unparented leaves all
+        // claiming one range.
+        //
+        // The discriminator is LeafNodeState.SplitInFlight, an explicit durable
+        // marker, and it has to be explicit. SplitState cannot serve: it is a
+        // monotone max lattice (Unsplit < SplitInProgress < SplitComplete), so
+        // once a leaf has completed any split it reads SplitComplete for the
+        // rest of its life and Merge(SplitInProgress) cannot move it back. A
+        // guard on SplitState would therefore be dead after the first split -
+        // precisely for the long-lived, frequently splitting leaves that
+        // accumulate this damage.
+        //
+        // Nor can it be inferred from the fields written beside the intent.
+        // OldNextSibling is a verbatim copy of NextSibling, so it is null
+        // during a division of a leaf that has no successor - reachable by
+        // splitting and then absorbing the rightmost successor through the
+        // reclaim widen path. SplitSiblingId and SplitKey are nulled by the
+        // absorbed-boundary clear on that same path. Conjoining those terms
+        // inherits both blind spots instead of cancelling either, so the marker
+        // is a field no other concern writes. See LeafNodeState.SplitInFlight.
+        if (HasInterruptedSplit)
+        {
+            ResolveLogger()?.LogWarning(
+                "Leaf {LeafId} was asked to split again while a previous division to sibling {SiblingId} at key "
+                + "'{SplitKey}' is still in flight; resuming that division instead of minting a second sibling. "
+                + "Minting one would strand the earlier sibling in the chain with no parent routing to it.",
+                context.GrainId,
+                state.State.SplitSiblingId,
+                state.State.SplitKey ?? "(none)");
+
+            // Null heads: CompleteSplitAsync captures the current per-partition
+            // WAL heads itself when it is resumed rather than driven inline,
+            // which is the same path activation recovery takes.
+            return await CompleteSplitAsync(null);
+        }
+
+        // Only the median key is needed to pivot the split. Asking the cache's
+        // ordered key view for it looks free - it reads as a projection over an
+        // in-memory dictionary - but Keys calls HydrateAll() first, so placing
+        // the cut used to require materialising every row in the leaf. That is
+        // self-defeating on exactly the leaves this exists to divide: the
+        // larger the leaf, the more certain the hydration fails, and division
+        // is the only thing that would have made it smaller (issue #2771).
+        //
+        // Take the pivot from the frame's ordinal index instead, which decodes
+        // one key and no payload.
+        //
+        // The fallback is the old path. Its cost is NOT uniform, and the
+        // difference is invisible from here (issue #2787). When no frame was
+        // ever attached - a leaf replayed from the WAL, say - the leaf is
+        // already resident and the ordered view costs nothing extra. But the
+        // same refusal arrives when a frame WAS attached and some unrelated
+        // whole-leaf operation consumed it, and there the fallback materialises
+        // the entire leaf, unsheddable for the life of the activation, on
+        // precisely the oversized leaf that can least afford it. The refusal is
+        // a function of activation history, not of leaf size, so this seam
+        // cannot tell the benign case from the harmful one. That is why the
+        // refusal is metered with the detaching seam rather than merely taken.
+        if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey, out var refusalReason))
+        {
+            // Recorded before the fallback runs, because the fallback detaches
+            // the frame and overwrites LastDetachSeam with its own surface. Read
+            // afterwards it would always report the division itself and never
+            // the operation that actually forfeited the fast path.
+            RecordBisectRefusal(refusalReason, Cache.LastDetachSeam);
+
+            var keys = Cache.Keys;
+            int mid = keys.Count() / 2;
+            splitKey = keys.ElementAt(mid);
+        }
+
+        // Admissibility. A pivot has to fall strictly inside this leaf's own
+        // declared range, because the division hands [Low, pivot) to the donor
+        // and [pivot, High) to the sibling: a pivot equal to Low leaves the
+        // donor owning nothing, and one at or past High leaves the sibling
+        // owning nothing. Either half is then a leaf that still holds rows and
+        // still answers reads, but that no routing descent can ever select,
+        // because every descent tests a key against exactly this range. Writes
+        // land on the real custodian while reads can be served the marooned
+        // copy, which is a torn read that never heals (issue 3117).
+        //
+        // The pivot comes from the row set, not from the range, so it is only
+        // as sound as the row set is. A leaf can legitimately hold rows outside
+        // its own span: the span-admission forward is deliberately fail-open
+        // (see BPlusLeafGrain.SpanAdmission.cs), and a cross-shard migration
+        // grafts rows before the range fixup lands. Bisecting such a leaf can
+        // therefore return an out-of-span key, and did.
+        if (!IsAdmissibleSplitPivot(splitKey))
+        {
+            splitKey = TryFindAdmissibleSplitPivot();
+            if (splitKey is null)
+            {
+                // Every row is out of span, so there is nothing here this leaf
+                // owns to divide. Declining is safe and self-correcting: the
+                // orphan rows drain to their real custodians, after which the
+                // leaf is either under threshold or divisible.
+                RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot);
+                ResolveLogger()?.LogWarning(
+                    "Leaf {LeafId} is over capacity with {RowCount} rows but no admissible split pivot inside its "
+                    + "declared range [{Low}, {High}); declining the division rather than minting a leaf that owns "
+                    + "no key range.",
+                    context.GrainId,
+                    Cache.Count,
+                    state.State.LowKeyInclusive ?? "(unbounded)",
+                    state.State.HighKeyExclusive ?? "(unbounded)");
+                return null;
+            }
+        }
 
         // Snapshot the WAL head per partition before the split's
         // intent is persisted. Under multi-partition replay every
@@ -147,6 +782,16 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
         state.State.OldNextSibling = state.State.NextSibling;
         state.State.NextSibling = state.State.SplitSiblingId;
+
+        // Issue #3265. The unambiguous record that a division is outstanding.
+        // It is set here and cleared only in CompleteSplitAsync, in the SAME
+        // persist as the intent above - a marker written in a later write
+        // would leave a window whose crash is exactly the case it exists to
+        // survive. Every other field on these four lines is overloaded: the
+        // ratchet cannot move on a leaf that has split before, and both
+        // OldNextSibling and SplitSiblingId have reachable nulls during an
+        // in-flight division. See LeafNodeState.SplitInFlight.
+        state.State.SplitInFlight = true;
         await PersistAsync();
 
         LatticeMetrics.LeafSplits.Add(1,
@@ -198,6 +843,15 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        // Register this completion as in flight for as long as this call is
+        // suspended inside the method body (issue #2967). The scope disposes on
+        // every exit - return or throw - so a division that hangs at an await
+        // and never resumes keeps its registry entry, which is exactly what
+        // makes the wedge visible on LeafSplitCompletionOldestAge. Both the
+        // forward caller (SplitAsync) and the recovery caller
+        // (CompleteRecoverySplitUnderGateAsync) reach the completion through
+        // here, so both are covered by this single seam.
+        using var completionScope = LatticeMetrics.EnterLeafSplitCompletion(state.State.TreeId ?? string.Empty);
         var splitKey = state.State.SplitKey!;
         var siblingId = state.State.SplitSiblingId!.Value;
         var donorPreSplitHigh = state.State.HighKeyExclusive;
@@ -256,40 +910,157 @@ internal sealed partial class BPlusLeafGrain
             HighKeyExclusive = donorPreSplitHigh,
             NextSibling = oldNextId,
             PrevSibling = context.GrainId,
+
+            // The moved-away seal rides the existing round-trip rather than a call
+            // of its own, and it is armed here - before the transfer loop below
+            // makes any migrated row visible on the sibling - for exactly the
+            // reason TransferShadowMarkersToSiblingAsync is ordered ahead of
+            // MergeEntriesAsync. A sibling that received rows before the seal would
+            // serve migrated orphans in the gap. Issue 3121.
+            MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } sealedSlots
+                ? sealedSlots
+                : null,
+            MovedAwayVirtualShardCount = state.State.MovedAwayVirtualShardCount,
+
+            // The heads captured above ride this same round-trip so the
+            // sibling's birth pin can publish a real offset rather than the
+            // "-1" sentinel (issue #3094). They are the identical values
+            // SetCheckpointOffsetHintsAsync stamps below, so the pin and the
+            // sibling's projection checkpoint start life in agreement.
+            WalHeadsAtBirth = resolvedHeads,
         });
 
-        var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
-        foreach (var (key, lww) in Cache.EnumerateRows())
-        {
-            if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-            {
-                rightEntries[key] = lww;
-            }
-        }
+        // Join the back-pointer fixup before mutating the donor's own
+        // state so a thrown fixup surfaces here (and not on a later
+        // unobserved-task path). Awaited ahead of the transfer rather than
+        // after it, as it was while the transfer was a single pass: the
+        // transfer now removes rows batch by batch, so donor mutation begins
+        // at the first batch rather than after the last. It still overlaps
+        // the InitializeSiblingAsync round-trip above.
+        await oldNextFixup;
 
-        if (rightEntries.Count > 0)
+        // Migrate the >= splitKey rows in bounded batches rather than in one
+        // pass. The single pass read them through Cache.EnumerateRows(), which
+        // - like Keys - calls HydrateAll() first, so it materialised the whole
+        // leaf, built a dictionary holding the entire right half, and handed
+        // that to MergeEntriesAsync to be deep-copied: three whole-leaf-scale
+        // costs alive at once, on a leaf already known to be oversized.
+        //
+        // The third of those costs is now gone outright rather than bounded:
+        // MergeEntriesAsync's parameter is marked [Immutable] (issue #2799), so
+        // the same-silo call hands these payload arrays through instead of
+        // cloning each one. Read the paragraph below as bounding the first two.
+        //
+        // Batching bounds the peak to one batch regardless of how large the
+        // leaf is, which is the property that makes this a fix rather than a
+        // mitigation: a leaf twice the size divides at the same peak, not at
+        // twice the peak. The batch width is derived at runtime from the
+        // frame's own measured mean row footprint against an option that
+        // already exists and already defaults sanely, so no new constant is
+        // introduced and nothing is tuned to a particular host's memory.
+        //
+        // Crash-safety is unchanged by batching. The split intent - SplitKey,
+        // SplitSiblingId and NextSibling - is already durable before any row
+        // moves (persisted by SplitAsync, or carried by the recovery path), so
+        // a process that dies mid-transfer reactivates with SplitInProgress and
+        // re-runs this method against the same durable SplitKey. The donor's
+        // own remaining rows are the resume cursor: rows already migrated and
+        // removed are simply not seen again, and rows migrated but not yet
+        // removed are re-sent into an idempotent LWW merge. That is the same
+        // contract the single-pass transfer relied on - it too had a durable
+        // window, between the sibling's merge landing and the donor's removals
+        // being persisted, in which a key existed on both leaves - so batching
+        // changes how many such windows occur, not what state they leave
+        // behind.
+        var transferOptions = await GetOptionsAsync();
+        var batchBoundaries = Cache.GetTransferBatchBoundariesWithoutHydrating(
+            splitKey, transferOptions.LeafHydrationResidentBytes);
+
+        var batchStart = splitKey;
+        for (var boundary = 0; boundary <= batchBoundaries.Count; boundary++)
         {
-            // Arm the sibling's read gate BEFORE the migrated entries land
-            // on it. While a cross-shard reshard saga is mid-flight a leaf
-            // can hold an IsMigrated=true value for a key whose atomic
-            // isolation is provided EITHER by a destination-side shadow
-            // marker (_shadowedSagas, installed by the shard shadow-forward)
-            // OR by a locally prepared saga bucket (_pendingTx, when the
-            // saga prepared directly on this leaf). Both are per-key state on
-            // the donor; a split moves only the committed Entries row to the
-            // sibling. Without carrying that isolation the sibling would
-            // surface the migrated pre-saga value ungated, and once the saga
-            // commits a concurrent reader could observe it while sibling keys
-            // already show the post-saga value - the torn read the reshard
-            // chaos fixture catches. Re-arm the sibling with a shadow marker
-            // for every such saga so the read gate rejects a
-            // Committed-without-backstop read until the saga's committed-values
-            // backstop terminal lands on the sibling (it routes there as the
-            // key's current owner and clears the marker). Must precede
-            // MergeEntriesAsync so the gate is armed before the migrated value
-            // becomes visible on the sibling.
-            await TransferShadowMarkersToSiblingAsync(newLeaf, rightEntries.Keys);
-            await newLeaf.MergeEntriesAsync(rightEntries);
+            var batchEndExclusive = boundary < batchBoundaries.Count
+                ? batchBoundaries[boundary]
+                : null;
+
+            // Materialised into a dictionary before any mutation: EnumerateRange
+            // hands back a live view over the backing dictionary, and RemoveEntry
+            // below structurally modifies it.
+            var batch = new Dictionary<string, LwwValue<byte[]>>();
+            foreach (var (key, lww) in Cache.EnumerateRange(batchStart, batchEndExclusive))
+            {
+                batch[key] = lww;
+            }
+
+            if (batch.Count > 0)
+            {
+                // Arm the sibling's read gate BEFORE the migrated entries land
+                // on it. While a cross-shard reshard saga is mid-flight a leaf
+                // can hold an IsMigrated=true value for a key whose atomic
+                // isolation is provided EITHER by a destination-side shadow
+                // marker (_shadowedSagas, installed by the shard shadow-forward)
+                // OR by a locally prepared saga bucket (_pendingTx, when the
+                // saga prepared directly on this leaf). Both are per-key state on
+                // the donor; a split moves only the committed Entries row to the
+                // sibling. Without carrying that isolation the sibling would
+                // surface the migrated pre-saga value ungated, and once the saga
+                // commits a concurrent reader could observe it while sibling keys
+                // already show the post-saga value - the torn read the reshard
+                // chaos fixture catches. Re-arm the sibling with a shadow marker
+                // for every such saga so the read gate rejects a
+                // Committed-without-backstop read until the saga's committed-values
+                // backstop terminal lands on the sibling (it routes there as the
+                // key's current owner and clears the marker). Must precede
+                // MergeEntriesAsync so the gate is armed before the migrated value
+                // becomes visible on the sibling.
+                await TransferShadowMarkersToSiblingAsync(newLeaf, batch.Keys);
+
+                // The batch's payload arrays are the donor cache's own arrays,
+                // and MergeEntriesAsync's parameter is [Immutable], so the
+                // sibling retains these references rather than copies of them.
+                // Nothing below may write into them: the removal loop only drops
+                // the donor's reference, which is why sharing them is safe here.
+                await newLeaf.MergeEntriesAsync(batch);
+
+                // Drop the batch from the donor before reading the next one, so
+                // the migrated payload is released rather than accumulating
+                // across batches. The rows are resident from the enumeration
+                // just above, so this costs no further hydration.
+                foreach (var key in batch.Keys)
+                {
+                    RemoveEntry(key);
+                }
+
+                // Issue #2796. Every batch that leaves the donor is an
+                // observable change to the set of rows this leaf owns, so it
+                // has to advance the revision cookie. The cookie's contract is
+                // equality-only: equal means "nothing has advanced", and
+                // LeafCacheGrain acts on that by returning early, ahead of the
+                // TTL gate, on the strength of it. Without this bump a
+                // same-silo cache holding the pre-division cookie concludes
+                // "provably fresh" and keeps serving keys this leaf has just
+                // handed to the sibling.
+                //
+                // No other bump covers this. A division reached through
+                // TrySplitForByteOverflowAsync runs at the snapshot-capture
+                // seam with no accompanying write, so there is no write bump
+                // to mask the omission on that path.
+                //
+                // Bumped per batch rather than once when the transfer
+                // finishes, because the donor is observably changed after each
+                // batch and a reader can sample between them. The asymmetry
+                // decides it: an extra bump costs one needless refresh, a
+                // missed bump costs a stale read that nothing downstream can
+                // detect.
+                BumpLocalRevision();
+            }
+
+            if (batchEndExclusive is null)
+            {
+                break;
+            }
+
+            batchStart = batchEndExclusive;
         }
 
         // Per-partition projection-checkpoint hints on the sibling, applied
@@ -301,18 +1072,9 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
         }
 
-        // Join the back-pointer fixup before mutating the donor's own
-        // state so a thrown fixup surfaces here (and not on a later
-        // unobserved-task path).
-        await oldNextFixup;
-
-        foreach (var key in rightEntries.Keys)
-        {
-            RemoveEntry(key);
-        }
-
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
+        state.State.SplitInFlight = false;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         // Advance the donor's per-partition projection checkpoints to
@@ -398,10 +1160,27 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        var bySaga = CollectShadowMarkers(movedKeys);
+        if (bySaga is null)
+            return;
+
+        foreach (var (txid, keys) in bySaga)
+            await sibling.MarkSagaShadowAsync(txid, keys);
+    }
+
+    /// <summary>
+    /// Gathers the saga shadow markers this leaf holds that cover any of
+    /// <paramref name="movedKeys"/>, grouped by transaction. Returns
+    /// <c>null</c> - without allocating - when this leaf holds neither
+    /// markers nor prepared buckets, which is the steady state.
+    /// </summary>
+    private Dictionary<Guid, List<string>>? CollectShadowMarkers(
+        IReadOnlyCollection<string> movedKeys)
+    {
         var haveMarkers = _shadowedSagas is { Count: > 0 };
         var havePending = _pendingTx is { Count: > 0 };
         if (!haveMarkers && !havePending)
-            return;
+            return null;
 
         Dictionary<Guid, List<string>>? bySaga = null;
 
@@ -433,11 +1212,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        if (bySaga is null)
-            return;
-
-        foreach (var (txid, keys) in bySaga)
-            await sibling.MarkSagaShadowAsync(txid, keys);
+        return bySaga;
     }
 
     private static void AddSagaKeyMarker(

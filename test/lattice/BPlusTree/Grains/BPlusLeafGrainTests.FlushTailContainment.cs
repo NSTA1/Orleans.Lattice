@@ -155,6 +155,19 @@ public partial class BPlusLeafGrainTests
 
         var state = new FakePersistentState<LeafNodeState>();
         state.State.TreeId = TailContainmentTreeId;
+        // Partition 0 is genuinely AT offset 0, stated explicitly rather than
+        // inherited from the type default. This test's mechanism depends on
+        // SetCheckpointOffsetAsync(0) below being an idempotent re-assert at the
+        // current offset, which is what routes it through the force-flush arm
+        // into the contained tail. A leaf that has never checkpointed partition 0
+        // now correctly reports the -1 "nothing applied" sentinel rather than the
+        // born-0 scalar (issue #2703), so without this marker the same call is a
+        // real advance, takes the ordinary arm, and never reaches the tail - the
+        // setup would silently stop constructing the scenario while still
+        // looking like it did. The contract under test (issue #2220: the flush
+        // tail contains faults and the durable advance stands) is unchanged, and
+        // the assertions below are untouched.
+        state.State.ProjectionCheckpointOffsetAssigned = true;
 
         var grain = new BPlusLeafGrain(
             context,

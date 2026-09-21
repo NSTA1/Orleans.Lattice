@@ -149,11 +149,13 @@ internal sealed partial class BPlusLeafGrain
         else
         {
             var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+            var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+                partitionCount, partitionsWithLiveData, treeId);
             for (var partition = 0; partition < partitionCount; partition++)
             {
                 var consumerId = BuildConsumerId(idBase, partition, partitionCount);
                 var (frontier, offset) = ResolveDurablePinForPartition(
-                    partition, clock, partitionsWithLiveData);
+                    partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
                 reporter.NoteDurableMaterialiserFrontier(
                     treeId, consumerId, frontier, offset);
             }
@@ -191,41 +193,60 @@ internal sealed partial class BPlusLeafGrain
     /// is best-effort: the WAL is the durability boundary and the next
     /// activation re-reports the frontier.
     /// </param>
-    private async Task FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+    private async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
         {
-            return;
+            return 0;
         }
 
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
-            return;
+            return 0;
         }
 
         var idBase = ResolveConsumerIdBase();
         if (idBase is null)
         {
-            return;
+            return 0;
         }
 
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+            partitionCount, partitionsWithLiveData, treeId);
         var reports = new MaterialiserPinReport[partitionCount];
+        var emptyWalReleases = 0;
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
-                partition, clock, partitionsWithLiveData);
+                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reports[partition] = new MaterialiserPinReport(consumerId, frontier, offset);
+
+            // Count the partitions this flush released under the #3103 rule -
+            // ones that held live rows and no checkpoint, and so would have
+            // published a permanent block pin, but whose WAL turned out to be
+            // empty. The starvation drive needs this to answer honestly whether
+            // it lifted anything, because its replay-based predicate cannot
+            // see a release it did not reach through a replay.
+            if (partitionsWithEmptyWal is not null
+                && partition < partitionsWithEmptyWal.Length
+                && partitionsWithEmptyWal[partition]
+                && partitionsWithLiveData[partition]
+                && GetCurrentCheckpointForPartition(partition) < 0)
+            {
+                emptyWalReleases++;
+            }
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
             treeId, reports, cancellationToken);
+        return emptyWalReleases;
     }
 
     /// <summary>
@@ -293,11 +314,13 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
+            partitionCount, partitionsWithLiveData, treeId);
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
-                partition, clock, partitionsWithLiveData);
+                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reporter.NoteDurableMaterialiserFrontier(
                 treeId, consumerId, frontier, offset);
         }
@@ -319,8 +342,40 @@ internal sealed partial class BPlusLeafGrain
     /// checkpoint and advances the pin past Zero. Idempotent and never throws
     /// (the awaited seam swallows transient failures); a no-op when the host has
     /// no cursor reporter (pre-WAL) or the tree id is unset.
+    /// <para>
+    /// <b>The offset half is not a sentinel when the caller knows the birth
+    /// frontier (issue #3094).</b> A pin reporting the "-1" no-offset sentinel
+    /// is deliberately excluded from the WAL GC's offset coverage set, so it is
+    /// protected <i>only</i> by the Zero-HLC block-pin branch - and that branch
+    /// does not block one partition, it disables the cursor trim for the whole
+    /// tree. Leaf keys hash across every WAL partition
+    /// (<see cref="WalPartitionHash"/> is FNV-1a over the entire key), so one
+    /// newborn leaf blocks all of them; and splits admit newborns continuously,
+    /// so a growing tree never stops having one. The measured consequence is a
+    /// WAL that grows monotonically while every trim pass short-circuits before
+    /// a single shard is scanned.
+    /// </para>
+    /// <para>
+    /// When <paramref name="walHeadsAtBirth"/> is supplied - the split path,
+    /// where the donor captured the per-partition heads before handing the rows
+    /// over - each partition's pin carries that head as a real checkpoint
+    /// offset instead. This is <b>not</b> a relaxation of the retention
+    /// guarantee: the sibling's rows are appended at or above the captured head,
+    /// and the WAL GC's offset floor refuses to trim any entry ABOVE the floor
+    /// even when it is HLC-eligible, so the rows the seed exists to protect stay
+    /// protected on the offset axis. What changes is that the pin now sits
+    /// inside the offset coverage set, so it no longer has to disable the cursor
+    /// branch tree-wide to be safe.
+    /// </para>
+    /// <para>
+    /// A head of <c>0</c> or less is not a usable checkpoint offset and falls
+    /// back to the sentinel, mirroring the <c>donorHead &gt; 0</c> guard
+    /// <c>CompleteSplitAsync</c> applies to the same array. The root/bulk-load
+    /// seam passes nothing and keeps the sentinel: it is a one-time bounded
+    /// event at tree creation rather than a continuous admission source.
+    /// </para>
     /// </summary>
-    private async Task SeedDurableMaterialiserBlockPinAsync()
+    private async Task SeedDurableMaterialiserBlockPinAsync(long[]? walHeadsAtBirth = null)
     {
         var reporter = ResolveCursorReporter();
         if (reporter is null)
@@ -341,11 +396,113 @@ internal sealed partial class BPlusLeafGrain
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero, -1);
+
+            // Only a head the donor actually captured for THIS partition is
+            // usable. A short array (a donor configured with fewer partitions
+            // than this leaf resolves) contributes nothing rather than reading
+            // another partition's offset space.
+            var offset = walHeadsAtBirth is { } heads
+                && partition < heads.Length
+                && heads[partition] > 0
+                    ? heads[partition]
+                    : -1;
+
+            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero, offset);
         }
 
         await reporter.SeedDurableMaterialiserBlockManyAsync(
             treeId, reports, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Deregisters every one of this leaf's materialiser cursors - the death
+    /// seam that mirrors <see cref="SeedDurableMaterialiserBlockPinAsync"/>'s
+    /// birth seam (issue #3101).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists.</b> A leaf's materialiser pin is a WAL retention
+    /// <i>floor</i>: until it resolves to a real offset, the GC cannot trim past
+    /// it. Registration is birth-gated - <see cref="ResolveConsumerIdBase"/>
+    /// returns <see langword="null"/> while the tree id is unset, so only a leaf
+    /// with a persisted tree id can ever hold a pin - but nothing retired the
+    /// pin at death. A reclaimed leaf therefore left its pin behind, and the pin
+    /// pinned the WAL forever.
+    /// </para>
+    /// <para>
+    /// <b>Why it must run before the state clear.</b> The consumer ids are
+    /// derived from <c>state.State.TreeId</c>, which
+    /// <c>state.ClearStateAsync()</c> nulls. Deregistering afterwards is not
+    /// merely late, it is impossible: the ids can no longer be computed. The
+    /// ordering is the whole correctness of the fix, so
+    /// <see cref="ClearGrainStateAsync"/> calls this first.
+    /// </para>
+    /// <para>
+    /// <b>Why it is safe.</b> This runs only from
+    /// <see cref="ClearGrainStateAsync"/>, which is terminal by construction -
+    /// it clears durable state and deactivates. That is exactly the "leaf
+    /// eviction during a purge" case
+    /// <see cref="ILeafCursorReporter.UnregisterAsync"/> reserves itself for.
+    /// Routine deactivation does not come here and must never deregister, or the
+    /// GC could trim entries the next activation still needs to replay.
+    /// </para>
+    /// <para>
+    /// <b>Failures are swallowed.</b> The caller has already committed the fold
+    /// that removed this leaf from the chain, so throwing here would report a
+    /// completed structural change as failed. A missed deregistration degrades
+    /// to the pre-fix behaviour - a retained WAL prefix - rather than to
+    /// corruption, and the GC's own orphan sweep retires the pin independently.
+    /// </para>
+    /// </remarks>
+    private async Task UnregisterMaterialiserPinsAsync()
+    {
+        var reporter = ResolveCursorReporter();
+        if (reporter is null)
+        {
+            return;
+        }
+
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
+        {
+            return;
+        }
+
+        var treeId = state.State.TreeId!;
+
+        int partitionCount;
+        try
+        {
+            var options = await GetOptionsAsync();
+            partitionCount = Math.Max(1, options.WalPartitions);
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {Leaf} of tree '{TreeId}' could not resolve its WAL partition count while retiring its materialiser pins; the pins are left registered and the WAL GC's orphan sweep will retire them instead.",
+                context.GrainId,
+                treeId);
+            return;
+        }
+
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            try
+            {
+                await reporter.UnregisterAsync(treeId, consumerId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Leaf {Leaf} of tree '{TreeId}' failed to retire materialiser pin {Consumer}; the WAL prefix behind it stays retained until the WAL GC's orphan sweep retires it.",
+                    context.GrainId,
+                    treeId,
+                    consumerId);
+            }
+        }
     }
 
     private ILeafCursorReporter? ResolveCursorReporter()
@@ -417,6 +574,98 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Per-activation memo of WAL partitions observed to hold at least one
+    /// entry. A partition's head offset is the next sequence number to be
+    /// assigned, so it is monotonic and <c>head &gt; 0</c> is a one-way
+    /// transition: once a partition is known non-empty it can never become
+    /// empty again, and re-probing it is pure cost. Lazily allocated because
+    /// the probe itself only runs for the rare state that needs it.
+    /// </summary>
+    private bool[]? _partitionWalKnownNonEmpty;
+
+    /// <summary>
+    /// Resolves which WAL partitions are <b>empty</b> (head offset <c>0</c>,
+    /// i.e. no entry was ever appended) among those that would otherwise
+    /// publish a permanent block pin, or <c>null</c> when no partition is in
+    /// that state and the probe can be skipped entirely.
+    /// <para>
+    /// This exists for issue #3103. A partition that holds live cache rows but
+    /// has never durably checkpointed (<c>checkpoint &lt; 0</c>) publishes the
+    /// <see cref="HybridLogicalClock.Zero"/> block pin, and that pin is
+    /// <b>permanent</b> when the partition's WAL is empty: there is nothing to
+    /// replay, so the starved-checkpoint drive returns <c>NoAdvance</c> for
+    /// ever, the checkpoint never advances, and the coverage repair's
+    /// "checkpointed WITHOUT coverage" predicate stays unreachable. Because a
+    /// block pin is tree-wide, one such partition strands every other leaf in
+    /// the tree and its WAL can never be trimmed again. The state is reached by
+    /// a WAL reset that preserves snapshots: the leaf rehydrates rows from the
+    /// surviving blob while the partition's WAL is empty.
+    /// </para>
+    /// <para>
+    /// An empty WAL holds no committed prefix, so the block protects nothing
+    /// and costs only liveness - which is exactly the reasoning the existing
+    /// genuinely-empty-partition branch already applies. This probe is what
+    /// lets that branch tell "empty WAL" from "unapplied prefix". It is
+    /// deliberately <b>not</b> a claim of coverage: a partition whose WAL holds
+    /// unapplied entries still keeps its block, preserving the #1535 no-loss
+    /// invariant and the #945 fall-off guard.
+    /// </para>
+    /// <para>
+    /// Fails closed. A probe that throws returns <c>null</c>, which keeps every
+    /// block pin exactly as it was - retaining more WAL is always safe, so a
+    /// transient read failure can never authorise a trim.
+    /// </para>
+    /// </summary>
+    private async Task<bool[]?> ComputeEmptyWalPartitionsAsync(
+        int partitionCount, bool[] partitionsWithLiveData, string treeId)
+    {
+        var known = _partitionWalKnownNonEmpty;
+        var needsProbe = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (!partitionsWithLiveData[p] || GetCurrentCheckpointForPartition(p) >= 0)
+                continue;
+            if (known is not null && p < known.Length && known[p])
+                continue;
+            needsProbe = true;
+            break;
+        }
+        if (!needsProbe)
+            return null;
+
+        long[] heads;
+        try
+        {
+            heads = await CaptureWalHeadsByPartitionAsync(treeId);
+        }
+        catch (Exception)
+        {
+            // Fail closed: keep every block pin. Retaining WAL is always safe.
+            return null;
+        }
+
+        if (known is null || known.Length < partitionCount)
+        {
+            var grown = new bool[partitionCount];
+            if (known is not null)
+                Array.Copy(known, grown, Math.Min(known.Length, partitionCount));
+            _partitionWalKnownNonEmpty = known = grown;
+        }
+
+        var empty = new bool[partitionCount];
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (p >= heads.Length)
+                continue;
+            if (heads[p] > 0)
+                known[p] = true;
+            else
+                empty[p] = true;
+        }
+        return empty;
+    }
+
+    /// <summary>
     /// Resolves the durable materialiser pin (frontier HLC and checkpoint
     /// offset) this leaf reports for <paramref name="partition"/>. This is the
     /// coverage-gated trim floor: the pin may only authorise the shared-shard
@@ -441,6 +690,19 @@ internal sealed partial class BPlusLeafGrain
     /// partition is never released on the strength of a momentarily empty cache.
     /// </description></item>
     /// <item><description>
+    /// <b>Data-bearing with an empty WAL</b> (issue #3103): the partition holds
+    /// live cache rows and has never checkpointed, but its WAL head is
+    /// <c>0</c>, so no entry was ever appended and the block protects nothing.
+    /// Reached by a WAL reset that preserves snapshots - the leaf rehydrates
+    /// rows from the surviving blob while the WAL behind them is gone. Left
+    /// blocking, the pin is <em>permanent</em>: there is nothing to replay, so
+    /// the checkpoint can never advance and the coverage repair can never
+    /// become reachable, and because a block pin is tree-wide one such
+    /// partition strands the whole tree's WAL for ever. Released, exactly as
+    /// the genuinely-empty-partition case is released and on the same
+    /// reasoning. See <see cref="ComputeEmptyWalPartitionsAsync"/>.
+    /// </description></item>
+    /// <item><description>
     /// <b>Data-bearing, not durably recoverable</b>: the partition holds live
     /// data whose only durable copy is the WAL prefix from offset 0, because
     /// it either never durably checkpointed (offset <c>&lt; 0</c>, the
@@ -460,7 +722,8 @@ internal sealed partial class BPlusLeafGrain
     /// </list>
     /// </summary>
     private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
-        int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData)
+        int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData,
+        bool[]? partitionsWithEmptyWal = null)
     {
         var checkpoint = GetCurrentCheckpointForPartition(partition);
 
@@ -489,6 +752,33 @@ internal sealed partial class BPlusLeafGrain
         // must therefore be coverage-gated exactly like a cache-populated one,
         // regardless of whether the cache momentarily shows it empty.
         if (!partitionsWithLiveData[partition] && checkpoint < 0)
+        {
+            return (clock, checkpoint);
+        }
+
+        // Issue #3103: data-bearing, never checkpointed, and its WAL is EMPTY
+        // (head offset 0 - no entry was ever appended). This is the same
+        // "nothing to lose" case as the branch above, reached the other way
+        // round: the rows are real but the WAL behind them is not, because a
+        // WAL reset preserved the snapshot the leaf rehydrated them from.
+        // Blocking here is not conservative, it is terminal - an empty WAL has
+        // nothing to replay, so the starved-checkpoint drive returns NoAdvance
+        // for ever, the checkpoint never leaves -1, and the coverage repair's
+        // "checkpointed WITHOUT coverage" predicate stays permanently
+        // unreachable. Since a block pin is tree-wide, one such partition
+        // strands every leaf in the tree. Release it: an empty WAL holds no
+        // committed prefix, so the block protects nothing at all.
+        //
+        // Narrow by construction. This releases ONLY on a proven-empty WAL; a
+        // partition whose WAL holds unapplied entries keeps its block exactly
+        // as before, so neither the #1535 no-loss invariant nor the #945
+        // fall-off guard is weakened. The probe fails closed (see
+        // ComputeEmptyWalPartitionsAsync), so an unreadable head keeps the
+        // block too.
+        if (checkpoint < 0
+            && partitionsWithEmptyWal is not null
+            && partition < partitionsWithEmptyWal.Length
+            && partitionsWithEmptyWal[partition])
         {
             return (clock, checkpoint);
         }

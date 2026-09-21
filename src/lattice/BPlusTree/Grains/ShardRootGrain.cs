@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -25,13 +26,40 @@ internal sealed partial class ShardRootGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
-    /// Runs the one-time activation repair for a persisted <c>RootIsLeaf</c> flag
-    /// baked <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
+    /// Publishes the scan-page leaf-read outcome arms at zero, then runs the
+    /// one-time activation repair for a persisted <c>RootIsLeaf</c> flag baked
+    /// <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
     /// completed task without allocating on every shard that has nothing to repair,
     /// which after the population has drained is every shard. See
     /// <c>ShardRootGrain.RootFlagHeal.cs</c> for why activation is the seam.
+    /// <para>
+    /// <b>The primes are the first statements and that is load-bearing</b> (issue
+    /// #2809, extended to the stall phase arms by issue #2952). Priming from
+    /// activation rather than from the read path is what makes the series
+    /// workload-independent: it exists for every <c>(tree, shard)</c>
+    /// that has activated, whether or not a scan has ever run against it, so an
+    /// absent series means the build does not carry the instrument and nothing
+    /// else. Priming from a traffic-gated site cannot say that - see
+    /// <see cref="PrimeScanPageLeafReadOutcomes"/> for the full argument and for
+    /// why the read path still primes as well.
+    /// </para>
+    /// <para>
+    /// They sit above <see cref="HealBakedRootIsLeafFlagAsync"/> rather than inside
+    /// it because that method returns early on three separate branches, and a prime
+    /// below any of them would be exactly the defect this moved away from. It does
+    /// not disturb the allocation pin that
+    /// <c>ShardRootGrainRootFlagHealTests.Activation_allocates_no_task_when_there_is_nothing_to_repair</c>
+    /// holds: that pin is a reference-identity check on the returned task, and
+    /// priming is synchronous and returns nothing.
+    /// </para>
     /// </summary>
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => HealBakedRootIsLeafFlagAsync();
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        PrimeScanPageLeafReadOutcomes();
+        PrimeScanPageStallPhases();
+        PrimeScanPageZeroProgressOutcomes();
+        return HealBakedRootIsLeafFlagAsync();
+    }
 
     async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
@@ -122,6 +150,154 @@ internal sealed partial class ShardRootGrain(
     }
 
     private ResolvedLatticeOptions? _cachedOptions;
+
+    /// <summary>
+    /// Consecutive failures a coalescing flush loop tolerates before suspending
+    /// itself for the remainder of the activation.
+    /// <para>
+    /// Both flush loops re-arm on failure and would otherwise retry for the life of
+    /// the activation. That is correct for a transient fault and useless for a
+    /// permanent one: a shard root whose in-memory ETag no longer matches its stored
+    /// row fails identically on every tick, and no number of retries repairs it.
+    /// Issue 2419 measured that shape in production - thirteen shard roots retrying
+    /// on a 30 s cadence with a byte-identical ETag for over twenty-five minutes.
+    /// </para>
+    /// <para>
+    /// Five is deliberately generous relative to the cause it bounds. At the 30 s
+    /// leaf-access cadence it spends about two and a half minutes before giving up,
+    /// which rides out a storage blip comfortably, while at the 50 ms dirty-leaf
+    /// cadence it costs a quarter of a second. Suspension never discards pending
+    /// work: the in-memory state is retained, the deactivation flush still attempts
+    /// a final best-effort write, and both subsystems document their own recovery
+    /// (dirty marks are re-discovered by the chain-walk fallback, and the
+    /// leaf-access model rebuilds from live traffic).
+    /// </para>
+    /// <para>
+    /// Suspension bounds wasted writes and makes the condition visible. On its own it
+    /// is not a repair: a grain timer does not extend an activation's lifetime
+    /// (<c>GrainTimerCreationOptions.KeepAlive</c> defaults to <see langword="false"/>),
+    /// so stopping the loop does not by itself hasten collection, and a shard root
+    /// held active by inbound traffic would stay stuck until it was collected and a
+    /// later activation re-read its state. <see cref="ReportFlushRetriesSuspended"/>
+    /// therefore requests that deactivation itself when - and only when - the
+    /// terminating failure is a version conflict, which is the one class that a fresh
+    /// activation is guaranteed to clear.
+    /// </para>
+    /// </summary>
+    internal const int MaxConsecutiveFlushFailures = 5;
+
+    /// <summary>
+    /// Reports a coalescing flush loop suspending itself after
+    /// <see cref="MaxConsecutiveFlushFailures"/> consecutive failures. Emits the
+    /// operator-visible warning and the metric, and - when the terminating failure is
+    /// a version conflict - requests deactivation so a later activation re-reads the
+    /// stored row and its current ETag. The caller disposes its own timer and latches
+    /// its own suspension flag.
+    /// </summary>
+    /// <param name="kind">The loop that gave up, used as the metric's kind tag.</param>
+    /// <param name="ex">The failure observed on the final attempt.</param>
+    /// <remarks>
+    /// <para>
+    /// The tenant dimension is named inline via
+    /// <see cref="LatticeTenantLabel.ForTree(string)"/> rather than taken from the
+    /// activation-cached tag set, matching <c>LeafAccessMetricTags()</c>: the site
+    /// fires at most twice per activation, so the allocation is immaterial, and
+    /// naming it here keeps it directly verifiable by the tenant-dimension hygiene
+    /// gate instead of needing an allow-list entry.
+    /// </para>
+    /// <para>
+    /// <b>Why suspension alone was not enough.</b> Issue 2419 bounded the wasted
+    /// writes and made the condition visible, and stopped there - deliberately, and
+    /// it said so: stopping a grain timer does not extend or shorten an activation's
+    /// lifetime, so a shard root held active by inbound traffic stayed stuck
+    /// indefinitely, with every write from it failing and its own warning saying
+    /// "pending state will not reach storage until it is re-read" while nothing
+    /// re-read it. A live container showed both halves of that: two vector-membership
+    /// shard roots suspended their leaf-access loops within six minutes of each
+    /// other, each after six identical version conflicts against a byte-identical
+    /// ETag, and neither ever logged a recovery.
+    /// </para>
+    /// <para>
+    /// <b>Deactivating is the repair, and it discards nothing.</b> A version conflict
+    /// means this activation's ETag no longer matches the stored row, so nothing it
+    /// writes can ever be accepted again - the pending state is already unreachable,
+    /// and the deactivation flush that follows would fail on the same conflict. What
+    /// deactivation adds is the re-read: the next activation loads the stored row and
+    /// its current ETag, and writes succeed again. Both subsystems already document
+    /// their own recovery from a lost window (dirty marks are re-discovered by the
+    /// chain-walk fallback; the leaf-access model rebuilds from live traffic), so the
+    /// cost is a colder shard, never a wrong answer.
+    /// </para>
+    /// <para>
+    /// <b>Only a version conflict deactivates.</b> A transient storage fault is not
+    /// repaired by a fresh activation - it would re-fail on the same storage - so
+    /// tearing down an otherwise-serving shard root for one would trade a bounded
+    /// write stall for an availability cost, and could recycle every shard root on a
+    /// tree at once while the fault lasted. Those keep the pre-existing behaviour:
+    /// suspend, report, and stay up.
+    /// </para>
+    /// <para>
+    /// <b>The exception type is the whole discriminator. Never gate this on the
+    /// etag properties.</b> <see cref="InconsistentStateException.StoredEtag"/> and
+    /// <see cref="InconsistentStateException.CurrentEtag"/> look like a way to
+    /// confirm a real mismatch, and they are not: <c>AdoNetGrainStorage</c> - the
+    /// provider this repository's own deployments register - raises every conflict
+    /// through the message-only constructor and never populates either property.
+    /// Measured on a real deployment, <b>0 of 134</b> version conflicts carried a
+    /// non-empty etag, including conflicts on rows that plainly existed
+    /// (<c>ETag=245</c>, <c>ETag=164</c>, <c>ETag=7718</c>); see
+    /// <see cref="TopologySeedPersist"/>, which documents the same measurement for
+    /// the same reason. Adding <c>&amp;&amp; !string.IsNullOrEmpty(ex.StoredEtag)</c>
+    /// here therefore reads as a tightening and acts as a disabling: the condition
+    /// is false for every conflict AdoNet can raise, so no shard root would ever be
+    /// deactivated and this repair would silently become dead code. The
+    /// <c>ETag=NNN</c> that does appear is part of the provider's message text - the
+    /// version the rejected write carried - not a property, and must not be parsed.
+    /// </para>
+    /// <para>
+    /// For the same reason this condition is <em>not</em> named for a damaged or
+    /// absent etag. What it detects is a conflict that repeated to the ceiling, which
+    /// on an established row means another writer advanced it and this activation's
+    /// cached version can no longer be accepted by any retry. That is an ordinary
+    /// stale-state conflict - the #1560 fail-loud contract working - and the repair
+    /// is to re-read, not to repair anything.
+    /// </para>
+    /// </remarks>
+    private void ReportFlushRetriesSuspended(string kind, Exception ex)
+    {
+        var permanentConflict = ex is InconsistentStateException;
+
+        logger.LogWarning(ex,
+            "Shard {ShardKey} suspended its {FlushKind} flush loop after {FailureCount} consecutive failures; retries are stopped for this activation and pending state will not reach storage until it is re-read. A repeating version conflict here means another writer advanced this grain's stored row, so this activation's cached version can no longer be accepted by any retry. Deactivation requested to force that re-read: {DeactivationRequested}.",
+            context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures, permanentConflict);
+
+        LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
+            LatticeTenantLabel.ForTree(TreeId));
+
+        if (!permanentConflict)
+        {
+            return;
+        }
+
+        try
+        {
+            // Scheduled for after the current turn, so this neither blocks nor
+            // re-enters. Wrapped because a unit test with a substituted
+            // IGrainContext has no runtime to schedule against, and the suspension
+            // path must stay exercisable there - matching how both flush timers are
+            // armed.
+            this.DeactivateOnIdle();
+        }
+        catch (Exception deactivateFailure)
+        {
+            logger.LogDebug(deactivateFailure,
+                "Could not request deactivation of shard {ShardKey} after a permanent version-conflict flush suspension (likely a test harness without a grain runtime); the activation stays up and its writes keep failing until it is collected.",
+                context.GrainId.Key.ToString());
+        }
+    }
 
     /// <summary>
     /// Returns the effective options for this tree. Cached for the grain's
@@ -1054,15 +1230,10 @@ internal sealed partial class ShardRootGrain(
             var split = splitResults[i];
             if (split is null) continue;
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             // Any residual split at the root must be promoted into a
             // new root grain - matches the single-key path's
@@ -1191,15 +1362,10 @@ internal sealed partial class ShardRootGrain(
                 continue;
             }
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             while (split is not null)
             {
@@ -1458,15 +1624,10 @@ internal sealed partial class ShardRootGrain(
             var split = leafResults[i].Split;
             if (split is null) continue;
 
-            var parents = orderedBuckets[i].Bucket.Parents;
-            var parentCursor = parents.Count;
-            while (split is not null && parentCursor > 0)
-            {
-                var parentId = parents[--parentCursor];
-                var parentGrain = ResolveInternalGrain(parentId);
-                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            split = await PropagateSplitAsync(split, orderedBuckets[i].Bucket.Parents);
 
             while (split is not null)
             {
@@ -1792,6 +1953,18 @@ internal sealed partial class ShardRootGrain(
         // Published per batch: the union across batches is the same tombstone
         // closure the single unbounded notification carried, so replication
         // apply still reproduces it without re-evaluating the predicate.
+        //
+        // This post-loop publish is also why this walk deliberately publishes
+        // NO bankable partial for the page-fill ceiling (issue 2807), unlike
+        // every other bounded walk on this grain. Banking one would hand the
+        // caller a resume key past a prefix whose tombstones were applied
+        // locally but whose notification never reached here, so the caller
+        // would resume beyond it and the replication closure for that prefix
+        // would be orphaned permanently. Today's ceiling fault is instead
+        // self-healing: the caller sees ScanPageStalledException, retries from
+        // startInclusive, and re-publishes the whole closure - a repeated
+        // tombstone being idempotent. A cheaper walk is not worth trading a
+        // loud retry for a silent divergence.
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
         RecordRecordsWritten(totalDeleted);
         return new ShardRangeDeletePage { Deleted = totalDeleted, ResumeFromInclusive = resumeFrom };
@@ -1898,19 +2071,22 @@ internal sealed partial class ShardRootGrain(
             total += leafCount;
             scan.Budget.RecordLeafVisited();
 
+            // This leaf's bounds, read unconditionally rather than only when
+            // something needs them. Three things want them - the past-range
+            // early exit, the yield point, and since issue 2807 the bankable
+            // checkpoint - and each used to pay its own round trip, so making
+            // the read unconditional costs nothing on a sterile or yielding
+            // leaf and one Task.FromResult-backed call on a productive one.
+            var bounds = await leaf.GetKeyRangeAsync();
+
             // Past-range early exit (issue 1971). Without this a narrow range
-            // still costs a walk to the end of the shard's chain. The bounds
-            // probe is paid only when a leaf contributed nothing, so a
-            // productive leaf keeps its single-call cost and only a sterile run
-            // pays for the check that ends it.
-            if (leafCount == 0 && endExclusive is not null)
+            // still costs a walk to the end of the shard's chain.
+            if (leafCount == 0
+                && endExclusive is not null
+                && bounds.LowKeyInclusive is { } low
+                && string.CompareOrdinal(low, endExclusive) >= 0)
             {
-                var probe = await leaf.GetKeyRangeAsync();
-                if (probe.LowKeyInclusive is { } low
-                    && string.CompareOrdinal(low, endExclusive) >= 0)
-                {
-                    break;
-                }
+                break;
             }
 
             // Resume by KEY, never by leaf grain id: grains are virtual, so a
@@ -1922,7 +2098,7 @@ internal sealed partial class ShardRootGrain(
             // truncating - the same "only stop where you can resume" rule the
             // range-delete and page-fill bounds follow.
             //
-            // The next sibling is resolved FIRST so a resume key is only ever
+            // The next sibling is read FIRST so a resume key is only ever
             // returned when there is genuinely more chain to walk. Yielding one
             // from the last leaf would make the caller re-descend to a leaf it
             // has already counted, which - unlike a range delete, where a
@@ -1931,11 +2107,22 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
+                // Bankable checkpoint (issue 2807). `total` covers exactly the
+                // leaves up to this boundary and the next batch resumes at it,
+                // so a ceiling fire from here costs the caller a batch boundary
+                // rather than the whole attempt. Published against the leaf
+                // just completed, never the one whose read is in flight, or the
+                // resumed batch would re-count it.
+                PublishScanPagePartial(
+                    scan,
+                    new ShardCountPage { Count = total, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    resumeFrom = high;
+                    resumeFrom = boundary;
                     break;
                 }
             }
@@ -1974,31 +2161,6 @@ internal sealed partial class ShardRootGrain(
         if (!IsLeafGrainId(resolved))
             resolved = await DescendToLeafForKeyAsync(resolved, resumeFromInclusive);
         return resolved;
-    }
-
-    /// <summary>
-    /// Returns the key a bounded walk should resume after this leaf from, or
-    /// <see langword="null"/> when the leaf declares no usable high bound.
-    /// <para>
-    /// The leaf's exclusive high bound is exactly where the next leaf begins.
-    /// When there is no safe key to resume from the caller must keep walking
-    /// rather than stop, because stopping without a resume position would
-    /// silently truncate - the "only stop where you can resume" rule the
-    /// range-delete and page-fill bounds also follow.
-    /// </para>
-    /// </summary>
-    private static async Task<string?> TryResolveResumeKeyAsync(
-        IBPlusLeafGrain leaf, string? lowerBound, string? upperBound)
-    {
-        var bounds = await leaf.GetKeyRangeAsync();
-        if (bounds.HighKeyExclusive is { } high
-            && (lowerBound is null || string.CompareOrdinal(high, lowerBound) > 0)
-            && (upperBound is null || string.CompareOrdinal(high, upperBound) < 0))
-        {
-            return high;
-        }
-
-        return null;
     }
 
     /// <inheritdoc />
@@ -2051,6 +2213,7 @@ internal sealed partial class ShardRootGrain(
                 return new ShardAnyPage { Found = true };
             scan.Budget.RecordLeafVisited();
 
+            var bounds = await leaf.GetKeyRangeAsync();
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) return new ShardAnyPage { Found = false };
 
@@ -2059,11 +2222,21 @@ internal sealed partial class ShardRootGrain(
             // output to strand a caller with, so the forward-progress rule the
             // page fills need does not apply. A resume key is still only
             // emitted when a next leaf exists, so the walk cannot stall.
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
+                // Bankable checkpoint (issue 2807): every leaf up to this
+                // boundary has been read and none held a live key, which is
+                // exactly what this page says. Banking it is what stops the
+                // ceiling turning an emptiness probe over a long tombstoned
+                // chain into a walk that can never finish.
+                PublishScanPagePartial(
+                    scan,
+                    new ShardAnyPage { Found = false, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    return new ShardAnyPage { Found = false, ResumeFromInclusive = high };
+                    return new ShardAnyPage { Found = false, ResumeFromInclusive = boundary };
                 }
             }
 
@@ -2160,14 +2333,28 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
+            var bounds = await leaf.GetKeyRangeAsync();
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
+                // Bankable checkpoint (issue 2807). The moved-away slot set has
+                // to ride along or a banked page loses rows silently: a
+                // strongly consistent caller re-asks the split's new owner for
+                // exactly the slots reported here, so a page that banks the
+                // count and drops the slots reports success and omits them.
+                PublishScanPagePartial(scan, new ShardCountWithMovedAwayPage
                 {
-                    resumeFrom = high;
+                    Count = total,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                    ResumeFromInclusive = boundary,
+                });
+
+                if (scan.Budget.ShouldYield())
+                {
+                    resumeFrom = boundary;
                     break;
                 }
             }
@@ -2258,28 +2445,35 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
+            // Read unconditionally, for the reason set out on
+            // CountBoundedCoreAsync: the past-range probe, the yield point and
+            // the bankable checkpoint (issue 2807) all want this leaf's bounds,
+            // and each used to pay its own round trip.
+            var bounds = await leaf.GetKeyRangeAsync();
+
             // Past-range early exit (issue 1971): a bounded range must not cost
-            // a walk to the end of the chain. The probe is paid only when a
-            // leaf yielded no in-range keys at all, so a productive leaf keeps
-            // its single-call cost.
-            if (keys.Count == 0 && endExclusive is not null)
+            // a walk to the end of the chain.
+            if (keys.Count == 0
+                && endExclusive is not null
+                && bounds.LowKeyInclusive is { } low
+                && string.CompareOrdinal(low, endExclusive) >= 0)
             {
-                var probe = await leaf.GetKeyRangeAsync();
-                if (probe.LowKeyInclusive is { } low
-                    && string.CompareOrdinal(low, endExclusive) >= 0)
-                {
-                    break;
-                }
+                break;
             }
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (scan.Budget.ShouldYield())
+            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            if (boundary is not null)
             {
-                if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
+                PublishScanPagePartial(
+                    scan,
+                    new ShardCountPage { Count = total, ResumeFromInclusive = boundary });
+
+                if (scan.Budget.ShouldYield())
                 {
-                    resumeFrom = high;
+                    resumeFrom = boundary;
                     break;
                 }
             }
@@ -2552,7 +2746,8 @@ internal sealed partial class ShardRootGrain(
         // applies - this is a CPU optimisation, not an allocation one.
         if (state.State.RootNodeId is not null
             && state.State.PendingPromotion is null
-            && state.State.PendingBulkGraft is null)
+            && state.State.PendingBulkGraft is null
+            && state.State.PendingChildLinks.Count == 0)
         {
             return Task.CompletedTask;
         }
@@ -2565,6 +2760,7 @@ internal sealed partial class ShardRootGrain(
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
+        await ResumePendingChildLinksAsync();
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
@@ -2736,13 +2932,10 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var splitResult = await leafGrain.MergeManyAsync(entries, isCrossShardMigration);
 
-            while (splitResult is not null && path.Count > 0)
-            {
-                var parentId = path.Pop();
-                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
-                InvalidateRoutingTable(parentId);
-            }
+            // Issue #3265: routed through the durable-intent helper so an
+            // interrupted promotion cannot strand a spliced, pinned sibling
+            // that no descent reaches.
+            splitResult = await PropagateSplitAsync(splitResult, path);
 
             return splitResult;
         }
@@ -2871,8 +3064,9 @@ internal sealed partial class ShardRootGrain(
         // flag could have steered the traversal onto an internal node; if so
         // re-descend to the leftmost leaf rather than blind-casting it.
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Forward();
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
@@ -2882,20 +3076,29 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids transferring keys that would be
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var key in leafKeys)
             {
+                // A key at or behind the watermark proves this leaf is not
+                // reachable by descent for the range it claims, so nothing it
+                // reports - rows or moved-away slots - is trustworthy (3271).
+                if (!chain.Admit(key))
+                    continue;
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (keys.Count >= pageSize)
                 break;
@@ -2907,6 +3110,19 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // A leaf shown not to be descent-reachable - by its rows regressing
+            // the chain, or by its own declared range claiming keyspace the
+            // walk has already consumed - is not evidence about where the walk
+            // is. Withholding its bounds keeps an orphan whose range is wider
+            // than the live leaf's from terminating the scan early or handing
+            // back a resume key that skips live leaves (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage
@@ -3018,8 +3234,9 @@ internal sealed partial class ShardRootGrain(
         // flag steered the traversal onto an internal node, re-descend to the
         // rightmost leaf rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Reverse();
         scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
@@ -3028,22 +3245,30 @@ internal sealed partial class ShardRootGrain(
             // Pass the effective upper boundary as beforeExclusive so the leaf
             // filters at the source - avoids transferring keys that would be
             // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
             {
                 var key = leafKeys[i];
+                // A key at or ahead of the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                if (!chain.Admit(key))
+                    continue;
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (keys.Count >= pageSize)
                 break;
@@ -3052,6 +3277,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See the forward variant: a chain-regressed leaf's bounds must not
+            // steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new KeysPage
@@ -3147,8 +3381,9 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Forward();
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -3161,20 +3396,31 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var entry in leafEntries)
             {
+                // A key at or behind the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                // Suppressing here also sidesteps the question an accumulator
+                // de-duplicator could not answer: which of two values for one
+                // key wins. The untrusted leaf simply never contributes.
+                if (!chain.Admit(entry.Key))
+                    continue;
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (entries.Count >= pageSize)
                 break;
@@ -3186,6 +3432,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage
@@ -3282,8 +3537,9 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToRightmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
         HashSet<int>? movedSet = null;
+        var chain = ScanChainCursor.Reverse();
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -3296,21 +3552,29 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, startInclusive, endExclusive, afterExclusive: null, beforeExclusive: effectiveBefore, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
                 var entry = leafEntries[i];
+                // A key at or ahead of the watermark proves this leaf is not
+                // reachable by descent for the range it claims (issue 3271).
+                if (!chain.Admit(entry.Key))
+                    continue;
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
-                    (movedSet ??= []).Add(movedSlot);
+                    RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
                     continue;
                 }
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (entries.Count >= pageSize)
                 break;
@@ -3319,6 +3583,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new EntriesPage
@@ -3426,7 +3699,8 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var keys = new List<string>(pageSize);
+        var keys = BeginScanPageRows<string>(scan, pageSize);
+        var chain = ScanChainCursor.Forward();
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3435,16 +3709,27 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var key in leafKeys)
             {
+                // Judged before the slot filter, not after: the slot filter
+                // rejects most keys on a post-split shard, so admitting only
+                // the survivors would leave the watermark far behind what the
+                // walk has actually consumed and blind the check across most
+                // of the keyspace (issue 3271).
+                if (!chain.Admit(key))
+                    continue;
                 var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
                 if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
                 keys.Add(key);
                 if (keys.Count >= pageSize) break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (keys.Count >= pageSize) break;
 
@@ -3452,6 +3737,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage { Keys = keys, HasMore = false };
@@ -3542,7 +3836,8 @@ internal sealed partial class ShardRootGrain(
             leafId = await TraverseToLeftmostLeafAsync();
         }
 
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var entries = BeginScanPageRows<KeyValuePair<string, byte[]>>(scan, pageSize);
+        var chain = ScanChainCursor.Forward();
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3551,16 +3846,24 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
+            chain.BeginLeaf();
 
             foreach (var entry in leafEntries)
             {
+                // Judged before the slot filter; see the keys variant for why
+                // (issue 3271).
+                if (!chain.Admit(entry.Key))
+                    continue;
                 var slot = ShardMap.GetVirtualSlot(entry.Key, virtualShardCount);
                 if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
                 entries.Add(entry);
                 if (entries.Count >= pageSize) break;
             }
+
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, leafId, chain.Watermark);
 
             if (entries.Count >= pageSize) break;
 
@@ -3568,6 +3871,15 @@ internal sealed partial class ShardRootGrain(
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
+
+            // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
+            // must not steer termination or resume (issue 3271).
+            if (bounds is { } declared && !chain.TrustsBounds(declared))
+            {
+                bounds = null;
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, leafId, chain.Watermark);
+            }
 
             if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage { Entries = entries, HasMore = false };

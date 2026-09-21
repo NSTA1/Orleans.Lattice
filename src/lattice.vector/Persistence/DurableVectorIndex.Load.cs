@@ -11,9 +11,33 @@ public sealed partial class DurableVectorIndex
     /// that the coherence contract exists to rule out, and because the index is a
     /// derived projection, throwing it away costs only time.
     /// </summary>
-    private async Task LoadAsync(CancellationToken cancellationToken)
+    private async Task LoadAsync(CancellationToken keyWalkToken, CancellationToken cancellationToken)
     {
-        await _keys.LoadAsync(cancellationToken).ConfigureAwait(false);
+        // THE KEY WALK IS TAKEN ONCE PER LOAD ATTEMPT SEQUENCE, NOT ONCE PER
+        // ATTEMPT, and this flag is what makes bounding the open safe.
+        //
+        // The dictionary resumes an interrupted walk from its own cursor and
+        // clears that cursor when the walk finishes. So a load interrupted BEFORE
+        // the walk ends resumes correctly, and one interrupted AFTER it - anywhere
+        // in the restore below - used to find a null cursor and re-issue the walk
+        // from zero. On this repository's corpus that walk is the single most
+        // expensive read in the open, so re-issuing it on every attempt is #2953's
+        // amplification exactly, merely moved one phase later: a caller that
+        // bounds the open would then never finish one, because each attempt would
+        // spend its whole budget redoing the work the last attempt completed.
+        //
+        // Remembering that the walk finished costs one bool and removes the entire
+        // class. Nothing else in the restore is O(corpus) in leaf activations.
+        //
+        // THE WALK IS ALSO THE ONLY PHASE THE SLICE TOKEN REACHES. Everything
+        // below banks nothing when interrupted, so bounding it would make each
+        // attempt restart it and an index whose restore exceeds one slice could
+        // never open. See LoadOrResumeAsync's remarks.
+        if (!_keysLoaded)
+        {
+            await _keys.LoadAsync(keyWalkToken).ConfigureAwait(false);
+            _keysLoaded = true;
+        }
 
         var manifestRecord = await _store
             .ReadAsync(VectorIndexStorageKeys.Manifest(_prefix), cancellationToken).ConfigureAwait(false);
@@ -51,11 +75,11 @@ public sealed partial class DurableVectorIndex
             }
         }
 
-        if (manifestRecord is null && buildRecord is null && _keys.Count == 0)
+        if (manifestRecord is null && _keys.Count == 0 && TryAdoptUncommittedBuild(buildRecord))
         {
-            // A store with nothing on it. Not a fault, and nothing to sweep: the
-            // index simply has not been built yet.
-            ResetInMemory();
+            // A store with nothing committed on it. Not a fault, and nothing to
+            // sweep: the index simply has not been built yet, or has been started
+            // and has not banked anything.
             return;
         }
 
@@ -144,6 +168,58 @@ public sealed partial class DurableVectorIndex
         _resident = resident;
         _persistedPartitions = partitionSlots;
         _restored = true;
+
+        // The append-only ingest prefix is addressed by chunk index: a checkpoint
+        // writes chunk numbers at or above the committed count and never revisits
+        // one below it. That is only sound while the committed prefix ends on a
+        // chunk boundary, because a prefix whose last chunk is partial would have
+        // its missing items silently skipped by the next append, and a loader
+        // would then read back fewer vectors than the manifest promises and
+        // correctly discard the whole index.
+        //
+        // Two different states fail that test, and they need opposite answers.
+        //
+        // A prefix laid out at a DIFFERENT item count - by an earlier
+        // configuration, or by a build whose dimensionality resolves to another
+        // one - cannot be appended to at all, because its chunk numbering spans a
+        // different range of vectors. That one has to be re-laid whole, which is
+        // what surrendering append-only asks for.
+        //
+        // A prefix laid out at THIS item count but ending mid-chunk is the
+        // ordinary output of the two writers that commit a true count rather than
+        // a rounded one: a completed ingest checkpoint, and a full rewrite. It
+        // needs no re-lay. Treating it as one is what made this unbounded: the
+        // re-lay itself commits a true count, so it lands right back in this state
+        // and re-arms the condition on the very next load. Every activation then
+        // rewrote the entire cell under a fresh epoch, and because the epoch is
+        // part of the chunk key nothing superseded anything - the write-ahead log
+        // grew without limit while the index stood still. An index whose training
+        // never completes stays under this branch forever, so the loop had no
+        // natural exit.
+        //
+        // The repair is to stop counting the partial tail chunk as committed. The
+        // vectors in it are already restored in memory, so lowering the committed
+        // count to the whole chunks lets the next checkpoint rewrite that tail in
+        // place and commit a boundary-aligned prefix, which clears the condition
+        // for good. The interval below is what separates the two states: a count
+        // laid out at a different item size misses it by more than one chunk.
+        if (manifest.Header.PartitionCount == 0 && chunkCounts[0] > 0)
+        {
+            var itemsPerChunk = _options.EffectiveItemsPerChunk;
+            var upper = (long)chunkCounts[0] * itemsPerChunk;
+
+            if (manifest.IndexedCount <= upper - itemsPerChunk || manifest.IndexedCount > upper)
+            {
+                _ingestAppendOnly = false;
+            }
+            else if (_loadMode == VectorIndexLoadMode.Full)
+            {
+                // A no-op when the prefix already ends on a boundary. Confined to
+                // a full load because a lazy handle never writes, so it must keep
+                // reporting the tail chunk it may still be asked to read.
+                _persistedChunkCount[0] = (int)(manifest.IndexedCount / itemsPerChunk);
+            }
+        }
 
         // Every partition's durable form matches what is now in memory, so the
         // next flush writes only what a subsequent mutation dirties.
@@ -315,6 +391,55 @@ public sealed partial class DurableVectorIndex
         }
     }
 
+    /// <summary>
+    /// Adopts the build state of a build that has started but committed nothing,
+    /// so an interrupted build resumes from where it got to instead of starting
+    /// again.
+    /// <para>
+    /// A build state is written by the first build step, which counts the source;
+    /// a manifest is written only by the first ingest checkpoint, which is later.
+    /// Between the two the store holds a build state and no manifest, and reading
+    /// that as damage costs the count and forces the phase back to
+    /// <see cref="VectorIndexBuildPhase.NotStarted"/>. A build whose activation is
+    /// long enough to take one step and no more then never gets past that step:
+    /// it re-counts the source, is discarded, and re-counts it again, without
+    /// ever ingesting a vector or reaching a terminating condition.
+    /// </para>
+    /// <para>
+    /// Adoption stays conservative, because the risk is not symmetric. There is
+    /// no committed content to be wrong about, but a cursor is a claim that the
+    /// vectors before it are durable, and with no manifest that claim is false -
+    /// resuming from it would skip them silently. A state carrying a cursor or an
+    /// ingested count is therefore still refused, and only the one that accounts
+    /// for nothing is adopted.
+    /// </para>
+    /// </summary>
+    /// <param name="buildRecord">The persisted build-state record, or null when the store holds none.</param>
+    /// <returns><see langword="true"/> when the in-memory state now reflects the store.</returns>
+    private bool TryAdoptUncommittedBuild(byte[]? buildRecord)
+    {
+        if (buildRecord is null)
+        {
+            ResetInMemory();
+            return true;
+        }
+
+        if (!VectorIndexBuildState.TryReadRecord(buildRecord, out var build) ||
+            build.Ingested != 0 ||
+            build.Cursor is not null)
+        {
+            return false;
+        }
+
+        ResetInMemory();
+        _generation = build.Generation;
+        _phase = build.Phase == VectorIndexBuildPhase.Persisting
+            ? VectorIndexBuildPhase.Training
+            : build.Phase;
+        _expected = build.Expected;
+        return true;
+    }
+
     private void AdoptBuildState(VectorIndexManifest manifest, byte[]? buildRecord)
     {
         if (buildRecord is not null &&
@@ -362,6 +487,12 @@ public sealed partial class DurableVectorIndex
         // were just deleted, and clearing it removes the whole class of stale
         // mappings that would otherwise outlive a rebuild. The identifier counter
         // deliberately does not rewind, so no key is ever handed out twice.
+        //
+        // The walked-the-keys flag is deliberately NOT reset. The cleared mapping
+        // is the current, authoritative one - empty, over a prefix this method has
+        // just deleted - so re-walking it could only re-read nothing. Clearing the
+        // flag here would buy a guaranteed-empty scan on the next attempt and
+        // nothing else.
         await _keys.ClearAsync(cancellationToken).ConfigureAwait(false);
         ResetInMemory();
     }

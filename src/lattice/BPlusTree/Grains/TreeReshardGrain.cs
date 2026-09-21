@@ -67,6 +67,43 @@ internal sealed class TreeReshardGrain(
         // so it counts only invocations that actually start a reshard.
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
+
+        // Zero-prime every member of the rejection taxonomy before any of the six
+        // sites below can arm one (issue #2918). The counter carries a bounded
+        // `reason` domain, and before this only the reason that had already fired
+        // existed as a series - so "no reshard was ever rejected for
+        // shrink_unsupported" and "this build has no shrink_unsupported call site"
+        // scraped identically, and neither could be told from "the rejection
+        // counter is not wired at all". Adding zero to a counter is the identity,
+        // so the arms below read exactly as they did.
+        //
+        // Placed above all six rejection sites, which is the whole point: a prime
+        // below any one of them is unreachable on precisely the path whose absence
+        // it exists to make readable. It sits BELOW the origin gate deliberately -
+        // a call refused for a non-internal origin is not a reshard rejection in
+        // this taxonomy and never reaches any of the six, so the population this
+        // primes is exactly the population that can arm it.
+        //
+        // The issue filed this as unprimable because LatticeMetrics is a static
+        // class with no silo-startup hook. That premise is too pessimistic: the
+        // instrument is EMITTED from a grain, and the emitting grain's own entry
+        // point is a lifecycle seam with all the reachability the prime needs.
+        //
+        // The six are written out rather than looped because the enrolment gate
+        // in test/lattice/Hygiene reads zero-primed values by matching literal
+        // `new KeyValuePair<string, object?>(...)` arguments on a zero-valued Add;
+        // a foreach over a collection of tags is invisible to it, so a loop would
+        // prime correctly at runtime and still leave the instrument classified
+        // `unprimed`. Writing them out also makes each primed arm textually
+        // identical to the site that arms it, so the two cannot drift into
+        // different series.
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_min"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "already_in_progress"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
+
         LatticeMetrics.ShardRootReshardInFlight.Record(state.State.InProgress ? 1L : 0L, treeTag, tenantTag);
 
         if (newShardCount < 2)

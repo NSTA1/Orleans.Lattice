@@ -368,6 +368,31 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_orphaned_leaf_request_shapes()
+    {
+        // Both orphaned-leaf verbs reuse the shared whole-tree request shape, so the
+        // interceptor decodes their target tree exactly as it does for the WAL verbs.
+        // Real enforcement (Read for the audit, TreeLifecycle for the repair) is in the facade.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.AuditOrphanedLeavesMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.RepairOrphanedLeavesMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.AuditOrphanedLeavesMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.RepairOrphanedLeavesMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void DescribeCall_view_request_shapes_carry_no_target_tree()
     {
         // A materialised view is authorized by its source tree, which the facade

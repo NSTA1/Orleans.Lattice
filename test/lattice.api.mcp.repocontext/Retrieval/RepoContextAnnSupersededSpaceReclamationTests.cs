@@ -88,12 +88,18 @@ public sealed class RepoContextAnnSupersededSpaceReclamationTests
             context.ActivationServices.Returns(services);
 
             var state = new FakeBuildState();
+            using var corpusReporter = new RepoContextAnnBuildCorpusReporter();
+            using var sliceReporter = new RepoContextAnnBuildSliceReporter();
             var grain = new RepoContextAnnIndexBuildGrain(
                 context,
                 Substitute.For<IReminderRegistry>(),
                 registry,
                 Backing,
                 Indexing,
+                new NullRepoIndexRunAuthority(),
+                UnrestrictedCorpusGateProbe.Instance,
+                corpusReporter,
+                sliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
                 state);
 
@@ -182,12 +188,18 @@ public sealed class RepoContextAnnSupersededSpaceReclamationTests
         context.ActivationServices.Returns(services);
 
         var state = new FakeBuildState();
+        using var corpusReporter = new RepoContextAnnBuildCorpusReporter();
+        using var sliceReporter = new RepoContextAnnBuildSliceReporter();
         var grain = new RepoContextAnnIndexBuildGrain(
             context,
             Substitute.For<IReminderRegistry>(),
             registry,
             rig.Backing,
             rig.Indexing,
+            new NullRepoIndexRunAuthority(),
+            UnrestrictedCorpusGateProbe.Instance,
+            corpusReporter,
+            sliceReporter,
             NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
             state);
 

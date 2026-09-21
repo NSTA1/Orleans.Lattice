@@ -152,13 +152,16 @@ public partial class BPlusLeafGrainTests
             sliceFactory: p => p switch
             {
                 // Partition 0: prepare + commit at offsets 0,1 -> may advance to 1.
-                0 => (1L, new[]
+                // Head is exclusive (the NEXT sequence), so two entries at 0,1
+                // report a head of 2, not 1 (issue #2668).
+                0 => (2L, new[]
                 {
                     new CommitLogSliceEntry(0, BuildPreparedSet(tx0, "k0", Encoding.UTF8.GetBytes("v0"), treeId: MultiPartitionTreeId)),
                     new CommitLogSliceEntry(1, BuildTerminal(tx0, committed: true, treeId: MultiPartitionTreeId)),
                 }),
                 // Partition 1: prepare at offset 0, no terminal -> must clamp to -1.
-                1 => (0L, new[]
+                // One entry at offset 0 reports an exclusive head of 1.
+                1 => (1L, new[]
                 {
                     new CommitLogSliceEntry(0, BuildPreparedSet(tx1, "k1", Encoding.UTF8.GetBytes("v1"), treeId: MultiPartitionTreeId)),
                 }),
@@ -335,7 +338,7 @@ public partial class BPlusLeafGrainTests
         siblingMock.SetKeyRangeAsync(Arg.Any<string>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
         siblingMock.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.CompletedTask);
-        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
         siblingMock.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         factory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);

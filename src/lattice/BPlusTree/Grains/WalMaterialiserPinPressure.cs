@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -12,8 +13,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// input to the WAL saturation signal is derived from the <i>in-memory</i>
 /// cursor registry, so a durable pin store that has stopped keeping up - the
 /// exact condition of issue #2012, where the retention floor stalled and the
-/// WAL grew without bound - reads perfectly healthy. Measuring the durable
-/// write itself is the only way that condition becomes observable.
+/// retained WAL became permanently unreleasable - reads perfectly healthy.
+/// Measuring the durable write itself is the only way that condition becomes
+/// observable; the footprint is not, because a tree only grows while it is being
+/// written to and a stalled tree is flat the rest of the time.
 /// </para>
 /// <para>
 /// The measurement is deliberately <b>caller-side</b>. A pin grain activation
@@ -101,6 +104,25 @@ internal static class WalMaterialiserPinPressure
         new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Per pin-shard-key start of the current <b>unbroken</b> run of shed
+    /// reports, as an <see cref="Environment.TickCount64"/> value. Set when a
+    /// shard sheds while no run is open, and removed the instant any report gets
+    /// through - whether the window lapsed on its own or the ceiling forced one.
+    /// Absent therefore means "this shard is not currently shedding". Bounded by
+    /// the live <c>(tree, shard)</c> cardinality, exactly like
+    /// <see cref="_shedUntilTickMs"/>.
+    /// <para>
+    /// This is the state that makes the issue #3310 stall observable. The shed
+    /// <i>counter</i> cannot: it rises at the same rate for a shard that sheds a
+    /// burst and recovers in a second as for one that has not restamped coverage
+    /// since the process started, because the volume of shed work is identical
+    /// and only elapsed time without progress separates them.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, long> _shedRunStartTickMs =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Records the outcome of one durable pin write against
     /// <paramref name="shardKey"/>.
     /// </summary>
@@ -149,15 +171,128 @@ internal static class WalMaterialiserPinPressure
     }
 
     /// <summary>
-    /// True when steady-state per-checkpoint reports routed to
-    /// <paramref name="shardKey"/> should be shed because a recent durable write
-    /// to that shard demonstrated the store is not keeping up. Never consulted
-    /// for the birth block-pin seed or the deactivation flush, which are
-    /// last-chance writes and therefore correctness-bearing.
+    /// True when a shed window is currently open for <paramref name="shardKey"/>.
+    /// <para>
+    /// A pure query on window state: it neither opens nor closes a run and is
+    /// not a scheduling decision. <b>Production callers must use
+    /// <see cref="EvaluateShed"/> instead</b>, which applies the issue #3310
+    /// ceiling and maintains the continuous-run clock that
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/> publishes.
+    /// Deciding from this predicate alone restores the unbounded behaviour the
+    /// ceiling exists to remove.
+    /// </para>
     /// </summary>
-    internal static bool ShouldShed(string shardKey)
+    internal static bool IsWindowOpen(string shardKey)
         => _shedUntilTickMs.TryGetValue(shardKey, out var until)
             && Environment.TickCount64 < until;
+
+    /// <summary>
+    /// What <see cref="EvaluateShed"/> decided for one coalescible report.
+    /// </summary>
+    internal enum PinShedDecision
+    {
+        /// <summary>No shed window is open; issue the report normally.</summary>
+        Proceed,
+
+        /// <summary>A shed window is open and within its ceiling; drop the report.</summary>
+        Shed,
+
+        /// <summary>
+        /// A shed window is open but the shard has been shedding continuously for
+        /// longer than the configured ceiling. Issue the report anyway and count
+        /// it on <see cref="LatticeMetrics.MaterialiserPinShedForced"/>.
+        /// </summary>
+        Forced,
+    }
+
+    /// <summary>
+    /// Decides whether a steady-state per-checkpoint report routed to
+    /// <paramref name="shardKey"/> should be shed, and maintains the continuous
+    /// shed-run clock behind
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/>. Never
+    /// consulted for the birth block-pin seed or the deactivation flush, which
+    /// are last-chance writes and therefore correctness-bearing.
+    /// <para>
+    /// <b>The ceiling turns a latch back into the hold-off it was designed to
+    /// be.</b> The issue #2012 window is self-tuning and proportional to the
+    /// cost of the write that opened it, but nothing bounded how often it could
+    /// be re-opened - and the non-sheddable paths record their own duration into
+    /// the same per-shard gate they are exempt from, so on a large tree under
+    /// activation churn a shard can hold its own window open indefinitely. That
+    /// starves the only path that restamps materialiser coverage, which is the
+    /// issue #3310 condition: the durable pin freezes while the checkpoint it
+    /// tracks advances and the retained WAL grows without bound.
+    /// </para>
+    /// <para>
+    /// Forcing is safe by construction. The offset a forced report carries was
+    /// already clamped to <c>min(checkpoint, durable snapshot coverage)</c>
+    /// inside the leaf by <c>ResolveDurablePinForPartition</c>, so no decision
+    /// taken here can publish an offset exceeding proven durable coverage.
+    /// Forcing therefore publishes <i>more</i> durability evidence than
+    /// shedding, never less, and cannot authorise a trim past the safe frontier -
+    /// the issue #3300 failure, which is this same seam failing the other way.
+    /// </para>
+    /// </summary>
+    /// <param name="shardKey">The pin grain key the report would be issued to.</param>
+    /// <param name="ceilingMs">
+    /// <see cref="LatticeOptions.WalMaterialiserPinShedCeiling"/> in
+    /// milliseconds, or <c>null</c> when the bound is disarmed. Disarmed
+    /// preserves the historical behaviour exactly; the run clock is still
+    /// maintained, so the stall remains observable even when it is unbounded.
+    /// </param>
+    internal static PinShedDecision EvaluateShed(string shardKey, long? ceilingMs)
+    {
+        var now = Environment.TickCount64;
+
+        if (!IsWindowOpen(shardKey))
+        {
+            // Window lapsed on its own: the run is over and coverage restamps.
+            _shedRunStartTickMs.TryRemove(shardKey, out _);
+            return PinShedDecision.Proceed;
+        }
+
+        var runStart = _shedRunStartTickMs.GetOrAdd(shardKey, now);
+
+        if (ceilingMs is { } ceiling && now - runStart >= ceiling)
+        {
+            // Break the latch. Clearing the run start restarts the clock, so the
+            // cost is at most one enqueued write per ceiling period per shard and
+            // the #2012 shedding still dominates the duty cycle.
+            _shedRunStartTickMs.TryRemove(shardKey, out _);
+            return PinShedDecision.Forced;
+        }
+
+        return PinShedDecision.Shed;
+    }
+
+    /// <summary>
+    /// Observation callback behind
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/>. Reports the
+    /// age in seconds of every pin shard's current unbroken shed run, tagged by
+    /// tree and pin shard. A shard with no open run is not reported at all
+    /// rather than reported as zero, so an idle process publishes no series;
+    /// once a run opens, the value climbs until a report gets through.
+    /// </summary>
+    internal static IEnumerable<Measurement<long>> ObserveShedStalls()
+    {
+        var now = Environment.TickCount64;
+        var measurements = new List<Measurement<long>>();
+
+        foreach (var entry in _shedRunStartTickMs)
+        {
+            var treeId = WalMaterialiserPinRouting.TreeNameFromKey(entry.Key);
+            var shard = WalMaterialiserPinRouting.ShardIndexFromKey(entry.Key);
+            var ageSeconds = Math.Max(0, (now - entry.Value) / 1000);
+
+            measurements.Add(new Measurement<long>(
+                ageSeconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shard),
+                LatticeTenantLabel.ForTree(treeId)));
+        }
+
+        return measurements;
+    }
 
     /// <summary>
     /// Clears all recorded pressure. Test seam only; production state is
@@ -167,6 +302,7 @@ internal static class WalMaterialiserPinPressure
     {
         _latencyTrips.Clear();
         _shedUntilTickMs.Clear();
+        _shedRunStartTickMs.Clear();
     }
 
     /// <summary>

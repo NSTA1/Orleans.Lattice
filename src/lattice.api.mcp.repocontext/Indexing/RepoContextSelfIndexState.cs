@@ -42,4 +42,20 @@ internal sealed class RepoContextSelfIndexState
     /// </summary>
     [Id(2)]
     public long NextReconcileAfterTicks { get; set; }
+
+    /// <summary>
+    /// The earliest UTC tick count at which the exhaustive coverage-digest audit may
+    /// run again (issue #2486). The audit re-derives the per-page coverage digest
+    /// from an authoritative whole-set membership scan, so it is the one remaining
+    /// O(sources) read on the coverage path and is paced far more slowly than
+    /// detection, which reads the digest itself.
+    /// <para>
+    /// Zero on a state written before the audit existed, which is deliberately read
+    /// as "due now": the first tick after an upgrade audits once and then settles
+    /// onto the cadence, rather than an already-onboarded repository waiting a whole
+    /// interval for its first verification.
+    /// </para>
+    /// </summary>
+    [Id(3)]
+    public long NextCoverageAuditAfterTicks { get; set; }
 }

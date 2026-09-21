@@ -67,6 +67,27 @@ public class ShardRootGrainScanPageStandDownCoverageTests
         @"StandDownIfCeilingFired\(\s*scan\s*[),]",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// The leaf-naming overload, <c>StandDownIfCeilingFired(scan, someLeafId)</c>.
+    /// Distinguished from <see cref="StandDown"/> by the comma: that regex
+    /// accepts either overload on purpose, which is exactly why it did not
+    /// catch issue 2365.
+    /// </summary>
+    private static readonly Regex StandDownNamingLeaf = new(
+        @"StandDownIfCeilingFired\(\s*scan\s*,",
+        RegexOptions.Compiled);
+
+    /// <summary>The identity-free overload, <c>StandDownIfCeilingFired(scan)</c>.</summary>
+    private static readonly Regex StandDownAnonymous = new(
+        @"StandDownIfCeilingFired\(\s*scan\s*\)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// The number of <c>LeafWalk</c>-phase walks when issue 2365 was fixed.
+    /// A floor for the same reason as <see cref="KnownWalkCount"/>.
+    /// </summary>
+    private const int KnownLeafWalkCount = 16;
+
     [Test]
     public void Every_leaf_walk_loop_stands_down_before_it_awaits_again()
     {
@@ -125,6 +146,153 @@ public class ShardRootGrainScanPageStandDownCoverageTests
             $"{KnownWalkCount}. The scan has stopped matching what it is meant " +
             "to check, so its silence is meaningless. Fix the scan rather than " +
             "lowering the floor, unless a walk really was deleted.");
+    }
+
+    /// <summary>
+    /// Every <c>LeafWalk</c>-phase walk must stand down through the
+    /// <em>leaf-naming</em> overload, and only the <c>BaselineFold</c> pass may
+    /// use the identity-free one (issue 2365).
+    /// <para>
+    /// The sibling guard above deliberately accepts either overload, because it
+    /// asks a different question: is the ceiling consulted, and is it consulted
+    /// before the next await. That is why five leaf walks stood down without
+    /// ever naming a leaf and no test noticed. A stall report from one of them
+    /// carried <c>LeafInFlight = null</c>, which
+    /// <c>ShardRootGrain.ScanPage.cs</c> documents as "no leaf read is
+    /// outstanding" - so an absence of instrumentation read as a measured
+    /// statement about the tree.
+    /// </para>
+    /// <para>
+    /// The fold pass is the one legitimate exception and the exception is
+    /// structural, not effort: it never calls <c>RecordLeafVisited()</c>, so
+    /// <c>Budget.LeavesVisited</c> is frozen for its whole duration. An
+    /// identity recorded there would satisfy the
+    /// <c>LeafInFlightOrdinal == Budget.LeavesVisited</c> freshness test
+    /// forever and go on naming a leaf that had already answered, which is
+    /// worse than naming none.
+    /// </para>
+    /// <para>
+    /// Both floors below are positive controls, and they fail in opposite
+    /// directions. If <see cref="StandDownNamingLeaf"/> stopped matching, no
+    /// walk would be counted as a leaf walk and the leaf floor would fail; if
+    /// <see cref="StandDownAnonymous"/> stopped matching, the fold pass would go
+    /// uncounted and the fold floor would fail. Without them a broken regex
+    /// would report zero offenders and read as a clean bill of health.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void Every_leaf_walk_stands_down_through_the_leaf_naming_overload()
+    {
+        var root = HygieneRepository.FindRepoRoot();
+        var grainsDir = Path.Combine(
+            root, "src", "lattice", "BPlusTree", "Grains");
+
+        var leafWalksNamingALeaf = 0;
+        var foldWalksNamingNothing = 0;
+        var offenders = new List<string>();
+
+        foreach (var name in ScannedFiles)
+        {
+            var path = Path.Combine(grainsDir, name);
+            var text = File.ReadAllText(path);
+            var lines = File.ReadAllLines(path);
+
+            foreach (Match phase in WalkPhase.Matches(text))
+            {
+                var isLeafWalk = phase.Groups[1].Value == "LeafWalk";
+                var phaseLine = LineOf(lines, phase.Index);
+
+                // A walk with no braced body, or one that awaits before it
+                // stands down at all, is already an offender of the sibling
+                // guard. Reporting it twice would only obscure which rule broke.
+                if (!TryFindWalkBody(lines, phaseLine, out var bodyStart, out var bodyEnd))
+                    continue;
+                if (!TryFirstStandDownNamesLeaf(lines, bodyStart, bodyEnd, out var namesLeaf))
+                    continue;
+
+                if (isLeafWalk && !namesLeaf)
+                {
+                    offenders.Add(
+                        $"{name}:{bodyStart + 1} is a leaf walk that stands down " +
+                        "through StandDownIfCeilingFired(scan), which records no " +
+                        "leaf identity. A stall raised from this walk reports " +
+                        "LeafInFlight = null, which reads as 'no leaf read is " +
+                        "outstanding' rather than 'this path never says' " +
+                        "(issue 2365). Pass the leaf id: the walk already holds " +
+                        "it as walk.CurrentLeafId!.Value.");
+                }
+                else if (!isLeafWalk && namesLeaf)
+                {
+                    offenders.Add(
+                        $"{name}:{bodyStart + 1} is a fold pass that records a " +
+                        "leaf identity. The fold never calls RecordLeafVisited(), " +
+                        "so Budget.LeavesVisited is frozen and the recorded id " +
+                        "passes the freshness test forever, naming a leaf that " +
+                        "already answered (issue 2365).");
+                }
+                else if (isLeafWalk)
+                {
+                    leafWalksNamingALeaf++;
+                }
+                else
+                {
+                    foldWalksNamingNothing++;
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                offenders,
+                Is.Empty,
+                "Walks whose stand-down overload does not match their phase:"
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, offenders));
+
+            Assert.That(
+                leafWalksNamingALeaf,
+                Is.GreaterThanOrEqualTo(KnownLeafWalkCount),
+                $"Only {leafWalksNamingALeaf} leaf walks were seen naming a " +
+                $"leaf, below the known floor of {KnownLeafWalkCount}. Either a " +
+                "walk regressed to the identity-free overload, or the scan has " +
+                "stopped matching and its silence is meaningless.");
+
+            Assert.That(
+                foldWalksNamingNothing,
+                Is.GreaterThanOrEqualTo(1),
+                "No fold pass was seen using the identity-free overload. That " +
+                "overload has one legitimate caller, so seeing none means the " +
+                "StandDownAnonymous pattern no longer matches it - and a pattern " +
+                "that matches nothing reports no offenders for the wrong reason.");
+        });
+    }
+
+    /// <summary>
+    /// Reports which <c>StandDownIfCeilingFired</c> overload the walk body
+    /// reaches first. Returns <see langword="false"/> when the body awaits (or
+    /// ends) before standing down at all, which is the sibling guard's finding
+    /// rather than this one's.
+    /// </summary>
+    private static bool TryFirstStandDownNamesLeaf(
+        string[] lines, int bodyStart, int bodyEnd, out bool namesLeaf)
+    {
+        namesLeaf = false;
+        for (var i = bodyStart; i < bodyEnd; i++)
+        {
+            var text = lines[i].Trim();
+            if (text.StartsWith("//", StringComparison.Ordinal)) continue;
+
+            if (StandDownNamingLeaf.IsMatch(text))
+            {
+                namesLeaf = true;
+                return true;
+            }
+
+            if (StandDownAnonymous.IsMatch(text)) return true;
+            if (text.Contains("await ", StringComparison.Ordinal)) return false;
+        }
+        return false;
     }
 
     private static int LineOf(string[] lines, int charIndex)

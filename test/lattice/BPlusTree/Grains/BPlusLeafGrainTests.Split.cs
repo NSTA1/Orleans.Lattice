@@ -480,7 +480,7 @@ public partial class BPlusLeafGrainTests
         siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         siblingMock.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
         siblingMock.SetKeyRangeAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
-        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingMock);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingMock);
 
@@ -559,7 +559,7 @@ public partial class BPlusLeafGrainTests
         siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         siblingMock.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
         siblingMock.SetKeyRangeAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
-        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingMock);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingMock);
 

@@ -189,6 +189,40 @@ public interface IWalCursorRegistry
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the minimum cursor across consumers that have reported for
+    /// <paramref name="treeName"/> at or after
+    /// <paramref name="reportedAtOrAfterTicks"/>, or
+    /// <see langword="null"/> when no consumer has a fresh, positive cursor.
+    /// This query belongs to the materialiser drain-lag <b>lag plane only</b>:
+    /// it is the input consumed by the saturation classifier's pure back-off
+    /// signal and must never feed the WAL GC trim floor.
+    /// <para>
+    /// The trim floor must stay conservative because a routinely deactivated
+    /// leaf remains registered so a later activation can replay entries the
+    /// leaf has not yet consumed. For that reason
+    /// <see cref="GetMinCursorAsync"/> includes cold consumers and its
+    /// behaviour must not be changed. The drain-lag classifier is different:
+    /// it gates only advisory pacing, so a cold consumer whose last report is
+    /// older than the freshness floor is excluded here to avoid treating an
+    /// idle leaf inside an otherwise live tree as genuine materialiser backlog.
+    /// </para>
+    /// <para>
+    /// Returning <see langword="null"/> means no fresh consumer can contribute
+    /// to the lag plane. The sampler interprets that as zero drain lag, which is
+    /// the safe direction for a pure back-off signal: an absent or cold
+    /// classifier input may skip pacing, but it can never permit WAL trimming or
+    /// data loss.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose fresh drain-lag frontier is being read. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="reportedAtOrAfterTicks">UTC <see cref="DateTime.Ticks"/> floor for reports that can contribute to the lag-plane minimum.</param>
+    /// <param name="cancellationToken">Cancellation token observed before reading registry state.</param>
+    Task<HybridLogicalClock?> GetMinCursorForDrainLagAsync(
+        string treeName,
+        long reportedAtOrAfterTicks,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the causal-stable frontier for <paramref name="treeName"/>:
     /// the pointwise minimum <see cref="VersionVector"/> across every
     /// consumer that has reported a vector through the causal+ overload

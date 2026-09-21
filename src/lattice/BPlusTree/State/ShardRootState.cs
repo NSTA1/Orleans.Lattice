@@ -204,6 +204,126 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(17)] public LeafAccessModelSnapshot? LeafAccessModel { get; set; }
+
+    /// <summary>
+    /// The leaf most recently classified unreadable by this shard's scan-page
+    /// stranded-leaf recovery, as its grain identity, or <see langword="null"/>
+    /// when no leaf has ever been classified (issue #3016).
+    /// <para>
+    /// Paired with <see cref="StrandedScanRecoveries"/>, and durable for a
+    /// reason that does not apply to the consecutive-stall run the
+    /// classification is derived from. That run counts how many times
+    /// <em>this activation</em> attached to one parked coalesced read and got
+    /// nowhere, and the remedy it selects - dropping that entry - acts on
+    /// activation-scoped state, so scoping the run to the activation is
+    /// correct. This pair counts something else: how many times the remedy has
+    /// been <em>applied to this leaf and failed to take</em>. A fresh
+    /// activation holds no coalesced reads, so its eviction is a no-op by
+    /// construction and its first stall is indistinguishable from a first-ever
+    /// stall - which is precisely why that evidence cannot live in the
+    /// activation that gathers it.
+    /// </para>
+    /// <para>
+    /// Adding this slot is backward-compatible: state persisted before the
+    /// field existed deserializes with <c>StrandedScanLeafId = null</c>, the
+    /// correct "nothing has ever been classified" state.
+    /// </para>
+    /// </summary>
+    [Id(18)] public string? StrandedScanLeafId { get; set; }
+
+    /// <summary>
+    /// How many times the stranded-leaf recovery has been applied to
+    /// <see cref="StrandedScanLeafId"/>, across every activation of this shard
+    /// root (issue #3016). Reset to one whenever a different leaf is
+    /// classified, so it is always a count for the leaf currently named.
+    /// <para>
+    /// One means the recovery has just been applied for the first time and may
+    /// yet take. <b>Greater than one is the reading that localises the fault:</b>
+    /// the coalesced read was already dropped on an earlier occasion, so the
+    /// read that stalled this time was issued fresh to the leaf and the leaf
+    /// still did not answer. No remedy available to the shard root can change
+    /// that, and continuing to retry will not either.
+    /// </para>
+    /// </summary>
+    [Id(19)] public int StrandedScanRecoveries { get; set; }
+
+    /// <summary>
+    /// Child links this shard owes to the tree: separators produced by a split
+    /// that have been made durable on the splitting node but not yet accepted
+    /// by the parent that is supposed to route to them (issue #3265).
+    /// <para>
+    /// <b>Why this has to be durable.</b> A leaf split commits in three
+    /// durable steps - the sibling is created and persisted, it is spliced into
+    /// the sibling chain, and it publishes a WAL materialiser pin - and then
+    /// returns a <see cref="SplitResult"/> asking its caller to link it into the
+    /// parent. Before this field existed, that request lived only in a local
+    /// variable inside the shard root's propagation loop. Every step that
+    /// creates the sibling is durable and the one step that makes it
+    /// <em>reachable</em> was not, so any failure in the loop forfeited the
+    /// linkage permanently: the sibling survives, spliced into the chain and
+    /// holding a pin, but no descent path reaches it.
+    /// </para>
+    /// <para>
+    /// Such a leaf can never advance its pin, and <b>both dispositions of that
+    /// pin wedge the tree</b> - at <c>-1</c> the block-pin branch stops the trim
+    /// tree-wide, and at <c>&gt;= 0</c> it freezes the durable offset floor. Trim
+    /// is upstream of compaction, so the tree's write-ahead log then grows
+    /// without any bound at all. The pin's value is not the defect; a leaf that
+    /// is not in the tree holding a pin at all is the defect, and no gate on any
+    /// pin-publication site can fix that.
+    /// </para>
+    /// <para>
+    /// Recorded before the parent is asked and cleared once the whole ancestor
+    /// chain has accepted, so an entry surviving here means the link is still
+    /// owed. <c>ResumePendingChildLinksAsync</c> replays it on the next
+    /// operation. Replay is safe because
+    /// <c>BPlusInternalGrain.AcceptSplitAsync</c> is idempotent on the
+    /// separator/child pair.
+    /// </para>
+    /// <para>
+    /// Adding this slot is backward-compatible: state persisted before the field
+    /// existed deserializes to an empty list, the correct "nothing owed" state.
+    /// </para>
+    /// </summary>
+    [Id(20)] public List<PendingChildLink> PendingChildLinks { get; set; } = new();
+}
+
+/// <summary>
+/// One split separator that is durable on the splitting node but not yet
+/// accepted by the ancestors that must route to it (issue #3265).
+/// </summary>
+/// <remarks>
+/// The whole remaining ancestor chain is captured, not just the immediate
+/// parent, so a resume can re-run the propagation exactly as the original
+/// in-memory loop would have: a parent that overflows while accepting promotes
+/// to <em>its</em> parent, and a resume that knew only the immediate parent
+/// would have to rediscover that chain by descent - on a topology the
+/// interrupted link is itself the reason to distrust.
+/// </remarks>
+[GenerateSerializer]
+[Alias(TypeAliases.PendingChildLink)]
+[Immutable]
+internal sealed record PendingChildLink
+{
+    /// <summary>The separator key promoted out of the split.</summary>
+    [Id(0)] public required string PromotedKey { get; init; }
+
+    /// <summary>The grain identity of the newly created right sibling.</summary>
+    [Id(1)] public required GrainId ChildId { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="ChildId"/> is a leaf. Carried so a resume can
+    /// reconstruct the original <see cref="SplitResult"/> faithfully, including
+    /// for a root promotion, rather than re-deriving it from a shard-root flag
+    /// an interleaved turn may have flipped since.
+    /// </summary>
+    [Id(2)] public bool ChildIsLeaf { get; init; }
+
+    /// <summary>
+    /// The ancestors that still have to accept this separator, nearest first -
+    /// the contents of the descent path at the moment the split was produced.
+    /// </summary>
+    [Id(3)] public required List<GrainId> Ancestors { get; init; }
 }
 
 /// <summary>

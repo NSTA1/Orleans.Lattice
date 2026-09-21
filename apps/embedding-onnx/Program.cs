@@ -68,11 +68,27 @@ app.MapPost("/encoder/bi-encoder-embed", (EmbedRequest request, OnnxEmbedder eng
 });
 
 app.Logger.LogInformation(
-    "Embedding server listening on port {Port} using {Provider} with model {Model} ({Dimension}-dim).",
+    "Embedding server listening on port {Port} using {Provider} with model {Model} " +
+    "({Dimension}-dim), intra-op threads {IntraOpThreads} [{IntraOpThreadsProvenance}].",
     options.Port,
     embedder.ActiveProvider,
     embedder.ModelName,
-    embedder.Dimension);
+    embedder.Dimension,
+    options.IntraOpThreads,
+    options.IntraOpThreadCount.DescribeProvenance());
+
+// A processor count that disagrees with the enforced CPU grant means something
+// has overridden it, and every pool sized from it is oversubscribed. The
+// intra-op pool is derived from the grant and so is already safe, but the
+// disagreement is worth saying out loud rather than silently absorbing: it is
+// the condition that produced a 4x oversubscription and a 2.91:1 stall-to-run
+// ratio before this server derived its own thread count (issue #2606).
+var cpuGrantMismatch = EmbedServerOptions.DescribeProcessorCountDisagreement(
+    ContainerCpuGrant.Read(), Environment.ProcessorCount);
+if (cpuGrantMismatch is not null)
+{
+    app.Logger.LogWarning("{CpuGrantMismatch}", cpuGrantMismatch);
+}
 
 await app.RunAsync().ConfigureAwait(false);
 return 0;

@@ -54,7 +54,8 @@ internal sealed class LatticeOptionsResolver(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<LatticeOptionsResolver>? logger = null,
     IWalStorageProviderCatalog? walProviderCatalog = null,
-    IOptions<SiloMessagingOptions>? siloMessagingOptions = null)
+    IOptions<SiloMessagingOptions>? siloMessagingOptions = null,
+    ISiloStatusOracle? siloStatusOracle = null)
 {
     private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
 
@@ -93,6 +94,172 @@ internal sealed class LatticeOptionsResolver(
     private readonly ConcurrentDictionary<string, int> _walPartitionsCache = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Registry reads for a tree that are in flight right now, so that
+    /// concurrent resolvers share one round trip instead of queueing one each
+    /// behind the registry singleton.
+    /// <para>
+    /// <b>This is not a cache and deliberately not one.</b> An entry lives only
+    /// for the duration of the round trip it represents and is removed before
+    /// its result is published, so a caller arriving after a flight completes
+    /// starts a fresh one. Nothing is retained, so there is no staleness window,
+    /// no invalidation, and - the reason this shape was chosen over a cache - no
+    /// expiry constant to fit to a particular host. It also leaves
+    /// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> honestly
+    /// runtime-mutable, which a memoising cache would silently freeze; callers
+    /// that share a flight observe one instant's value, which is already
+    /// indistinguishable from the single read they would each have made.
+    /// </para>
+    /// <para>
+    /// <b>Why activation needs this.</b> <see cref="ILatticeRegistry"/> is a
+    /// non-reentrant cluster singleton, so N concurrent
+    /// <see cref="ILatticeRegistry.GetEntryAsync"/> calls take N turns in
+    /// series. Every cold leaf activation resolves options exactly once, so a
+    /// cold start with N leaves queues N serialised round trips inside each
+    /// leaf's activation deadline; past a few thousand leaves the leaves at the
+    /// back of that queue are cancelled before they are served. The failure is
+    /// self-reinforcing, because a leaf cancelled during activation captures no
+    /// snapshot and therefore returns cold - and so re-queues - on the next
+    /// start. Coalescing collapses the burst to one round trip, which is what
+    /// breaks the loop. The same amplification was already identified and fixed
+    /// for the foreground commit path by <see cref="_walPartitionsCache"/>
+    /// above; the activation path was still paying it in full.
+    /// </para>
+    /// <para>
+    /// Per-resolver-instance rather than static, matching
+    /// <see cref="_walPartitionsCache"/>, so each silo owns its own coalescing
+    /// and fixtures that construct the resolver directly start clean.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Task<State.TreeRegistryEntry?>> _inFlightRegistryReads =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The silo's bound on how many registry round trips may be in flight at
+    /// once, and the batching that falls out of it.
+    /// <para>
+    /// <b>Why this is a second mechanism and not a duplicate of
+    /// <see cref="_inFlightRegistryReads"/>.</b> That coalescer collapses the
+    /// concurrent readers of <em>one</em> tree into one round trip, which removes
+    /// the <c>x (per-tree background services)</c> factor from the cold-start
+    /// cost. It does nothing to the other factor: K trees resolving at once still
+    /// start K flights, so the peak fan-in onto the singleton registry activation
+    /// remained proportional to the tree count. The gate bounds that second
+    /// factor, and the two compose - per-tree coalescing first, then a
+    /// tree-count-independent bound on whatever distinct reads survive it.
+    /// </para>
+    /// <para>
+    /// Per-resolver-instance, matching the caches above, so each silo owns its
+    /// own bound.
+    /// </para>
+    /// </summary>
+    private readonly RegistryFanInGate _registryReads = new(grainFactory, siloStatusOracle);
+
+    /// <summary>
+    /// The silo's bounded registry read path, for the per-tree background
+    /// services that read the registry directly rather than through resolved
+    /// options.
+    /// <para>
+    /// Exposed here because this resolver is already the front door every such
+    /// service holds, and because the bound is only a bound if every cold-start
+    /// reader passes through the same one. A service that kept its own
+    /// <see cref="ILatticeRegistry"/> reference for a point read would reopen
+    /// exactly the unbounded fan-in the gate exists to close.
+    /// </para>
+    /// </summary>
+    internal RegistryFanInGate RegistryReads => _registryReads;
+
+    /// <summary>
+    /// Reads <paramref name="treeId"/>'s registry entry, joining the read
+    /// already in flight for that tree when there is one. Seeding a missing
+    /// structural pin happens inside the shared flight, so a cold start seeds
+    /// once rather than once per activation.
+    /// </summary>
+    private Task<State.TreeRegistryEntry?> FetchRegistryEntryCoalescedAsync(string treeId)
+    {
+        if (_inFlightRegistryReads.TryGetValue(treeId, out var joined))
+        {
+            return joined;
+        }
+
+        var flight = new TaskCompletionSource<State.TreeRegistryEntry?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var winner = _inFlightRegistryReads.GetOrAdd(treeId, flight.Task);
+        if (!ReferenceEquals(winner, flight.Task))
+        {
+            return winner;
+        }
+
+        _ = RunFlightAsync();
+        return flight.Task;
+
+        async Task RunFlightAsync()
+        {
+            try
+            {
+                var entry = await FetchRegistryEntryAsync(treeId).ConfigureAwait(false);
+
+                // Retire the flight BEFORE publishing its result. A caller that
+                // arrives after this point must start a fresh read rather than
+                // join a completed one, which is what keeps the shared round
+                // trip from behaving as a zero-length cache.
+                _inFlightRegistryReads.TryRemove(
+                    new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
+                flight.TrySetResult(entry);
+            }
+            catch (Exception ex)
+            {
+                _inFlightRegistryReads.TryRemove(
+                    new KeyValuePair<string, Task<State.TreeRegistryEntry?>>(treeId, flight.Task));
+
+                // Every joined caller observes the same fault, exactly as it
+                // would have observed its own. Sharing a failure is not new
+                // behaviour: the alternative is N identical failures against a
+                // registry that is already not answering.
+                flight.TrySetException(ex);
+            }
+        }
+    }
+
+    private async Task<State.TreeRegistryEntry?> FetchRegistryEntryAsync(string treeId)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+#if LATTICE_DIAG
+        // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
+        // Note this now emits once per FLIGHT rather than once per caller, because
+        // callers that join an in-flight read never reach here.
+        try
+        {
+            Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                $"resolve-pre treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+        }
+        catch { }
+#endif
+        if (entry is null ||
+            entry.MaxLeafKeys is null ||
+            entry.MaxInternalChildren is null ||
+            entry.ShardCount is null)
+        {
+            // Lazy first-use seeding: every user tree must have a
+            // structural pin, but callers should not have to register
+            // explicitly for simple scenarios. RegisterAsync is
+            // idempotent and fills nulls with LatticeConstants defaults.
+            await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
+            entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
+#if LATTICE_DIAG
+            try
+            {
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                    $"resolve-post-register treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+            }
+            catch { }
+#endif
+        }
+
+        return entry;
+    }
+
+    /// <summary>
     /// Trees for which a "configured = true but latched-disabled" warning
     /// has already been logged. Re-resolving the same tree must not spam
     /// the log on every grain activation; the warning is informational
@@ -115,6 +282,56 @@ internal sealed class LatticeOptionsResolver(
     /// and the clamp is unconditional.
     /// </summary>
     private static readonly ConcurrentDictionary<string, byte> WarnedClampedLeafBatchSizeTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Trees for which a "leaf hydration budget does not bound a splittable
+    /// leaf" advisory has already been logged. Re-resolving the same tree must
+    /// not spam the log on every grain activation; the advisory is
+    /// informational and nothing is clamped.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> WarnedHydrationBudgetTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="options"/> configures a leaf hydration residency
+    /// budget that cannot bound the peak footprint of a leaf large enough to be
+    /// split on bytes (issue #2836).
+    /// <para>
+    /// The leaf's read, digest and freeze seams walk bounded key windows rather
+    /// than the whole-cache view. Windowing bounds the peak only because
+    /// <c>LeafEntryCache.TrimToBudget</c> can evict a window once the walk has
+    /// moved past it, and it evicts only while the resident footprint exceeds
+    /// the budget. A budget that is unbounded, or that is not materially
+    /// smaller than the leaf, therefore evicts nothing: the walk is windowed in
+    /// shape and whole-leaf in cost, and since issue #2843 retained the frame
+    /// across a completed ranged hydration the frame's bytes sit on top of a
+    /// fully resident leaf rather than being released by the detach that used
+    /// to follow. The degradation is silent - every converted seam still
+    /// returns the right answer, and a fixture whose corpus exceeds the budget
+    /// cannot observe the regime at all.
+    /// </para>
+    /// <para>
+    /// Three conjuncts, each load-bearing. Partial hydration off means there is
+    /// no frame and no windowing to undermine. A disarmed byte bound
+    /// (<c>MaxLeafBytes</c> of 0) means leaves split on key count alone, so
+    /// there is no byte threshold to compare a budget against. And the
+    /// comparison itself is a tenth of the threshold - "within roughly an order
+    /// of magnitude" - written as a division rather than
+    /// <c>budget * 10 &gt;= threshold</c> so an extreme configured budget
+    /// cannot overflow the multiplication and silently invert the test.
+    /// </para>
+    /// </summary>
+    /// <param name="options">The silo-wide configured options for the tree.</param>
+    internal static bool LeafHydrationBudgetUnderminesWindowing(LatticeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.LeafPartialHydrationEnabled || options.MaxLeafBytes <= 0)
+        {
+            return false;
+        }
+
+        return options.LeafHydrationResidentBytes <= 0
+            || options.LeafHydrationResidentBytes >= options.MaxLeafBytes / 10;
+    }
 
     /// <summary>
     /// Fast-path resolver for the WAL <see cref="LatticeOptions.WalPartitions"/>
@@ -153,8 +370,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<int> LoadWalPartitionsSlowAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var baseOptions = optionsMonitor.Get(treeId);
         var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
         // First writer wins the cache slot; if a racing ResolveAsync
@@ -206,8 +422,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<long?> LoadMaxCacheValueBytesSlowAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var baseOptions = optionsMonitor.Get(treeId);
         return entry?.MaxCacheValueBytes ?? baseOptions.MaxCacheValueBytes;
     }
@@ -374,19 +589,72 @@ internal sealed class LatticeOptionsResolver(
     /// is supplied by the caller (the view maintainer reads it from
     /// <see cref="Orleans.Lattice.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
     /// only consulted under <see cref="HistoryRetentionMode.Hybrid"/>.
+    /// <para>
+    /// System trees (IDs beginning with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) resolve synchronously to
+    /// the documented defaults without touching the registry, matching the
+    /// <see cref="ResolveAsync"/> branch and avoiding the registry-tree
+    /// bootstrap cycle. The bypass is behaviour-preserving as well as
+    /// cycle-avoiding: a system tree is never registered (the registry excludes
+    /// the reserved prefix from self-registration and
+    /// <c>ILatticeRegistry.RegisterAsync</c> rejects it outright), so the
+    /// registry read it replaces could only ever have returned <c>null</c> and
+    /// fallen through to exactly the same defaults.
+    /// </para>
+    /// <para>
+    /// <b>The read is deliberately not cached.</b> The decision is recorded here
+    /// rather than left to the parenthetical above, because that parenthetical
+    /// answers only one of the two axes. The first axis is staleness, and it is
+    /// decisive on its own: this resolver is registered <c>AddSingleton</c>, so
+    /// it is a <em>per-silo</em> instance, while
+    /// <c>ILattice.SetHistoryRetentionAsync</c> writes the registry from the
+    /// source tree's own <c>LatticeGrain</c> activation and performs no local
+    /// invalidation - contrast <c>SetPublishEventsEnabledAsync</c> beside it,
+    /// which invalidates its gate. No channel carries that write to the silo
+    /// hosting a reading view maintainer, so a memo's staleness window would be
+    /// unbounded rather than merely long. Nor is staleness cosmetic here: a
+    /// stale <see cref="HistoryRetentionMode.MetadataOnly"/> silently discards
+    /// values an operator has just asked to retain, and a stale
+    /// <see cref="HistoryRetentionMode.FullValue"/> silently retains values they
+    /// have just asked to stop retaining.
+    /// <see cref="InvalidateWalPartitionsCacheForTests"/> is not a precedent to
+    /// borrow: it is safe as a test-only seam precisely because the pin it
+    /// guards is documented tree-immutable, which this policy is not.
+    /// </para>
+    /// <para>
+    /// The second axis is load, which "never on a write hot path" does not
+    /// address: the accumulative history views call this once per drain pass
+    /// against what was a non-reentrant registry singleton, so concurrent
+    /// readers took a turn each. That axis is now answered at the registry
+    /// rather than here, because
+    /// <see cref="ILatticeRegistry.GetEntryAsync"/> is
+    /// <see cref="AlwaysInterleaveAttribute"/> and so is admitted mid-body
+    /// instead of queueing head-of-line behind another read or an enumeration.
+    /// A cache at this seam would therefore buy back a cost that has already
+    /// been removed at its source, and pay for it with the unbounded staleness
+    /// above. Both directions of that decision are pinned by the fixture:
+    /// sequential reads must each reach the registry afresh, and the read must
+    /// stay pure, never seeding a registry row the way the resolve path's
+    /// fetch does.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The source tree whose history retention is resolved.</param>
     /// <param name="hybridFullValueWindow">The recent-tail window for hybrid mode.</param>
     public ValueTask<Views.HistoryRetentionPolicy> GetHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<Views.HistoryRetentionPolicy>(
+                new Views.HistoryRetentionPolicy(
+                    HistoryRetentionMode.MetadataOnly, TimeSpan.Zero, hybridFullValueWindow));
+        }
         return new ValueTask<Views.HistoryRetentionPolicy>(LoadHistoryRetentionAsync(treeId, hybridFullValueWindow));
     }
 
     private async Task<Views.HistoryRetentionPolicy> LoadHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         var mode = entry?.HistoryRetentionMode ?? HistoryRetentionMode.MetadataOnly;
         var window = entry?.HistoryRetentionWindowTicks is { } ticks
             ? TimeSpan.FromTicks(ticks)
@@ -500,37 +768,7 @@ internal sealed class LatticeOptionsResolver(
         }
         else
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            var entry = await registry.GetEntryAsync(treeId);
-#if LATTICE_DIAG
-            // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
-            try
-            {
-                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
-                    $"resolve-pre treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
-            }
-            catch { }
-#endif
-            if (entry is null ||
-                entry.MaxLeafKeys is null ||
-                entry.MaxInternalChildren is null ||
-                entry.ShardCount is null)
-            {
-                // Lazy first-use seeding: every user tree must have a
-                // structural pin, but callers should not have to register
-                // explicitly for simple scenarios. RegisterAsync is
-                // idempotent and fills nulls with LatticeConstants defaults.
-                await registry.RegisterAsync(treeId, entry);
-                entry = await registry.GetEntryAsync(treeId) ?? entry;
-#if LATTICE_DIAG
-                try
-                {
-                    Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
-                        $"resolve-post-register treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
-                }
-                catch { }
-#endif
-            }
+            var entry = await FetchRegistryEntryCoalescedAsync(treeId).ConfigureAwait(false);
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;
             sc = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
@@ -631,6 +869,26 @@ internal sealed class LatticeOptionsResolver(
             }
         }
 
+        // Leaf hydration residency budget against the byte-split threshold
+        // (issue #2836). Advisory only, with a one-shot warning per tree per
+        // process; the configuration is legitimate and nothing is clamped.
+        if (LeafHydrationBudgetUnderminesWindowing(baseOptions)
+            && WarnedHydrationBudgetTrees.TryAdd(treeId, 0))
+        {
+            _logger.LogWarning(
+                "Tree {TreeId} has LeafHydrationResidentBytes={ResidentBytes} configured against " +
+                "MaxLeafBytes={MaxLeafBytes}. The leaf read and fold seams walk bounded key windows " +
+                "to keep peak residency below the budget, but a window is only sheddable when " +
+                "TrimToBudget can actually evict it - which it cannot when the budget is unbounded " +
+                "(0) or is not materially smaller than the leaf. In that regime those walks are " +
+                "windowed in shape and whole-leaf in cost, and the retained snapshot frame is " +
+                "additive on top, so a leaf approaching the split threshold costs more resident " +
+                "memory than it did before, not less. This is a performance advisory, not a " +
+                "correctness one: lower LeafHydrationResidentBytes well below MaxLeafBytes to " +
+                "restore the bound, or accept the cost deliberately on a host with ample memory.",
+                treeId, baseOptions.LeafHydrationResidentBytes, baseOptions.MaxLeafBytes);
+        }
+
         var resolved = new ResolvedLatticeOptions
         {
             // Structural pins are sourced from the registry entry, not from
@@ -706,4 +964,12 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     internal static void ResetWarnedClampedLeafBatchSizeTreesForTests() =>
         WarnedClampedLeafBatchSizeTrees.Clear();
+
+    /// <summary>
+    /// Test-only seam to reset the per-process "leaf hydration budget does not
+    /// bound a splittable leaf" advisory memo so multiple test cases can each
+    /// observe the warning behaviour independently.
+    /// </summary>
+    internal static void ResetWarnedHydrationBudgetTreesForTests() =>
+        WarnedHydrationBudgetTrees.Clear();
 }

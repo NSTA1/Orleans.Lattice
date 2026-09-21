@@ -39,4 +39,31 @@ internal interface IRepoContextAnnIndexBuildGrain : IGrainWithStringKey
     /// </summary>
     /// <returns><see langword="true"/> once the index has converged.</returns>
     Task<bool> IsConvergedAsync();
+
+    /// <summary>
+    /// Disarms the coordinator: clears the persisted build intent, stops the phase
+    /// pump, unregisters the keep-alive reminder, and deactivates. Idempotent - a
+    /// coordinator that was never armed, or was already stopped, completes without
+    /// doing anything.
+    /// <para>
+    /// This is the counterpart to <see cref="EnsureBuildingAsync"/> and exists
+    /// because the keep-alive reminder is <b>durable</b> while the switch that
+    /// arms it is not. A deployment that ran with approximate-index scheduling on
+    /// and later turned it off still carries the registered reminder, so the
+    /// coordinator keeps reactivating after every restart and rebuilding an index
+    /// nobody asked for. <see cref="EnsureBuildingAsync"/> deliberately cannot fix
+    /// that: it returns early when the switch is off, which is exactly the
+    /// configuration in which the orphaned reminder exists. The reminder is only
+    /// retired opportunistically, the next time it happens to fire and the base
+    /// class finds no work outstanding - and that firing is itself an activation
+    /// that re-opens the index into the process. Tearing a repository down must
+    /// therefore be able to say "stop", not merely "do not start".
+    /// </para>
+    /// <para>
+    /// It is <b>not</b> gated on the scheduling switch, for the same reason. A stop
+    /// verb that refused to run whenever scheduling was disabled would be unable to
+    /// clean up in the only state that needs cleaning up.
+    /// </para>
+    /// </summary>
+    Task StopAsync();
 }

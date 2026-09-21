@@ -26,14 +26,6 @@ internal sealed class SnapshotLeafGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
 {
-    /// <summary>
-    /// Per-slice WAL read budget. Mirrors the activation-time
-    /// materialiser's <c>ReplaySliceBudget</c> so a snapshot rebuild
-    /// imposes the same coordinator-RPC granularity as a live leaf's
-    /// fall-off-log recovery.
-    /// </summary>
-    private const int ReplaySliceBudget = 256;
-
     /// <summary>Tree this snapshot leaf belongs to (set on first <see cref="OpenAsync"/>).</summary>
     private string _treeId = string.Empty;
 
@@ -649,8 +641,8 @@ internal sealed class SnapshotLeafGrain(
     /// <summary>
     /// Drives the per-partition WAL replay loop for the snapshot leaf.
     /// Iterates every partition's <c>(empty, capturedOffsets[p]]</c>
-    /// slice through <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
-    /// in <see cref="ReplaySliceBudget"/>-sized chunks. Saga terminals
+    /// slice through <see cref="ReplaySliceReader"/>, which owns the
+    /// read width and narrows it on memory pressure. Saga terminals
     /// and <see cref="MutationKind.DeleteRange"/> mutations are
     /// deferred to a pass-2 drain after every partition's pass-1 has
     /// completed so the same atomicity and ordering invariants the
@@ -682,14 +674,34 @@ internal sealed class SnapshotLeafGrain(
             long fromExclusive = -1;
             long toInclusive = capturedOffset - 1;
 
+            // Issue #2899. Narrow-and-retry on memory pressure, which this site
+            // lacked from #2742 until now. It matters more here than anywhere
+            // else that replays: the loop below starts at the -1 sentinel, so a
+            // snapshot rebuild reads the WHOLE pinned WAL prefix rather than the
+            // gap above a checkpoint, and it takes no replay permit - so before
+            // this change it had neither of the two factors that bound peak
+            // replay memory working for it. The starting width is configured
+            // per tree (issue #2898), which matters most at exactly this site.
+            var sliceReader = new ReplaySliceReader(
+                coordinator, _treeId, partition, optionsMonitor.Get(_treeId).WalReplaySliceBudget);
+
             while (fromExclusive < toInclusive)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var slice = await coordinator.ReadSliceAsync(
+                var slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
                     toInclusive,
-                    ReplaySliceBudget,
+                    (ex, narrowedTo) => logger.LogWarning(
+                        ex,
+                        "Snapshot leaf {GrainId} rebuild of tree {TreeId} partition {Partition} could not afford "
+                        + "a commit-log read from offset {FromExclusive}; narrowing the slice budget to "
+                        + "{SliceBudget} entries and retrying the same range.",
+                        context.GrainId,
+                        _treeId,
+                        partition,
+                        fromExclusive,
+                        narrowedTo),
                     cancellationToken);
 
                 if (slice.Count == 0)

@@ -15,6 +15,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeConstants.SystemTreePrefix"/> and is excluded from
 /// self-registration to avoid circular bootstrap.
 /// </para>
+/// <para>
+/// Read-only members of <see cref="ILatticeRegistry"/> are
+/// <c>[AlwaysInterleave]</c> and mutating members deliberately are not; the
+/// grain type itself is not <c>[Reentrant]</c>. The full rationale - why the
+/// write paths still need exclusion and why the reads are safe to admit
+/// mid-body - lives on the interface, which is where the attributes are
+/// declared.
+/// </para>
 /// </summary>
 internal sealed class LatticeRegistryGrain(
     IGrainFactory grainFactory,
@@ -30,12 +38,28 @@ internal sealed class LatticeRegistryGrain(
     // make the registry impossible to implement on top of Lattice itself.
     private ISystemLattice Registry => grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId);
 
-    public async Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
+    public Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
-        // The existence check is also used by the DIAG block below; keep
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Register,
+            () => RegisterCoreAsync(treeId, entry));
+    }
+
+    /// <summary>
+    /// The registration itself, uninstrumented.
+    /// </summary>
+    /// <remarks>
+    /// Split out for the same reason as <see cref="GetEntryCoreAsync"/>: the
+    /// census arm must count inbound grain calls only. This member carries no
+    /// <c>[AlwaysInterleave]</c>, so it holds the singleton's turn token for its
+    /// whole duration - including the existence check below, which is itself a
+    /// hop onto the backing system tree.
+    /// </remarks>
+    private async Task RegisterCoreAsync(string treeId, TreeRegistryEntry? entry)
+    {        // The existence check is also used by the DIAG block below; keep
         // the call outside the directive so foreground behaviour is
         // identical whether or not LATTICE_DIAG is defined.
         var existsAtCall = await Registry.ExistsAsync(treeId);
@@ -250,48 +274,81 @@ internal sealed class LatticeRegistryGrain(
         await Registry.SetAsync(treeId, SerializeEntry(entry));
     }
 
-    public async Task UnregisterAsync(string treeId)
+    public Task UnregisterAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        await Registry.DeleteAsync(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Unregister,
+            () => Registry.DeleteAsync(treeId));
     }
 
-    public async Task<bool> ExistsAsync(string treeId)
+    public Task<bool> ExistsAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        return await Registry.ExistsAsync(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Exists,
+            () => Registry.ExistsAsync(treeId));
     }
 
-    public async Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
+    public Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetEntry,
+            () => GetEntryCoreAsync(treeId));
+    }
+
+    /// <summary>
+    /// The entry read itself, uninstrumented.
+    /// <para>
+    /// Every in-grain caller goes through this rather than through
+    /// <see cref="GetEntryAsync"/>, so the <c>get_entry</c> arm of the registry
+    /// census counts inbound grain calls only. Routing an internal caller through
+    /// the public member instead would attribute that caller's read to
+    /// <c>get_entry</c> as well as to its own arm, double-counting one admitted
+    /// call and nesting one duration inside another.
+    /// </para>
+    /// </summary>
+    private async Task<TreeRegistryEntry?> GetEntryCoreAsync(string treeId)
+    {
         var bytes = await Registry.GetAsync(treeId);
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
 
-    public async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
+    public Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
     {
         ArgumentNullException.ThrowIfNull(treeIds);
         if (treeIds.Count == 0)
         {
             // No registry hop at all for an empty page: there is nothing to read,
-            // so the fan-out below would be pure overhead.
-            return new Dictionary<string, TreeRegistryEntry>(0, StringComparer.Ordinal);
+            // so the fan-out below would be pure overhead. Not censused either -
+            // a call that reaches no backing read is not fan-in, and recording it
+            // would put a zero-cost sample in a histogram read for saturation.
+            return Task.FromResult(new Dictionary<string, TreeRegistryEntry>(0, StringComparer.Ordinal));
         }
 
-        // One concurrent wave of the same single-key read GetEntryAsync issues,
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetEntries,
+            () => GetEntriesCoreAsync(treeIds));
+    }
+
+    private async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesCoreAsync(IReadOnlyList<string> treeIds)
+    {        // One concurrent wave of the same single-key read GetEntryAsync issues,
         // rather than ISystemLattice.GetManyAsync. That looks like the obvious
-        // primitive but it deadlocks from here: LatticeGrain.GetManyAsyncCore
+        // primitive but it was unsafe from here: LatticeGrain.GetManyAsyncCore
         // ends every attempt with an unconditional topology-stability re-probe
         // (`registry.GetShardMapAsync(TreeId)`) against ILatticeRegistry. Called
         // from inside this grain that closes a two-hop cycle back onto this
-        // activation, which is non-reentrant and still executing this turn, so
-        // the probe queues behind us forever. The single-key read has no such
-        // re-probe, which is why the per-entry GetEntryAsync path has always
-        // worked from here. Awaiting the whole wave keeps the caller-visible win
-        // (one round-trip for a page instead of one per entry) and collapses the
-        // registry-side cost from N sequential awaits to a single parallel wave;
-        // only the shard-level grouping is given up, and that is silo-internal.
+        // activation while it is still executing this turn. (Since #3180 that
+        // re-probe is [AlwaysInterleave] and so would no longer queue behind
+        // us, but the single-key read has never had the re-probe at all, which
+        // is why the per-entry GetEntryAsync path has always worked from here -
+        // and it costs nothing to keep, so the cycle stays closed by
+        // construction rather than by one attribute on another method.)
+        // Awaiting the whole wave keeps the caller-visible win (one round-trip
+        // for a page instead of one per entry) and collapses the registry-side
+        // cost from N sequential awaits to a single parallel wave; only the
+        // shard-level grouping is given up, and that is silo-internal.
         var reads = new Task<byte[]?>[treeIds.Count];
         for (var i = 0; i < treeIds.Count; i++)
         {
@@ -321,7 +378,12 @@ internal sealed class LatticeRegistryGrain(
 
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
 
-    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix)
+    public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) =>
+        RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.GetAllTreeIds,
+            () => GetAllTreeIdsCoreAsync(prefix));
+
+    private async Task<IReadOnlyList<string>> GetAllTreeIdsCoreAsync(string? prefix)
     {
         // The registry tree is ordinally sorted, so a prefix is one contiguous key
         // range: scanning [prefix, PrefixUpperBound(prefix)) stops the walk
@@ -334,7 +396,15 @@ internal sealed class LatticeRegistryGrain(
         var end = scoped ? LatticeKeyRange.PrefixUpperBound(prefix!) : null;
 
         var keys = new List<string>();
-        await foreach (var key in Registry.KeysAsync(start, end))
+        // ScanKeysAsync, not the raw KeysAsync primitive. The registry tree is
+        // backed by LatticeGrain, which is [StatelessWorker], so a MoveNext can
+        // be routed to a sibling worker activation that holds no state for this
+        // enumerator and the scan aborts - a steady-state background rate that
+        // rises with concurrency, not a rare failover event, and one a
+        // single-page scan is fully exposed to. The wrapper reopens and resumes
+        // from the successor of the last yielded key, so the catalog it returns
+        // has no duplicates and no gaps.
+        await foreach (var key in Registry.ScanKeysAsync(start, end))
         {
             // The reserved system-tree namespace is never part of the catalog,
             // whether or not the scan was scoped. Kept inside the loop so a
@@ -405,13 +475,13 @@ internal sealed class LatticeRegistryGrain(
         await EnsureAliasTargetIsControlledAsync(physicalTreeId);
 
         // Enforce single-level indirection: the target must not itself be aliased.
-        var targetEntry = await GetEntryAsync(physicalTreeId);
+        var targetEntry = await GetEntryCoreAsync(physicalTreeId);
         if (targetEntry?.PhysicalTreeId is not null)
             throw new InvalidOperationException(
                 $"Cannot set alias: target tree '{physicalTreeId}' is itself aliased to '{targetEntry.PhysicalTreeId}'. " +
                 "Only a single level of indirection is supported.");
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PhysicalTreeId = physicalTreeId };
         await UpdateAsync(treeId, updated);
 
@@ -437,7 +507,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId);
+        var existing = await GetEntryCoreAsync(treeId);
         if (existing?.PhysicalTreeId is null) return;
 
         var oldPhysical = existing.PhysicalTreeId;
@@ -459,19 +529,26 @@ internal sealed class LatticeRegistryGrain(
         }
     }
 
-    public async Task<string> ResolveAsync(string treeId)
+    public Task<string> ResolveAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var entry = await GetEntryAsync(treeId);
-        return entry?.PhysicalTreeId ?? treeId;
+        return RegistryCallCensus.MeasureAsync(RegistryCallCensus.Resolve, async () =>
+        {
+            var entry = await GetEntryCoreAsync(treeId);
+            return entry?.PhysicalTreeId ?? treeId;
+        });
     }
 
-    public async Task<ShardMap?> GetShardMapAsync(string treeId)
+    public Task<ShardMap?> GetShardMapAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var entry = await GetEntryAsync(treeId);
-        return entry?.ShardMap;
+
+        return RegistryCallCensus.MeasureAsync(RegistryCallCensus.GetShardMap, async () =>
+        {
+            var entry = await GetEntryCoreAsync(treeId);
+            return entry?.ShardMap;
+        });
     }
 
     public async Task SetShardMapAsync(string treeId, ShardMap map)
@@ -479,27 +556,79 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(map);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         // Bump the map version on every persist so strongly-consistent scans
-        // can detect topology changes via a single long comparison. The
-        // registry grain is non-reentrant and singleton-keyed, so the
-        // get-modify-set sequence is atomic across concurrent split
-        // coordinators.
+        // can detect topology changes via a single long comparison.
+        //
+        // Note this method replaces the map wholesale. A caller that needs to
+        // apply a *diff* onto the live map must not build that diff from a
+        // separate GetShardMapAsync call and persist it here: non-reentrancy
+        // serialises each individual mutating call, not a sequence of two, so a
+        // concurrent coordinator can persist between the caller's read and its
+        // write and have its reassignment erased. Use ReassignSlotsAsync,
+        // which performs the whole read-modify-write inside one call.
         var previousVersion = existing.ShardMap?.Version ?? 0L;
         map.Version = previousVersion + 1;
         var updated = existing with { ShardMap = map };
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task<ShardMap> ReassignSlotsAsync(
+        string treeId,
+        int[] slots,
+        int targetShardIndex,
+        ShardMap fallbackMap)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(fallbackMap);
+
+        // Atomic read-modify-write: this grain is a singleton (keyed by
+        // RegistryTreeId) and this method carries no [AlwaysInterleave], so the
+        // entire method body runs without another mutator interleaving. Both
+        // the read of the live map and the persist of the reassigned copy are
+        // inside that body, which is what lets a concurrent split and fold
+        // compose: each applies its own slot diff onto whatever the other has
+        // already committed, rather than onto a view that has since gone stale.
+        // Read-only members are [AlwaysInterleave] and may be admitted mid-body;
+        // that is harmless, because the entry is rewritten by the single
+        // terminal SetAsync below, so a reader sees it wholly before or wholly
+        // after.
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var currentMap = existing.ShardMap ?? fallbackMap;
+        var newSlots = (int[])currentMap.Slots.Clone();
+        foreach (var slot in slots)
+        {
+            if (slot < 0 || slot >= newSlots.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(slots),
+                    slot,
+                    $"Virtual slot is outside the shard map's {newSlots.Length} slots.");
+            }
+
+            newSlots[slot] = targetShardIndex;
+        }
+
+        var reassigned = new ShardMap
+        {
+            Slots = newSlots,
+            Version = (existing.ShardMap?.Version ?? 0L) + 1,
+        };
+        await UpdateAsync(treeId, existing with { ShardMap = reassigned });
+        return reassigned;
+    }
+
     public async Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap)
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        // Atomic read-modify-write: this grain is non-reentrant and is a
-        // singleton (keyed by RegistryTreeId), so the entire method body runs
-        // without interleaving across concurrent callers, guaranteeing each
-        // split coordinator receives a distinct target shard index.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        // Atomic read-modify-write: this grain is a singleton (keyed by
+        // RegistryTreeId) and this method carries no [AlwaysInterleave], so the
+        // entire method body runs without another mutator interleaving,
+        // guaranteeing each split coordinator receives a distinct target shard
+        // index.
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
         var allocated = floor + 1;
         var updated = existing with { NextShardIndex = allocated };
@@ -511,7 +640,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PublishEvents = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -521,7 +650,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         HistoryRetentionValidator.Validate(mode, window);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with
         {
             HistoryRetentionMode = mode,
@@ -534,7 +663,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { MaintainProjectionDigest = enabled };
         await UpdateAsync(treeId, updated);
     }
@@ -551,7 +680,7 @@ internal sealed class LatticeRegistryGrain(
                 + "value-payload bytes per cache activation with LRU payload eviction).");
         }
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { MaxCacheValueBytes = maxCacheValueBytes };
         await UpdateAsync(treeId, updated);
     }
@@ -560,7 +689,7 @@ internal sealed class LatticeRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         if (existing.ProjectionDigestPermanentlyDisabled == true)
         {
             // Idempotent: latch is one-way and re-stamping is a no-op.
@@ -575,7 +704,7 @@ internal sealed class LatticeRegistryGrain(
     public async Task<WalPlacementPin> GetWalPlacementAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var entry = await GetEntryAsync(treeId);
+        var entry = await GetEntryCoreAsync(treeId);
         return entry?.WalPlacement ?? WalPlacementPin.Create();
     }
 
@@ -584,10 +713,10 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentException.ThrowIfNullOrEmpty(providerKey);
 
-        // Atomic read-validate-write: the registry grain is non-reentrant and
-        // singleton-keyed, so the compare-and-swap below cannot interleave with
-        // a concurrent placement change.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        // Atomic read-validate-write: the registry grain is singleton-keyed and
+        // this method carries no [AlwaysInterleave], so the compare-and-swap
+        // below cannot interleave with a concurrent placement change.
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {
@@ -614,10 +743,11 @@ internal sealed class LatticeRegistryGrain(
             ArgumentException.ThrowIfNullOrEmpty(providerKey, nameof(moves));
         }
 
-        // Atomic read-validate-write: the registry grain is non-reentrant and
-        // singleton-keyed, so the compare-and-swap below applies every move under
-        // one version bump with no intermediate placement observable.
-        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        // Atomic read-validate-write: the registry grain is singleton-keyed and
+        // this method carries no [AlwaysInterleave], so the compare-and-swap
+        // below applies every move under one version bump with no intermediate
+        // placement observable.
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var current = existing.WalPlacement ?? WalPlacementPin.Create();
         if (current.Version != expectedVersion)
         {

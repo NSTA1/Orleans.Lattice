@@ -69,6 +69,17 @@ public static class LatticeEventConstants
     internal const string MaintenanceRequestContextKey = "ol.maint";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to mark the current logical call
+    /// as <em>bulk</em> for WAL replay admission: work whose cost scales with
+    /// the corpus rather than with one user request, and which may therefore be
+    /// refused a place in the replay-permit queue at a lower depth than an
+    /// interactive read. Absent means interactive, which is the safe default -
+    /// a caller that never opts in is never de-prioritised. Set through
+    /// <see cref="LatticeReplayAdmissionContext"/>.
+    /// </summary>
+    internal const string ReplayAdmissionBulkRequestContextKey = "ol.replayadm.bulk";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
     /// <em>author's delta</em> - the pre-merge mutation the caller actually
     /// authored, encoded as a <c>(Kind, Payload)</c> opaque-bytes pair -

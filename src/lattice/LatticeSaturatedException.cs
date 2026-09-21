@@ -49,6 +49,19 @@ namespace Orleans.Lattice;
 ///   heavy per-shard baseline capture is shed before it fans out onto
 ///   shard roots already collapsing under write back-pressure (the
 ///   Explorer-driven scan storm documented in issue #1053).</description></item>
+///   <item><description>The WAL replay permit admission refusal from
+///   <c>BPlusLeafGrain.AcquireReplayPermitAsync</c>, raised when the
+///   admitted-waiter count already meets the bound derived from
+///   <see cref="LatticeOptions.WalReplayPermitQueueDepthPerPermit"/> and
+///   the resolved per-silo permit ceiling (issue #3284) <b>and</b> the
+///   queue is failing to drain within
+///   <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/> (issue
+///   #3290). Unlike the three
+///   above it is raised <b>before</b> the caller waits for anything, which
+///   is the point: an activation admitted to a queue it cannot reach the
+///   head of burns its whole request deadline and then enqueues a
+///   replacement, so refusing immediately is the cheaper failure as well
+///   as the more honest one.</description></item>
 /// </list>
 /// <para>
 /// Derives from <see cref="System.InvalidOperationException"/> so

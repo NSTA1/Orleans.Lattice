@@ -171,6 +171,100 @@ public sealed class SingleClusterWalDurabilityTests
         });
     }
 
+    /// <summary>
+    /// Issue #3206: trimming is decided and performed per shard, so
+    /// <c>orleans.lattice.wal.entries_trimmed</c> must name the shard it
+    /// trimmed rather than reporting a single tree-scoped total. Without the
+    /// tag a tree whose active shards keep trimming looks healthy while a
+    /// stranded majority never moves, and the tree-scoped sum cannot tell the
+    /// two apart.
+    /// <para>
+    /// The emission is also unconditional per scanned shard, including a zero
+    /// for a shard that reclaimed nothing, which is what makes an absent
+    /// series mean "this shard was not scanned on this silo" rather than "this
+    /// shard reclaimed nothing". So the assertion is that the set of shards
+    /// that reported covers every partition the pass walked, not merely that
+    /// some shard did.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task LatticeWalGc_RunOnceAsync_tags_wal_entries_trimmed_with_the_shard_it_scanned()
+    {
+        var treeId = "sc-wal-gc-shard-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+
+        for (var i = 0; i < 10; i++)
+        {
+            await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
+        }
+
+        var sp = RequireSiloServices();
+        var registry = sp.GetRequiredService<IWalCursorRegistry>();
+
+        var shards = new HashSet<int>();
+        var untagged = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (inst, lst) =>
+        {
+            if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                && inst.Name == "orleans.lattice.wal.entries_trimmed")
+            {
+                lst.EnableMeasurementEvents(inst);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            var matchesTree = false;
+            int? shard = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == LatticeMetrics.TagTree
+                    && tag.Value is string t
+                    && string.Equals(t, treeId, StringComparison.Ordinal))
+                {
+                    matchesTree = true;
+                }
+                else if (tag.Key == LatticeMetrics.TagShard && tag.Value is int s)
+                {
+                    shard = s;
+                }
+            }
+
+            if (!matchesTree)
+            {
+                return;
+            }
+
+            if (shard is { } index)
+            {
+                lock (shards)
+                {
+                    shards.Add(index);
+                }
+            }
+            else
+            {
+                Interlocked.Increment(ref untagged);
+            }
+        });
+        listener.Start();
+
+        var gc = new LatticeWalGc(
+            sp,
+            registry,
+            new FixedLatticeOptionsMonitor(new LatticeOptions { WalRetention = TimeSpan.FromMilliseconds(1) }));
+        var report = await gc.RunOnceAsync(treeId);
+        listener.RecordObservableInstruments();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(untagged, Is.Zero,
+                "Every orleans.lattice.wal.entries_trimmed measurement must name the shard it trimmed.");
+            Assert.That(shards, Is.EquivalentTo(Enumerable.Range(0, report.ShardsScanned)),
+                "One measurement per scanned shard, so an absent shard series means that shard was never scanned.");
+        });
+    }
+
     [Test]
     public async Task LatticeWalGcScheduler_drives_RunOnceAsync_and_trims_the_wal_for_a_non_replicated_tree()
     {
@@ -236,7 +330,19 @@ public sealed class SingleClusterWalDurabilityTests
         var ttlGc = new LatticeWalGc(
             sp,
             registry,
-            new FixedLatticeOptionsMonitor(new LatticeOptions { WalRetention = TimeSpan.FromMilliseconds(1) }));
+            new FixedLatticeOptionsMonitor(new LatticeOptions
+            {
+                WalRetention = TimeSpan.FromMilliseconds(1),
+
+                // Issue #3300: the durability hold engages by default for any
+                // tree that has never published a durable offset floor. This
+                // tree is created seconds earlier and its leaves have not yet
+                // checkpointed, so it sits in exactly that state - which is why
+                // the hold is opted out of here (0 disables it), keeping the
+                // issue #920 assertion below about the scheduler rather than
+                // about the hold.
+                WalDurabilityHoldCeilingBytes = 0,
+            }));
 
         // Before the core scheduler existed this non-replicated tree had no
         // GC driver at all; here we drive it on a fast cadence (the first

@@ -69,6 +69,42 @@ public static class RepoContextReplayConcurrency
     public const int DefaultMaxConcurrentReplays = LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays;
 
     /// <summary>
+    /// The token that selects the library's runtime derivation deliberately,
+    /// rather than by omission.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a token and not just <c>0</c> (issue #2863).</b> <c>0</c> already
+    /// selects the derivation, so this token buys nothing at this layer. It buys
+    /// it one layer up. The sample deployment's tuning overlay declares this
+    /// variable with a compose presence check, which errors when the variable is
+    /// unset or empty and <b>cannot inspect the value</b> - compose interpolation
+    /// has no value predicate. So <c>0</c> passes that guard while meaning
+    /// exactly what the guard exists to forbid, and an operator who forgot to
+    /// export the variable is indistinguishable from one who chose the
+    /// derivation on purpose. Both are true of the same byte.
+    /// </para>
+    /// <para>
+    /// The fix has to be at the encoding rather than at the check, because no
+    /// guard can recover information the encoding has already destroyed. So
+    /// <c>0</c> is refused by the deployment's preflight and the deliberate case
+    /// gets its own spelling. The general rule, which outlives this variable: a
+    /// value that means "I did not choose" and a value that means "I chose the
+    /// automatic behaviour" must not be the same value.
+    /// </para>
+    /// <para>
+    /// It is accepted <b>here</b>, in the host that reads the variable, because
+    /// that is the only place it can be. A token may only be introduced where we
+    /// own the code that interprets it; compose cannot rewrite a value in
+    /// transit, so a token invented for a variable that Docker or the CLR
+    /// finally reads would merely produce a string the consumer does not
+    /// recognise. That is why the overlay's other resource knobs accept no such
+    /// token and simply refuse <c>0</c>.
+    /// </para>
+    /// </remarks>
+    public const string AutoToken = "auto";
+
+    /// <summary>
     /// The largest accepted ceiling. Each permit admits one whole-readable-window
     /// WAL replay, which is CPU bound, so a value far above any plausible host's
     /// core count does not bound a reactivation storm at all - it merely restates
@@ -88,10 +124,10 @@ public static class RepoContextReplayConcurrency
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="configuration"/> is null.</exception>
     /// <exception cref="InvalidOperationException">
-    /// The variable is present but is not an integer in the accepted range. The
-    /// host refuses to start rather than silently ignoring an operator's intent,
-    /// because silently ignoring it is the exact failure this class was written
-    /// to remove.
+    /// The variable is present but is neither <see cref="AutoToken"/> nor an
+    /// integer in the accepted range. The host refuses to start rather than
+    /// silently ignoring an operator's intent, because silently ignoring it is
+    /// the exact failure this class was written to remove.
     /// </exception>
     public static int ResolveMaxConcurrentReplays(IConfiguration configuration)
     {
@@ -103,13 +139,28 @@ public static class RepoContextReplayConcurrency
             return DefaultMaxConcurrentReplays;
         }
 
-        if (!int.TryParse(raw.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+        var trimmed = raw.Trim();
+
+        // The token resolves to the same number the unset path resolves to, and
+        // that identity is the point rather than a redundancy: the deployment
+        // gets a spelling for "run the derivation" that a presence check upstream
+        // can tell apart from a forgotten export, while the code path the library
+        // then takes is byte-for-byte the one it already took. An acceptance run
+        // pinned with this token is therefore still exercising the derivation it
+        // means to measure, not a second implementation of it (issue #2863).
+        if (string.Equals(trimmed, AutoToken, StringComparison.OrdinalIgnoreCase))
+        {
+            return DefaultMaxConcurrentReplays;
+        }
+
+        if (!int.TryParse(trimmed, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
             || parsed < 0
             || parsed > MaxConcurrentReplaysCeiling)
         {
             throw new InvalidOperationException(
-                $"{MaxConcurrentReplaysKey} must be an integer between 0 and {MaxConcurrentReplaysCeiling} "
-                + $"(zero defers to the library, which sizes the gate from Environment.ProcessorCount); was '{raw}'.");
+                $"{MaxConcurrentReplaysKey} must be '{AutoToken}' or an integer between 0 and {MaxConcurrentReplaysCeiling} "
+                + $"('{AutoToken}' defers to the library, which sizes the gate from the lesser of Environment.ProcessorCount "
+                + $"and the enforced container CPU grant); was '{raw}'.");
         }
 
         return parsed;

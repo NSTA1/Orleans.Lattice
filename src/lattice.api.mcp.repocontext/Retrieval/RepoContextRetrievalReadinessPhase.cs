@@ -45,4 +45,29 @@ public enum RepoContextRetrievalReadinessPhase
     /// </para>
     /// </summary>
     NothingRegistered = 3,
+
+    /// <summary>
+    /// An embedding provider is bound and the vector plane cannot arm, because an
+    /// admission gate has refused its open for longer than the declared bound.
+    /// <b>Not ready</b> - and, unlike <see cref="Building"/>, not expected to
+    /// become ready at the present capacity.
+    /// <para>
+    /// <b>It is a phase of its own precisely because <see cref="Building"/> could
+    /// not say this.</b> A plane still replaying and a plane being refused on every
+    /// open attempt produce the identical reading - not ready, 503, no vector
+    /// answers - while needing opposite responses: wait, versus add capacity. Issue
+    /// #3286 measured that ambiguity directly, with refusals climbing at 0.66 per
+    /// minute against successful opens pinned at zero and nothing anywhere able to
+    /// name which of the two situations was in progress.
+    /// </para>
+    /// <para>
+    /// <b>Not sticky, and not terminal for the open.</b> The open goes on being
+    /// attempted, so a plane whose saturation clears returns to
+    /// <see cref="Building"/> and then to <see cref="Serving"/> with no operator
+    /// action. A phase that latched would convert a transient heap excursion into a
+    /// permanent outage needing a restart, which is worse than the silence it
+    /// replaces.
+    /// </para>
+    /// </summary>
+    SaturatedUnavailable = 4,
 }

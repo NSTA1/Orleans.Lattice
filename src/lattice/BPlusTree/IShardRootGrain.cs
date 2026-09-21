@@ -147,6 +147,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// (see U9g).
     /// </para>
     /// <para>
+    /// <b>Note what that citation can and cannot support.</b> The
+    /// <c>NonReentrancyQueueSize=</c> clause comes from Orleans' near-timeout
+    /// diagnostic, which is emitted only for a request already approaching the
+    /// response deadline and reports only that request's own wait. It can show
+    /// that a queue existed once a call was already failing; it cannot measure
+    /// how often or how deeply calls queue, because a grain type that queues
+    /// deeply without tripping the timeout contributes nothing to it. Read
+    /// <see cref="Orleans.Lattice.LatticeMetrics.GrainCallOutstandingDepth"/>
+    /// (enabled by
+    /// <see cref="Orleans.Lattice.LatticeServiceCollectionExtensions.AddLatticeGrainCallObservation"/>)
+    /// for the uncensored per-grain-type distribution.
+    /// </para>
+    /// <para>
     /// Safety relies on three invariants that hold across interleaved
     /// turns on the same activation:
     /// </para>
@@ -445,6 +458,64 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </para>
     /// </summary>
     Task<int> ReclaimEmptyLeavesAsync(int maxLeaves);
+
+    /// <summary>
+    /// Examines one work-bounded batch of this shard's leaf chain for leaves
+    /// that are spliced into it but unreachable by descent from the shard
+    /// root, and - unless <paramref name="dryRun"/> is set - unsplices the ones
+    /// it can prove safe to remove.
+    /// <para>
+    /// An orphaned leaf is not cosmetic. Nothing routes writes to it, so it
+    /// never checkpoints, so the WAL materialiser pin it published at birth can
+    /// never advance - yet that pin is still counted in the trim floor. The WAL
+    /// therefore never trims, and because compaction is strictly downstream of
+    /// trim it never compacts either: one orphan removes every bound on a
+    /// tree's WAL growth, permanently, and no amount of ordinary maintenance
+    /// recovers it (issue 3269). The empty-leaf reclaim pass cannot help,
+    /// because <c>IsReclaimCandidate</c> rejects on its first line for any leaf
+    /// holding rows and an orphan characteristically holds a shadow copy of a
+    /// live leaf's range.
+    /// </para>
+    /// <para>
+    /// <b>It fails closed.</b> Before unsplicing anything it proves, key by
+    /// key, that every row the orphan holds is readable from the
+    /// descent-reachable leaf that owns it. A leaf that fails any check is
+    /// left exactly as it was found and reported as a refusal. Nothing is
+    /// assumed about duplication: the one orphan pair ever measured did hold
+    /// duplicated keys, but that is a sample of one and the mechanism that
+    /// mints an orphan guarantees nothing of the kind.
+    /// </para>
+    /// <para>
+    /// The walk is bounded and resumable for the same reason every other
+    /// chain walk on this grain is: probing a leaf activates it, and this
+    /// method holds the shard root's non-reentrant activation turn while it
+    /// runs. Drive batches until
+    /// <see cref="OrphanedLeafRepairPage.ResumeFromInclusive"/> is
+    /// <see langword="null"/>.
+    /// </para>
+    /// <para>
+    /// Returns an empty page, rather than throwing, when the shard has not
+    /// been initialised, is a single-leaf tree, or is mid-way through a
+    /// shard-level split.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The previous page's resume key, or <see langword="null"/> to start at
+    /// the head of the chain.
+    /// </param>
+    /// <param name="dryRun">
+    /// When <see langword="true"/>, detects and verifies but mutates nothing,
+    /// reporting <see cref="OrphanedLeafDisposition.Repairable"/> where a
+    /// repair would report <see cref="OrphanedLeafDisposition.Repaired"/>. The
+    /// detection and verification code is shared with the repair path rather
+    /// than duplicated, so an inspection cannot disagree with the repair it
+    /// predicts.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk before the next leaf.</param>
+    Task<OrphanedLeafRepairPage> RepairOrphanedLeavesAsync(
+        string? resumeFromInclusive,
+        bool dryRun,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the <see cref="GrainId"/> of the leaf a chain walk should start
@@ -1512,6 +1583,40 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// coordinator's snapshot. Entries marked at or before this HLC
     /// are removed.</param>
     Task ClearDirtyLeavesUpToAsync(HybridLogicalClock advance);
+
+    /// <summary>
+    /// Re-marks <paramref name="leafId"/> dirty with an HLC strictly greater
+    /// than <paramref name="above"/>, so a subsequent
+    /// <see cref="ClearDirtyLeavesUpToAsync"/> called with that same watermark
+    /// preserves the entry instead of trimming it.
+    /// <para>
+    /// This is the seam that lets the compaction coordinator advance past a
+    /// leaf it could not compact without discarding the one signal that says
+    /// the leaf still needs compacting. The coordinator drains the shard's
+    /// dirty set at the watermark it observed when the pass began, and that
+    /// drain removes every entry marked at-or-before it - including the
+    /// blocker's own mark. Lifting the blocker above the watermark first turns
+    /// "skip it" into "skip it and keep asking", which is the difference
+    /// between a shard that reports success while silently forgetting the leaf
+    /// the exercise exists to reclaim and one that keeps reporting the skip
+    /// every pass.
+    /// </para>
+    /// <para>
+    /// The mark is raised in memory and persisted by the next state write, in
+    /// exactly the same way as a mark raised by routed <c>Delete</c> traffic;
+    /// the coordinator's drain is itself such a write, so the retained mark is
+    /// normally persisted by the very call that would otherwise have removed
+    /// it. The durability bound is therefore unchanged from
+    /// <c>MarkLeafDirtyAsync</c>: an unclean shutdown before the next write can
+    /// lose the mark, and the legacy chain walk rediscovers the leaf.
+    /// </para>
+    /// </summary>
+    /// <param name="leafId">The leaf whose dirty mark must survive the drain.</param>
+    /// <param name="above">The watermark the caller is about to drain to. The
+    /// resulting mark is strictly greater than this value. An existing mark is
+    /// never lowered: if the leaf already carries a higher one, that mark is
+    /// kept, which satisfies the same guarantee.</param>
+    Task RetainDirtyLeafAsync(GrainId leafId, HybridLogicalClock above);
 
     /// <summary>
     /// Engages a durable write fence on this shard for the cross-cluster saga

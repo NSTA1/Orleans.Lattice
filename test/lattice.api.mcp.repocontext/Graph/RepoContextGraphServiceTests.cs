@@ -251,7 +251,8 @@ public sealed class RepoContextGraphServiceTests
             trees.GrainFactory,
             Serializer,
             counter ?? TokenCounter(42),
-            new RepoContextWorkspaceGuard(allowedRoots));
+            new RepoContextWorkspaceGuard(allowedRoots),
+            new RepoContextRetrievalLatencyReporter());
 
     private static IRepoContextTokenCounter TokenCounter(int result)
     {
@@ -277,16 +278,16 @@ public sealed class RepoContextGraphServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                () => new RepoContextGraphService(null!, Serializer, TokenCounter(1), guard),
+                () => new RepoContextGraphService(null!, Serializer, TokenCounter(1), guard, new RepoContextRetrievalLatencyReporter()),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextGraphService(trees.GrainFactory, null!, TokenCounter(1), guard),
+                () => new RepoContextGraphService(trees.GrainFactory, null!, TokenCounter(1), guard, new RepoContextRetrievalLatencyReporter()),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextGraphService(trees.GrainFactory, Serializer, null!, guard),
+                () => new RepoContextGraphService(trees.GrainFactory, Serializer, null!, guard, new RepoContextRetrievalLatencyReporter()),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextGraphService(trees.GrainFactory, Serializer, TokenCounter(1), null!),
+                () => new RepoContextGraphService(trees.GrainFactory, Serializer, TokenCounter(1), null!, new RepoContextRetrievalLatencyReporter()),
                 Throws.ArgumentNullException);
         });
     }

@@ -27,6 +27,27 @@ public sealed class FileWalStorageOptions
     public const int DefaultCompactionMinimumDeadBytes = 64 * 1024;
 
     /// <summary>
+    /// The default absolute dead-byte ceiling (<c>0</c>: disabled, leaving
+    /// <see cref="DefaultCompactionThreshold"/> as the sole trigger).
+    /// Disabled by default because the ratio policy is what keeps
+    /// compaction amortised: a compaction rewrites every <i>live</i> byte to
+    /// reclaim the dead ones, so triggering at a dead fraction of <c>0.5</c>
+    /// costs roughly one byte written per byte reclaimed, whereas an
+    /// absolute ceiling on a large shard can cost many. The ceiling
+    /// deliberately trades that amortisation for a hard bound on wasted
+    /// disk, so it is opt-in rather than a silent I/O regression.
+    /// </summary>
+    public const long DefaultCompactionMaximumDeadBytes = 0L;
+
+    /// <summary>
+    /// The default per-read payload byte ceiling (<c>16 MiB</c>). Four
+    /// times <see cref="LatticeOptions.DefaultWalMaxBatchBytes"/>, so a
+    /// page always has room for a full default-sized write batch and the
+    /// bound never costs a round trip on an ordinary workload.
+    /// </summary>
+    public const long DefaultMaxReadBatchBytes = 16L * 1024 * 1024;
+
+    /// <summary>
     /// Absolute or relative filesystem path to the root directory under
     /// which every tree/shard write-ahead log is stored. The provider
     /// creates the directory (and per-shard subdirectories) on first
@@ -65,4 +86,98 @@ public sealed class FileWalStorageOptions
     /// <see cref="DefaultCompactionMinimumDeadBytes"/>.
     /// </summary>
     public int CompactionMinimumDeadBytes { get; set; } = DefaultCompactionMinimumDeadBytes;
+
+    /// <summary>
+    /// An absolute ceiling, in dead (trimmed but not yet physically
+    /// reclaimed) payload bytes, above which a
+    /// <see cref="IWalStorageProvider.TrimAsync"/> call compacts the shard
+    /// <b>regardless of <see cref="CompactionThreshold"/></b>. <c>0</c> (the
+    /// default) disables the ceiling, leaving the ratio as the sole trigger.
+    /// <para>
+    /// <see cref="CompactionThreshold"/> bounds waste only <i>relative</i> to
+    /// live data, so absolute waste grows without limit as a shard grows: at
+    /// the default fraction a 100 GB shard may hold approaching 100 GB of
+    /// dead bytes before compaction is due. This option is how an operator
+    /// under disk pressure expresses "never waste more than N bytes per
+    /// shard, whatever it costs to honour".
+    /// </para>
+    /// <para>
+    /// It does cost. Compaction rewrites every live byte in the shard to
+    /// reclaim the dead ones, so the work done per byte reclaimed is
+    /// <c>live / dead</c>: at the 0.5 ratio that is about 1, while a ceiling
+    /// set far below the live size drives it proportionally higher and
+    /// compacts more often. Size it against the shard sizes the deployment
+    /// actually reaches rather than as small as disk allows, and prefer
+    /// leaving it disabled unless bounded disk genuinely outranks write
+    /// amplification.
+    /// </para>
+    /// <para>
+    /// <see cref="CompactionMinimumDeadBytes"/> still applies, and it is
+    /// evaluated <i>first</i>: a shard below that floor is never compacted by
+    /// either trigger. A ceiling below the floor is therefore not honoured as
+    /// written, and it is <b>not</b> inert. Every shard that reaches the
+    /// ceiling comparison has already cleared the floor, so the comparison is
+    /// unconditionally true and the ceiling behaves exactly as if set to the
+    /// floor: the shard is rewritten on every trim that accumulates
+    /// <see cref="CompactionMinimumDeadBytes"/> of dead space, which on a
+    /// large shard is the highest write amplification this option can
+    /// produce. The only value that disables the ceiling is <c>0</c>. A
+    /// configuration with a non-zero ceiling below the floor is rejected by
+    /// the registration-time validator rather than silently relocated. A host
+    /// that builds the provider directly from <c>Options.Create</c> never runs
+    /// that validator and is outside the guard.
+    /// </para>
+    /// </summary>
+    public long CompactionMaximumDeadBytes { get; set; } = DefaultCompactionMaximumDeadBytes;
+
+    /// <summary>
+    /// Maximum total payload bytes a single read page may materialise,
+    /// bounding <see cref="IWalStorageProvider.ReadAsync"/> and
+    /// <see cref="IWalStorageProvider.ReadEncodedAsync"/> by size as well
+    /// as by the caller's entry count. Defaults to
+    /// <see cref="DefaultMaxReadBatchBytes"/>. Must be at least <c>1</c>.
+    /// <para>
+    /// The write path bounds a batch by both entries
+    /// (<see cref="LatticeOptions.WalMaxBatchEntries"/>) and bytes
+    /// (<see cref="LatticeOptions.WalMaxBatchBytes"/>). Without this
+    /// option the read path bounded only entries, so a page of large
+    /// records was unbounded in memory: an operator who set
+    /// <c>WalMaxBatchBytes</c> would reasonably believe WAL memory was
+    /// bounded in both directions, and it was not (issue #2689).
+    /// </para>
+    /// <para>
+    /// A page always yields at least one entry, even when that entry
+    /// alone exceeds the ceiling. Returning nothing would be
+    /// indistinguishable from end-of-stream to every reader and would
+    /// stall replay permanently at that offset, so this option bounds a
+    /// page's size without ever being able to block progress.
+    /// </para>
+    /// <para>
+    /// That floor is why this option cannot, on its own, keep a read
+    /// affordable, and why it must not be tuned downwards in the hope that
+    /// it will (issue #2742). It bounds how many bytes a page totals; it
+    /// bounds neither the largest single block the read must find nor the
+    /// page's cost relative to the memory that actually remains. Both gaps
+    /// are closed below this option rather than by changing it:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>the oversized-single-entry case is decoded from
+    /// pooled non-contiguous chunks, so it no longer needs a contiguous
+    /// buffer its own size - the floor stays, and stops being expensive;
+    /// </description></item>
+    /// <item><description>this value is treated as a ceiling and narrowed
+    /// per read by the process's current heap occupancy, because a ceiling
+    /// chosen for healthy operation is the wrong one for a process whose
+    /// allocations are already failing; and</description></item>
+    /// <item><description>a page that still cannot be allocated is retried
+    /// at a quarter of its width, down to one entry, before the read is
+    /// refused as unaffordable.</description></item>
+    /// </list>
+    /// <para>
+    /// The configured value therefore continues to mean what it says on a
+    /// healthy host, and stops being the binding constraint on a host that
+    /// is out of memory.
+    /// </para>
+    /// </summary>
+    public long MaxReadBatchBytes { get; set; } = DefaultMaxReadBatchBytes;
 }

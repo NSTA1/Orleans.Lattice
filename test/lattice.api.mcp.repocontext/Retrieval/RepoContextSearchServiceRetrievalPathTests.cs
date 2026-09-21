@@ -75,7 +75,7 @@ public sealed class RepoContextSearchServiceRetrievalPathTests
             index,
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider,
             readiness);
     }
@@ -307,7 +307,7 @@ public sealed class RepoContextSearchServiceRetrievalPathTests
             Substitute.For<IRepoContextSemanticIndex>(),
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider: null);
 
         var result = await service.SearchAsync("acme", "widget", 10, CancellationToken.None);

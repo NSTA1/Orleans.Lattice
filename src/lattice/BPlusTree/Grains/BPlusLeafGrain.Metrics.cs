@@ -67,6 +67,20 @@ internal sealed partial class BPlusLeafGrain
     private ILogger<BPlusLeafGrain>? _logger;
 
     /// <summary>
+    /// Diagnostic gate for the c2-vi etag-race probe. Set
+    /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
+    /// emit one stdout line per <see cref="PersistAsync"/> call with
+    /// the activation id, <c>RecordExists</c>,
+    /// <c>Etag</c>, and a short caller-
+    /// supplied tag. Read once at process start; flipping the env var
+    /// mid-run has no effect. Default <c>false</c> so production and
+    /// the unit-test harness pay zero cost.
+    /// </summary>
+    private static readonly bool _tracePersist =
+        Environment.GetEnvironmentVariable("LATTICE_BENCH_TRACE_PERSIST") is { Length: > 0 } v
+        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Persists the leaf's state row and records the elapsed time on
     /// the <see cref="LatticeMetrics.LeafWriteDuration"/> histogram.
     /// Used by (a) the topology / lifecycle paths (sibling pointer
@@ -83,20 +97,6 @@ internal sealed partial class BPlusLeafGrain
     /// when the tree has not yet been registered with this leaf
     /// (pre-<c>SetTreeIdAsync</c>).
     /// </summary>
-    /// <summary>
-    /// Diagnostic gate for the c2-vi etag-race probe. Set
-    /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
-    /// emit one stdout line per <see cref="PersistAsync"/> call with
-    /// the activation id, <c>RecordExists</c>,
-    /// <c>Etag</c>, and a short caller-
-    /// supplied tag. Read once at process start; flipping the env var
-    /// mid-run has no effect. Default <c>false</c> so production and
-    /// the unit-test harness pay zero cost.
-    /// </summary>
-    private static readonly bool _tracePersist =
-        Environment.GetEnvironmentVariable("LATTICE_BENCH_TRACE_PERSIST") is { Length: > 0 } v
-        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
-
     private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
         if (_tracePersist)

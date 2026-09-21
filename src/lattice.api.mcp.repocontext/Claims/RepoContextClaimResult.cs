@@ -61,6 +61,44 @@ public sealed record RepoContextClaimResult
     public double? LeaseSeconds { get; init; }
 
     /// <summary>
+    /// When the lease that a renew replaced was due to expire, in round-trip
+    /// ISO-8601 UTC form. Always <see langword="null"/> on a claim, on a refusal,
+    /// and whenever no prior lease could be observed. Reported alongside
+    /// <see cref="LeaseShortened"/> so a caller can see by how much a renew moved
+    /// its own deadline, not merely that it moved.
+    /// </summary>
+    public string? PreviousLeaseExpiresAtUtc { get; init; }
+
+    /// <summary>
+    /// Whether this renew <b>shortened</b> the lease it replaced: <see langword="true"/>
+    /// when the new expiry is earlier than the previous one, <see langword="false"/>
+    /// when it is not, and <see langword="null"/> when the question does not apply
+    /// (a claim, or a refusal) or could not be answered because no prior lease was
+    /// observed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A renew that shortens a lease is a successful renew, so it is reported here
+    /// rather than refused. It exists because the alternative - reporting it as a
+    /// plain <c>granted: true</c> - is the shape that lets the damage run
+    /// undetected. The lease length defers to the cluster default when
+    /// <c>leaseSeconds</c> is omitted, and that default is deliberately short, so a
+    /// caller holding a long explicit lease that renews without naming one cuts its
+    /// own deadline dramatically and is told only that the renew succeeded. The
+    /// failure then surfaces one step later, on the *next* renew, as
+    /// <see cref="Granted"/> <see langword="false"/> with reason <c>superseded</c> -
+    /// at a call site that did nothing wrong.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> deliberately means <i>unknown</i> and never <i>fine</i>.
+    /// A renew whose prior lease could not be read reports <see langword="null"/>
+    /// rather than <see langword="false"/>, so an absent observation is not
+    /// presented as a positive assurance that nothing shrank.
+    /// </para>
+    /// </remarks>
+    public bool? LeaseShortened { get; init; }
+
+    /// <summary>
     /// Why the claim was not granted, or <see langword="null"/> when it was. One of
     /// <c>contended</c> (another agent holds it), <c>timeout</c> (the bounded wait
     /// elapsed), or <c>missing</c> (no record exists at the key).

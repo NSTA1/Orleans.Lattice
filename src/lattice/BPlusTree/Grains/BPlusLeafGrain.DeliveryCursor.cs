@@ -140,8 +140,10 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceCursorAsync"/>
-    public Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
+    public async Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         EnsureDeliveryEpochInitialized();
         var current = new LeafDeliveryCursor
@@ -173,12 +175,40 @@ internal sealed partial class BPlusLeafGrain
             var snapshot = new Dictionary<string, LwwValue<byte[]>>(
                 Cache.Count,
                 StringComparer.Ordinal);
+            // MUST NOT become a single EnumerateRange(start, end) call. This is
+            // a full resync, so the delta it returns is the consumer's entire
+            // view and has to enumerate every row this leaf holds;
+            // EnumerateRows() hydrates all deferred rows first, so it is
+            // complete by construction. One ranged call is deliberately partial
+            // (it hydrates only the requested span), so swapping one in here
+            // would silently ship an incomplete mirror under a green call - the
+            // same defect class PR #2420 closed on the rehydrate path, where a
+            // cache left short of the rows the leaf had persisted still
+            // reported a clean activation.
+            //
+            // Read that prohibition as SCOPED TO THE SINGLE RANGED CALL, which
+            // is the only form it was ever true of. It is not a prohibition on
+            // ranged enumeration as such, and in particular it does not rule
+            // out the exhaustive GetFullScanWindowsWithoutHydrating() plus
+            // per-window EnumerateRange walk the epic built later (#2839,
+            // #2835). Those windows are disjoint and exhaustive and visit every
+            // row exactly once - LeafEntryCache.Bisect.cs documents the
+            // property, and LeafSnapshotDetachAttributionTests pins it at
+            // 512/512 rows visited with the frame still attached - so that walk
+            // is complete by construction too, and is the supported way to
+            // convert this seam should the resync ever need to stop forfeiting
+            // the division fast path.
+            //
+            // The requirement here is COMPLETENESS. EnumerateRows() is one way
+            // to meet it, not the only way, and reading the paragraph above as
+            // "ranged walks are banned on this seam" is the generalisation to
+            // avoid (issue #2864).
             foreach (var (key, lww) in Cache.EnumerateRows())
             {
                 snapshot[key] = lww;
             }
 
-            return Task.FromResult(new StateDelta
+            return new StateDelta
             {
                 Entries = snapshot,
                 Version = state.State.Version.Clone(),
@@ -186,7 +216,7 @@ internal sealed partial class BPlusLeafGrain
                 MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms ? ms : null,
                 MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
                 DeliveryCursor = current,
-            });
+            };
         }
 
         // Same epoch, already at head: nothing to ship beyond the
@@ -195,7 +225,7 @@ internal sealed partial class BPlusLeafGrain
             && state.State.SplitKey is null
             && (state.State.MovedAwaySlots is null || state.State.MovedAwaySlots.Length == 0))
         {
-            return Task.FromResult(new StateDelta
+            return new StateDelta
             {
                 Entries = EmptyEntries,
                 Version = state.State.Version.Clone(),
@@ -203,7 +233,7 @@ internal sealed partial class BPlusLeafGrain
                 MovedAwaySlots = null,
                 MovedAwayVsc = null,
                 DeliveryCursor = current,
-            });
+            };
         }
 
         // Incremental delivery: every key whose recorded sequence is
@@ -232,7 +262,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        return Task.FromResult(new StateDelta
+        return new StateDelta
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
@@ -240,6 +270,6 @@ internal sealed partial class BPlusLeafGrain
             MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms2 ? ms2 : null,
             MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
             DeliveryCursor = current,
-        });
+        };
     }
 }

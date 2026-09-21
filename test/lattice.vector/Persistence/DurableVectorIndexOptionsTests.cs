@@ -1,4 +1,5 @@
 using Orleans.Lattice.Vector.Persistence;
+using Orleans.Lattice.Vector.Tests.Fakes;
 
 namespace Orleans.Lattice.Vector.Tests.Persistence;
 
@@ -64,12 +65,16 @@ public sealed class DurableVectorIndexOptionsTests
             MaxItemsPerChunk = 7,
             IngestBatchSize = 11,
             KeyReservationBlock = 13,
+            IngestSliceBudget = TimeSpan.FromSeconds(17),
+            TimeProvider = new SteppingTimeProvider(TimeSpan.Zero),
             Index = new VectorIndexOptions { Dimensions = 4, Probes = 2 },
         };
 
         var clone = options.Clone();
         options.KeyPrefix = "b/";
         options.MaxItemsPerChunk = 99;
+        options.IngestSliceBudget = TimeSpan.FromSeconds(99);
+        options.TimeProvider = TimeProvider.System;
         options.Index.Probes = 9;
 
         Assert.Multiple(() =>
@@ -78,8 +83,51 @@ public sealed class DurableVectorIndexOptionsTests
             Assert.That(clone.MaxItemsPerChunk, Is.EqualTo(7));
             Assert.That(clone.IngestBatchSize, Is.EqualTo(11));
             Assert.That(clone.KeyReservationBlock, Is.EqualTo(13));
+            Assert.That(clone.IngestSliceBudget, Is.EqualTo(TimeSpan.FromSeconds(17)));
+            Assert.That(clone.TimeProvider, Is.InstanceOf<SteppingTimeProvider>(),
+                "A clone that dropped the clock would silently put a fixture back on the wall clock.");
             Assert.That(clone.Index.Dimensions, Is.EqualTo(4));
             Assert.That(clone.Index.Probes, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void The_slice_budget_defaults_to_a_value_a_grain_turn_can_afford()
+    {
+        var options = new DurableVectorIndexOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.IngestSliceBudget,
+                Is.EqualTo(DurableVectorIndexOptions.DefaultIngestSliceBudget));
+            Assert.That(options.IngestSliceBudget, Is.GreaterThan(TimeSpan.Zero),
+                "The bound is on by default, because the deployment that needed it had configured nothing.");
+            Assert.That(options.IngestSliceBudget, Is.LessThan(TimeSpan.FromSeconds(30)),
+                "A slice has to fit inside the call timeout a reminder tick is delivered under.");
+            Assert.That(options.TimeProvider, Is.SameAs(TimeProvider.System));
+        });
+    }
+
+    [Test]
+    public void A_null_clock_is_rejected_rather_than_left_to_fail_mid_build()
+    {
+        var options = new DurableVectorIndexOptions();
+
+        Assert.Throws<ArgumentNullException>(() => options.TimeProvider = null!);
+    }
+
+    [Test]
+    public void A_non_positive_slice_budget_is_accepted_as_the_way_to_turn_the_bound_off()
+    {
+        var options = new DurableVectorIndexOptions
+        {
+            IngestSliceBudget = TimeSpan.Zero,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.IngestSliceBudget, Is.EqualTo(TimeSpan.Zero));
+            Assert.DoesNotThrow(() => options.IngestSliceBudget = TimeSpan.FromSeconds(-1));
         });
     }
 

@@ -189,7 +189,7 @@ public partial class BPlusLeafGrainTests
         var cold = CreateCoverageRegressColdLeaf(store, detector, reader, coord, persistedCheckpoint: 5L);
 
         Assert.DoesNotThrowAsync(
-            async () => await ((IGrainBase)cold).OnActivateAsync(CancellationToken.None),
+            async () => await LeafActivationHarness.ActivateAsync(cold, CancellationToken.None),
             "a later capture that regressed a partition's durable coverage below an already-authorised trim " +
             "must not strand the cold restart with an unrecoverable prefix; the durable store must retain the " +
             "higher coverage so rehydrate advances the checkpoint past the trimmed prefix and the tail replay " +

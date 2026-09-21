@@ -134,7 +134,12 @@ public static class CrdtLatticeExtensions
 
     /// <summary>
     /// Reads the current rows for <paramref name="keys"/> in one batched call.
-    /// Absent keys are simply missing from the result and decode as an empty flag.
+    /// A key the read does not return is missing from the result and decodes as
+    /// an empty flag, which is indistinguishable from a key that genuinely has
+    /// no row. Callers must therefore treat this snapshot as possibly
+    /// incomplete: mint enable dots with
+    /// <see cref="OrFlagAccessor.EnableDeltaFor"/>, which does not depend on the
+    /// snapshot having returned the row (issue #2208).
     /// </summary>
     private static Task<Dictionary<string, byte[]>> ReadFlagsAsync(
         ILattice lattice,

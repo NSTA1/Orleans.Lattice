@@ -53,8 +53,10 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalSaturationMaterialiserLagSampleWindows", o => o.WalSaturationMaterialiserLagSampleWindows = 0);
         yield return Case("WalMaterialiserMaxConcurrentReplays", o => o.WalMaterialiserMaxConcurrentReplays = -1);
         yield return Case("WalReplayMaxRecordsPerTurn", o => o.WalReplayMaxRecordsPerTurn = -1);
+        yield return Case("WalReplaySliceBudget", o => o.WalReplaySliceBudget = 0);
         yield return Case("WalAdmissionSaturationWaitBudget", o => o.WalAdmissionSaturationWaitBudget = NegOne);
         yield return Case("WalThrottledAdmissionPace", o => o.WalThrottledAdmissionPace = NegOne);
+        yield return Case("StarvationDriveBudget", o => o.StarvationDriveBudget = TimeSpan.Zero);
     }
 
     private static TestCaseData Case(string field, Action<LatticeOptions> mutate) =>

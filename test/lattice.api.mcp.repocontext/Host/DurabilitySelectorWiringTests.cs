@@ -81,6 +81,11 @@ public sealed class DurabilitySelectorWiringTests
         {
             Assert.That(options.Invariant, Is.EqualTo(DurabilitySelector.PostgresInvariantName));
             Assert.That(options.ConnectionString, Is.EqualTo(PostgresConnection));
+            Assert.That(options.DeleteStateOnClear, Is.False,
+                "deliberate: this host ships no Postgres schema, so it cannot guarantee the "
+                + "DeleteStorageKey query the option requires exists. Orleans throws at silo "
+                + "startup when it does not, which would turn an operator-provisioned catalogue "
+                + "outside this repository's control into a container that will not boot.");
         });
     }
 
@@ -97,6 +102,10 @@ public sealed class DurabilitySelectorWiringTests
         {
             Assert.That(options.Invariant, Is.EqualTo(SqliteSchemaInitializer.InvariantName));
             Assert.That(options.ConnectionString, Does.Contain("/mnt/data/repo.db"));
+            Assert.That(options.DeleteStateOnClear, Is.True,
+                "cleared rows must be removed rather than nulled and retained; the embedded "
+                + "script defines the DeleteStorageKey query this requires and "
+                + "SqliteSchemaInitializer reapplies it on every start. See issue #3307.");
         });
     }
 
@@ -161,6 +170,34 @@ public sealed class DurabilitySelectorWiringTests
             .Value;
 
         Assert.That(options.RootDirectory, Is.EqualTo("/mnt/data/wal"));
+    }
+
+    [Test]
+    public void The_file_wal_arm_leaves_the_dead_byte_ceiling_at_the_provider_default_when_unset()
+    {
+        using var provider = Wire((RepoContextHostConfiguration.WalDirKey, "/mnt/data/wal"));
+
+        var options = provider
+            .GetRequiredService<IOptions<Orleans.Lattice.Storage.File.FileWalStorageOptions>>()
+            .Value;
+
+        Assert.That(
+            options.CompactionMaximumDeadBytes,
+            Is.EqualTo(Orleans.Lattice.Storage.File.FileWalStorageOptions.DefaultCompactionMaximumDeadBytes));
+    }
+
+    [Test]
+    public void The_file_wal_arm_wires_the_dead_byte_compaction_ceiling()
+    {
+        using var provider = Wire(
+            (RepoContextHostConfiguration.WalDirKey, "/mnt/data/wal"),
+            (RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey, "1073741824"));
+
+        var options = provider
+            .GetRequiredService<IOptions<Orleans.Lattice.Storage.File.FileWalStorageOptions>>()
+            .Value;
+
+        Assert.That(options.CompactionMaximumDeadBytes, Is.EqualTo(1_073_741_824L));
     }
 
     /// <summary>

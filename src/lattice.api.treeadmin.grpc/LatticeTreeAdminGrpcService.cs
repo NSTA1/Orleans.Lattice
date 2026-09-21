@@ -129,6 +129,12 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Audits the WAL placement on the wrapped facade.</summary>
     public abstract Task<TreeWalPlacementAudit> AuditWalPlacement(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Audits the tree's orphaned leaves on the wrapped facade.</summary>
+    public abstract Task<TreeOrphanedLeafReport> AuditOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context);
+
+    /// <summary>Repairs the tree's orphaned leaves on the wrapped facade.</summary>
+    public abstract Task<TreeOrphanedLeafReport> RepairOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context);
+
     /// <summary>Computes a WAL move plan on the wrapped facade.</summary>
     public abstract Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context);
 
@@ -227,6 +233,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetSnapshotStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>?)null);
             binder.AddMethod(methods.GetWalPlacement, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacement>?)null);
             binder.AddMethod(methods.AuditWalPlacement, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacementAudit>?)null);
+            binder.AddMethod(methods.AuditOrphanedLeaves, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>?)null);
+            binder.AddMethod(methods.RepairOrphanedLeaves, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>?)null);
             binder.AddMethod(methods.PlanWalMove, (UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>?)null);
             binder.AddMethod(methods.ExecuteWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ReclaimMovedWalSource, (UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>?)null);
@@ -279,6 +287,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetSnapshotStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>(serviceImpl.GetSnapshotStatus));
         binder.AddMethod(methods.GetWalPlacement, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacement>(serviceImpl.GetWalPlacement));
         binder.AddMethod(methods.AuditWalPlacement, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacementAudit>(serviceImpl.AuditWalPlacement));
+        binder.AddMethod(methods.AuditOrphanedLeaves, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(serviceImpl.AuditOrphanedLeaves));
+        binder.AddMethod(methods.RepairOrphanedLeaves, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(serviceImpl.RepairOrphanedLeaves));
         binder.AddMethod(methods.PlanWalMove, new UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(serviceImpl.PlanWalMove));
         binder.AddMethod(methods.ExecuteWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(serviceImpl.ExecuteWalMove));
         binder.AddMethod(methods.ReclaimMovedWalSource, new UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(serviceImpl.ReclaimMovedWalSource));
@@ -512,6 +522,14 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeWalPlacementAudit> AuditWalPlacement(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.AuditWalPlacementAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeOrphanedLeafReport> AuditOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.AuditOrphanedLeavesAsync(req.TreeId, req.ResumeFrom, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeOrphanedLeafReport> RepairOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.RepairOrphanedLeavesAsync(req.TreeId, req.ResumeFrom, ct));
 
     /// <inheritdoc />
     public override Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context)

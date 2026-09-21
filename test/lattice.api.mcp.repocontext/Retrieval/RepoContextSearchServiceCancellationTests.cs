@@ -166,7 +166,7 @@ public sealed class RepoContextSearchServiceCancellationTests
             index,
             store,
             TimeProvider.System,
-            NullLogger<RepoContextSearchService>.Instance,
+            NullLogger<RepoContextSearchService>.Instance, new RepoContextRetrievalLatencyReporter(),
             embeddingProvider);
     }
 

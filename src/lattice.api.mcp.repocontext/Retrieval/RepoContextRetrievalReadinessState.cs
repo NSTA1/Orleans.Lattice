@@ -62,6 +62,32 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     internal const string PhaseNothingRegisteredTag = "nothing_registered";
 
     /// <summary>
+    /// Wire value for <see cref="RepoContextRetrievalReadinessPhase.Building"/>. No
+    /// readiness stamp carries it - <see cref="StampReady(string)"/> records the phase a
+    /// host became ready in, and Building is precisely the phase that is not ready - so
+    /// it has no meter arm. It exists because reporting surfaces must still be able to
+    /// name the phase they observed, and naming it "" or omitting it would make
+    /// "not ready" indistinguishable from "not evaluated".
+    /// </summary>
+    internal const string PhaseBuildingTag = "building";
+
+    /// <summary>
+    /// Wire value for <see cref="RepoContextRetrievalReadinessPhase.SaturatedUnavailable"/>.
+    /// Like <see cref="PhaseBuildingTag"/> it carries no readiness stamp, because it
+    /// is a not-ready phase and <see cref="StampReady(string)"/> records only the
+    /// phase a host became ready in.
+    /// </summary>
+    internal const string PhaseSaturatedUnavailableTag = "saturated_unavailable";
+
+    /// <summary>
+    /// The cause recorded when an admission gate refused the vector plane's open for
+    /// longer than its declared bound, so the plane is reported unable to arm rather
+    /// than merely arming. Distinct from every other cause here because the remedy is
+    /// capacity rather than a rebuild, a reconfiguration, or patience.
+    /// </summary>
+    public const string SaturatedCause = "saturated";
+
+    /// <summary>
     /// The cause a readiness probe supplies to <see cref="MarkUnavailable(string?)"/>
     /// when it, rather than a real query, observed the plane unable to serve.
     /// </summary>
@@ -69,6 +95,23 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
 
     /// <summary>The cause recorded when a supplied cause is absent or not a recognised local value.</summary>
     internal const string UnknownCause = "unknown";
+
+    /// <summary>
+    /// The closed set of cause arms this state can ever put on the meter, and the single
+    /// source of truth for both halves of that guarantee: <see cref="NormalizeCause"/>
+    /// resolves against this list, and the constructor pre-mints exactly these arms at
+    /// zero. Deriving both from one list is what stops a cause being added to the
+    /// normaliser and silently arriving unprimed.
+    /// </summary>
+    internal static readonly string[] MeteredCauses =
+    [
+        RepoContextRetrievalPath.KeywordVectorPlaneUnavailable,
+        RepoContextRetrievalPath.KeywordIndexDegraded,
+        RepoContextRetrievalPath.KeywordExactFallbackSuppressed,
+        ProbeCause,
+        SaturatedCause,
+        UnknownCause,
+    ];
 
     /// <summary>
     /// The default window a vector-plane fault must persist for before readiness is
@@ -80,6 +123,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     private const int ServingRaw = (int)RepoContextRetrievalReadinessPhase.Serving;
     private const int KeywordOnlyRaw = (int)RepoContextRetrievalReadinessPhase.KeywordOnly;
     private const int NothingRegisteredRaw = (int)RepoContextRetrievalReadinessPhase.NothingRegistered;
+    private const int SaturatedUnavailableRaw = (int)RepoContextRetrievalReadinessPhase.SaturatedUnavailable;
     private const long NoFault = long.MinValue;
     private const long NotReady = -1L;
 
@@ -94,6 +138,7 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     private int _phase = BuildingRaw;
     private long _faultSinceTicks = NoFault;
     private long _readyElapsedTicks = NotReady;
+    private int _arming = (int)RepoContextRetrievalArming.Unknown;
 
     /// <summary>Creates the readiness state, starting the time-to-ready clock.</summary>
     /// <param name="timeProvider">The clock driving the fault hold-down and the time-to-ready measurement. Must not be <see langword="null"/>.</param>
@@ -117,7 +162,39 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         _unavailable = _meter.CreateCounter<long>(
             UnavailableInstrumentName,
             unit: "{event}",
-            description: "Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by cause.");
+            description:
+                "Observed vector-plane fault episodes that made semantic retrieval unavailable, tagged by "
+                + "cause: 'keyword.vector_plane_unavailable', 'keyword.index_degraded', "
+                + "'keyword.exact_fallback_suppressed' (the three keyword retrieval paths that mean a real "
+                + "capability loss), 'probe' (a readiness probe rather than a query observed it), "
+                + "'saturated' (AN ADMISSION GATE REFUSED THE PLANE'S OPEN past its declared bound, so the "
+                + "plane is reported unable to arm rather than merely arming - the remedy is capacity, not a "
+                + "rebuild or a reconfiguration, and this is the arm that separates 'still arming' from 'will "
+                + "not arm at this capacity', which were the same observation until issue #3286), or "
+                + "'unknown' (a cause outside that closed set, normalised so an unbounded tag can never "
+                + "reach the meter). All six arms are pre-minted at zero when this state is constructed, so "
+                + "each is present from process start rather than appearing on its first fault episode, "
+                + "which makes 'retrieval has never degraded on this process' a measured absence rather than "
+                + "an absent measurement. Without that, no series exists at all until the first fault, and a "
+                + "healthy host and an unwired instrument read identically. If an arm is absent rather than "
+                + "zero, that reading does not hold and nothing should be concluded from this instrument "
+                + "until 'lattice_metrics_series' has been read against the collector ceiling and "
+                + "'lattice_metrics_dropped_measurements_by_family_total' checked for a non-zero value: a "
+                + "series whose first occurrence falls after a ceiling is reached is refused at creation and "
+                + "never appears at all.");
+
+        // Pre-mint every arm of the cause partition with a zero-valued add, iterating the
+        // same closed list NormalizeCause resolves against so the primed set and the
+        // emittable set cannot drift. An arm that is created on its first occurrence is the
+        // arm most likely to be refused by a saturated collector, and it is exactly the arm
+        // a reader is invited to read as a measured zero (issues #2515, #3280).
+        foreach (var cause in MeteredCauses)
+        {
+            _unavailable.Add(
+                0,
+                new KeyValuePair<string, object?>(CauseTagKey, cause),
+                LatticeTenantLabel.Platform);
+        }
     }
 
     /// <summary>
@@ -157,8 +234,79 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     /// <see langword="true"/> when the host can serve the retrieval it is configured
     /// for - the vector plane is serving, or no embedder is bound and keyword recall is
     /// the intended steady state.
+    /// <para>
+    /// <b>Deliberately an explicit ready-set test rather than "not Building".</b> The
+    /// negative form was correct while Building was the only not-ready phase and became
+    /// wrong the moment a second one existed: a phase added to report an unready plane
+    /// would have read as READY, which is the precise inversion a readiness signal must
+    /// never make. Adding a phase and forgetting this line is a silent false green; the
+    /// positive form fails the other way, reporting a genuinely ready host as unready,
+    /// which is loud.
+    /// </para>
     /// </summary>
-    public bool IsReady => Phase != RepoContextRetrievalReadinessPhase.Building;
+    public bool IsReady => IsReadyPhase(Phase);
+
+    /// <summary>
+    /// Whether a phase is one in which the host can serve what it is configured for.
+    /// Exposed so every reporting surface answers from one predicate: the health tool
+    /// previously computed its own <c>phase != Building</c>, which is the same
+    /// inversion trap documented on <see cref="IsReady"/>, duplicated.
+    /// </summary>
+    /// <param name="phase">The phase to test.</param>
+    /// <returns><see langword="true"/> when <paramref name="phase"/> is a ready phase.</returns>
+    public static bool IsReadyPhase(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving => true,
+        RepoContextRetrievalReadinessPhase.KeywordOnly => true,
+        RepoContextRetrievalReadinessPhase.NothingRegistered => true,
+        RepoContextRetrievalReadinessPhase.Building => false,
+        RepoContextRetrievalReadinessPhase.SaturatedUnavailable => false,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No readiness verdict is declared for this readiness phase."),
+    };
+
+    /// <summary>
+    /// The canonical low-cardinality wire value naming a readiness phase, single-sourced
+    /// from the same constants the meter stamps so a reporting surface and the meter can
+    /// never disagree about what a phase is called.
+    /// <para>
+    /// <b>Deliberately a throwing switch.</b> A phase added to
+    /// <see cref="RepoContextRetrievalReadinessPhase"/> without a value here raises
+    /// rather than falling through to a default, because the alternative is reporting
+    /// the new phase under an existing phase's name - a wrong answer that reads exactly
+    /// like a right one.
+    /// </para>
+    /// </summary>
+    /// <param name="phase">The phase to name.</param>
+    /// <returns>The canonical wire value for <paramref name="phase"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="phase"/> is not a declared phase.</exception>
+    public static string PhaseTag(RepoContextRetrievalReadinessPhase phase) => phase switch
+    {
+        RepoContextRetrievalReadinessPhase.Serving => PhaseServingTag,
+        RepoContextRetrievalReadinessPhase.KeywordOnly => PhaseKeywordOnlyTag,
+        RepoContextRetrievalReadinessPhase.NothingRegistered => PhaseNothingRegisteredTag,
+        RepoContextRetrievalReadinessPhase.Building => PhaseBuildingTag,
+        RepoContextRetrievalReadinessPhase.SaturatedUnavailable => PhaseSaturatedUnavailableTag,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "No canonical wire value is declared for this readiness phase."),
+    };
+
+    /// <summary>
+    /// Whether the approximate plane is <b>armed</b> - answering from a trained
+    /// partitioning - as last demonstrated by a query the plane answered for
+    /// itself. <see cref="RepoContextRetrievalArming.Unknown"/> until one has.
+    /// <para>
+    /// <b>Deliberately not part of <see cref="IsReady"/> or
+    /// <see cref="Phase"/>.</b> An unarmed plane serves complete recall by
+    /// exhaustive scan, so it is genuinely ready; a corpus below the training
+    /// threshold can never partition and would never become ready if arming
+    /// gated the verdict. This reports a second, independent fact beside the
+    /// verdict rather than changing it. Do not "simplify" the two into one:
+    /// they answer different questions and have different correct answers on the
+    /// same host.
+    /// </para>
+    /// </summary>
+    public RepoContextRetrievalArming Arming => (RepoContextRetrievalArming)Volatile.Read(ref _arming);
 
     /// <summary>
     /// The elapsed time from this state's construction to the moment the host first
@@ -197,10 +345,42 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
         }
 
         if (string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, StringComparison.Ordinal)
-            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal)
+            || string.Equals(retrievalPath, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, StringComparison.Ordinal))
         {
             MarkUnavailable(retrievalPath);
         }
+    }
+
+    /// <summary>
+    /// Folds an observation of which path inside the approximate plane answered a
+    /// query into <see cref="Arming"/>. Call it only where the plane answered for
+    /// itself, so the value reports demonstrated behaviour rather than a
+    /// prediction from configuration.
+    /// <para>
+    /// <b>Last observation wins, and evidence is never erased.</b> Arming is a
+    /// statement about the plane's current partitioning, not a latch: a rebuild
+    /// can legitimately return an armed plane to
+    /// <see cref="RepoContextRetrievalArming.Unarmed"/>, and latching would make
+    /// this property assert a partitioning that no longer exists - the defect
+    /// this signal was added to remove. In the other direction
+    /// <see cref="RepoContextRetrievalArming.Unknown"/> is ignored, because it
+    /// carries no observation and must never overwrite one that does.
+    /// </para>
+    /// <para>
+    /// This changes neither <see cref="Phase"/> nor <see cref="IsReady"/> by
+    /// design; see <see cref="Arming"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="arming">The observed arming state. <see cref="RepoContextRetrievalArming.Unknown"/> is ignored.</param>
+    public void ObserveArming(RepoContextRetrievalArming arming)
+    {
+        if (arming == RepoContextRetrievalArming.Unknown)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _arming, (int)arming);
     }
 
     /// <summary>
@@ -233,13 +413,104 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
 
         lock (_gate)
         {
-            var wasReady = _phase != BuildingRaw;
+            // The ready-set predicate, not "not Building". With the negative form a
+            // host recovering from SaturatedUnavailable would be treated as already
+            // ready and skip its readiness stamp entirely, so the once-per-process
+            // time-to-ready figure would never be published on exactly the hosts
+            // whose arming took long enough to be worth measuring.
+            var wasReady = IsReadyPhase((RepoContextRetrievalReadinessPhase)_phase);
             Volatile.Write(ref _phase, ServingRaw);
             Volatile.Write(ref _faultSinceTicks, NoFault);
             if (!wasReady)
             {
                 StampReady(PhaseServingTag);
             }
+        }
+    }
+
+    /// <summary>
+    /// Records that an admission gate has refused the vector plane's open for longer
+    /// than its declared bound, so the plane is reported <b>unable to arm</b> rather
+    /// than merely arming. Metered once per episode entered, and idempotent while the
+    /// episode is open.
+    /// <para>
+    /// <b>This is the distinction the readiness signal previously could not draw.</b>
+    /// A plane still replaying and a plane refused on every open attempt both report
+    /// <see cref="RepoContextRetrievalReadinessPhase.Building"/>, both answer 503, and
+    /// both emit a rising refusal count against zero successful opens - while the
+    /// first means wait and the second means add capacity. Issue #3286 measured that
+    /// exact ambiguity on a live plane.
+    /// </para>
+    /// <para>
+    /// Ignored in <see cref="RepoContextRetrievalReadinessPhase.KeywordOnly"/>, where
+    /// there is no vector plane to be saturated, and in
+    /// <see cref="RepoContextRetrievalReadinessPhase.Serving"/>, which is a plane that
+    /// has already opened and so cannot be refused an open. It DOES apply from
+    /// <see cref="RepoContextRetrievalReadinessPhase.NothingRegistered"/>, whose
+    /// premise - that there is nothing to retrieve from - is falsified outright by a
+    /// plane that has an index to open and cannot open it.
+    /// </para>
+    /// </summary>
+    /// <returns><see langword="true"/> when this call entered the phase, rather than finding it already entered.</returns>
+    public bool MarkSaturationUnavailable()
+    {
+        var raw = Volatile.Read(ref _phase);
+        if (raw is KeywordOnlyRaw or ServingRaw or SaturatedUnavailableRaw)
+        {
+            return false;
+        }
+
+        bool entered;
+        lock (_gate)
+        {
+            entered = _phase is not (KeywordOnlyRaw or ServingRaw or SaturatedUnavailableRaw);
+            if (entered)
+            {
+                Volatile.Write(ref _phase, SaturatedUnavailableRaw);
+            }
+        }
+
+        if (entered)
+        {
+            _unavailable.Add(
+                1,
+                new KeyValuePair<string, object?>(CauseTagKey, SaturatedCause),
+                LatticeTenantLabel.Platform);
+        }
+
+        return entered;
+    }
+
+    /// <summary>
+    /// Ends a saturation episode, returning the host to
+    /// <see cref="RepoContextRetrievalReadinessPhase.Building"/> so an open that is
+    /// making progress again is reported as arming rather than as an outage.
+    /// <para>
+    /// <b>Required, not optional.</b> The open never stops retrying, so saturation
+    /// really does clear on its own once heap occupancy recovers; a phase with no way
+    /// out would convert a transient excursion into an outage that needs a restart,
+    /// which is a worse failure than the silence the phase was added to remove. It
+    /// returns to Building rather than to Serving because nothing has yet been
+    /// demonstrated - only the refusals have stopped.
+    /// </para>
+    /// </summary>
+    /// <returns><see langword="true"/> when this call left the phase.</returns>
+    public bool ClearSaturationUnavailable()
+    {
+        if (Volatile.Read(ref _phase) != SaturatedUnavailableRaw)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (_phase != SaturatedUnavailableRaw)
+            {
+                return false;
+            }
+
+            Volatile.Write(ref _phase, BuildingRaw);
+            return true;
         }
     }
 
@@ -405,21 +676,21 @@ public sealed class RepoContextRetrievalReadinessState : IDisposable
     }
 
     /// <summary>
-    /// Resolves a supplied cause against the closed set of local values, so the meter's
-    /// tag cardinality is bounded no matter what a caller passes.
+    /// Resolves a supplied cause against <see cref="MeteredCauses"/>, the closed set of
+    /// local values, so the meter's tag cardinality is bounded no matter what a caller
+    /// passes. It is total onto that set: anything unrecognised becomes
+    /// <see cref="UnknownCause"/>, which is itself an arm of it.
     /// </summary>
     private static string NormalizeCause(string? cause)
     {
-        if (string.Equals(cause, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, StringComparison.Ordinal))
+        foreach (var candidate in MeteredCauses)
         {
-            return RepoContextRetrievalPath.KeywordVectorPlaneUnavailable;
+            if (string.Equals(cause, candidate, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
         }
 
-        if (string.Equals(cause, RepoContextRetrievalPath.KeywordIndexDegraded, StringComparison.Ordinal))
-        {
-            return RepoContextRetrievalPath.KeywordIndexDegraded;
-        }
-
-        return string.Equals(cause, ProbeCause, StringComparison.Ordinal) ? ProbeCause : UnknownCause;
+        return UnknownCause;
     }
 }

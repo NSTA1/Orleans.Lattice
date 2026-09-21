@@ -143,6 +143,8 @@ public partial class TombstoneCompactionGrainTests
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
         shardRoot.GetLeafIdForKeyAsync(Arg.Any<string?>()).Returns(Task.FromResult<GrainId?>(null));
         shardRoot.ClearDirtyLeavesUpToAsync(Arg.Any<HybridLogicalClock>()).Returns(Task.CompletedTask);
+        shardRoot.RetainDirtyLeafAsync(Arg.Any<GrainId>(), Arg.Any<HybridLogicalClock>())
+            .Returns(Task.CompletedTask);
         shardRoot.ReclaimEmptyLeavesAsync(Arg.Any<int>()).Returns(Task.FromResult(0));
 
         foreach (var id in dirtyLeaves)
@@ -275,6 +277,11 @@ public partial class TombstoneCompactionGrainTests
         // trigger-context scope is active, which is gated on the ratio / size
         // thresholds being configured at all. Each trigger kind selects a
         // different pre-allocated tag, so each is its own arm.
+        //
+        // This arm previously asserted ShardRetries == 1 as a proxy and never
+        // inspected a tag, which its own name promised. Since issue 2926 a
+        // skipped leaf does not fail its shard, so the proxy is gone and the
+        // tag is asserted directly.
         var options = new LatticeOptions
         {
             TombstoneGracePeriod = TimeSpan.FromHours(24),
@@ -284,16 +291,21 @@ public partial class TombstoneCompactionGrainTests
         // Reminder: the pass the recurring reminder starts.
         var reminderHarness = CreateHostedGrain(options);
         var reminderLeaf = SetupFailingLeafShard(reminderHarness, 0);
-        await reminderHarness.Grain.StartCompactionAsync(startFromShard: 0);
-        await reminderHarness.Grain.ProcessNextShardAsync();
-        Assert.That(reminderHarness.State.State.ShardRetries, Is.EqualTo(1));
-        await reminderLeaf.Received().CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        using (var skipped = CaptureSkippedLeafTags())
+        {
+            await reminderHarness.Grain.StartCompactionAsync(startFromShard: 0);
+            await reminderHarness.Grain.ProcessNextShardAsync();
+
+            await reminderLeaf.Received().CompactTombstonesAsync(Arg.Any<TimeSpan>());
+            Assert.That(skipped, Has.Count.EqualTo(1));
+            Assert.That(TriggerTagOf(skipped[0]), Is.EqualTo("reminder"));
+        }
 
         // Size and ratio: the shard-scoped requests the shard root raises.
-        foreach (var trigger in new[]
+        foreach (var (trigger, expectedTag) in new[]
                  {
-                     TombstoneCompactionGrain.TriggerSize,
-                     TombstoneCompactionGrain.TriggerRatio,
+                     (TombstoneCompactionGrain.TriggerSize, "size"),
+                     (TombstoneCompactionGrain.TriggerRatio, "ratio"),
                  })
         {
             var h = CreateHostedGrain(new LatticeOptions
@@ -303,15 +315,24 @@ public partial class TombstoneCompactionGrainTests
             });
             SetupFailingLeafShard(h, 0);
 
+            using var skipped = CaptureSkippedLeafTags();
+
             Assert.That(await h.Grain.TryBeginRequestedCompactionAsync(0, trigger), Is.True);
             await h.Grain.ProcessNextShardAsync();
 
-            Assert.That(h.State.State.ShardRetries, Is.EqualTo(1),
-                $"the '{trigger}' pass recorded the skipped leaf and consumed a retry");
+            Assert.That(skipped, Has.Count.EqualTo(1),
+                $"the '{trigger}' pass recorded the skipped leaf");
+            Assert.That(TriggerTagOf(skipped[0]), Is.EqualTo(expectedTag),
+                $"the '{trigger}' pass tagged the skip with its own trigger kind");
         }
 
-        // Operator: the full synchronous pass, which surfaces the failure to
-        // its caller rather than applying the retry policy.
+        // Operator: the full synchronous pass. Since issue 2926 a leaf-scoped
+        // fault is absorbed on this path too, and deliberately so - exempting
+        // the operator path would leave the one caller trying to remedy a
+        // wedged leaf as the only caller that still cannot get past it. The
+        // operator's signal is this counter and the warning log, not an
+        // exception. The faults that DO threaten signal loss still surface:
+        // see A_leaf_whose_mark_cannot_be_retained_still_reports_to_the_operator.
         var operatorHarness = CreateHostedGrain(new LatticeOptions
         {
             TombstoneGracePeriod = TimeSpan.FromHours(24),
@@ -319,9 +340,45 @@ public partial class TombstoneCompactionGrainTests
         });
         SetupFailingLeafShard(operatorHarness, 0);
 
-        Assert.That(async () => await operatorHarness.Grain.RunCompactionPassAsync(),
-            Throws.InstanceOf<InvalidOperationException>(),
-            "an operator-driven pass reports the leaf failure to the operator");
+        // Shard 1 has to be stubbed now, and that requirement is itself the
+        // remedy showing: before issue 2926 the pass aborted at shard 0's
+        // wedged leaf and never reached a second shard, so the shards behind
+        // the blocker were unreachable for the life of the process.
+        var laterShard = SetupShardRoot(operatorHarness.GrainFactory, 1);
+
+        using (var skipped = CaptureSkippedLeafTags())
+        {
+            Assert.That(async () => await operatorHarness.Grain.RunCompactionPassAsync(),
+                Throws.Nothing,
+                "a leaf-scoped fault no longer aborts an operator-driven pass");
+            Assert.That(skipped, Is.Not.Empty,
+                "but the operator still gets the skipped-leaf signal");
+            Assert.That(TriggerTagOf(skipped[0]), Is.EqualTo("operator"));
+            await laterShard.Received().GetDirtyLeavesSinceLastCompactionAsync();
+        }
+    }
+
+    [Test]
+    public async Task A_leaf_whose_mark_cannot_be_retained_still_reports_to_the_operator()
+    {
+        // The boundary on the arm above. Absorbing a leaf fault is safe only
+        // because the blocker's dirty mark is preserved. When that preservation
+        // fails there is a real risk of silently dropping the leaf, so the
+        // fault is re-raised and an operator-driven pass reports it.
+        var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var h = CreateHostedGrain();
+        var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
+        h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId)
+            .CompactTombstonesAsync(Arg.Any<TimeSpan>())
+            .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+        shardRoot.RetainDirtyLeafAsync(Arg.Any<GrainId>(), Arg.Any<HybridLogicalClock>())
+            .Returns(_ => Task.FromException(
+                new InvalidOperationException("shard root unavailable")));
+
+        Assert.That(async () => await h.Grain.RunCompactionPassAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        await shardRoot.DidNotReceive().ClearDirtyLeavesUpToAsync(Arg.Any<HybridLogicalClock>());
     }
 
     /// <summary>
@@ -479,36 +536,48 @@ public partial class TombstoneCompactionGrainTests
     // --- Dirty-leaf fast path faults ---
 
     [Test]
-    public async Task A_leaf_that_refuses_to_compact_is_recorded_as_skipped_and_fails_the_shard()
+    public async Task A_leaf_that_refuses_to_compact_is_recorded_as_skipped_and_retained()
     {
         // The skipped-leaf counter is the operator's only signal that a
-        // specific leaf is wedged, so it has to be recorded before the failure
-        // is handed to the shard retry policy.
+        // specific leaf is wedged. Since issue 2926 that is literally true:
+        // the fault no longer reaches the shard retry policy, so if this
+        // counter did not fire the leaf would fail in complete silence.
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var h = CreateHostedGrain();
-        SetupShardRoot(h.GrainFactory, 0, leafId);
+        var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
         var leaf = h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
 
+        var skipped = CaptureSkippedLeafTags();
+
         await h.Grain.BeginCompactionStateAsync(startFromShard: 0);
         await h.Grain.ProcessNextShardAsync();
 
-        Assert.That(h.State.State.ShardRetries, Is.EqualTo(1),
-            "the leaf failure surfaced as a shard failure and consumed a retry");
+        Assert.That(skipped, Has.Count.EqualTo(1),
+            "the wedged leaf was recorded as skipped");
+        await shardRoot.Received(1).RetainDirtyLeafAsync(leafId, Arg.Any<HybridLogicalClock>());
+        Assert.That(h.State.State.ShardRetries, Is.Zero,
+            "a leaf-scoped fault no longer surfaces as a shard failure (issue 2926)");
     }
 
     [Test]
     public async Task A_leaf_that_refuses_to_compact_under_a_scoped_trigger_is_still_recorded()
     {
-        // The skipped-leaf counter tags the trigger kind only for a scoped
-        // pass, which is a separate arm of the same recording helper.
+        // The shard-scoped request path (TryBeginRequestedCompactionAsync) is
+        // a separate entry point into the same recording helper, so the skip
+        // must be recorded on it too. The trigger TAG is a different arm and
+        // is covered by A_skipped_leaf_is_tagged_with_the_trigger_that_started
+        // _the_pass - it is absent here because these default options leave the
+        // trigger-context scope inactive.
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var h = CreateHostedGrain();
-        SetupShardRoot(h.GrainFactory, 0, leafId);
+        var shardRoot = SetupShardRoot(h.GrainFactory, 0, leafId);
         var leaf = h.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         leaf.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Returns<int>(_ => throw new InvalidOperationException("leaf unavailable"));
+
+        using var skipped = CaptureSkippedLeafTags();
 
         var honoured = await h.Grain.TryBeginRequestedCompactionAsync(
             0, TombstoneCompactionGrain.TriggerSize);
@@ -516,7 +585,8 @@ public partial class TombstoneCompactionGrainTests
 
         await h.Grain.ProcessNextShardAsync();
 
-        Assert.That(h.State.State.ShardRetries, Is.EqualTo(1));
+        Assert.That(skipped, Has.Count.EqualTo(1));
+        await shardRoot.Received(1).RetainDirtyLeafAsync(leafId, Arg.Any<HybridLogicalClock>());
     }
 
     [Test]

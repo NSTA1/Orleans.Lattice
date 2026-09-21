@@ -20,6 +20,57 @@ internal readonly record struct RepoContextEmbeddingCoverage(
     IReadOnlySet<string> Contentless)
 {
     /// <summary>
+    /// How many of the probed keys the store's read-path access gate removed before
+    /// fan-out, so this coverage never saw them (issue #2277). Always <c>0</c> on
+    /// an ungated deployment, and <c>0</c> for a whole-set scan.
+    /// </summary>
+    public int PrunedByAccessGate { get; init; }
+
+    /// <summary>
+    /// How much of the requested key range the read-path access gate admitted, for a
+    /// coverage built by a whole-set <em>range</em> scan rather than a per-key probe.
+    /// <para>
+    /// A range read cannot report a prune <em>count</em>: the gate narrows it with a
+    /// reject-all or per-key filter and the scan simply yields fewer rows, so there is
+    /// no denominator to count against and <see cref="PrunedByAccessGate"/> stays
+    /// <c>0</c>. That is why this is a separate classification and not folded into the
+    /// count - reporting a fabricated count of <c>1</c> would put a wrong number in an
+    /// operator's log, which is the same class of defect as the silence it replaces.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="LatticeRangeReadGateCoverage.Unrestricted"/>, so a
+    /// coverage built by the per-key probe path - which reports a real count - is
+    /// unaffected.
+    /// </para>
+    /// </summary>
+    public LatticeRangeReadGateCoverage RangeGateCoverage { get; init; }
+
+    /// <summary>
+    /// Whether a source's <em>absence</em> from this coverage may be read as "not
+    /// embedded". True exactly when the gate withheld nothing - neither pruning a
+    /// probed key nor restricting a scanned range - so every key this coverage could
+    /// have seen was actually answered on its merits.
+    /// <para>
+    /// When this is <see langword="false"/> the coverage is not wrong, it is
+    /// INCOMPLETE, and the two call for opposite responses. A pruned key is absent
+    /// from <see cref="Embedded"/> for a reason that has nothing to do with whether
+    /// it was embedded, so classifying on it marks an already-embedded source as a
+    /// gap and re-embeds it on every pass, forever. A caller that sees
+    /// <see langword="false"/> must decline to classify for that page or pass rather
+    /// than treat this coverage as authoritative.
+    /// </para>
+    /// <para>
+    /// A whole-set range scan reports restriction through
+    /// <see cref="RangeGateCoverage"/> rather than a count, and a restricted range is
+    /// just as inconclusive as a pruned probe: the withheld rows are absent for a
+    /// reason that has nothing to do with whether they were embedded.
+    /// </para>
+    /// </summary>
+    public bool AbsenceIsConclusive =>
+        PrunedByAccessGate == 0
+        && RangeGateCoverage == LatticeRangeReadGateCoverage.Unrestricted;
+
+    /// <summary>
     /// Whether <paramref name="sourceId"/> is covered - either it has a real embedding
     /// or it was considered and recorded as contentless - so the gap sweep and
     /// unchanged-file selection should not treat it as a missing embedding.

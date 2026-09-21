@@ -213,21 +213,77 @@ public partial class PhaseTwoWorkerTests
         // pending one are faulted and the producer resyncs from the
         // persisted TAIL, so the worker can no longer vouch for
         // anything it has not committed.
-        var fail = false;
-        var submitter = new RecordingSubmitter((_, _) => fail
-            ? Task.FromException(new InvalidOperationException("phase-2 boom"))
-            : Task.CompletedTask);
+        //
+        // Which submit faults is selected by its ORDINAL rather than by
+        // a flag this thread flips, so no state crosses from the test
+        // thread to the drain loop and the arrangement cannot be raced.
+        // The first batch is awaited to completion before the second is
+        // enqueued, so call 1 is (0,3) and call 2 is (4,7) by
+        // construction. ">= 2" rather than "== 2" keeps the failure
+        // sticky, so a retried submit cannot succeed on a later attempt
+        // and quietly re-vouch for the range. See issue #2745 for the
+        // bare bool this replaced.
+        var calls = 0;
+        var submitter = new RecordingSubmitter((_, _) =>
+            Interlocked.Increment(ref calls) >= 2
+                ? Task.FromException(new InvalidOperationException("phase-2 boom"))
+                : Task.CompletedTask);
         await using var worker = NewWorker(submitter);
 
         await worker.EnqueueAsync(0L, 3L).ConfigureAwait(false);
 
-        fail = true;
         var doomed = worker.EnqueueAsync(4L, 7L);
         Assert.That(async () => await doomed.ConfigureAwait(false),
             Throws.InstanceOf<InvalidOperationException>());
 
         Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(3L), Is.EqualTo(3L),
             "the faulted batch must be discarded, leaving only the committed tail");
+    }
+
+    [Test]
+    public async Task A_caller_woken_by_a_phase_two_fault_never_sees_the_worker_still_vouching()
+    {
+        // The ordering guard for issue #2745, and the reason the test
+        // above is now deterministic rather than merely usually right.
+        //
+        // The accepted set must be discarded BEFORE the faulted commit's
+        // task is completed, never after. Completion is created with
+        // RunContinuationsAsynchronously, so the woken caller resumes on
+        // the thread pool CONCURRENTLY with the remainder of the worker's
+        // catch block: anything the worker does after TrySetException is
+        // not covered by the signal the caller just received. Discarding
+        // afterwards therefore leaves a window in which the worker still
+        // vouches for a range it has just failed to write.
+        //
+        // The sequence is the production one rather than a contrived
+        // one. GetHighestOffsetAsync folds
+        // ContiguousAcceptedEndOffsetInclusive over the persisted TAIL,
+        // and the caller likeliest to call it is the one that just took
+        // the fault, because it is the one resyncing.
+        var calls = 0;
+        var submitter = new RecordingSubmitter((_, _) =>
+            Interlocked.Increment(ref calls) >= 2
+                ? Task.FromException(new InvalidOperationException("phase-2 boom"))
+                : Task.CompletedTask);
+        await using var worker = NewWorker(submitter);
+
+        await worker.EnqueueAsync(0L, 3L).ConfigureAwait(false);
+
+        // Observe at the instant the fault wakes us, with no intervening
+        // await, so the read lands inside the window the ordering closes.
+        var observedAtFault = long.MinValue;
+        try
+        {
+            await worker.EnqueueAsync(4L, 7L).ConfigureAwait(false);
+            Assert.Fail("precondition: the second phase-2 commit was supposed to fault");
+        }
+        catch (InvalidOperationException)
+        {
+            observedAtFault = worker.ContiguousAcceptedEndOffsetInclusive(3L);
+        }
+
+        Assert.That(observedAtFault, Is.EqualTo(3L),
+            "a caller woken by the fault must never be told an offset the worker failed to commit");
     }
 
     [Test]
@@ -257,6 +313,84 @@ public partial class PhaseTwoWorkerTests
             "the post-resync batch must be vouched for again");
 
         release.TrySetResult();
+    }
+
+    [Test]
+    public async Task A_caller_woken_by_disposal_never_sees_the_worker_still_vouching()
+    {
+        // The shutdown twin of the ordering guard above, and the reason
+        // the disposal fixture below does not cover this: that one awaits
+        // DisposeAsync to completion, by which point every ordering inside
+        // the drain loop's finally has already played out, so it can only
+        // observe WHETHER the discard happened and never WHEN.
+        //
+        // Disposal faults every parked commit, so it must discard before
+        // it faults for the same reason the commit-failure path must: the
+        // caller woken by the ObjectDisposedException resumes on the pool
+        // concurrently with the rest of that finally block.
+        var submitter = new RecordingSubmitter();
+        var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, NeverCommitsWindow, commitTimeout: null);
+
+        var parked = worker.EnqueueAsync(0L, 3L);
+        Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(-1L), Is.EqualTo(3L),
+            "precondition: the parked batch is vouched for while it is pending");
+
+        var disposal = worker.DisposeAsync().AsTask();
+
+        var observedAtFault = long.MinValue;
+        Exception? faulted = null;
+        try
+        {
+            // Bounded deliberately: a regression on the stranded-arrival
+            // adoption below leaves this task never settled at all, and
+            // an unbounded await would hang the whole suite rather than
+            // fail this one test.
+            await parked.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            faulted = ex;
+            observedAtFault = worker.ContiguousAcceptedEndOffsetInclusive(-1L);
+        }
+
+        await disposal.ConfigureAwait(false);
+
+        Assert.That(faulted, Is.InstanceOf<ObjectDisposedException>(),
+            "precondition: the parked commit was supposed to fault at disposal");
+        Assert.That(observedAtFault, Is.EqualTo(-1L),
+            "a caller woken by disposal must never be told an offset the worker abandoned");
+    }
+
+    [Test]
+    public async Task A_commit_enqueued_moments_before_disposal_is_faulted_rather_than_abandoned()
+    {
+        // WaitToReadAsync can observe cancellation before the drain loop
+        // pulls the arrival out of the channel, so the commit never
+        // reaches _pending - and the shutdown fault loop only walks
+        // _pending. Unadopted, its Completion is never settled at all:
+        // the caller does not get ObjectDisposedException, it waits
+        // forever. Whether the drain loop wins that race depends on
+        // thread-pool scheduling, so drive the window repeatedly rather
+        // than once. Bounded by WhenAny so a regression fails this test
+        // instead of hanging the run.
+        for (var i = 0; i < 200; i++)
+        {
+            var submitter = new RecordingSubmitter();
+            var worker = new PhaseTwoWorker(
+                submitter.SubmitAsync, ManifestPartitionKey, NeverCommitsWindow, commitTimeout: null);
+
+            var parked = worker.EnqueueAsync(0L, 3L);
+            ObserveFaults(parked);
+
+            await worker.DisposeAsync().ConfigureAwait(false);
+
+            var settled = await Task.WhenAny(parked, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+            Assert.That(ReferenceEquals(settled, parked), Is.True,
+                $"iteration {i}: a commit enqueued before disposal must be settled by disposal, not abandoned unfinished");
+            Assert.That(parked.IsFaulted, Is.True,
+                $"iteration {i}: disposal must fault the commit, not complete it successfully");
+        }
     }
 
     [Test]

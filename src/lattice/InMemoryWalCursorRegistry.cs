@@ -287,6 +287,46 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     }
 
     /// <inheritdoc />
+    public Task<HybridLogicalClock?> GetMinCursorForDrainLagAsync(
+        string treeName,
+        long reportedAtOrAfterTicks,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            if (!_byTree.TryGetValue(treeName, out var state) || state.PerConsumer.Count == 0)
+            {
+                return Task.FromResult<HybridLogicalClock?>(null);
+            }
+
+            HybridLogicalClock? min = null;
+            foreach (var snapshot in state.PerConsumer.Values)
+            {
+                // Skip blocked-floor-only consumers (registered
+                // with cursor=Zero) so a buffer pin does not disable
+                // the drain-lag frontier, matching the GC cursor meet.
+                if (snapshot.Cursor <= HybridLogicalClock.Zero)
+                {
+                    continue;
+                }
+                if (snapshot.LastReportedAtTicks < reportedAtOrAfterTicks)
+                {
+                    continue;
+                }
+                if (min is null || snapshot.Cursor < min.Value)
+                {
+                    min = snapshot.Cursor;
+                }
+            }
+
+            return Task.FromResult(min);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<VersionVector?> GetCausalStableAsync(
         string treeName,
         CancellationToken cancellationToken = default)

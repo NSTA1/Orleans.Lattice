@@ -221,6 +221,45 @@ public class LatticeOptions
     public int MaxLeafEntriesBeforeForcedCompaction { get; set; } = DefaultMaxLeafEntriesBeforeForcedCompaction;
 
     /// <summary>
+    /// Maximum live state size, in bytes, that a single leaf may hold before a
+    /// split is triggered, measured as the leaf's running
+    /// <c>StateBytes</c> total (UTF-8 key length plus stored value length per
+    /// entry). Complements the structural
+    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/> bound: the key count
+    /// bounds how many entries a leaf holds, and this bounds how large those
+    /// entries are allowed to be in aggregate.
+    /// <para>
+    /// A key-count bound alone cannot keep a leaf snapshottable. A tree whose
+    /// values are large (an approximate-nearest-neighbour index storing a
+    /// chunk of vectors per key, say) reaches a multi-hundred-megabyte leaf
+    /// while still holding fewer keys than
+    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/>, so it never splits.
+    /// Capturing that leaf's snapshot has to materialise the payload in one
+    /// contiguous buffer, which fails with
+    /// <see cref="OutOfMemoryException"/> under ambient heap pressure. A failed
+    /// capture leaves the leaf without durable snapshot coverage, its
+    /// durable-materialiser pin unusable, and - because the tree's WAL trim
+    /// floor is a minimum across every pin - the whole tree's WAL untrimmable.
+    /// One oversized leaf is therefore enough to stop a tree reclaiming any WAL
+    /// at all.
+    /// </para>
+    /// <para>
+    /// Set to <c>0</c> to disable the byte bound and restore pure key-count
+    /// splitting. The default is armed rather than disabled because the failure
+    /// it prevents is silent, unbounded WAL growth that no operator action
+    /// short of a re-index recovers from.
+    /// </para>
+    /// <para>
+    /// The bound is advisory in one direction only: a leaf holding a single
+    /// entry larger than the bound is irreducible, because a split pivots on a
+    /// median key and cannot divide one entry. Such a leaf is left intact
+    /// rather than split into an empty donor forever, and is reported on
+    /// <c>leaf_byte_overflow_total</c> with an <c>irreducible</c> outcome.
+    /// </para>
+    /// </summary>
+    public long MaxLeafBytes { get; set; } = DefaultMaxLeafBytes;
+
+    /// <summary>
     /// Minimum interval between consecutive out-of-cycle compaction passes
     /// for the same <c>(treeId, shardIndex)</c> when triggered by
     /// <see cref="MinTombstoneRatioForCompaction"/> or
@@ -451,6 +490,33 @@ public class LatticeOptions
     /// </para>
     /// </summary>
     public const int DefaultMaxLeafEntriesBeforeForcedCompaction = 0;
+
+    /// <summary>
+    /// Default value for <see cref="MaxLeafBytes"/> (64 MiB).
+    /// <para>
+    /// Armed by default, unlike the other leaf-size valve
+    /// <see cref="DefaultMaxLeafEntriesBeforeForcedCompaction"/>, because the
+    /// two guard opposite kinds of failure. Leaving ratio-based compaction off
+    /// costs only some deferred tombstone reclamation, which the reminder-driven
+    /// pass performs anyway. Leaving the byte bound off costs a tree that can
+    /// never trim its WAL again, because one uncapturable leaf zeroes the
+    /// tree-wide trim floor, and the tree does not recover on its own.
+    /// </para>
+    /// <para>
+    /// The value is chosen so that a capture stays far inside a modest process
+    /// heap rather than merely inside the largest single array the runtime
+    /// permits. Capturing a leaf materialises its payload several times over
+    /// concurrently: the exact-sized encoded frame, the deep copy taken when
+    /// the blob crosses the grain call boundary, and the serializer's growth
+    /// buffer, which doubles from a small initial capacity and so holds both
+    /// the old and new arrays at each step. A 64 MiB leaf therefore costs on
+    /// the order of a few hundred megabytes transiently, which a default
+    /// container tolerates, while leaving ordinary trees (whose leaves are
+    /// kilobytes) entirely unaffected: they never approach the bound and so
+    /// never split on it.
+    /// </para>
+    /// </summary>
+    public const long DefaultMaxLeafBytes = 64L * 1024 * 1024;
 
     /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
     public static readonly TimeSpan DefaultCompactionTriggerCooldown = TimeSpan.FromMinutes(5);
@@ -1626,14 +1692,75 @@ public class LatticeOptions
     /// entirely; only the activation-scoped captures (the
     /// once-per-activation capture driven by the activation-time
     /// advisory, and the one-shot snapshot-coverage-deficit escape that
-    /// breaks the frozen-leaf rehydrate livelock) will fire. Those
-    /// activation-scoped captures are not affected by this option.
+    /// breaks the frozen-leaf rehydrate livelock) and the coverage-lag
+    /// bound of
+    /// <see cref="LeafSnapshotMaxCoverageLagSeconds"/> will fire. Those
+    /// are not affected by this option.
+    /// </para>
+    /// <para>
+    /// The count is advanced by checkpoint PERSISTS only. A coverage-lag
+    /// tick drives the same recheck but never feeds this counter, so this
+    /// cadence keeps meaning what it says rather than becoming "every N
+    /// persists or ticks".
     /// </para>
     /// </summary>
     public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;
 
     /// <summary>Default value for <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/> (<c>64</c>).</summary>
     public const int DefaultLeafSnapshotReClassifyEveryNCheckpoints = 64;
+
+    /// <summary>
+    /// Upper bound, in seconds, on how long an active leaf may leave its
+    /// durable snapshot coverage lagging behind its projection checkpoint.
+    /// A leaf that has been active for this long with some partition's
+    /// checkpoint ahead of the coverage a durable snapshot records drives a
+    /// capture, closing the gap. Set to <c>0</c> to disable.
+    /// <para>
+    /// This exists because every other capture driver is either
+    /// activation-scoped or write-driven, which leaves a live leaf serving
+    /// only READS with no driver at all.
+    /// <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/> is a cadence in
+    /// successful checkpoint PERSISTS, and a persist requires a checkpoint
+    /// advance, which requires a write; so a leaf whose writes have stopped
+    /// never reaches the cadence however long it stays active. Reads
+    /// meanwhile keep resetting Orleans' idle timer, so the grain never
+    /// collects and the graceful-deactivation capture never runs either.
+    /// Coverage then lags without bound.
+    /// </para>
+    /// <para>
+    /// That matters beyond snapshot freshness, because the WAL GC gates on
+    /// coverage: the materialiser's offset floor is a minimum over every
+    /// partition of every leaf, so one leaf whose coverage is frozen holds
+    /// the floor for its whole tree and the WAL cannot be trimmed by a byte
+    /// while no leaf reports blocked and no GC pass fails. It is a liveness
+    /// failure, not a safety one - the floor is released as soon as any
+    /// driver fires - but the latency to that release is what this bound
+    /// exists to cap.
+    /// </para>
+    /// <para>
+    /// The timer that enforces this cannot keep a leaf alive:
+    /// <c>GrainTimerCreationOptions.KeepAlive</c> defaults to
+    /// <see langword="false"/>, so it fires only while the grain is already
+    /// active, which is precisely the case the deactivation hook cannot
+    /// reach. The two drivers are complementary, and together they bound
+    /// coverage lag by the lesser of this interval and the collection age.
+    /// </para>
+    /// </summary>
+    public int LeafSnapshotMaxCoverageLagSeconds { get; set; } = DefaultLeafSnapshotMaxCoverageLagSeconds;
+
+    /// <summary>Default value for <see cref="LeafSnapshotMaxCoverageLagSeconds"/> (<c>300</c>, five minutes).</summary>
+    public const int DefaultLeafSnapshotMaxCoverageLagSeconds = 300;
+
+    /// <summary>
+    /// Maximum accepted value for <see cref="LeafSnapshotMaxCoverageLagSeconds"/>
+    /// (<c>86400</c>, one day). A coverage lag longer than a day is not a bound
+    /// in any useful sense: the whole point of the setting is that a read-held
+    /// leaf cannot hold its tree's WAL trim floor indefinitely, and a ceiling
+    /// measured in days concedes that. The ceiling also keeps the per-leaf
+    /// first-tick jitter comfortably inside the range its arithmetic is defined
+    /// over.
+    /// </summary>
+    public const int MaxLeafSnapshotCoverageLagSeconds = 86_400;
 
     /// <summary>
     /// When <c>true</c> (the default), a leaf snapshot capture encodes its
@@ -1721,6 +1848,45 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="LeafHydrationResidentBytes"/> (1 MiB).</summary>
     public const long DefaultLeafHydrationResidentBytes = 1L * 1024 * 1024;
+
+    /// <summary>
+    /// Largest encoded snapshot frame, in bytes, that is persisted as a single
+    /// BLOB column. A capture whose frame exceeds this is split into
+    /// row-aligned segments of at most this size, each persisted in its own
+    /// grain-state row, and hydration then decodes one segment at a time.
+    /// <para>
+    /// This bounds the <b>contiguous</b> allocation on the hydration read path,
+    /// which is a different quantity from the total bytes the leaf ends up
+    /// holding. The storage provider materialises a BLOB column as one
+    /// contiguous array before any lattice code runs, so a snapshot large
+    /// enough to need a Large Object Heap array can fail to load while the heap
+    /// has ample free space - the question is the largest free contiguous
+    /// segment, not the sum. That is the failure issue #2844 observed, and the
+    /// admission gate it added bounds the claim without being able to bound the
+    /// allocation; segmenting is what actually bounds it (issue #2914).
+    /// </para>
+    /// <para>
+    /// The default is 4 MiB: comfortably above the Large Object Heap threshold
+    /// (85 KB) so ordinary leaves are never segmented and keep the inline,
+    /// lazily-attachable frame path unchanged, and far enough below the sizes
+    /// at which contiguous allocation becomes unreliable on a fragmented heap
+    /// that a segment read is not itself the failure. Raising it trades fewer
+    /// grain rows for a larger peak contiguous allocation; lowering it does the
+    /// reverse. Values below 64 KiB are clamped, since a window smaller than a
+    /// few rows would multiply rows across grains for no allocation benefit.
+    /// </para>
+    /// </summary>
+    public long LeafSnapshotSegmentBytes { get; set; } = DefaultLeafSnapshotSegmentBytes;
+
+    /// <summary>Default value for <see cref="LeafSnapshotSegmentBytes"/> (4 MiB).</summary>
+    public const long DefaultLeafSnapshotSegmentBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// Lower clamp for <see cref="LeafSnapshotSegmentBytes"/> (64 KiB). A
+    /// configured value below this is raised to it rather than rejected, so a
+    /// misconfiguration degrades to a small window instead of failing capture.
+    /// </summary>
+    public const long MinimumLeafSnapshotSegmentBytes = 64L * 1024;
 
     /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
@@ -1870,6 +2036,51 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserPinShards = 8;
 
     /// <summary>
+    /// Maximum time a durable leaf-materialiser pin shard may shed coalescible
+    /// reports <b>continuously</b> before one is forced through. <c>null</c>
+    /// (the default) leaves the bound disarmed and preserves the historical
+    /// issue #2012 behaviour exactly.
+    /// <para>
+    /// The shed window of issue #2012 was designed as a short, self-tuning
+    /// hold-off proportional to the cost of the write that opened it - not a
+    /// latch. Nothing bounded how often it could be re-opened, and the
+    /// non-sheddable write paths (the birth block-pin seed and the retention
+    /// flush) record their own duration into the same per-shard gate they are
+    /// themselves exempt from. Under sustained leaf-activation churn on a large
+    /// tree, those exempt writes can hold a window open indefinitely and starve
+    /// the only path that restamps materialiser coverage, so the durable pin
+    /// stops advancing while the checkpoint it tracks moves on and the retained
+    /// WAL grows without bound (issue #3310).
+    /// </para>
+    /// <para>
+    /// Setting a ceiling bounds that: once a shard has shed continuously for
+    /// this long, the next report is issued regardless of the window and
+    /// <see cref="LatticeMetrics.MaterialiserPinShedForced"/> records it. The
+    /// run then restarts, so the cost is at most one enqueued write per ceiling
+    /// period per shard and the #2012 shedding continues to dominate. Pin
+    /// staleness - and therefore retained WAL - is bounded by the ceiling
+    /// instead of being unbounded.
+    /// </para>
+    /// <para>
+    /// <b>Arming this cannot lose data.</b> Forcing a report publishes more
+    /// durability evidence, never less, and the offset it carries was already
+    /// clamped to <c>min(checkpoint, durable snapshot coverage)</c> inside the
+    /// leaf before the reporter saw it, so no value this seam can emit exceeds
+    /// proven durable coverage. The real cost of arming it too aggressively is
+    /// the issue #2012 failure itself - re-saturating the pin grain's
+    /// non-reentrancy queue - which is why the default is disarmed and why a
+    /// ceiling should be set in units of minutes, not milliseconds.
+    /// </para>
+    /// <para>
+    /// Leaving this <c>null</c> does not make a stall invisible:
+    /// <see cref="LatticeMetrics.MaterialiserPinShedStallSeconds"/> reports the
+    /// age of every shard's current shed run either way. Disarmed means
+    /// "unbounded but observed", never "unobserved".
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalMaterialiserPinShedCeiling { get; set; }
+
+    /// <summary>
     /// Number of independently-persisted durable state slots ("buckets") each
     /// leaf-materialiser pin shard splits its pin map across.
     /// <para>
@@ -1945,16 +2156,121 @@ public class LatticeOptions
     /// than a thread-pool stampede; replays release the permit as soon as the
     /// tail is drained. Defaults to
     /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>0</c>),
-    /// which resolves to <see cref="Environment.ProcessorCount"/> at runtime.
-    /// Set to a positive value to pin the ceiling explicitly.
+    /// which resolves at runtime to the lesser of
+    /// <see cref="Environment.ProcessorCount"/> and the CPU grant the
+    /// container's cgroup actually enforces, so a host that raises
+    /// <c>DOTNET_PROCESSOR_COUNT</c> above its quota cannot oversubscribe this
+    /// CPU-bound path (issue #2816). An unreadable or unlimited quota is treated
+    /// as unknown and imposes no constraint. Set to a positive value to pin the
+    /// ceiling explicitly; an explicit value always wins over both figures.
     /// </summary>
     public int WalMaterialiserMaxConcurrentReplays { get; set; } = DefaultWalMaterialiserMaxConcurrentReplays;
 
     /// <summary>
     /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>
-    /// (<c>0</c>, resolved to <see cref="Environment.ProcessorCount"/>).
+    /// (<c>0</c>, resolved to the lesser of
+    /// <see cref="Environment.ProcessorCount"/> and the enforced container CPU
+    /// grant).
     /// </summary>
     public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
+
+    /// <summary>
+    /// How many activations may be <b>queued</b> for a WAL replay permit, per
+    /// permit the gate was sized to. The admitted-waiter bound is this figure
+    /// multiplied by the resolved ceiling, so it scales with the deployment's
+    /// own CPU grant and needs no retuning between a 2-vCPU box and a 64-vCPU
+    /// one. Defaults to
+    /// <see cref="DefaultWalReplayPermitQueueDepthPerPermit"/> (4). Set to
+    /// <c>0</c> to admit an unbounded queue, which is the historical shape.
+    /// <para>
+    /// <b>Why a queue needs a bound at all (issue #3284).</b> The gate bounds
+    /// how many replays run at once; nothing bounded how many activations could
+    /// line up behind it. A measured 87 waiters against a ceiling of 6 is not a
+    /// queue but a backlog: every one of those activations was going to exhaust
+    /// its request deadline before reaching the head, and each expiry enqueued a
+    /// replacement, so the queue length was self-sustaining. Refusing admission
+    /// converts that into fast, attributable back-pressure
+    /// (<see cref="LatticeSaturatedException"/>) which the caller retries after
+    /// a backoff rather than a silent wait that cannot succeed.
+    /// </para>
+    /// <para>
+    /// <b>Derived from the ceiling on purpose, and from nothing else.</b> Silo
+    /// count is deliberately <i>not</i> an input: the gate is a process-wide
+    /// static, so scaling out adds pools rather than dividing one, and scaling
+    /// this bound by cluster size would shrink aggregate replay capacity exactly
+    /// as capacity was being added. The resources the gate protects - CPU at
+    /// sizing time, the local managed heap at runtime - are strictly local, so
+    /// there is no cluster-wide term for it to be adaptive to.
+    /// </para>
+    /// <para>
+    /// <b>Necessary but no longer sufficient (issue #3290).</b> The paragraph
+    /// above is correct that the resources are local; it was wrong to conclude
+    /// that a bound derived from them alone could judge a queue. This value now
+    /// gates refusal jointly with
+    /// <see cref="WalReplayPermitMaxQueueWait"/>, which supplies the demand-side
+    /// term it lacks. Raising this number is therefore no longer the way to stop
+    /// spurious refusals, and it should not be tuned for that reason.
+    /// </para>
+    /// </summary>
+    public int WalReplayPermitQueueDepthPerPermit { get; set; } =
+        DefaultWalReplayPermitQueueDepthPerPermit;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplayPermitQueueDepthPerPermit"/> (4).
+    /// <para>
+    /// Four deep is a queue a waiter can plausibly clear inside an Orleans
+    /// request deadline at any realistic per-replay service time, and it leaves
+    /// the gate fully saturated for as long as work exists - the bound refuses
+    /// only waiters that were not going to be served in time anyway.
+    /// </para>
+    /// </summary>
+    public const int DefaultWalReplayPermitQueueDepthPerPermit = 4;
+
+    /// <summary>
+    /// The longest smoothed WAL replay permit queue wait treated as healthy.
+    /// Defaults to <see cref="DefaultWalReplayPermitMaxQueueWait"/> (5 seconds).
+    /// Set to <see cref="TimeSpan.Zero"/> to disable this half of the admission
+    /// decision, restoring the pure depth bound of issue #3284.
+    /// <para>
+    /// <b>This is the demand-side half, and it is load-bearing (issue #3290).</b>
+    /// <see cref="WalReplayPermitQueueDepthPerPermit"/> multiplies a supply-side
+    /// ceiling by a dimensionless constant, so the bound it produces carries
+    /// neither an arrival term nor a latency term while the queue it guards is
+    /// filled entirely by cluster-wide fan-out that contains no CPU term. The
+    /// consequence was measured: the same healthy fan-out peaked at 31 waiters
+    /// against a bound of 64 on a 16-processor host and at 40 against a bound of
+    /// 16 on a 4-processor one, so an ordinary activation was admitted on the
+    /// large host and refused on the small one. The bound was anti-correlated
+    /// with need, loosest where the silo copes and tightest where it does not.
+    /// </para>
+    /// <para>
+    /// Both halves must now hold before an activation is refused. Depth says the
+    /// queue is long; this says it is <b>not draining</b>, which is the only
+    /// signal that separates a wide fan-out from the self-sustaining backlog of
+    /// issue #3284, and the only one expressed in the same units as the harm
+    /// (a request deadline is a time, not a count).
+    /// </para>
+    /// </summary>
+    public TimeSpan WalReplayPermitMaxQueueWait { get; set; } =
+        DefaultWalReplayPermitMaxQueueWait;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplayPermitMaxQueueWait"/> (5 seconds).
+    /// <para>
+    /// Chosen to sit well clear of <b>both</b> measured regimes rather than
+    /// between them, because a threshold that separates two populations by two
+    /// orders of magnitude does not need to be precise to be right. The healthy
+    /// regime of issue #3290 drained 40 queued waiters inside a test that
+    /// completed in 111 ms, so its waits are sub-second. The pathological regime
+    /// of issue #3284 was 87 waiters against a ceiling of 6 that were exhausting
+    /// an Orleans request deadline in the queue, so its waits are tens of
+    /// seconds. Five seconds is roughly an order of magnitude above the first
+    /// and comfortably below the second, and it stays under the 30-second
+    /// Orleans default response timeout with enough margin for the replay itself
+    /// and the remainder of the call.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultWalReplayPermitMaxQueueWait = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of WAL records the activation-time leaf replay applies in
@@ -1973,6 +2289,55 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalReplayMaxRecordsPerTurn"/> (256).</summary>
     public const int DefaultWalReplayMaxRecordsPerTurn = 256;
+
+    /// <summary>
+    /// Number of WAL entries a single activation-time replay requests per
+    /// commit-log slice read, and the width it widens back towards after a
+    /// memory-pressure narrowing. Defaults to
+    /// <see cref="DefaultWalReplaySliceBudget"/> (256).
+    /// <para>
+    /// <b>This is the second of the two factors that set peak replay memory,
+    /// and until now it was the only one that could not be configured (issue
+    /// #2898).</b> Peak draw is the <i>product</i> of how many replays run at
+    /// once and how much each one buffers. The first factor is
+    /// <see cref="WalMaterialiserMaxConcurrentReplays"/>; this is the second.
+    /// Lowering it trades round trips for a smaller resident slice on a host
+    /// that cannot afford the default width.
+    /// </para>
+    /// <para>
+    /// <b>Distinct from <see cref="WalReplayMaxRecordsPerTurn"/>, which is
+    /// easily confused with it.</b> That option bounds how many records a
+    /// replay applies <i>within</i> one scheduler turn before yielding
+    /// cooperatively, and so governs silo responsiveness. This one bounds how
+    /// many entries a single cross-RPC slice read <i>returns</i>, and so
+    /// governs allocation. They default to the same number and mean different
+    /// things; changing one does not change the other.
+    /// </para>
+    /// <para>
+    /// The value is the <i>starting</i> width, not a floor. A read refused for
+    /// memory pressure is retried at a quarter of the current width, floored at
+    /// a single entry, and widens back towards this value on success - so
+    /// configuring it lowers the ceiling the replay works down from rather than
+    /// disabling the adaptation. A width of one is the narrowest legal read,
+    /// which is why zero is rejected: it would request nothing and the replay
+    /// could never advance.
+    /// </para>
+    /// </summary>
+    public int WalReplaySliceBudget { get; set; } = DefaultWalReplaySliceBudget;
+
+    /// <summary>
+    /// Default value for <see cref="WalReplaySliceBudget"/> (256).
+    /// <para>
+    /// This constant is the <b>single</b> declaration of the per-replay slice
+    /// width in the library. The internal reader that owns the narrow-and-retry
+    /// mechanism binds its own default to this field rather than repeating the
+    /// literal, so the two cannot drift apart by construction rather than by a
+    /// test that compares them - and a comparison of values is precisely the
+    /// detector that failed between issues #2742 and #2899, when three sites
+    /// held the same number while their behaviour had diverged.
+    /// </para>
+    /// </summary>
+    public const int DefaultWalReplaySliceBudget = 256;
 
     /// <summary>
     /// Maximum number of entries the WAL grain will batch into a single
@@ -2232,9 +2597,9 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalGcMinInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.
-    /// When set and the byte-accounting core reports that a tree's retained
-    /// WAL exceeds this value, the host-scheduled WAL garbage collector
+    /// Optional advisory per-tree ceiling, in bytes, on WAL size.
+    /// When set and the byte-accounting core reports that a tree's WAL
+    /// exceeds this value, the host-scheduled WAL garbage collector
     /// (<see cref="ILatticeWalGc"/>) lowers its effective trim frontier
     /// toward <see cref="WalBytePressureReclaimTarget"/> of the ceiling -
     /// but <b>only within the already-safe frontier</b> (the minimum
@@ -2254,8 +2619,12 @@ public class LatticeOptions
     /// mechanism: a correct value is a fraction of the volume the WAL lives on,
     /// which the library cannot know, and any value the library picked would be
     /// wrong for most deployments in one direction or the other. Enabling it also
-    /// costs one <c>GetRetainedByteSizeAsync</c> probe per WAL partition on every
-    /// garbage-collection pass - a cost every consumer would pay for a signal
+    /// costs one <c>GetPhysicalByteSizeAsync</c> probe and one
+    /// <c>GetRetainedByteSizeAsync</c> probe per WAL partition on every
+    /// garbage-collection pass - the second samples the logical working set the
+    /// <see cref="WalMaxRetainedBytesWorkingSetMultiple"/> rule below is checked
+    /// against, and both are contractually O(1) reads that never scan the log -
+    /// a cost every consumer would pay for a signal
     /// most do not need. Leaving it off does not blind an operator: the
     /// unconditional pass counter still reports every pass and its outcome, and
     /// reclaimed volume is visible through the entries-trimmed counter, so a tree
@@ -2263,8 +2632,187 @@ public class LatticeOptions
     /// rather than "no backlog". Set it when the WAL volume has a hard size
     /// budget and the provider accounts bytes.
     /// </para>
+    /// <para>
+    /// <b>The ceiling bounds physical occupancy, not live payload.</b> It is
+    /// compared against <c>IWalStorageProvider.GetPhysicalByteSizeAsync</c> -
+    /// every byte the WAL occupies on disk, including per-record framing and
+    /// dead payload that has been trimmed but not yet reclaimed by compaction.
+    /// The property name predates that correction and is retained because it is
+    /// public API. Before issue #3107 the comparison was made against the
+    /// <i>retained</i> total, which counts live payload only; since a
+    /// log-structured backend reclaims space only by rewriting the file, dead
+    /// bytes are a designed-in component of occupancy up to the compaction
+    /// threshold's share of the file, so a WAL could legitimately occupy
+    /// approaching twice this ceiling while never reporting a breach. A
+    /// provider that cannot report physical size falls back to the retained
+    /// figure per partition and is understated to that same degree; both
+    /// figures are surfaced separately on the storage-usage report so the gap
+    /// is visible rather than inferred.
+    /// <para>
+    /// <b>Size it above
+    /// <see cref="WalMaxRetainedBytesWorkingSetMultiple"/> times the largest
+    /// tree's logical working set.</b> This is not a style preference; it is
+    /// what makes the ceiling reachable at all. Compaction is the mechanism that
+    /// actually bounds a log-structured WAL, it is decided per shard, and with
+    /// the file provider's absolute dead-byte ceiling disabled by default the
+    /// sole trigger is its dead-byte <i>ratio</i> threshold (0.5). Designed
+    /// steady-state physical occupancy is therefore about twice the live set.
+    /// Since the comparison moved to physical bytes (issue #3107), a value below
+    /// that multiple is unsatisfiable by construction: the tree breaches while
+    /// perfectly healthy, and no amount of reclamation can bring it inside.
+    /// </para>
+    /// <para>
+    /// Getting it wrong does not merely produce a spurious breach, it produces a
+    /// <b>permanently armed advisory alarm</b>. Because
+    /// <see cref="WalBytePressureReclaimTarget"/> defaults to 0.8, the disarm
+    /// point of a ceiling set below the multiple sits <i>below</i> the natural
+    /// floor of the tree's own compaction cycle, so the policy arms and never
+    /// disarms - and an alarm that cannot clear cannot distinguish pathological
+    /// growth from normal size, which is the one distinction it exists to draw.
+    /// </para>
+    /// <para>
+    /// <b>The working set grows, so this is a rule with an expiry date.</b> A
+    /// value calibrated once against a measured working set stops holding as soon
+    /// as that set doubles, which is why nothing validates the rule at
+    /// registration time: the working set is not knowable at startup, so a static
+    /// check would be either vacuous or wrong. The condition is reported at
+    /// runtime instead, by
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/>, which every
+    /// garbage-collection pass evaluates against the working set it just measured
+    /// and which is zero-primed per tree so a flat zero is a measurement rather
+    /// than silence (issue #3242).
+    /// </para>
     /// </summary>
     public long? WalMaxRetainedBytes { get; set; }
+
+    /// <summary>
+    /// Byte ceiling at which the garbage collector stops holding a tree's WAL
+    /// back for want of a durable materialiser offset floor, and resumes
+    /// trimming it regardless (issue #3300). Defaults to
+    /// <see cref="DefaultWalDurabilityHoldCeilingBytes"/> (256 MiB), so the hold
+    /// is <b>on by default</b>; set it to <c>0</c> (or any non-positive value)
+    /// to disable the hold entirely and restore the pre-#3300 behaviour byte for
+    /// byte.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this ships on rather than opt-in.</b> It was introduced default-off
+    /// so that naming the condition could not change anyone's retention. That was
+    /// the right call for the instrument and the wrong one for the remedy:
+    /// default-off means the fix for issue #3300 is absent from every deployment
+    /// that has not heard of issue #3300, which is all of them, so the defect
+    /// stayed live and merely became legible. A remedy shipped switched off
+    /// reproduces the failure it was written for.
+    /// </para>
+    /// <para>
+    /// When this is set and positive, a partition whose durable offset floor is
+    /// <b>absent</b> is not trimmed while the tree's retained WAL is below the
+    /// ceiling. Absent means the collector could not establish that <i>any</i>
+    /// leaf has durably applied <i>anything</i>, so it has no evidence that a
+    /// single entry it is about to release has been written down anywhere. The
+    /// pre-existing behaviour on that path is to trim anyway, which is how
+    /// issue #3300 discarded eleven hours of writes while every counter the
+    /// collector published read healthy.
+    /// </para>
+    /// <para>
+    /// <b>The hold is bounded, and the bound is the point.</b> Refusing to trim
+    /// outright would be the obvious fix and is the wrong one: a tree that has
+    /// legitimately no materialiser wired never acquires a floor, so an
+    /// unconditional hold grows its WAL without limit and recreates issue
+    /// #3094. Retaining only up to a ceiling keeps the failure mode finite. Past
+    /// the ceiling the collector trims, because an unbounded WAL is the worse of
+    /// the two outages and the operator is entitled to have the node stay up.
+    /// </para>
+    /// <para>
+    /// <b>Forced progress is reported, not silent.</b> Each partition trimmed
+    /// past this ceiling without a durable floor increments
+    /// <see cref="LatticeMetrics.WalGcDurabilityHoldForced"/>. That counter
+    /// firing is not a tuning hint, it is the statement that this tree is
+    /// actively discarding records nothing is known to have applied - the exact
+    /// condition of issue #3300 - and it should be alerted on rather than
+    /// tolerated. Raising the ceiling buys time; it does not fix anything.
+    /// </para>
+    /// <para>
+    /// <b>The narrowness of the trigger is what makes default-on safe.</b> The
+    /// hold engages only where the offset floor is <b>absent</b> - structurally,
+    /// the branch tests <c>offsetFloor is null</c> - and never where a floor
+    /// exists but has stopped advancing. That distinction is not a policy
+    /// setting that a later edit could widen by accident: a stalled floor is a
+    /// non-null value and cannot reach the branch at all. It matters because a
+    /// stalled tree has some records covered, so holding it would retain an
+    /// unbounded working set for a bounded benefit; an absent floor means
+    /// nothing whatever is known to be applied, so every retained entry is a
+    /// sole copy. A correctly-configured deployment with a materialiser wired
+    /// has a present floor and therefore never enters this branch, which is why
+    /// turning the default on moves no healthy consumer.
+    /// </para>
+    /// <para>
+    /// <b>A hold that cannot be bounded does not engage.</b> The ceiling is
+    /// measured against the tree's retained bytes, so a provider that cannot
+    /// report bytes leaves the hold with nothing to bound it. On that shape the
+    /// hold declines and the pass trims as it did before, reporting
+    /// <see cref="WalGcTrimStopReason.DurabilityUnverified"/> so the condition
+    /// stays legible. While this knob was opt-in the opposite choice was
+    /// correct - an operator who had switched the hold on had accepted its cost,
+    /// and holding on an unmeasurable tree was safer than trimming on a check
+    /// that never ran. Default-on inverts that: the unbounded shape would arrive
+    /// unannounced on every deployment using such a provider, which is issue
+    /// #3094 delivered by default. Bounded retention is the whole safety
+    /// property of this mechanism, so where the bound cannot exist the mechanism
+    /// does not run.
+    /// </para>
+    /// <para>
+    /// Deliberately a separate knob from <see cref="WalMaxRetainedBytes"/>,
+    /// which is an advisory pressure policy that never blocks a trim. Reusing it
+    /// would have made a durability hold appear the moment an operator
+    /// configured a byte budget, silently changing retention semantics for every
+    /// deployment that already sets one.
+    /// </para>
+    /// </remarks>
+    public long? WalDurabilityHoldCeilingBytes { get; set; } = DefaultWalDurabilityHoldCeilingBytes;
+
+    /// <summary>
+    /// Default ceiling for <see cref="WalDurabilityHoldCeilingBytes"/>: 256 MiB.
+    /// </summary>
+    /// <remarks>
+    /// Sized to be generous for the only trees that can reach the hold at all -
+    /// ones with no durable floor whatever, whose WAL is therefore pure
+    /// accumulation rather than a working set - while staying small enough that
+    /// the worst case it can produce is a bounded, single-tree overshoot rather
+    /// than the unbounded growth of issue #3094. It buys time for an operator to
+    /// notice <see cref="LatticeMetrics.WalGcDurabilityHoldForced"/>; it is not a
+    /// capacity plan, and a tree that reaches it has a materialiser problem that
+    /// raising this number will not fix.
+    /// </remarks>
+    public const long DefaultWalDurabilityHoldCeilingBytes = 256L * 1024 * 1024;
+
+    /// <summary>
+    /// The multiple of a tree's <i>logical</i> retained payload that
+    /// <see cref="WalMaxRetainedBytes"/> must exceed for the ceiling to be
+    /// reachable by a healthy tree, and the multiple
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> tests against.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It is 2 because that is where a log-structured provider's compaction
+    /// policy puts designed steady-state occupancy. Such a provider reclaims dead
+    /// bytes only by rewriting a segment, and it rewrites when dead bytes reach a
+    /// configured fraction <c>t</c> of total payload, so occupancy peaks at
+    /// <c>live / (1 - t)</c>. The file provider's default ratio threshold is 0.5,
+    /// giving <c>2 x live</c>.
+    /// </para>
+    /// <para>
+    /// It is a constant here rather than a per-provider reading because the core
+    /// library does not reference any storage provider package and so cannot see
+    /// that threshold, and because the value is a sizing rule an operator applies
+    /// by hand to a number they measured. A provider tuned to a larger threshold
+    /// needs a correspondingly larger ceiling, so a tree sized to this multiple is
+    /// the floor of the safe range and never the whole of it - treat a
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> zero as "not
+    /// provably unsatisfiable", not as "comfortably sized".
+    /// </para>
+    /// </remarks>
+    public const double WalMaxRetainedBytesWorkingSetMultiple = 2.0;
 
     /// <summary>
     /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the
@@ -2703,6 +3251,93 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalDrainBudget = TimeSpan.FromSeconds(75);
 
     /// <summary>
+    /// Wall-clock ceiling on one WAL GC starvation drive
+    /// (<c>DriveStarvedCheckpointAsync</c>), measured from the moment the drive
+    /// claims a permit from the per-silo replay concurrency gate to the moment
+    /// it gives that permit back. A drive that exceeds it is abandoned, its
+    /// permit is released, and its in-flight latch is cleared (issue #3065).
+    /// <para>
+    /// <b>This bounds permit residency, not drive latency.</b> A healthy drive
+    /// finishes in milliseconds and never approaches it. What it defends
+    /// against is a drive parked in an await that never returns: the guarded
+    /// region reaches host-supplied storage, whose cancellation behaviour is
+    /// not this library's to assume, and a permit lost there is lost for the
+    /// lifetime of the process because the gate is sized once and is never
+    /// re-created or topped up. A production silo was measured holding both of
+    /// its two permits for 66.8 minutes with 345 activations queued behind them
+    /// and not one acquisition in 102 seconds, which wedges the whole
+    /// cold-activation path and with it WAL GC.
+    /// </para>
+    /// <para>
+    /// <b>Abandonment is not destructive, which is what makes a finite ceiling
+    /// safe.</b> Replay banks its absorbed prefix at every slice boundary, so
+    /// an abandoned drive keeps whatever it achieved and the next one replays a
+    /// strictly shorter - and therefore strictly cheaper - gap. The cost of
+    /// setting this too low is repeated work, not lost work.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultStarvationDriveBudget"/>
+    /// (5 minutes = <c>4 * <see cref="DefaultWalDrainBudget"/></c>). The
+    /// derivation has two sides. A drive issues at most
+    /// <c><see cref="MaxLeafReplayEntries"/> / <see cref="WalReplaySliceBudget"/></c>
+    /// slice reads - 40 at the defaults - so the default budget admits an
+    /// average of 7.5 seconds per read at the maximum permitted replay size,
+    /// against a healthy read of well under a millisecond and a standard
+    /// per-storage-operation ceiling (<see cref="WalFlushTimeout"/>) of 15
+    /// seconds. On the other side the gate ceiling is
+    /// <c>min(ProcessorCount, container CPU grant)</c> - two on the host that
+    /// produced the measurement above - so a parked drive costs one budget of
+    /// cold-activation availability per permit, which is why the ceiling is
+    /// minutes rather than the tens of minutes the unbounded region reached.
+    /// </para>
+    /// <para>
+    /// Configurable because the derivation is a function of three other
+    /// configurable quantities: <see cref="MaxLeafReplayEntries"/>,
+    /// <see cref="WalReplaySliceBudget"/>, and the cluster response timeout
+    /// that self-limits each individual slice read. A host that raises any of
+    /// them, or that runs against storage materially slower than the 7.5
+    /// seconds per read implied above, must be able to raise this with them.
+    /// </para>
+    /// <para>
+    /// <b>There is no value that disables the ceiling</b>, and this option
+    /// deliberately does not accept
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> the way
+    /// <see cref="WalDrainBudget"/> and <see cref="WalSaturationSampleInterval"/>
+    /// do. For those two, the infinite value restores an earlier behaviour that
+    /// was merely unbounded; here it would restore the defect itself. The
+    /// registered options validator rejects any non-positive value, infinite
+    /// included, at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan StarvationDriveBudget { get; set; } = DefaultStarvationDriveBudget;
+
+    /// <summary>
+    /// Default value for <see cref="StarvationDriveBudget"/>
+    /// (5 minutes = <c>4 * <see cref="DefaultWalDrainBudget"/></c>).
+    /// <para>
+    /// Expressed as a multiple of <see cref="DefaultWalDrainBudget"/> rather
+    /// than as a fresh literal because that constant is already this library's
+    /// answer to "how long may one WAL-facing operation be given to settle
+    /// against a provider that may be wedged", and is itself declared as
+    /// <c>5 * <see cref="DefaultWalFlushTimeout"/></c>. Binding to it keeps the
+    /// two moving together if the house view of provider latency changes,
+    /// instead of leaving a second independent number to drift.
+    /// </para>
+    /// <para>
+    /// <b>Declared below <see cref="DefaultWalDrainBudget"/>, and that ordering
+    /// is load-bearing.</b> Static field initialisers run in declaration order,
+    /// so a <c>static readonly</c> derived from one declared further down the
+    /// file would silently initialise from <see cref="TimeSpan.Zero"/> rather
+    /// than throw - and a zero budget here abandons every drive instantly,
+    /// which presents as the drive never working rather than as a broken
+    /// constant. This is the same declaration-order hazard the repository's
+    /// metrics convention documents for <c>Meter</c> fields, in a different
+    /// guise and without the null-dereference that makes that one loud.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultStarvationDriveBudget = 4 * DefaultWalDrainBudget;
+
+    /// <summary>
     /// Cadence at which the silo-scoped sampler that backs
     /// <see cref="Orleans.Lattice.IWalSaturationSignal"/> and
     /// <see cref="Orleans.Lattice.IWalSaturationObserver"/> recomputes
@@ -2993,15 +3628,15 @@ public class LatticeOptions
     /// leaf-materialiser drain frontier falls more than this far behind the
     /// WAL head - the direct "the materialiser is not keeping up with the
     /// write rate" surface that the indirect admission-depth and flush-latency
-    /// inputs only approximate. The WAL GC measures the lag on each pass as
+    /// inputs only approximate. The saturation sampler measures the lag each
+    /// tick as
     /// <c>walHead.WallClockTicks - materialiserFrontier.WallClockTicks</c>
-    /// (clamped at zero): the age of the oldest WAL entry the slowest durable
+    /// (clamped at zero): the age of the oldest WAL entry the slowest fresh
     /// leaf-materialiser checkpoint has not yet drained. Because the measure is
-    /// head-relative rather than wall-clock-relative it reads zero on an
-    /// idle-but-caught-up tree (the frontier reaches the head), so a quiescent
-    /// tree never trips. The GC records the standing lag as a per-tree level
-    /// that the saturation sampler re-reads every tick; once the level stays
-    /// above this threshold for
+    /// a pure lag-plane classifier input, it applies
+    /// <see cref="WalDrainLagConsumerFreshness"/> before reading the minimum so
+    /// a cold leaf that remains registered for WAL GC safety cannot hold a live
+    /// tree throttled forever. Once the live level stays above this threshold for
     /// <see cref="WalSaturationMaterialiserLagSampleWindows"/> consecutive
     /// sampler windows the tree is held at Throttled.
     /// <para>
@@ -3022,14 +3657,13 @@ public class LatticeOptions
     /// <para>
     /// Defaults to <see cref="DefaultWalSaturationMaterialiserLagThreshold"/>
     /// (30 seconds); set to <c>null</c> to disable the input entirely (the
-    /// classifier then ignores drain lag and the GC skips the WAL-head read). A
+    /// classifier then ignores drain lag and skips the WAL-head read). A
     /// block pin (a never-checkpointed leaf, which disables the cursor trim
     /// branch) is not treated as lag and never trips this input. The registered
     /// options validator rejects a non-positive value when the option is set.
-    /// The level observation refreshes at the WAL GC cadence (the replication
-    /// maintenance interval for replicated trees, <see cref="WalGcInterval"/>
-    /// otherwise), so the input engages for trees whose GC runs frequently
-    /// enough to keep the observation fresh.
+    /// The level observation refreshes at
+    /// <see cref="WalSaturationSampleInterval"/>, so the input engages without
+    /// waiting for a WAL GC pass.
     /// </para>
     /// </summary>
     public TimeSpan? WalSaturationMaterialiserLagThreshold { get; set; } = DefaultWalSaturationMaterialiserLagThreshold;
@@ -3054,6 +3688,39 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalSaturationMaterialiserLagSampleWindows"/> (3).</summary>
     public const int DefaultWalSaturationMaterialiserLagSampleWindows = 3;
+
+    /// <summary>
+    /// Freshness window applied to WAL cursor reports before they can
+    /// contribute to the materialiser drain-lag classifier input. A registered
+    /// consumer whose most recent report is older than this window is excluded
+    /// from the lag-plane minimum, while remaining fully registered for
+    /// <see cref="IWalCursorRegistry.GetMinCursorAsync(string, System.Threading.CancellationToken)"/>
+    /// and therefore still pinning the WAL GC trim floor.
+    /// <para>
+    /// This split is deliberate. A routinely deactivated leaf must not be
+    /// deregistered or aged out of the registry, because the trim floor needs
+    /// its cursor when that activation later replays. The saturation classifier
+    /// gates only <see cref="WalThrottledAdmissionPace"/>, a pure advisory
+    /// pacing delay, so excluding cold consumers here cannot permit trimming or
+    /// data loss. It only prevents an idle leaf inside a live tree from holding
+    /// the tree permanently <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalDrainLagConsumerFreshness"/> (5
+    /// minutes), which is 1,500 times the default
+    /// <see cref="WalSaturationSampleInterval"/> of 200 milliseconds. That is
+    /// comfortably wider than sampler jitter and brief scheduler stalls while
+    /// still bounded enough to exclude leaf cursors that have gone cold for
+    /// operationally meaningful time. Set to <see cref="System.TimeSpan.Zero"/>
+    /// to disable the freshness exclusion and restore the historical
+    /// all-consumers lag-plane behaviour. The registered options validator
+    /// rejects negative values.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalDrainLagConsumerFreshness { get; set; } = DefaultWalDrainLagConsumerFreshness;
+
+    /// <summary>Default value for <see cref="WalDrainLagConsumerFreshness"/> (5 minutes).</summary>
+    public static readonly TimeSpan DefaultWalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// WAL saturation input that escalates a tree to

@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// deterministically rather than raced.
 /// </summary>
 [TestFixture]
-public sealed class RepoContextRetrievalReadinessStateTests
+public sealed partial class RepoContextRetrievalReadinessStateTests
 {
     private static readonly TimeSpan HoldDown = TimeSpan.FromSeconds(30);
 
@@ -488,6 +488,14 @@ public sealed class RepoContextRetrievalReadinessStateTests
         };
         listener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
         {
+            // Skip the constructor's pre-mints. They carry a zero on every cause arm, so a
+            // fixture that recorded them observes the full arm set before any episode occurs -
+            // which both corrupts a recorded sequence and lets a "last cause seen" assertion
+            // pass on a mint rather than on a fault (issue #3280).
+            if (measurement == 0)
+            {
+                return;
+            }
             episodes += measurement;
             foreach (var tag in tags)
             {
@@ -539,8 +547,16 @@ public sealed class RepoContextRetrievalReadinessStateTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        listener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
         {
+            // Skip the constructor's pre-mints. They carry a zero on every cause arm, so a
+            // fixture that recorded them observes the full arm set before any episode occurs -
+            // which both corrupts a recorded sequence and lets a "last cause seen" assertion
+            // pass on a mint rather than on a fault (issue #3280).
+            if (measurement == 0)
+            {
+                return;
+            }
             foreach (var tag in tags)
             {
                 if (tag.Key == RepoContextRetrievalReadinessState.CauseTagKey)
@@ -573,8 +589,16 @@ public sealed class RepoContextRetrievalReadinessStateTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        listener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
         {
+            // Skip the constructor's pre-mints. They carry a zero on every cause arm, so a
+            // fixture that recorded them observes the full arm set before any episode occurs -
+            // which both corrupts a recorded sequence and lets a "last cause seen" assertion
+            // pass on a mint rather than on a fault (issue #3280).
+            if (measurement == 0)
+            {
+                return;
+            }
             foreach (var tag in tags)
             {
                 if (tag.Key == RepoContextRetrievalReadinessState.CauseTagKey)

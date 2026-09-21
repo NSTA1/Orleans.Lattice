@@ -153,4 +153,85 @@ public sealed class RepoContextContainerDocumentationTests
             + "assertion: an undocumented knob is indistinguishable, from outside the process, from a knob "
             + "that does not exist.");
     }
+
+    /// <summary>
+    /// Anti-vacuity floor for the instrument scan, on the same reasoning as
+    /// <see cref="MinimumExpectedKeys"/>. The host declared 21 instrument-name
+    /// constants when this guard was written.
+    /// </summary>
+    private const int MinimumExpectedInstruments = 15;
+
+    /// <summary>
+    /// Every instrument name the host assembly declares as a public constant. Matched
+    /// on the field's name suffix rather than on the value's prefix, so an instrument
+    /// published under a family this container does not own is still covered.
+    /// </summary>
+    private static IReadOnlyList<string> DeclaredInstruments() =>
+        typeof(RepoContextReplayConcurrency).Assembly
+            .GetTypes()
+            .SelectMany(t => t.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy))
+            .Where(f => f.IsLiteral
+                && !f.IsInitOnly
+                && f.FieldType == typeof(string)
+                && (f.Name.EndsWith("GaugeName", StringComparison.Ordinal)
+                    || f.Name.EndsWith("CounterName", StringComparison.Ordinal)
+                    || f.Name.EndsWith("HistogramName", StringComparison.Ordinal)))
+            .Select(f => f.GetRawConstantValue() as string)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// Every instrument the container exports has to be named in a table in the
+    /// operator reference, on exactly the reasoning that applies to an environment
+    /// variable: a series nobody can discover is, from outside the process,
+    /// indistinguishable from one that does not exist.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Issue #2543. This matters more here than the analogy suggests, because this
+    /// epic reads <b>absence</b> as evidence. A dashboard with an empty memory panel
+    /// is meant to say "the process published nothing", and that reading only holds
+    /// if the reader could have found out what the series is called. The repository
+    /// gates that enforce the equivalent rule for library instruments
+    /// (<c>MetricsDocCoverageTests</c>, <c>MeterDashboardCoverageEnrolmentTests</c>,
+    /// <c>MetricEmissionScanner</c>) all enumerate <c>src/</c>, so every instrument
+    /// this host publishes under <c>apps/</c> sat outside all of them and was
+    /// documented by convention alone. Adding this guard immediately found three
+    /// undocumented series, one of them
+    /// (<c>lattice_metrics_dropped_measurements_by_family_total</c>) named nowhere in
+    /// the document at all.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Every_instrument_the_host_publishes_is_documented_for_operators()
+    {
+        var instruments = DeclaredInstruments();
+
+        Assert.That(
+            instruments.Count,
+            Is.GreaterThanOrEqualTo(MinimumExpectedInstruments),
+            $"The reflection scan found only {instruments.Count} instrument-name constant(s) on the host "
+            + $"assembly, below the {MinimumExpectedInstruments} floor. That is a broken scan, not a thinly "
+            + "instrumented host: fix the scan rather than lowering the floor.");
+
+        var root = HygieneRepository.FindRepoRoot();
+        var path = Path.Combine(root, ContainerDocRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        Assert.That(File.Exists(path), Is.True, $"The container reference doc was not found at '{path}'.");
+
+        var doc = File.ReadAllLines(path);
+        var missing = instruments.Where(i => !DocumentsInTable(doc, i)).ToList();
+
+        Assert.That(
+            missing,
+            Is.Empty,
+            "The host publishes these instruments, but "
+            + $"{ContainerDocRelativePath} has no table row naming them, so an operator building a query or "
+            + $"a panel has no way to discover them:{Environment.NewLine}  - "
+            + string.Join(Environment.NewLine + "  - ", missing)
+            + $"{Environment.NewLine}Add a row giving each instrument's meaning, and say what a zero on it "
+            + "means if zero and absent are not the same reading.");
+    }
 }

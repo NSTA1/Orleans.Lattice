@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -41,6 +42,7 @@ internal sealed class RepoContextSearchService
     private readonly TimeProvider _timeProvider;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly RepoContextRetrievalReadinessState? _readiness;
+    private readonly RepoContextRetrievalLatencyReporter _latency;
     private readonly ILogger<RepoContextSearchService> _logger;
 
     /// <summary>Creates the search service.</summary>
@@ -50,6 +52,13 @@ internal sealed class RepoContextSearchService
     /// <param name="store">The capture store used to hydrate canonical records for semantic hits. Must not be <see langword="null"/>.</param>
     /// <param name="timeProvider">The clock used to project remaining life during the keyword scan. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
+    /// <param name="latency">
+    /// The reporter that publishes end-to-end and per-stage retrieval latency. It is a
+    /// <b>required</b> dependency rather than an optional one: a nullable reporter
+    /// would make an unmeasured host indistinguishable from an idle one, which is the
+    /// exact defect class this instrument was added to close (issue #2624). Making it
+    /// required means the absence of the measurement is not constructible.
+    /// </param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then uses keyword recall).</param>
     /// <param name="readiness">The shared vector-plane readiness state each resolved retrieval path is folded into, or <see langword="null"/> for an in-process host that publishes no readiness signal.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
@@ -60,6 +69,7 @@ internal sealed class RepoContextSearchService
         RepoContextStore store,
         TimeProvider timeProvider,
         ILogger<RepoContextSearchService> logger,
+        RepoContextRetrievalLatencyReporter latency,
         IEmbeddingProvider? embeddingProvider = null,
         RepoContextRetrievalReadinessState? readiness = null)
     {
@@ -69,6 +79,7 @@ internal sealed class RepoContextSearchService
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(latency);
 
         _grainFactory = grainFactory;
         _serializer = serializer;
@@ -76,30 +87,81 @@ internal sealed class RepoContextSearchService
         _store = store;
         _timeProvider = timeProvider;
         _logger = logger;
+        _latency = latency;
         _embeddingProvider = embeddingProvider;
         _readiness = readiness;
     }
 
     /// <summary>
     /// Runs a repository-context search: the semantic path when an embedder and
-    /// vectors are available, otherwise a keyword/structural scan.
+    /// vectors are available, otherwise a keyword/structural scan. Times the call
+    /// end-to-end as the <c>search</c> tool.
     /// </summary>
     /// <param name="repoId">The repository to search. Must be non-empty.</param>
     /// <param name="query">The free-text query. Must be non-empty.</param>
     /// <param name="k">The maximum number of hits to return; clamped to [1, 100], defaulting to 10.</param>
     /// <param name="cancellationToken">Cancels the search.</param>
     /// <returns>The ranked hits, the mode that produced them, and the precise retrieval path that answered.</returns>
-    public async Task<RepoContextSearchResult> SearchAsync(
+    public Task<RepoContextSearchResult> SearchAsync(
         string repoId, string query, int k, CancellationToken cancellationToken)
+        => SearchAsync(repoId, query, k, RepoContextRetrievalTool.Search, cancellationToken);
+
+    /// <summary>
+    /// Runs a repository-context search, attributing the end-to-end timing to
+    /// <paramref name="endToEndTool"/>.
+    /// <para>
+    /// <b>Pass <see langword="null"/> from an outer tool that times itself.</b> The
+    /// bundle service calls this as one step of a larger <c>repocontext_context</c>
+    /// call and times that whole call, so it must not also be counted as a
+    /// <c>search</c> - otherwise a context call would inflate the search tool's series
+    /// and the two tools' latencies would be mutually contaminated. The per-stage
+    /// timings are published either way, because a stage costs the same whichever tool
+    /// asked for it.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository to search. Must be non-empty.</param>
+    /// <param name="query">The free-text query. Must be non-empty.</param>
+    /// <param name="k">The maximum number of hits to return; clamped to [1, 100], defaulting to 10.</param>
+    /// <param name="endToEndTool">The <see cref="RepoContextRetrievalTool"/> value to attribute the end-to-end timing to, or <see langword="null"/> when an outer tool times the call instead.</param>
+    /// <param name="cancellationToken">Cancels the search.</param>
+    /// <returns>The ranked hits, the mode that produced them, and the precise retrieval path that answered.</returns>
+    internal async Task<RepoContextSearchResult> SearchAsync(
+        string repoId, string query, int k, string? endToEndTool, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(query);
         var count = k <= 0 ? DefaultResultCount : Math.Min(k, MaxResultCount);
 
+        // Timed from a finally so a cancelled or faulted call is still recorded, under
+        // the 'unresolved' path when it terminated before one was settled. A dropped
+        // measurement would make an aborting host look idle, which is precisely the
+        // silent-absence shape this instrument exists to rule out.
+        var timing = new RepoContextRetrievalTiming();
+        var startedAt = Stopwatch.GetTimestamp();
+        string? resolvedPath = null;
+        try
+        {
+            var result = await RunAsync(repoId, query, count, timing, cancellationToken).ConfigureAwait(false);
+            resolvedPath = result.RetrievalPath;
+            return result;
+        }
+        finally
+        {
+            timing.Flush(_latency, resolvedPath);
+            if (endToEndTool is not null)
+            {
+                _latency.RecordCall(endToEndTool, resolvedPath, Stopwatch.GetElapsedTime(startedAt));
+            }
+        }
+    }
+
+    private async Task<RepoContextSearchResult> RunAsync(
+        string repoId, string query, int count, RepoContextRetrievalTiming timing, CancellationToken cancellationToken)
+    {
         SemanticOutcome semantic;
         try
         {
-            semantic = await TrySemanticAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+            semantic = await TrySemanticAsync(repoId, query, count, timing, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -140,7 +202,10 @@ internal sealed class RepoContextSearchService
         IReadOnlyList<RepoContextSearchHit> keyword;
         try
         {
-            keyword = await KeywordAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+            using (timing.Time(RepoContextRetrievalStage.KeywordScan))
+            {
+                keyword = await KeywordAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -197,27 +262,41 @@ internal sealed class RepoContextSearchService
         /// <summary>The semantic index ran but is degraded: it threw, or ranked candidates that no longer hydrate.</summary>
         internal static SemanticOutcome IndexDegraded { get; } =
             new(null, RepoContextRetrievalPath.KeywordIndexDegraded);
+
+        /// <summary>The plane is not serving and the exact fallback that would answer is suppressed by a guard.</summary>
+        internal static SemanticOutcome ExactFallbackSuppressed { get; } =
+            new(null, RepoContextRetrievalPath.KeywordExactFallbackSuppressed);
     }
 
     private async Task<SemanticOutcome> TrySemanticAsync(
-        string repoId, string query, int k, CancellationToken cancellationToken)
+        string repoId, string query, int k, RepoContextRetrievalTiming timing, CancellationToken cancellationToken)
     {
         if (_embeddingProvider is null)
         {
             return SemanticOutcome.NoEmbedder;
         }
 
-        if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+        // The availability probe and the embed call are one stage: both are network
+        // hops to the same separate service, and an operator diagnosing a slow embedder
+        // needs the cost of reaching it whether or not the embed itself ran. The scope
+        // records from a finally, so an embed that is slow and then fails - the case
+        // that most needs to be visible - is timed rather than lost.
+        EmbeddingResult embed;
+        using (timing.Time(RepoContextRetrievalStage.Embed))
         {
-            _logger.LogInformation(
-                "repocontext_search for repository {RepoId} falling back to keyword recall: the embedding provider is unavailable.",
-                repoId);
-            return SemanticOutcome.VectorPlaneUnavailable;
+            if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+            {
+                _logger.LogInformation(
+                    "repocontext_search for repository {RepoId} falling back to keyword recall: the embedding provider is unavailable.",
+                    repoId);
+                return SemanticOutcome.VectorPlaneUnavailable;
+            }
+
+            embed = await _embeddingProvider
+                .EmbedAsync(new[] { query }, EmbeddingTextType.Query, cancellationToken)
+                .ConfigureAwait(false);
         }
 
-        var embed = await _embeddingProvider
-            .EmbedAsync(new[] { query }, EmbeddingTextType.Query, cancellationToken)
-            .ConfigureAwait(false);
         if (!embed.Succeeded || embed.Vectors.Count != 1)
         {
             _logger.LogInformation(
@@ -233,45 +312,74 @@ internal sealed class RepoContextSearchService
         // pool and collapse it to k distinct sources, keeping each source's best
         // (highest-scored, hence first) passage - the ranker returns descending score.
         var poolK = Math.Min(Math.Max(k * 8, k), 1000);
-        var matches = await _index
-            .SearchAsync(repoId, embed.Vectors[0], querySpace, poolK, cancellationToken)
-            .ConfigureAwait(false);
+        IReadOnlyList<RepoContextVectorMatch> matches;
+        using (timing.Time(RepoContextRetrievalStage.VectorSearch))
+        {
+            matches = await _index
+                .SearchAsync(repoId, embed.Vectors[0], querySpace, poolK, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         if (matches.Count == 0)
         {
-            // The index answered but holds nothing to compare in this embedding space:
-            // the plane is empty, mid-replay, or re-deriving after a fall-off. That is a
+            // The index answered but returned nothing. Two different facts produce
+            // that, and they have opposite remedies, so they are separated here
+            // rather than both reported as an unavailable plane (issue #2720).
+            //
+            // Asking the index is a racy snapshot and is safe only because it can
+            // only ever fall back to the older classification: a suppression lifted
+            // between the search and this read reports the plane as unavailable,
+            // which is what this branch reported before the distinction existed.
+            if (_index.IsExactFallbackSuppressed(repoId))
+            {
+                // A gather over this repository has already stalled, so the exact
+                // scan that would answer with complete recall is being withheld. The
+                // plane's contents are not what stopped this query; a guard is, and
+                // it retries on its own through a half-open probe.
+                return SemanticOutcome.ExactFallbackSuppressed;
+            }
+
+            // The index holds nothing to compare in this embedding space: the plane
+            // is empty, mid-replay, or re-deriving after a fall-off. That is a
             // vector-plane availability fact, not a degraded index.
             return SemanticOutcome.VectorPlaneUnavailable;
         }
 
         var hits = new List<RepoContextSearchHit>(k);
         var seenSources = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var match in matches)
+        // Hydration is its own stage because the index returns identities, never a
+        // second copy of the data: every hit is a real read from the store of record,
+        // so a slow store presents identically to a slow vector search unless the two
+        // are separated.
+        using (timing.Time(RepoContextRetrievalStage.Hydrate))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (hits.Count >= k)
+            foreach (var match in matches)
             {
-                break;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (hits.Count >= k)
+                {
+                    break;
+                }
 
-            if (string.IsNullOrEmpty(match.SourceKey) || !seenSources.Add(match.SourceKey))
-            {
-                continue;
-            }
+                if (string.IsNullOrEmpty(match.SourceKey) || !seenSources.Add(match.SourceKey))
+                {
+                    continue;
+                }
 
-            var entry = await _store.RecallAsync(match.SourceKey, cancellationToken).ConfigureAwait(false);
-            if (!entry.Exists)
-            {
-                continue;
-            }
+                var entry = await _store.RecallAsync(match.SourceKey, cancellationToken).ConfigureAwait(false);
+                if (!entry.Exists)
+                {
+                    continue;
+                }
 
-            hits.Add(new RepoContextSearchHit
-            {
-                Score = match.Score,
-                Entry = entry,
-                VectorId = match.VectorId,
-                Reasons = RepoContextSearchReasons.ForSemantic(match.SourceKey),
-            });
+                hits.Add(new RepoContextSearchHit
+                {
+                    Score = match.Score,
+                    Entry = entry,
+                    VectorId = match.VectorId,
+                    Reasons = RepoContextSearchReasons.ForSemantic(match.SourceKey),
+                });
+            }
         }
 
         if (hits.Count == 0)

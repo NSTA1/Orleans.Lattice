@@ -144,7 +144,92 @@ public sealed class RepoContextAnnIndexSchedulingTests
                 async () => await new RepoContextAnnIndexScheduler(grainFactory, options, logger)
                     .TryArmAsync(null!, CancellationToken.None),
                 Throws.ArgumentNullException);
+            Assert.That(
+                async () => await new RepoContextAnnIndexScheduler(grainFactory, options, logger)
+                    .TryStopAsync(null!, CancellationToken.None),
+                Throws.ArgumentNullException);
         });
+    }
+
+    [Test]
+    public async Task The_scheduler_stops_the_coordinator_for_the_live_space()
+    {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var coordinator = Substitute.For<IRepoContextAnnIndexBuildGrain>();
+        var space = EmbeddingSpaceTag.FromSpace(StubEmbedder.Instance.Space);
+        grainFactory
+            .GetGrain<IRepoContextAnnIndexBuildGrain>(RepoContextAnnIndexKeys.BuildGrainKey("acme", space))
+            .Returns(coordinator);
+
+        var scheduler = new RepoContextAnnIndexScheduler(
+            grainFactory,
+            new RepoContextIndexingOptions(),
+            NullLogger<RepoContextAnnIndexScheduler>.Instance,
+            StubEmbedder.Instance);
+
+        Assert.That(await scheduler.TryStopAsync("acme", Ct), Is.True);
+        await coordinator.Received(1).StopAsync();
+    }
+
+    /// <summary>
+    /// The load-bearing asymmetry between arming and stopping, and the reason the
+    /// stop verb exists at all.
+    /// <para>
+    /// The keep-alive reminder a coordinator registers is <b>durable</b>; the switch
+    /// that arms it is not. So the state that most needs stopping is exactly this
+    /// one: a coordinator armed by an earlier run, still registered, with the switch
+    /// now off. <c>TryArmAsync</c> cannot clear it - it returns early precisely here,
+    /// as the sibling test above asserts - so a stop gated on the same switch would
+    /// be a no-op in the only configuration that has cleanup to do, and a removed or
+    /// reset repository would keep reactivating a build coordinator for records that
+    /// no longer exist.
+    /// </para>
+    /// <para>
+    /// Add <c>AnnIndexSchedulingEnabled</c> to the guard in <c>TryStopAsync</c> and
+    /// this test goes red while every other test in this fixture stays green.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_scheduler_stops_the_coordinator_even_when_the_switch_is_off()
+    {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var coordinator = Substitute.For<IRepoContextAnnIndexBuildGrain>();
+        var space = EmbeddingSpaceTag.FromSpace(StubEmbedder.Instance.Space);
+        grainFactory
+            .GetGrain<IRepoContextAnnIndexBuildGrain>(RepoContextAnnIndexKeys.BuildGrainKey("acme", space))
+            .Returns(coordinator);
+
+        var options = new RepoContextIndexingOptions { AnnIndexScheduling = false };
+        var scheduler = new RepoContextAnnIndexScheduler(
+            grainFactory, options, NullLogger<RepoContextAnnIndexScheduler>.Instance, StubEmbedder.Instance);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(scheduler.CanSchedule, Is.False,
+                "the switch is off, so nothing may be armed");
+            Assert.That(await scheduler.TryArmAsync("acme", Ct), Is.False,
+                "arming is correctly refused - which is exactly why a stop must not share the guard");
+            Assert.That(await scheduler.TryStopAsync("acme", Ct), Is.True,
+                "stopping must still proceed: the durable reminder outlives the switch, so this "
+                + "configuration is the one with cleanup to do, not the one to skip");
+        });
+
+        await coordinator.Received(1).StopAsync();
+        await coordinator.DidNotReceive().EnsureBuildingAsync(Arg.Any<EmbeddingSpaceTag>());
+    }
+
+    [Test]
+    public async Task The_scheduler_stops_nothing_without_an_embedding_provider()
+    {
+        // The coordinator key embeds the space fingerprint, so with no provider bound
+        // there is no way to address a coordinator - and equally nothing was ever
+        // armed to need stopping.
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var scheduler = new RepoContextAnnIndexScheduler(
+            grainFactory, new RepoContextIndexingOptions(), NullLogger<RepoContextAnnIndexScheduler>.Instance);
+
+        Assert.That(await scheduler.TryStopAsync("acme", Ct), Is.False);
+        grainFactory.DidNotReceive().GetGrain<IRepoContextAnnIndexBuildGrain>(Arg.Any<string>());
     }
 
     /// <summary>

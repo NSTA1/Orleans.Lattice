@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -6,6 +7,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// How far a shard range-scan page fill had progressed, so a stall is
 /// attributable to a phase rather than only to a duration.
 /// </summary>
+[InstrumentedEnum(
+    typeof(ShardRootGrain),
+    "orleans.lattice.shard_root.scan_page.stalls",
+    LatticeMetrics.TagPhase)]
 internal enum ScanPagePhase
 {
     /// <summary>Preparing the shard for the operation, before any descent.</summary>
@@ -62,7 +67,11 @@ internal sealed partial class ShardRootGrain
 
         /// <summary>
         /// The leaf whose read this walk most recently issued, or
-        /// <see langword="null"/> before the walk has issued one.
+        /// <see langword="null"/> before the walk has issued one. Written only
+        /// by <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/>, so
+        /// it is recorded on every leaf-walk path and on none of the fold pass.
+        /// Read through <see cref="LeafInFlight"/>, never directly: on its own
+        /// this is "last issued", not "still outstanding".
         /// </summary>
         internal GrainId? LeafInFlightId;
 
@@ -76,7 +85,7 @@ internal sealed partial class ShardRootGrain
 
         /// <summary>
         /// The leaf whose read is genuinely still outstanding, or
-        /// <see langword="null"/> when the walk is between reads.
+        /// <see langword="null"/> when no leaf read is outstanding.
         /// <para>
         /// A leaf read is outstanding exactly when no completion has been
         /// recorded since it was issued, which is why the ordinal is captured
@@ -89,9 +98,100 @@ internal sealed partial class ShardRootGrain
         /// or at the stand-down between two reads, and in the second the last
         /// identity recorded names a leaf that already answered.
         /// </para>
+        /// <para>
+        /// <see langword="null"/> has exactly three meanings, and issue 2365
+        /// removed a fourth. In <see cref="ScanPagePhase.Prologue"/> and
+        /// <see cref="ScanPagePhase.Descent"/> no leaf read has been issued at
+        /// all; in <see cref="ScanPagePhase.LeafWalk"/> it means the walk is
+        /// between reads, and that reading is now trustworthy on every
+        /// leaf-walk path because all of them record through
+        /// <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/>; and in
+        /// <see cref="ScanPagePhase.BaselineFold"/> it means no identity is
+        /// recorded by design - see that overload's sibling for why the fold
+        /// pass cannot use this mechanism. The fourth meaning was "this call
+        /// site never records an identity", which held on five of the six
+        /// leaf-walk stand-downs and rendered identically to "between reads",
+        /// so a stall from a projection-admin or diagnostics walk looked like a
+        /// measured negative when the diagnostic had simply never been applied.
+        /// </para>
         /// </summary>
         internal GrainId? LeafInFlight =>
             LeafInFlightId is { } id && LeafInFlightOrdinal == Budget.LeavesVisited ? id : null;
+
+        /// <summary>
+        /// The rows the walk has collected so far - a
+        /// <c>List&lt;KeyValuePair&lt;string, byte[]&gt;&gt;</c> or a
+        /// <c>List&lt;string&gt;</c> - published by the core method so that a
+        /// ceiling fire can bank them rather than discard them (issue 2585).
+        /// <para>
+        /// It is the walk's own live list rather than a copy, so the guard must
+        /// copy before handing it out: the abandoned walk keeps appending until
+        /// its next stand-down, and Orleans would otherwise serialise a list
+        /// that is being mutated. Reading it is nonetheless safe without a
+        /// lock, and for a structural reason rather than a timing one - the
+        /// activation scheduler is single-threaded, so the guard's continuation
+        /// can only run while the walk is parked at an <c>await</c>, and no
+        /// leaf-walk site awaits anything inside its append loop. The list a
+        /// ceiling fire observes is therefore always at a leaf boundary, never
+        /// mid-leaf.
+        /// </para>
+        /// <para>
+        /// Typed as <see cref="object"/> because the two page shapes collect
+        /// different element types through the same pooled walk; the guard
+        /// discriminates on the page type it was asked for, which is a
+        /// once-per-stall cost on a path that has already lost a wall-clock
+        /// ceiling.
+        /// </para>
+        /// </summary>
+        internal object? Accumulated;
+
+        /// <summary>
+        /// The moved-away virtual slots the walk has filtered out so far, or
+        /// <see langword="null"/> when it has filtered none.
+        /// <para>
+        /// A banked page has to carry these or it loses rows silently. A
+        /// strongly consistent scan reads
+        /// <see cref="EntriesPage.MovedAwaySlots"/> to re-ask the split's new
+        /// owner for the keys the old owner filtered; a page that banks the
+        /// rows but drops the slots reports success, raises nothing, and simply
+        /// omits every key in those slots from the caller's result.
+        /// </para>
+        /// </summary>
+        internal HashSet<int>? MovedAwaySlots;
+
+        /// <summary>
+        /// A complete, immutable partial result the core method has published
+        /// for the guard to hand back verbatim if the ceiling fires, or
+        /// <see langword="null"/> when the walk has reached no bankable
+        /// checkpoint (issue 2807).
+        /// <para>
+        /// This is the counterpart of <see cref="Accumulated"/> for the walks
+        /// whose result is an <em>aggregate</em> rather than a list of rows - a
+        /// count, an emptiness probe, a rollup. Those cannot be banked from raw
+        /// rows, because their partial-result contract expresses progress as a
+        /// <c>ResumeFromInclusive</c> key rather than as rows the caller can
+        /// derive a continuation from, and that key is a leaf boundary the
+        /// guard has no way to obtain: resolving one is an <c>await</c> on the
+        /// very shard whose unresponsiveness is the reason the ceiling fired.
+        /// </para>
+        /// <para>
+        /// So the core method publishes the whole page instead, at each leaf
+        /// boundary where it holds both its running aggregate and a usable
+        /// resume key - which it obtains from the
+        /// <c>GetKeyRangeAsync</c> the walk now makes on every leaf. The
+        /// guard then needs no per-operation knowledge at all: it type-checks
+        /// what was published and returns it.
+        /// </para>
+        /// <para>
+        /// Publishing a <em>value</em> rather than a live accumulator is what
+        /// makes this safe against the abandoned walk, which keeps running
+        /// until its own stand-down. Each published page is an immutable
+        /// snapshot, so the one the guard reads is whichever checkpoint the
+        /// walk had last completed and cannot be mutated under serialization -
+        /// the copy <see cref="Accumulated"/> needs is unnecessary here.
+        /// </para>
+        /// </summary>
+        internal object? BankedPartial;
 
         private CancellationTokenSource? _deadline;
 
@@ -119,8 +219,29 @@ internal sealed partial class ShardRootGrain
             StallDuration = bounds.StallDuration;
             LeafInFlightId = null;
             LeafInFlightOrdinal = 0;
+            Accumulated = null;
+            MovedAwaySlots = null;
+            BankedPartial = null;
             if (!bounds.IsStallGuarded)
             {
+                // Drop any source inherited from a previous call on this POOLED
+                // instance, or this call reports a ceiling it does not have
+                // (issue #2809). TryReset disarms the timer but deliberately
+                // keeps the source for reuse, and IsStallGuarded is defined as
+                // "_deadline is not null", so an unguarded call renting an
+                // instance that last served a guarded one would answer true -
+                // and be sent down the coalescing path that the ceiling is what
+                // justifies. It also made the unguarded early return in
+                // ReadLeafAsync unreachable after the first guarded walk in the
+                // process, which is why the priming defect below it could not
+                // be pinned by a test until this was corrected.
+                //
+                // Disposing is safe and is the same disposal TryReset already
+                // performs on its own failure path: the previous call has stood
+                // down, and a successful TryReset has already invalidated every
+                // token it handed out.
+                _deadline?.Dispose();
+                _deadline = null;
                 return;
             }
 
@@ -148,6 +269,9 @@ internal sealed partial class ShardRootGrain
             StallDuration = Timeout.InfiniteTimeSpan;
             LeafInFlightId = null;
             LeafInFlightOrdinal = 0;
+            Accumulated = null;
+            MovedAwaySlots = null;
+            BankedPartial = null;
             return true;
         }
     }
@@ -180,10 +304,87 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private ScanPageWalk BeginScanPage(string operation)
     {
+        // Above everything this method does, and above every caller's own early
+        // returns, for the reason set out on PrimeScanPageStallPhases. The
+        // activation hook is the primary site; this one keeps the invariant "no
+        // stall is ever recorded on an unprimed phase arm" true on its own for
+        // an activation that somehow reached a page fill without running it. It
+        // is a latched bool read on every subsequent call.
+        PrimeScanPageStallPhases();
+
         var walk = ScanPageWalkPool.Get();
         walk.Begin(optionsResolver.GetScanPageBounds(TreeId), operation);
         return walk;
     }
+
+    private bool _scanPageStallPhasesPrimed;
+
+    /// <summary>
+    /// Publishes all four <see cref="ScanPagePhase"/> arms of
+    /// <see cref="LatticeMetrics.ScanPageStalls"/> at zero, so that an absent
+    /// phase is a measured zero rather than an absent measurement (issue #2952).
+    /// <para>
+    /// Before this, the only write to the counter was the increment on the stall
+    /// path, so exactly the arm that had already fired existed. A live scrape
+    /// carried <c>leaf-walk</c> on 321 series and <b>nothing at all</b> for
+    /// <c>prologue</c>, <c>descent</c> and <c>baseline-fold</c> - and an absent
+    /// arm is byte-identical to an arm that was never reached, which is
+    /// byte-identical to an arm whose call site does not exist. That cost the
+    /// epic a written-down discriminator: a pre-registered acceptance predicate
+    /// claimed a stall surfacing under <c>prologue</c> or <c>descent</c> would
+    /// prove the fault had moved off the leaf read, and the clause had to be
+    /// withdrawn in its two-sided form because the <em>continued absence</em> of
+    /// such a stall proved nothing whatsoever.
+    /// </para>
+    /// <para>
+    /// <b>Why activation, and not the page-fill entry the issue proposed.</b>
+    /// Issue #2952 suggested binding the prime to the point a shard first begins
+    /// a scan page, on the reasoning that it primes only the shards that
+    /// demonstrably scan. That bound is sound on cardinality and is still taken
+    /// as a second call site, but on its own it is strictly weaker than the one
+    /// this grain already established for
+    /// <see cref="LatticeMetrics.ScanPageLeafReadOutcomes"/> under issue #2809: a
+    /// workload-gated prime leaves an absent series meaning either "the build
+    /// does not carry the instrument" <em>or</em> "it does and no page fill ever
+    /// ran", which is the same two-reading ambiguity one layer out. Priming from
+    /// the lifecycle hook collapses it, and costs the same four series per
+    /// <c>(tree, shard)</c> that activates - the identical population that
+    /// already carries three primed leaf-read arms from that earlier fix, so the
+    /// cardinality precedent is set rather than newly taken.
+    /// </para>
+    /// <para>
+    /// <b>Priming is correct here because this is a counter.</b> Adding zero to a
+    /// counter is the identity, so it creates the series and changes no reading
+    /// of it. A zero <em>recorded</em> on a <c>Histogram&lt;T&gt;</c> is a
+    /// fabricated sample, so this pattern must not be carried across to one.
+    /// </para>
+    /// </summary>
+    private void PrimeScanPageStallPhases()
+    {
+        if (_scanPageStallPhasesPrimed)
+        {
+            return;
+        }
+
+        _scanPageStallPhasesPrimed = true;
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPagePrologueTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageDescentTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageLeafWalkTag);
+        RecordScanPageStall(0, LatticeMetrics.PhaseScanPageBaselineFoldTag);
+    }
+
+    /// <summary>
+    /// The single write seam for <see cref="LatticeMetrics.ScanPageStalls"/>, so
+    /// that a primed arm and an armed one are the same series by construction
+    /// rather than by two call sites agreeing on a tag list.
+    /// </summary>
+    private void RecordScanPageStall(long delta, KeyValuePair<string, object?> phase) =>
+        LatticeMetrics.ScanPageStalls.Add(
+            delta,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
+            phase,
+            LatticeTenantLabel.ForTree(TreeId));
 
     /// <summary>
     /// Applies the hard end-to-end stall ceiling to a page fill already in
@@ -207,6 +408,18 @@ internal sealed partial class ShardRootGrain
     /// racing them. The abandoned walk is deliberately <em>not</em> pooled -
     /// the stray continuation keeps writing its phase and leaf counter, and
     /// reusing it would corrupt a later call's diagnostics.
+    /// </para>
+    /// <para>
+    /// What abandoning must not mean is that the work is thrown away
+    /// (issues 2585, 2807). The rows the walk had already read are banked as an
+    /// ordinary short page by <see cref="TryBankPartialScanPage{T}"/> whenever
+    /// there is at least one of them; a walk that accumulates an aggregate
+    /// rather than rows publishes a finished partial page at each leaf boundary
+    /// instead, and that is banked the same way. Only a fire that caught the
+    /// walk with nothing to show still faults. Without that, the ceiling is a
+    /// livelock rather than a bound: the retry it invites re-walks the same
+    /// leaves, hits the same ceiling and discards the same work, so a page that
+    /// cannot fill in one attempt cannot fill in any number of them.
     /// </para>
     /// <para>
     /// What abandoning must <em>not</em> mean is that the walk carries on
@@ -233,6 +446,7 @@ internal sealed partial class ShardRootGrain
     {
         if (page.IsCompletedSuccessfully)
         {
+            NoteScanPageProgress();
             ScanPageWalkPool.Return(walk);
             return page;
         }
@@ -253,7 +467,40 @@ internal sealed partial class ShardRootGrain
         catch (OperationCanceledException oce) when (walk.DeadlineFired)
         {
             ObserveAbandonedScanPage(page);
-            throw ScanPageStalled(walk, oce);
+
+            // Issue 2585: bank what the walk had already read. Without this the
+            // ceiling is not a bound but a livelock - the retry it invites
+            // re-walks the same leaves, hits the same ceiling and discards the
+            // same work, so a page that cannot fill in one attempt cannot fill
+            // in any number of them.
+            var banked = TryBankPartialScanPage<T>(walk, out var partial);
+            LatticeMetrics.ScanPageCeilingOutcomes.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
+                banked
+                    ? LatticeMetrics.OutcomeScanPageBankedTag
+                    : LatticeMetrics.OutcomeScanPageDiscardedTag,
+                LatticeTenantLabel.ForTree(TreeId));
+
+            if (banked)
+            {
+                // A banked page carries at least one row, so at least one leaf
+                // completed: the run of zero-progress fires is broken and the
+                // next fire starts a fresh count (issue #3016).
+                NoteScanPageProgress();
+                return partial;
+            }
+
+            var stall = ScanPageStalled(walk, oce);
+
+            // Awaited before the throw rather than fired and forgotten, so the
+            // durable record the fault reports is committed by the time the
+            // caller sees it. Best-effort inside: a storage failure here must
+            // not replace the fault that names the wedge (issue #3016).
+            await FlushStrandedLeafRecoveryAsync();
+
+            throw stall;
         }
         catch
         {
@@ -261,6 +508,7 @@ internal sealed partial class ShardRootGrain
             throw;
         }
 
+        NoteScanPageProgress();
         ScanPageWalkPool.Return(walk);
         return result;
     }
@@ -270,6 +518,7 @@ internal sealed partial class ShardRootGrain
         try
         {
             var result = await page.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            NoteScanPageProgress();
             ScanPageWalkPool.Return(walk);
             return result;
         }
@@ -278,6 +527,436 @@ internal sealed partial class ShardRootGrain
             ScanPageWalkPool.Return(walk);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Turns the work an abandoned walk had already done into an ordinary
+    /// short page, so that a ceiling fire costs the caller a page boundary
+    /// rather than the whole attempt (issues 2585, 2807).
+    /// <para>
+    /// Two carriers reach it, and neither is a new wire shape. A page fill
+    /// publishes its row accumulator through
+    /// <see cref="BeginScanPageRows{TRow}"/> and this method assembles the page
+    /// around it; an aggregate walk has no rows to accumulate, so it publishes
+    /// a finished, immutable page through
+    /// <see cref="PublishScanPagePartial{T}"/> at each leaf boundary and this
+    /// method hands the most recent one back verbatim. The second carrier
+    /// exists because the first cannot be generalised: this method would
+    /// otherwise have to know how to construct every guarded operation's page,
+    /// which is precisely why banking reached only the six page fills and left
+    /// the other ten guarded operations discarding unconditionally.
+    /// </para>
+    /// <para>
+    /// For the row carrier, a page carrying rows, <c>HasMore = true</c> and no
+    /// <c>ResumeFromKey</c> is exactly what the cooperative
+    /// <see cref="LatticeOptions.MaxScanPageDuration"/> budget already emits
+    /// when a leaf declares no usable boundary, and every cursor in
+    /// <c>LatticeGrain</c> already advances past it by taking the last row's
+    /// key as its next continuation token. That is why the fix needs no wire
+    /// format change and no caller change: it reuses a contract the callers
+    /// have always had to honour.
+    /// </para>
+    /// <para>
+    /// No <c>ResumeFromKey</c> is computed here, deliberately. The resume key
+    /// is a leaf <em>boundary</em>, and this method cannot <c>await</c> the
+    /// further <c>GetKeyRangeAsync</c> that would yield one - the shard whose
+    /// unresponsiveness brought us here is the shard it would have to ask. It
+    /// is also an inclusive lower bound, so handing back the last banked key as
+    /// one would re-serve that row. The caller's exclusive last-key
+    /// continuation is both correct and already implemented. The aggregate
+    /// walks have no rows and so no such continuation to fall back on, which is
+    /// why they resolve their boundary <em>in the walk</em>, where the leaf is
+    /// already activated and its range is a <c>Task.FromResult</c> off state
+    /// the walk has in hand.
+    /// </para>
+    /// <para>
+    /// <b>Returning <see langword="false"/> for an empty accumulator is
+    /// load-bearing, not an optimisation.</b> A page with no rows and no resume
+    /// key carries nothing a caller can advance past, and every cursor reads
+    /// that combination as the end of the scan. Banking one would convert a
+    /// loud, retriable <see cref="ScanPageStalledException"/> into a silently
+    /// truncated result set - a strictly worse failure, and one no test of the
+    /// caller would catch. It is also what keeps the fix from trading one
+    /// livelock for another: because a banked page always carries at least one
+    /// row, the caller's continuation token strictly advances on every
+    /// attempt, so a finite tree still terminates. The published carrier obeys
+    /// the same rule from the other end - a partial is only ever published at a
+    /// boundary the walk has passed, and never with a null resume key - so its
+    /// caller's cursor strictly advances too.
+    /// </para>
+    /// <para>
+    /// Two guarded operations publish nothing and still fault on a ceiling
+    /// fire, both deliberately.
+    /// <c>CaptureSnapshotBaselineAsync</c> has no meaningful partial: a
+    /// baseline covering some of the chain is not a baseline.
+    /// <c>DeleteRangeBoundedAsync</c> has one it must not bank, because its
+    /// replication notification is published after the loop: a resume key past
+    /// a prefix whose tombstones were applied but never published would orphan
+    /// that closure permanently, where today's fault has the caller retry from
+    /// the range start and re-publish it. Both exclusions are about side
+    /// effects and shape, not about the boundary being unavailable - the
+    /// distinction the survey behind issue 2807 did not draw.
+    /// </para>
+    /// <para>
+    /// Copying the accumulator is likewise required. The abandoned walk keeps
+    /// appending until its own stand-down observes the same deadline, so
+    /// handing out the live list would let Orleans serialise a collection while
+    /// it is being mutated. The published carrier needs no copy for the mirror
+    /// image of that reason: each publication is a finished, immutable page
+    /// that the walk replaces rather than mutates.
+    /// </para>
+    /// </summary>
+    private bool TryBankPartialScanPage<T>(ScanPageWalk walk, out T banked)
+    {
+        banked = default!;
+
+        // Issue 2807: the aggregate walks publish a finished partial page at
+        // each leaf boundary they reach, so the guard hands it back without
+        // knowing anything about the operation that built it. Checked first
+        // because a walk publishes either a partial or an accumulator, never
+        // both, and the type test is the cheaper of the two.
+        if (walk.BankedPartial is T published)
+        {
+            banked = published;
+            return true;
+        }
+
+        if (walk.Accumulated is null)
+        {
+            return false;
+        }
+
+        if (typeof(T) == typeof(EntriesPage)
+            && walk.Accumulated is List<KeyValuePair<string, byte[]>> { Count: > 0 } entries)
+        {
+            banked = (T)(object)new EntriesPage
+            {
+                Entries = new List<KeyValuePair<string, byte[]>>(entries),
+                HasMore = true,
+                MovedAwaySlots = BankedMovedAwaySlots(walk),
+            };
+            return true;
+        }
+
+        if (typeof(T) == typeof(KeysPage)
+            && walk.Accumulated is List<string> { Count: > 0 } keys)
+        {
+            banked = (T)(object)new KeysPage
+            {
+                Keys = new List<string>(keys),
+                HasMore = true,
+                MovedAwaySlots = BankedMovedAwaySlots(walk),
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int[]? BankedMovedAwaySlots(ScanPageWalk walk) =>
+        walk.MovedAwaySlots is { Count: > 0 } moved ? SortedSlotsArray(moved) : null;
+
+    /// <summary>
+    /// Publishes the list a page fill is about to collect into, so a ceiling
+    /// fire can bank it (issue 2585). Call it in place of allocating the list
+    /// directly; a core method that allocates its own list without publishing
+    /// it reverts to discarding its work, silently and only under stall.
+    /// </summary>
+    private static List<TRow> BeginScanPageRows<TRow>(ScanPageWalk scan, int pageSize)
+    {
+        var rows = new List<TRow>(pageSize);
+        scan.Accumulated = rows;
+        return rows;
+    }
+
+    /// <summary>
+    /// Tracks how far along the keyspace a paged range-scan sibling walk has
+    /// already consumed, so a leaf that is not reachable by descent cannot
+    /// contribute to the page (issue 3271).
+    /// <para>
+    /// The defect this closes: the sibling walks follow next/prev pointers with
+    /// no descent-reachability check. A leaf that is spliced into the chain but
+    /// unreachable from the root (an orphan - see issue 3265 for how the split
+    /// seam creates them) is therefore read and emitted <em>in addition to</em>
+    /// the live leaf that legitimately owns the same range. Its rows are not
+    /// empty placeholders: leaf rows are not durable state, they are
+    /// materialised at activation by replaying the shard WAL through a
+    /// predicate keyed on (ShardIndex, LowKeyInclusive, HighKeyExclusive) and
+    /// never on leaf identity, so an orphan sharing a live leaf's shard and
+    /// bounds materialises a full shadow copy of its range. Nothing on the
+    /// page-assembly path de-duplicates.
+    /// </para>
+    /// <para>
+    /// <b>Why a watermark rather than a reachability probe or a set.</b>
+    /// Proving descent-reachability per leaf means re-descending from the root
+    /// for every leaf, which turns the O(n) sibling walk into O(n log n) grain
+    /// calls and so gives up the entire reason the chain exists. A hash set at
+    /// the accumulator de-duplicates rows but leaves the two other halves of
+    /// the invariant unfixed: an orphan's declared bounds would still steer
+    /// termination and resume, and for an entries page it raises an
+    /// unanswerable question about which of two values for one key wins. The
+    /// watermark instead exploits the one property the walk already depends on
+    /// and can check for free: a correct chain visits the keyspace
+    /// monotonically. Any key at or behind the furthest key already consumed
+    /// proves the walk has re-entered territory it has left, whoever produced
+    /// it, which catches the orphan case and also transient split races where
+    /// a leaf is read before a split and its new sibling after.
+    /// </para>
+    /// <para>
+    /// <b>The detection is per leaf and latching, deliberately.</b> Leaf rows
+    /// arrive sorted, so the first regressed key condemns the whole leaf: every
+    /// later key on it comes from the same untrusted source, including keys
+    /// that happen to fall beyond the watermark because the orphan holds a
+    /// stale key the live leaf no longer has. The latch clears at the next leaf
+    /// because a single bad splice says nothing about the leaves past it.
+    /// </para>
+    /// <para>
+    /// <b>The walk still follows the chain past a regressed leaf.</b> An orphan
+    /// is spliced <em>between</em> live leaves, so stopping at one would
+    /// truncate the page and lose live rows - a worse defect than the one being
+    /// fixed. Only the orphan's rows and its declared bounds are discarded.
+    /// </para>
+    /// <para>
+    /// <b>What this deliberately does not do:</b> it does not advance the
+    /// leaf-level <c>afterExclusive</c> filter to the watermark. Doing so would
+    /// suppress the duplicates one hop earlier and more cheaply, but it would
+    /// also destroy the evidence that anything was wrong - the filter that
+    /// hides the symptom would hide the cause - and it would make the leaf-read
+    /// coalescing key depend on the contents of previously visited leaves.
+    /// Rows are read as before and judged here, where the condition can be
+    /// reported.
+    /// </para>
+    /// <para>
+    /// Cost on a healthy chain is one ordinal comparison per emitted row and no
+    /// allocation; the regression branch is never taken.
+    /// </para>
+    /// </summary>
+    private struct ScanChainCursor
+    {
+        private readonly bool _reverse;
+        private string? _watermark;
+        private string? _leafEntryWatermark;
+        private bool _leafRegressed;
+        private bool _leafWarned;
+
+        private ScanChainCursor(bool reverse)
+        {
+            _reverse = reverse;
+            _watermark = null;
+            _leafEntryWatermark = null;
+            _leafRegressed = false;
+            _leafWarned = false;
+        }
+
+        /// <summary>A cursor for a walk that consumes the keyspace ascending.</summary>
+        internal static ScanChainCursor Forward() => new(reverse: false);
+
+        /// <summary>A cursor for a walk that consumes the keyspace descending.</summary>
+        internal static ScanChainCursor Reverse() => new(reverse: true);
+
+        /// <summary>
+        /// Whether the leaf currently being read regressed the chain, and so
+        /// must not contribute rows, termination, or a resume position.
+        /// </summary>
+        internal readonly bool LeafRegressed => _leafRegressed;
+
+        /// <summary>The furthest key consumed from a trusted leaf so far.</summary>
+        internal readonly string? Watermark => _watermark;
+
+        /// <summary>
+        /// Clears the per-leaf regression latch and records where the walk had
+        /// reached before this leaf contributed anything. Call once per leaf,
+        /// before admitting any of its rows.
+        /// </summary>
+        internal void BeginLeaf()
+        {
+            _leafRegressed = false;
+            _leafWarned = false;
+            _leafEntryWatermark = _watermark;
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> at most once per leaf, and only for a
+        /// leaf that regressed, so a leaf detected by both its rows and its
+        /// declared bounds is reported once rather than twice.
+        /// </summary>
+        internal bool TryClaimWarning()
+        {
+            if (!_leafRegressed || _leafWarned)
+                return false;
+            _leafWarned = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Judges one row's key against the watermark. Returns
+        /// <see langword="true"/> when the row may be emitted, advancing the
+        /// watermark to it; returns <see langword="false"/> when the key
+        /// regresses the chain, latching the current leaf as untrusted for the
+        /// remainder of its rows.
+        /// </summary>
+        /// <remarks>
+        /// A key equal to the watermark is a regression, not a tie: a key lives
+        /// on exactly one leaf, so seeing it twice in one walk is itself the
+        /// proof that two leaves claim the same range.
+        /// </remarks>
+        internal bool Admit(string key)
+        {
+            if (_leafRegressed)
+                return false;
+
+            if (_watermark is { } mark)
+            {
+                var order = string.CompareOrdinal(key, mark);
+                if (_reverse ? order >= 0 : order <= 0)
+                {
+                    _leafRegressed = true;
+                    return false;
+                }
+            }
+
+            _watermark = key;
+            return true;
+        }
+
+        /// <summary>
+        /// Judges the leaf's own declared <see cref="LeafKeyRange"/> against the
+        /// watermark as it stood <em>before</em> this leaf contributed, and
+        /// returns whether those bounds may be trusted to terminate the walk or
+        /// to produce a resume key.
+        /// </summary>
+        /// <remarks>
+        /// This is the half of the check <see cref="Admit"/> cannot reach. A
+        /// leaf that yields no rows at all - because it is empty, or because
+        /// the range or predicate filtered everything it holds - never trips
+        /// the row watermark, yet its declared bounds are still consulted for
+        /// termination and resume. An orphan claiming a range wider than the
+        /// live leaf's would therefore end the page early and silently drop the
+        /// live leaves beyond it. Comparing the leaf's leading edge against the
+        /// pre-leaf watermark catches exactly that: in a correct chain the
+        /// keyspace a leaf claims begins past everything already consumed, so a
+        /// leading edge at or behind the pre-leaf watermark is a leaf claiming
+        /// territory the walk has already left. A leaf with no bounds recorded
+        /// at all is not judged, preserving the existing legacy fallback; but a
+        /// leaf that declares a real trailing edge while leaving its leading
+        /// edge unset is claiming the keyspace from the unbounded end, which is
+        /// behind any watermark and so is judged like any other regression.
+        /// </remarks>
+        internal bool TrustsBounds(LeafKeyRange bounds)
+        {
+            if (_leafRegressed)
+                return false;
+
+            if (_leafEntryWatermark is not { } mark)
+                return true;
+
+            var edge = _reverse ? bounds.HighKeyExclusive : bounds.LowKeyInclusive;
+            if (edge is null)
+            {
+                var trailing = _reverse ? bounds.LowKeyInclusive : bounds.HighKeyExclusive;
+                if (trailing is null)
+                    return true;
+
+                _leafRegressed = true;
+                return false;
+            }
+
+            var order = string.CompareOrdinal(edge, mark);
+            if (_reverse ? order > 0 : order <= 0)
+            {
+                _leafRegressed = true;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reports a leaf whose keys regressed the scan's chain watermark, which
+    /// proves it is not reachable by descent for the range it claims to own
+    /// (issue 3271). Emitted once per offending leaf per page.
+    /// </summary>
+    /// <remarks>
+    /// This is a warning rather than a throw on purpose. Throwing would convert
+    /// a bounded read-correctness defect into a total read outage for exactly
+    /// the trees that carry an orphan, and issue 3269 establishes that no
+    /// operator repair path exists yet - so the failure would be unrecoverable
+    /// rather than merely loud. The page is served correctly and the tree's
+    /// need for repair is reported.
+    /// </remarks>
+    private void WarnScanChainRegression(ScanPageWalk scan, GrainId leafId, string? watermark) =>
+        logger.LogWarning(
+            "Range scan {Operation} on tree {TreeId} shard {ShardIndex} suppressed rows from leaf {LeafId}: " +
+            "its keys are at or behind the chain watermark {Watermark}, so the leaf is not reachable by descent " +
+            "for the range it claims and its rows duplicate a live leaf (issue 3271). The shard's leaf chain " +
+            "needs repair (issue 3269).",
+            scan.Operation,
+            TreeId,
+            ShardIndex,
+            leafId,
+            watermark);
+
+    /// <summary>
+    /// Publishes a finished partial page for the guard to bank if the ceiling
+    /// fires (issue 2807), replacing any earlier checkpoint from this walk.
+    /// <para>
+    /// Call it at a leaf boundary, with the aggregate the walk has accumulated
+    /// up to and including the leaf just completed, and a
+    /// <c>ResumeFromInclusive</c> that is that leaf's exclusive high bound. The
+    /// two must be consistent or the banked answer is wrong in the one way this
+    /// whole mechanism must not be: a resume key naming a leaf already folded
+    /// into the aggregate makes the caller's next batch count it twice, which
+    /// is precisely the hazard <see cref="ShardCountPage"/>'s own contract
+    /// calls out. Never publish against the leaf whose read is in flight.
+    /// </para>
+    /// <para>
+    /// A page must never be published with a null resume key. For these
+    /// operations "no resume key" is the wire signal for <em>complete</em>, so
+    /// banking one would convert a loud, retriable
+    /// <see cref="ScanPageStalledException"/> into a silently wrong answer -
+    /// an undercount or a populated shard reported empty. It is the same rule
+    /// that makes <see cref="TryBankPartialScanPage{T}"/> refuse an empty row
+    /// accumulator, for the same reason.
+    /// </para>
+    /// </summary>
+    private static void PublishScanPagePartial<T>(ScanPageWalk scan, T partial) =>
+        scan.BankedPartial = partial;
+
+    /// <summary>
+    /// The key a walk may resume from once it has finished with the leaf whose
+    /// <paramref name="bounds"/> these are, or <see langword="null"/> when the
+    /// leaf declares no usable boundary.
+    /// <para>
+    /// The leaf's exclusive high bound is exactly where the next leaf begins.
+    /// A high bound outside the walk's own <c>[lowerBound, upperBound)</c> is
+    /// not a position this walk can resume from, and when there is no safe key
+    /// the caller must keep walking rather than stop, because stopping without
+    /// a resume position would silently truncate - the "only stop where you can
+    /// resume" rule the range-delete and page-fill bounds also follow.
+    /// </para>
+    /// </summary>
+    private static string? ResumeKeyFrom(
+        in LeafKeyRange bounds, string? lowerBound, string? upperBound)
+    {
+        if (bounds.HighKeyExclusive is { } high
+            && (lowerBound is null || string.CompareOrdinal(high, lowerBound) > 0)
+            && (upperBound is null || string.CompareOrdinal(high, upperBound) < 0))
+        {
+            return high;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Records a virtual slot the walk filtered out as moved away, into both
+    /// the core method's own set and the walk, so a banked page reports it.
+    /// </summary>
+    private static void RecordMovedAwaySlot(ScanPageWalk scan, ref HashSet<int>? movedSet, int slot)
+    {
+        scan.MovedAwaySlots = movedSet ??= [];
+        movedSet.Add(slot);
     }
 
     /// <summary>
@@ -294,23 +973,43 @@ internal sealed partial class ShardRootGrain
     /// than to how much work a stalled page fill costs the silo.
     /// </para>
     /// <para>
-    /// It throws rather than returning a truncated page on purpose. The page
-    /// this walk would build is discarded either way - the guard has already
-    /// answered the caller - so returning one would only oblige all sixteen
-    /// core methods to name a resume key they have no caller for. Throwing
-    /// unwinds each of them identically, and the
+    /// It throws rather than returning a truncated page on purpose, and that
+    /// stays true after issue 2585 made the <em>outer</em> guard bank the rows
+    /// this walk had already collected. The two are not in tension: the guard
+    /// has already answered the caller by the time this fires, so a page built
+    /// here would have nobody to return it to, and the rows it would have
+    /// carried are precisely the ones the guard read out of
+    /// <see cref="ScanPageWalk.Accumulated"/> before abandoning the walk.
+    /// Throwing unwinds all sixteen core methods identically without obliging
+    /// any of them to name a resume key, and the
     /// <see cref="OperationCanceledException"/> it raises is the same fault
-    /// the guard already converts to a
-    /// <see cref="ScanPageStalledException"/> when the cancellation beats the
-    /// walk to it, so the caller cannot tell which of the two raced. When the
-    /// guard has already answered, the throw lands on an abandoned task and is
-    /// observed by <see cref="ObserveAbandonedScanPage"/>.
+    /// the guard already handles when the cancellation beats the walk to it,
+    /// so the caller cannot tell which of the two raced. When the guard has
+    /// already answered, the throw lands on an abandoned task and is observed
+    /// by <see cref="ObserveAbandonedScanPage"/>.
     /// </para>
     /// <para>
     /// Deliberately <em>not</em> a work or volume predicate. The walk this
     /// stops has not overrun any leaf, row or byte bound - it is stopped
     /// because the wall clock the ceiling set has elapsed, which is the only
     /// quantity that moves when the fault is a read that will not return.
+    /// </para>
+    /// <para>
+    /// This overload records no leaf identity, so a leaf-walk site must call
+    /// <see cref="StandDownIfCeilingFired(ScanPageWalk, GrainId)"/> instead
+    /// (issue 2365): a stand-down that records nothing leaves
+    /// <see cref="ScanPageWalk.LeafInFlight"/> permanently
+    /// <see langword="null"/>, which a stall reader cannot distinguish from
+    /// the documented "between reads". The one legitimate caller is the
+    /// <see cref="ScanPagePhase.BaselineFold"/> pass, and the reason is
+    /// structural rather than a matter of effort: the freshness test that
+    /// makes a recorded identity trustworthy is
+    /// <c>LeafInFlightOrdinal == Budget.LeavesVisited</c>, and the fold pass
+    /// never calls <see cref="LeafWalkBudget.RecordLeafVisited"/>, so an
+    /// identity recorded there would compare equal forever and go on naming a
+    /// leaf that had already answered. That is strictly worse than naming
+    /// none, which is why the fold pass reports its fan-out through the phase
+    /// instead.
     /// </para>
     /// </summary>
     private static void StandDownIfCeilingFired(ScanPageWalk scan) =>
@@ -379,12 +1078,17 @@ internal sealed partial class ShardRootGrain
         var phase = walk.Phase;
         var leaves = walk.Budget.LeavesVisited;
         var leafInFlight = walk.LeafInFlight;
-        LatticeMetrics.ScanPageStalls.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
-            PhaseTag(phase),
-            LatticeTenantLabel.ForTree(TreeId));
+        RecordScanPageStall(1, PhaseTag(phase));
+
+        // Issue #3016. Classified here and nowhere else, because this is the
+        // one site that both knows the fire completed no leaf and knows which
+        // leaf it was parked on - and because a fire that banked its rows
+        // returns before reaching here, so no page that made progress can be
+        // mistaken for a wedge.
+        var progress = ClassifyScanPageStall(walk);
+        var stranded = progress == ScanPageLeafProgress.Stranded;
+        var consecutive = _consecutiveZeroProgressStalls;
+        var applications = stranded ? state.State.StrandedScanRecoveries : 0;
 
         // Deliberately in the message and the typed slot only, never a metric
         // tag: leaf identity is unbounded cardinality, and the counter above is
@@ -404,6 +1108,33 @@ internal sealed partial class ShardRootGrain
                 + $"leaf {leaves + 1}{which}",
         };
 
+        // The wedge clause. A stall that is one of a run is a categorically
+        // different report from a stall that is the first of its kind, and the
+        // two were indistinguishable for the 307 attempts behind issue #3016.
+        var run = stranded
+            ? $" This is the {consecutive}th consecutive ceiling fire on this shard that completed "
+                + "no leaf and named this same leaf, so the leaf is classified UNREADABLE rather "
+                + "than slow: retrying it unchanged has already been tried and did not differ. The "
+                + "coalesced read the retries were attaching to has been abandoned so the next "
+                + "attempt issues a fresh one."
+            : consecutive > 1
+                ? $" This is the {consecutive}th consecutive ceiling fire on this shard that "
+                    + "completed no leaf and named this same leaf."
+                : string.Empty;
+
+        // The did-the-remedy-take clause. The run above is bounded by this
+        // activation, and a freshly activated shard root holds no coalesced
+        // reads - so its eviction is a no-op and its stall reads identically to
+        // a first-ever stall however long the leaf has been unreadable. This
+        // count is durable precisely so that reading cannot recur (issue #3016).
+        var took = stranded && applications > 1
+            ? $" The recovery has now been applied to this leaf {applications} times across every "
+                + "activation of this shard root, so a fresh read was already issued on an earlier "
+                + "occasion and the leaf still did not answer: the fault is inside that leaf "
+                + "activation rather than in this shard root's read coalescing, and no further "
+                + "scan attempt will converge without the leaf being made readable."
+            : string.Empty;
+
         return new ScanPageStalledException(
             $"{walk.Operation} on shard {MyShardIndex} of tree '{TreeId}' exceeded the "
             + $"{walk.StallDuration} page-fill ceiling "
@@ -411,7 +1142,7 @@ internal sealed partial class ShardRootGrain
             + $"{nameof(LatticeOptions.MaxScanPageDuration)} is sampled between leaf reads, so it "
             + "cannot stop a single await that never returns; the page fill is abandoned so the "
             + "shard stops being held and the operation can be retried from its last continuation "
-            + "token.", cause)
+            + $"token.{run}{took}", cause)
         {
             TreeId = TreeId ?? string.Empty,
             ShardIndex = MyShardIndex,
@@ -419,6 +1150,9 @@ internal sealed partial class ShardRootGrain
             Phase = PhaseLabel(phase),
             LeavesVisited = leaves,
             LeafInFlight = leafInFlight?.ToString(),
+            ConsecutiveZeroProgressStalls = consecutive,
+            LeafStranded = stranded,
+            StrandedRecoveryApplications = applications,
             TimeoutSeconds = walk.StallDuration.TotalSeconds,
         };
     }

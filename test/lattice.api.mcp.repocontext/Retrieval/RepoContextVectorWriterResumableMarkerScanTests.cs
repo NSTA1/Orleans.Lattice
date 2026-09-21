@@ -77,13 +77,16 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
         var injector = RangeReadInjector();
         await using var harness = await RepoContextMcpHarness.StartAsync(Options(injector), Ct);
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+        var reporter = harness.Services.GetRequiredService<RepoContextMemoryMarkerScanReporter>();
         var keys = MarkerKeys();
 
         await writer.MarkMemoryEmbeddedAsync(RepoId, keys, Ct);
 
         var before = injector.Matched;
+        var armsBefore = reporter.Snapshot();
         var markers = await writer.LoadEmbeddedMemoryKeysAsync(RepoId, Ct);
         var rangeReads = injector.Matched - before;
+        var armsAfter = reporter.Snapshot();
 
         Assert.Multiple(() =>
         {
@@ -94,6 +97,14 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
                 "and it took several bounded range reads rather than one. The page size is the interval at "
                 + "which progress is banked, so a walk that took a single read would have nothing to resume "
                 + "from when the next one stalls.");
+
+            Assert.That(armsAfter.Complete - armsBefore.Complete, Is.EqualTo(1),
+                "A walk that exhausted the range without banking anything scores the complete arm,");
+            Assert.That(armsAfter.Resumed - armsBefore.Resumed, Is.Zero,
+                "and NOT the resumed arm - conflating the two would make the resumable cursor "
+                + "unobservable exactly when it is working.");
+            Assert.That(armsAfter.Banked - armsBefore.Banked, Is.Zero,
+                "and nothing was banked.");
         });
     }
 
@@ -106,9 +117,12 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
         var injector = RangeReadInjector();
         await using var harness = await RepoContextMcpHarness.StartAsync(Options(injector), Ct);
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+        var reporter = harness.Services.GetRequiredService<RepoContextMemoryMarkerScanReporter>();
         var keys = MarkerKeys();
 
         await writer.MarkMemoryEmbeddedAsync(RepoId, keys, Ct);
+
+        var armsBefore = reporter.Snapshot();
 
         // 1. Measure a healthy whole walk.
         var mark = injector.Matched;
@@ -140,6 +154,8 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
         var fresh = await writer.LoadEmbeddedMemoryKeysAsync(RepoId, Ct);
         var freshReads = injector.Matched - mark;
 
+        var armsAfter = reporter.Snapshot();
+
         Assert.Multiple(() =>
         {
             Assert.That(partial.Complete, Is.False, "The stalled walk reports itself incomplete,");
@@ -168,6 +184,20 @@ public sealed class RepoContextVectorWriterResumableMarkerScanTests
                 + "cursor, so a marker added or disabled since is still observed.");
             Assert.That(fresh.Passes, Is.EqualTo(1),
                 "counting from one again, because completion dropped the cursor and this is a new walk.");
+
+            // The same five walks, read off the instrument rather than the return
+            // values. This is the half that survives into production: Complete,
+            // Passes and Fault are visible only to this caller, whereas these arms
+            // are the only way anyone operating the system can tell a converging
+            // marker scan from one that banks forever.
+            Assert.That(armsAfter.Banked - armsBefore.Banked, Is.EqualTo(2),
+                "Both stalled walks scored the banked arm - the state the log grep currently looks for,");
+            Assert.That(armsAfter.Resumed - armsBefore.Resumed, Is.EqualTo(1),
+                "the walk that finished off banked progress scored the resumed arm, which is the ONLY "
+                + "positive evidence anywhere that the resumable cursor works end to end,");
+            Assert.That(armsAfter.Complete - armsBefore.Complete, Is.EqualTo(2),
+                "and the two single-pass walks scored the complete arm. Splitting resumed out of complete "
+                + "is what stops 'never needed to bank' and 'banked and recovered' reading identically.");
         });
     }
 }

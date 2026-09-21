@@ -33,6 +33,15 @@ services:
     # own after a Docker daemon restart, because an unattended restart would
     # write to the working volume outside a measured run.
     restart: "no"
+    # PID 1 is an init process, matching the live sample (issue #2576). See the
+    # repocontext service below for why the rig needs this at least as much as
+    # the sample does.
+    init: true
+    # The embedder holds no durable state and mounts only a read cache, so it
+    # needs only enough time to close its listener. Stated rather than defaulted
+    # so an omission stays distinguishable from a decision, exactly as the live
+    # sample does it.
+    stop_grace_period: 30s
     logging:
       driver: json-file
       options:
@@ -61,6 +70,14 @@ services:
       LATTICE_RECONCILE_INTERVAL_SECONDS: "${RIG_RECONCILE_INTERVAL_SECONDS:-86400}"
       LATTICE_RECONCILE_JITTER_SECONDS: "0"
       LATTICE_FULL_WALK_INTERVAL_SECONDS: "${RIG_FULL_WALK_INTERVAL_SECONDS:-86400}"
+      # The container's shutdown grant, declared to the process. The host cannot
+      # read its own stop_grace_period, so it derives its shutdown budget from
+      # this declaration (issue #2402) - which means the two MUST be kept equal,
+      # and RepoContextComposeInitProcessTests asserts that they are. A rig whose
+      # host believed it had a larger grant than Docker actually gives would
+      # silence the drain-abandoned log line, the one signal that says a
+      # measurement was taken across a crash teardown.
+      LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD: "120s"
     ports:
       # NEVER 8080 on the host. The container-side port stays 8080 because
       # that is the application's own listener.
@@ -73,6 +90,38 @@ services:
       # writable bind mount.
       - ${RIG_WORKSPACE:?RIG_WORKSPACE must be set by the rig scripts}:/workspace:ro
     restart: "no"
+    # PID 1 is an init process (issue #2576), so orphaned descendants are reaped
+    # and SIGTERM is forwarded rather than depending on the application's own
+    # handler registration while it runs as PID 1.
+    #
+    # The fix is not confined to samples/ because this is the file that
+    # produces the epic's headline number. A container that cannot be torn down
+    # cleanly poisons the NEXT run rather than its own: an unflushed WAL leaves
+    # unbanked state for the following start to replay, so the run that
+    # inherits it looks slower for a reason unrelated to the change under test,
+    # and the contamination flatters the earlier run rather than showing up as
+    # noise. That is not separable after the fact, which is why the epic #2368
+    # gate comparison had to be discarded outright rather than caveated.
+    init: true
+    # Must exceed the host's own shutdown budget or that budget is dead
+    # configuration and the teardown is a crash teardown (issue #2389). Kept
+    # equal to the grant declared above; the live sample's compose file carries
+    # the full derivation of why the bound to clear is the HOST budget rather
+    # than any particular corpus's observed drain time.
+    #
+    # Read carefully WHICH teardowns this repairs, because the obvious one was
+    # never broken. The measured `graceful-restart` scenario passes an explicit
+    # `stop -t $GracefulStopTimeoutSec` (180s), so it always had a real drain
+    # window; a 180s grant against a 90s budget is the safe direction, and the
+    # host simply does not use all of it. Every OTHER teardown ran on Docker's
+    # 10s default: the warm-up `down` before a cohort, the `down` after it, and
+    # - the one that persists - the `down` that `generate-corpus.ps1` performs
+    # immediately before PROMOTING the working volume to the scale master. A
+    # promote whose teardown was a SIGKILL bakes an unbanked WAL into the
+    # master that every later cohort then restores from, so the defect is
+    # copied forward into the baseline instead of expiring with the run. The
+    # measured stop being correct is precisely what kept that invisible.
+    stop_grace_period: 120s
     logging:
       driver: json-file
       options:

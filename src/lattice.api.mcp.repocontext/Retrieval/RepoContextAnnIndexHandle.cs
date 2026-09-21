@@ -22,7 +22,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// silent-degradation failure this work exists to remove. Until the build reaches
 /// <see cref="VectorIndexBuildPhase.Ready"/> the handle reports
 /// <see cref="RepoContextAnnServingState.Bootstrapping"/> and answers nothing, so
-/// the caller serves the exact scan and recall stays complete throughout.
+/// the caller serves the exact scan. Recall then stays complete for as long as
+/// that scan can complete - which is not unconditional: where a gather has already
+/// stalled, the caller's breaker withholds it and keyword recall serves instead,
+/// reported as <see cref="RepoContextRetrievalPath.KeywordExactFallbackSuppressed"/>
+/// (issue #2720).
 /// </para>
 /// <para>
 /// <b>Why it catches up on open.</b> Maintenance updates are flushed in batches, so
@@ -42,13 +46,86 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private readonly EmbeddingSpaceTag _space;
     private readonly string _repoId;
     private readonly ILogger _logger;
+    private readonly RepoContextAnnPartitioningReporter? _partitioning;
+    private readonly RepoContextAnnIndexLoadReporter? _load;
+
+    // Held across a load that FAULTED, which is the entire mechanism: the
+    // partially-built identifier mapping lives on this instance, so discarding it
+    // is what made every retry reissue the whole O(corpus) walk (#2953).
+    private DurableVectorIndex? _loading;
     private readonly SemaphoreSlim _turn = new(1, 1);
 
     private DurableVectorIndex? _index;
     private VectorIndexBuildProgress _progress;
     private int _pendingFlush;
+
+    /// <summary>
+    /// Identifiers the writer handed over while the build was still streaming, and
+    /// which were therefore recorded instead of applied. Holds identifiers only,
+    /// never vectors, so it stays a few bytes per write of a build that is already
+    /// reading the whole corpus. Drained by the catch-up once the build is Ready.
+    /// </summary>
+    private HashSet<string>? _deferredWrites;
     private bool _serving;
     private bool _disposed;
+
+    /// <summary>
+    /// The largest identifier-mapping count any deferred open has observed, and
+    /// how many deferrals have since banked nothing. Together they let a bounded
+    /// open tell "advancing slowly" from "not advancing at all". See the escalation
+    /// in <c>OpenAsync</c>.
+    /// </summary>
+    private int _lastOpenKeyCount;
+    private int _emptyOpenDeferrals;
+
+    /// <summary>
+    /// How many consecutive budget expiries that banked no mapping are tolerated
+    /// before the open is declared unable to progress. Small on purpose: every one
+    /// of them is a wasted coordinator turn, and the only configuration that
+    /// produces them cannot be fixed by waiting.
+    /// </summary>
+    private const int MaxEmptyOpenDeferrals = 3;
+
+    /// <summary>
+    /// Bounds an unbroken run of admission refusals so the open has a state a reader
+    /// can act on, rather than only a counter that rises. See
+    /// <see cref="RepoContextAnnOpenSaturationLatch"/> for why a rising refusal count
+    /// alone cannot distinguish a slow cold open from a plane that will not arm.
+    /// </summary>
+    private readonly RepoContextAnnOpenSaturationLatch _openSaturation;
+
+    /// <summary>
+    /// The host's shared readiness state, so a terminal saturation episode reaches
+    /// <c>/health/ready</c> and the health tool rather than only the log. Null when a
+    /// test drives the handle directly.
+    /// </summary>
+    private readonly RepoContextRetrievalReadinessState? _readiness;
+
+    /// <summary>
+    /// The smallest corpus at which another threshold-crossing training may be
+    /// attempted, or <c>0</c> when none has been declined yet.
+    /// <para>
+    /// This exists only to bound the pathological case, and it is deliberately not
+    /// the trigger. A corpus at or above
+    /// <see cref="RepoContextAnnOptions.MinimumTrainingCount"/> can still resolve
+    /// to fewer than two partitions - an explicit
+    /// <see cref="RepoContextAnnOptions.PartitionCount"/> of one, or a minimum set
+    /// low enough that the automatic count rounds to one - and such a training
+    /// declines again, leaving the trigger condition exactly as it found it. Without
+    /// this, every maintenance turn would retrain and the stuck state would have
+    /// been traded for a hot one. Doubling caps the attempts at one per doubling of
+    /// the corpus, so an activation makes at most a logarithmic number of them, and
+    /// it costs the healthy case nothing because that case succeeds on the first.
+    /// </para>
+    /// <para>
+    /// It is activation-local and is not persisted, and that is correct rather than
+    /// a shortcut: the state it guards against is re-derived from the index on every
+    /// open, so a restart that forgets it costs exactly one training attempt. A
+    /// persisted counter would instead have to be right forever, and this defect
+    /// exists because a trigger was keyed on a counter that could not be.
+    /// </para>
+    /// </summary>
+    private int _nextPartitionAttemptCount;
 
     /// <summary>Creates the handle. Nothing is opened until the first advance.</summary>
     /// <param name="repoId">The repository this index covers. Must not be <see langword="null"/>.</param>
@@ -58,6 +135,23 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// <param name="options">The plane's shaping and maintenance options. Must not be <see langword="null"/>.</param>
     /// <param name="keyPrefix">The key prefix this index owns exclusively. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger the build-state report is written to. Must not be <see langword="null"/>.</param>
+    /// <param name="partitioning">
+    /// The reporter the plane's partitioning state is metered on, or
+    /// <see langword="null"/> to publish nothing. Null is for a test driving the
+    /// handle directly; the registry always supplies one, so no deployment runs
+    /// without the instrument.
+    /// </param>
+    /// <param name="load">
+    /// The reporter durable-load attempts are metered on, or <see langword="null"/>
+    /// to publish nothing. Null is for a test driving the handle directly; the
+    /// registry always supplies one, so no deployment runs without the instrument.
+    /// </param>
+    /// <param name="readiness">
+    /// The shared retrieval readiness state this handle reports a terminal
+    /// saturation episode to, or <see langword="null"/> to report nothing. Null is
+    /// for a test driving the handle directly; the registry supplies the host's
+    /// singleton.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public RepoContextAnnIndexHandle(
         string repoId,
@@ -66,7 +160,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         IVectorIndexStore store,
         RepoContextAnnOptions options,
         string keyPrefix,
-        ILogger logger)
+        ILogger logger,
+        RepoContextAnnPartitioningReporter? partitioning = null,
+        RepoContextAnnIndexLoadReporter? load = null,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(source);
@@ -82,7 +179,37 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         _options = options;
         _durableOptions = options.ToDurableOptions(space, keyPrefix);
         _logger = logger;
+        _partitioning = partitioning;
+        _load = load;
+        _readiness = readiness;
+        _openSaturation = new RepoContextAnnOpenSaturationLatch(
+            options.TimeProvider,
+            options.MaxConsecutiveOpenRefusals,
+            options.OpenRefusalTerminalPeriod);
     }
+
+    /// <summary>
+    /// What the open has most recently observed about admission:
+    /// <see cref="RepoContextAnnOpenSaturationState.Clear"/> when no unbroken run of
+    /// refusals is in progress, <see cref="RepoContextAnnOpenSaturationState.Refusing"/>
+    /// while one is inside its bounds, and
+    /// <see cref="RepoContextAnnOpenSaturationState.Unavailable"/> once it has passed
+    /// them.
+    /// <para>
+    /// <b>Read without taking the turn</b>, and safe to do so: the underlying run is
+    /// held in a single volatile field whose sentinel value is the "no run" state, so
+    /// a reader racing the open cannot observe a started run with an unset start time
+    /// and mistake a first refusal for a breached elapsed bound. Wiring a health
+    /// surface straight to this property is the intended use.
+    /// </para>
+    /// </summary>
+    public RepoContextAnnOpenSaturationState OpenSaturation => _openSaturation.State;
+
+    /// <summary>
+    /// How many admission refusals the open has taken in an unbroken run. Zero once
+    /// any attempt banks progress, so it measures a stall rather than a lifetime.
+    /// </summary>
+    public int ConsecutiveOpenRefusals => _openSaturation.ConsecutiveRefusals;
 
     /// <summary>
     /// Whether the index can answer a query right now. Read without taking the
@@ -114,25 +241,99 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// <param name="cancellationToken">Cancels the step.</param>
     /// <returns>Progress after the step.</returns>
     /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
-    public async Task<VectorIndexBuildProgress> AdvanceAsync(CancellationToken cancellationToken)
+    public Task<VectorIndexBuildProgress> AdvanceAsync(CancellationToken cancellationToken)
+        => AdvanceAsync(phase: null, cancellationToken);
+
+    /// <summary>
+    /// Advances the build by one step, reporting the phase each part of the step
+    /// ran in through <paramref name="phase"/>.
+    /// </summary>
+    /// <param name="phase">
+    /// The caller's phase probe, or <see langword="null"/> when the caller does not
+    /// meter the step. Written only on this call, so it never carries a phase some
+    /// other caller's concurrent step was in.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the step.</param>
+    /// <returns>Progress after the step.</returns>
+    /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
+    /// <remarks>
+    /// <para>
+    /// <b>The probe is written twice, and the second write is the load-bearing
+    /// one.</b> Before the step it records the phase the index is ENTERING, which
+    /// is the honest label for a step that completes: it says what the step did. If
+    /// the step throws it is rewritten from the index's own phase AT THE FAULT
+    /// SITE, which is strictly better than the entry reading because a step entered
+    /// at <see cref="VectorIndexBuildPhase.Training"/> trains and then persists in
+    /// the same call - the index moves itself to
+    /// <see cref="VectorIndexBuildPhase.Persisting"/> between the two - so a
+    /// persist fault on a training-entry step is attributed to the persist rather
+    /// than to the training. That distinction is the whole point of the dimension
+    /// (issue #2855): the persist writes into the same tree a corpus-read defect
+    /// would already have named, so mislabelling it as training or ingest is what
+    /// would let one defect be scored as two.
+    /// </para>
+    /// <para>
+    /// The catch-up branch marks <see cref="RepoContextAnnBuildStepPhase.Reconciling"/>
+    /// only from inside its own fault handler, so a step that built AND caught up
+    /// successfully is still reported under the phase it built in rather than
+    /// under the maintenance that followed it.
+    /// </para>
+    /// </remarks>
+    public async Task<VectorIndexBuildProgress> AdvanceAsync(
+        RepoContextAnnBuildPhaseProbe? phase, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _turn.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            phase?.Enter(RepoContextAnnBuildStepPhase.Opening);
             var index = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            if (index is null)
+            {
+                // The open spent its budget and banked its progress. The step ends
+                // here, still in Opening, which is the honest phase: the index is
+                // opening and has not finished. Returning the unchanged progress
+                // rather than throwing is what lets the coordinator release its
+                // turn, answer its keep-alive, and resume on the next tick - the
+                // entire point of bounding the open. See
+                // RepoContextAnnOptions.OpenSliceBudget.
+                return _progress;
+            }
+
             if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
             {
                 var restoredAtOpen = index.Progress.RestoredFromDurableState;
-                _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
+                phase?.Enter(MapStepPhase(index.Progress.Phase));
+                try
+                {
+                    _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The index has moved its own phase as far as it got, so this
+                    // reading places the fault inside the step rather than at the
+                    // step's entry. See the remarks above.
+                    phase?.Enter(MapStepPhase(index.Progress.Phase));
+                    throw;
+                }
+
                 if (_progress.Phase == VectorIndexBuildPhase.Ready)
                 {
                     // This process streamed the corpus itself, so it knows what the
                     // index covers - unless the index it resumed was restored
                     // part-built, in which case an earlier process streamed some of
                     // it and only the probe can confirm the join.
-                    await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
-                    MarkServing(index);
+                    try
+                    {
+                        await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
+                        MarkServing(index);
+                        RecordPartitioningState();
+                    }
+                    catch
+                    {
+                        phase?.Enter(RepoContextAnnBuildStepPhase.Reconciling);
+                        throw;
+                    }
                 }
 
                 return _progress;
@@ -142,8 +343,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // idempotent and completes in one step. Reaching Ready at OPEN means the
             // index came off durable state, so the probe is the only way to learn
             // whether the store of record has moved on since.
+            phase?.Enter(RepoContextAnnBuildStepPhase.Reconciling);
             await CatchUpAsync(index, probeSource: true, cancellationToken).ConfigureAwait(false);
             MarkServing(index);
+            RecordPartitioningState();
             return _progress;
         }
         finally
@@ -153,10 +356,61 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     }
 
     /// <summary>
+    /// Projects the index's own build phase onto the phase this plane reports.
+    /// </summary>
+    /// <param name="phase">The phase the durable index is in.</param>
+    /// <returns>The reported phase.</returns>
+    /// <remarks>
+    /// <see cref="VectorIndexBuildPhase.NotStarted"/> maps onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Ingesting"/> because the step taken
+    /// from it counts the source, which is a read of the same corpus by the same
+    /// path - so a fault there is an ingest-read fault however the index labels the
+    /// phase it was in. <see cref="VectorIndexBuildPhase.Ready"/> maps onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Persisting"/> rather than onto
+    /// <see cref="RepoContextAnnBuildStepPhase.Reconciling"/>, because this mapping
+    /// is only ever applied INSIDE a build step: an index reporting Ready there has
+    /// reached it during its own persist and has not finished that persist yet.
+    /// Reconciling is written explicitly by the two catch-up paths, which is the
+    /// only place it is true.
+    /// </remarks>
+    private static RepoContextAnnBuildStepPhase MapStepPhase(VectorIndexBuildPhase phase) => phase switch
+    {
+        VectorIndexBuildPhase.Training => RepoContextAnnBuildStepPhase.Training,
+        VectorIndexBuildPhase.Persisting => RepoContextAnnBuildStepPhase.Persisting,
+        VectorIndexBuildPhase.Ready => RepoContextAnnBuildStepPhase.Persisting,
+        _ => RepoContextAnnBuildStepPhase.Ingesting,
+    };
+
+    /// <summary>
     /// Drives <see cref="AdvanceAsync(CancellationToken)"/> until the index is
-    /// serving. Each step is bounded and the turn is released between steps, so a
-    /// query issued while this runs is answered by the fall-back path immediately
-    /// rather than queueing behind the build.
+    /// serving. The turn is released between steps.
+    /// <para>
+    /// A concurrent <see cref="SearchAsync"/> does not wait on the build: it reads
+    /// <see cref="IsServing"/> without taking the turn and falls back to the
+    /// exact scan while a build runs. What a long step does block is every other
+    /// caller of this handle - the coordinator's own pump, and the arming path.
+    /// See <see cref="RepoContextAnnOptions.IngestSliceBudget"/> and issue #2483.
+    /// </para>
+    /// <para>
+    /// <b>The open is bounded in time as well, and separately.</b> The vector-count
+    /// and wall-clock budgets named above govern the INGEST portion of a step only:
+    /// they are consulted once the index is open. <c>OpenAsync</c> - which restores
+    /// or rebuilds the durable index BEFORE any of them is read - carries its own
+    /// ceiling, <see cref="RepoContextAnnOptions.OpenSliceBudget"/>. An open that
+    /// reaches it banks what it walked, returns the turn, and continues on the next
+    /// step, so a cold open over a large plane is sliced rather than run to
+    /// completion inside one non-reentrant coordinator turn.
+    /// </para>
+    /// <para>
+    /// <b>The history matters, because this paragraph has been wrong before.</b> It
+    /// once asserted a time bound that did not exist, and issue #3130 spent its
+    /// investigation looking PAST the open because the documentation said the open
+    /// could not be where the time was going - a cold open was in fact holding the
+    /// turn for over thirty minutes. Bounding it had to wait on the load being
+    /// resumable (#2953), because a bound that discards its progress converts a
+    /// slow open into one that never finishes. Both halves are now in place; if
+    /// either is removed, this paragraph is false again.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the build between steps.</param>
     /// <exception cref="ObjectDisposedException">The handle has been disposed.</exception>
@@ -311,6 +565,31 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                     continue;
                 }
 
+                if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
+                {
+                    // THE BUILD IS STREAMING THE STORE OF RECORD RIGHT NOW, AND
+                    // THIS WRITE IS ALREADY IN IT. Applying it here anyway costs
+                    // far more than it looks: while the index is ingesting it is
+                    // one untrained cell, and any write the build did not make
+                    // itself ends the cell's append-only property, so the next
+                    // ingest checkpoint rewrites EVERY chunk of it instead of
+                    // appending. The writer hands a batch over once per build
+                    // slice, so the build pays a whole-index rewrite per slice
+                    // and its write-ahead volume becomes quadratic in corpus
+                    // size rather than linear. That is issue #2691, where this
+                    // tree reached 25 GB of log while its largest sibling
+                    // reached 185 MB.
+                    //
+                    // Recording the identifier rather than dropping it is what
+                    // keeps this exact: the build re-reads anything it has not
+                    // reached, and CatchUpAsync replays these once the build is
+                    // Ready, so an identifier the build had already passed is
+                    // refreshed instead of being left stale.
+                    (_deferredWrites ??= new HashSet<string>(StringComparer.Ordinal))
+                        .Add(update.VectorId);
+                    continue;
+                }
+
                 await index.UpsertAsync(update.VectorId, update.Vector, cancellationToken).ConfigureAwait(false);
                 applied++;
             }
@@ -381,36 +660,344 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         Volatile.Write(ref _serving, false);
     }
 
-    private async Task<DurableVectorIndex> OpenAsync(CancellationToken cancellationToken)
+    private async Task<DurableVectorIndex?> OpenAsync(CancellationToken cancellationToken)
     {
         if (_index is not null)
         {
             return _index;
         }
 
+        // RETAINED ACROSS A FAULTED LOAD. The factory builds into a local and
+        // returns only on success, so a load that threw used to discard the
+        // partially-built identifier mapping along with the instance holding it -
+        // and the next phase tick reissued the entire O(corpus) key-map walk. On a
+        // tree whose leaves are slow to activate that regenerates the identical
+        // demand on every attempt, which is the amplification half of #2953.
+        // Keeping the instance is what lets the walk bank its progress.
+        //
         // Full rather than lazy: a lazily loaded index is read-only by contract, and
         // this one has to be maintained in place as vectors are written.
-        _index = await DurableVectorIndex
-            .OpenAsync(_store, _source, _durableOptions, VectorIndexLoadMode.Full, cancellationToken)
-            .ConfigureAwait(false);
+        var resuming = _loading is not null && _loading.HasBankedLoadProgress;
+        _loading ??= DurableVectorIndex.CreateUnloaded(
+            _store, _source, _durableOptions, VectorIndexLoadMode.Full);
+
+        // THE OPEN IS BOUNDED IN TIME, AND THIS IS ISSUE #3130's ITEM 1.
+        //
+        // Everything below this line used to run for as long as it ran, inside a
+        // single non-reentrant coordinator turn, with the keep-alive reminder and
+        // every arming call queued behind it - measured at over thirty minutes on
+        // the acceptance rig. The ingest budget does not reach here: it is read
+        // once the index is already open.
+        //
+        // Two token sources rather than one because the two cancellations mean
+        // opposite things and the handler below has to tell them apart. The budget
+        // source is the one this method owns; the linked source is what the load
+        // actually sees, so a caller cancelling still cancels. Both are skipped
+        // entirely when the bound is disabled, so the unbounded configuration pays
+        // nothing for a feature it declined.
+        //
+        // THE DEADLINE IS ARMED ON PROGRESS, NOT ON ELAPSED TIME ALONE, AND THAT IS
+        // ISSUE #3284. A bare timer measured wall-clock that includes queueing for a
+        // WAL replay permit - time in which the walk can bank nothing, since it banks
+        // position per entry and an entry cannot be read before its leaf activates -
+        // so under permit saturation every slice was guaranteed to expire having
+        // banked zero, and each expiry enqueued another waiter behind the queue that
+        // caused it. See RepoContextAnnOpenSliceDeadline.
+        var budget = _options.OpenSliceBudget;
+        using var deadline = budget > TimeSpan.Zero
+            ? new RepoContextAnnOpenSliceDeadline(
+                budget,
+                _options.MaxOpenSliceExtensions,
+                () => _loading?.LoadedKeyCount ?? 0,
+                _options.TimeProvider)
+            : null;
+        using var linked = deadline is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+
+        try
+        {
+            // CLASSIFIED BULK FOR THE WHOLE WALK (issue #3284). The key walk is an
+            // O(corpus) fan-out that activates cold leaves in bulk, which is exactly
+            // the load that filled the replay permit queue measured on the incident.
+            // The class flows ambiently on RequestContext, so every leaf the walk
+            // reaches inherits it without knowing the seam exists, and a saturated
+            // gate turns this walk away one full ceiling's worth of queue before it
+            // starts refusing foreground reads. It can only ever make this caller
+            // MORE likely to be refused; it is never a priority boost.
+            using var admission = LatticeReplayAdmissionContext.BeginBulkScope();
+
+            // The deadline reaches the RESUMABLE key walk only; the caller's token
+            // governs the load as a whole. Passing the deadline to both would bound
+            // the restore too, and the restore banks nothing when interrupted - so
+            // an index whose restore exceeds one slice would restart it every
+            // attempt and could never open. See DurableVectorIndex.LoadOrResumeAsync.
+            await _loading
+                .LoadOrResumeAsync(linked?.Token ?? cancellationToken, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+            when (deadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // THE BUDGET EXPIRED, WHICH IS NOT A FAULT AND MUST NOT BE COUNTED AS
+            // ONE. The distinction is read from the two sources rather than from
+            // the exception, which carries no way to tell the difference: the
+            // deadline fired and the caller's token did not, so this is the bound
+            // working. The instance is deliberately kept - its banked progress is
+            // the whole reason the bound is safe - and the next tick resumes past
+            // it. See RepoContextAnnIndexLoadOutcome.Deferred for why folding this
+            // into Faulted would reproduce the very wedge signal that diagnosed
+            // this defect.
+            // ONE ARM IS RECORDED PER ATTEMPT, SO THE DECISION COMES FIRST.
+            // Recording Deferred here and then escalating would count a single
+            // attempt under two arms and break the partition the snapshot claims.
+            if (RecordEmptyOpenSliceAndShouldEscalate())
+            {
+                // Recorded HERE and not by the fault arm below, which cannot see
+                // this: an exception thrown from inside a catch clause is not
+                // caught by a sibling clause of the same try. Same reasoning as
+                // that arm's own "record before the rethrow" note.
+                _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+                throw new InvalidOperationException(
+                    $"The repository-context approximate index for '{_repoId}' in space "
+                    + $"{_space.ModelId}/{_space.Dimension} reached its {budget} open budget "
+                    + $"(extended up to {_options.MaxOpenSliceExtensions} further period(s) whenever a "
+                    + $"slice banked nothing) {MaxEmptyOpenDeferrals} times in succession without loading "
+                    + "a single identifier mapping, so the open cannot make progress and would retry for "
+                    + $"ever. Raise {RepoContextAnnOptions.OpenSliceBudgetSecondsVariable} above the time "
+                    + $"one store read takes, raise {RepoContextAnnOptions.MaxOpenSliceExtensionsVariable} "
+                    + "if the leaves this walk activates are merely slow, or set the budget to zero to "
+                    + "open unbounded.");
+            }
+
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Deferred);
+
+            _logger.LogDebug(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} reached its "
+                + "{Budget} open budget and yielded; the progress it banked is resumed on the next tick.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                budget);
+
+            return null;
+        }
+        catch (LatticeSaturatedException ex)
+        {
+            // THE ADMISSION BOUND REFUSED THIS WALK, WHICH IS NOT A FAULT AND MUST
+            // NOT BE COUNTED AS ONE (issue #3284). Without this arm the refusal is
+            // not an OperationCanceledException, so it falls through to the fault
+            // arm below and is recorded as Faulted - which is precisely the
+            // misattribution the reason-value split at the leaf activation counter
+            // exists to prevent, left unapplied one layer up. The consequence is
+            // not cosmetic: it makes the load counter's faulted arm rise BECAUSE
+            // the admission bound started working, so a rise, a fall, and no
+            // change would each be consistent with the fix having worked and with
+            // it having made things worse.
+            //
+            // The instance is deliberately kept. A refused walk banked whatever it
+            // had already read, exactly as a deferred one does, and the next tick
+            // resumes past it.
+            //
+            // THE REFUSAL STILL COUNTS TOWARD THE EMPTY-SLICE ESCALATION, and that
+            // is load-bearing rather than tidy. EnsureBuiltAsync loops until the
+            // handle serves, so a walk refused on every attempt banks nothing on
+            // every attempt and would retry for ever - reintroducing, inside the
+            // fix for the bound, exactly the unbounded retry issue #3130 removed.
+            // Sharing one counter with the deferral arm is what makes that
+            // impossible to regress independently.
+            //
+            // One arm per attempt either way: the escalation rethrows the original
+            // saturation rather than recording a different outcome, so the type
+            // (and any upstream backoff keyed to it) survives and the faulted arm
+            // is never touched by a refusal on any path through this clause.
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Refused);
+
+            // THE REFUSAL LOOP NOW HAS A TERMINAL STATE (issue #3286). The
+            // escalation above bounds ONE ATTEMPT; it does not bound the loop,
+            // because EnsureBuiltAsync catches nothing and the coordinator simply
+            // ticks again. Under sustained saturation that produced a refusal
+            // count rising for ever against successful opens pinned at zero, with
+            // every reading of it equally consistent with a large, healthy, slow
+            // cold open. The latch turns that into a state, and the state reaches
+            // readiness, so "still arming" and "will not arm at this capacity"
+            // stop being the same observation.
+            if (_openSaturation.RecordRefusal() == RepoContextAnnOpenSaturationState.Unavailable
+                && _readiness?.MarkSaturationUnavailable() == true)
+            {
+                // Once per episode entered, not once per refusal: the transition is
+                // the event, and logging every refusal at Warning would bury it
+                // under the noise it exists to summarise.
+                _logger.LogWarning(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} has "
+                    + "been refused admission on {Refusals} consecutive open attempts over {RefusedFor} "
+                    + "without banking a single identifier mapping, so semantic retrieval is reported "
+                    + "UNAVAILABLE-SATURATED rather than arming: at the present capacity this plane will "
+                    + "not arm, and the remedy is capacity rather than patience. The open keeps retrying "
+                    + "and this clears by itself once admission recovers. Bounds are "
+                    + "{CountVariable} and {PeriodVariable}.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    _openSaturation.ConsecutiveRefusals,
+                    _openSaturation.RefusedFor,
+                    RepoContextAnnOptions.MaxConsecutiveOpenRefusalsVariable,
+                    RepoContextAnnOptions.OpenRefusalTerminalPeriodSecondsVariable);
+            }
+
+            if (RecordEmptyOpenSliceAndShouldEscalate())
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} was "
+                    + "refused admission to the WAL replay permit queue {Attempts} times in succession "
+                    + "without banking a single identifier mapping. The silo has been saturated for the "
+                    + "whole of that window; the open is abandoning this attempt rather than retrying for "
+                    + "ever.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    MaxEmptyOpenDeferrals);
+                throw;
+            }
+
+            _logger.LogDebug(
+                ex,
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} was refused "
+                + "admission to the WAL replay permit queue and yielded; the progress it banked is resumed on "
+                + "the next tick.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
+
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Recorded before the rethrow so the fault arm cannot be lost to the
+            // propagation, and so faults and resumptions are counted on the same
+            // path. The instance is deliberately NOT cleared: its banked progress
+            // is what the next attempt resumes from.
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+            throw;
+        }
+
+        _load?.Record(resuming
+            ? RepoContextAnnIndexLoadOutcome.Resumed
+            : RepoContextAnnIndexLoadOutcome.Fresh);
+
+        // The open completed, so whatever admission refusals preceded it are behind
+        // a walk that finished. Clearing on success as well as on progress matters
+        // for the plane that was refused every slice and then admitted on the last
+        // one: that walk banks its remaining mappings and completes in a single
+        // attempt, so the progress path above is never reached for it.
+        ClearOpenSaturation();
+
+        _index = _loading;
+        _loading = null;
         _progress = _index.Progress;
 
         _logger.LogInformation(
             "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} opened in phase "
-            + "{Phase} holding {VectorsIndexed} vectors (restored from durable state: {Restored}).",
+            + "{Phase} holding {VectorsIndexed} vectors (restored from durable state: {Restored}, "
+            + "resumed a previously faulted load: {Resumed}).",
             _repoId,
             _space.ModelId,
             _space.Dimension,
             _progress.Phase,
             _progress.VectorsIndexed,
-            _progress.RestoredFromDurableState);
+            _progress.RestoredFromDurableState,
+            resuming);
 
         return _index;
+    }
+
+    /// <summary>
+    /// Accounts one open attempt that yielded without completing, and reports
+    /// whether the handle has now yielded <see cref="MaxEmptyOpenDeferrals"/> times
+    /// in succession having banked nothing - which is the one way a bounded open
+    /// can wedge, and so must escalate rather than retry for ever.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Deliberately shared by every yielding arm</b> - the slice-budget deferral
+    /// and the admission refusal alike. <c>EnsureBuiltAsync</c> loops until the
+    /// handle serves, so every yield that banks at least one mapping makes that
+    /// loop terminate, which is the normal case and why a cold open over a large
+    /// plane is merely sliced. A yield that can never bank anything - a budget too
+    /// small to read a single record, or a silo that refuses admission on every
+    /// attempt - makes the loop spin for ever, having reproduced exactly the wedge
+    /// issue #3130 exists to remove. An arm that returned without passing through
+    /// here would reintroduce that unbounded retry silently, so there is one
+    /// counter and one place that advances it.
+    /// </para>
+    /// <para>
+    /// The counter is PRESENT-TENSE and is cleared by any attempt that advances,
+    /// deliberately mirroring
+    /// <c>VectorIndexBuildProgress.EmptyDeadlinesSinceLastAdvance</c>. A lifetime
+    /// tally would be the wrong shape for the same reason documented there: a plane
+    /// that took a few empty slices early and then advanced perfectly would go on
+    /// reporting a wedge for ever.
+    /// </para>
+    /// </remarks>
+    /// <returns><see langword="true"/> when the caller must escalate.</returns>
+    private bool RecordEmptyOpenSliceAndShouldEscalate()
+    {
+        var loaded = _loading?.LoadedKeyCount ?? 0;
+        if (loaded > _lastOpenKeyCount)
+        {
+            _lastOpenKeyCount = loaded;
+            _emptyOpenDeferrals = 0;
+
+            // AN ATTEMPT THAT BANKED SOMETHING PROVES ADMISSION IS WORKING, so the
+            // refusal run ends here too. Without this a walk that advances on every
+            // attempt and is refused on every attempt - which is converging, not
+            // wedged - would accumulate refusals until it declared an outage it was
+            // in the middle of recovering from.
+            ClearOpenSaturation();
+            return false;
+        }
+
+        return ++_emptyOpenDeferrals >= MaxEmptyOpenDeferrals;
+    }
+
+    /// <summary>
+    /// Ends any open refusal run and, if a terminal saturation episode was open,
+    /// returns readiness to arming. Called from every path that demonstrates the
+    /// open is progressing again.
+    /// </summary>
+    private void ClearOpenSaturation()
+    {
+        if (!_openSaturation.Clear())
+        {
+            return;
+        }
+
+        if (_readiness?.ClearSaturationUnavailable() == true)
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is being "
+                + "admitted again, so semantic retrieval is reported as arming rather than "
+                + "unavailable-saturated.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
+        }
     }
 
     private async Task CatchUpAsync(
         DurableVectorIndex index, bool probeSource, CancellationToken cancellationToken)
     {
+        // WRITES DEFERRED DURING THE BUILD ARE REPLAYED HERE, and this is taken
+        // before the probe's early exit below rather than after it. That exit
+        // reasons that "anything written since arrives through the writer's
+        // write-through seam" - which is precisely the seam ApplyWriteAsync now
+        // defers, so leaving the drain behind it would strand every deferred
+        // write on the path the build's own process takes.
+        var deferred = _deferredWrites;
+        _deferredWrites = null;
+
         // ONLY AN INDEX THIS PROCESS DID NOT STREAM NEEDS THE SHORTFALL PROBE.
         // The probe is an O(corpus) key walk whose only job is to decide whether a
         // persisted index is BEHIND the store of record. When this activation
@@ -418,7 +1005,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // anything written since arrives through the writer's write-through seam,
         // so the walk is pure cost - and it is the single most timeout-prone call
         // in the build, which took the whole build down with it (#1844).
-        if (!probeSource)
+        if (!probeSource && deferred is null)
         {
             await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
             return;
@@ -438,21 +1025,31 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // generous reconnect budget. Treating exhaustion as "unknown, therefore
         // possibly behind" keeps the build going down the path that repairs, which
         // is the safe direction and the one the upper-bound case already takes.
+        //
+        // There are now two ways to be unknown and they are handled identically. An
+        // EnumerationAbortedException is the store losing the enumerator; a
+        // RepoContextCountBudgetExceededException is the source declining to spend
+        // more wall clock on the walk (#2447). The distinction matters in a log line
+        // and nowhere else: neither yields a figure, and a missing figure has exactly
+        // one safe reading here.
         var behind = true;
-        try
+        if (deferred is null)
         {
-            var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
-            behind = expected > index.Count;
-        }
-        catch (EnumerationAbortedException ex)
-        {
-            _logger.LogInformation(
-                ex,
-                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
-                + "source within its reconnect budget; treating the persisted index as possibly behind and repairing.",
-                _repoId,
-                _space.ModelId,
-                _space.Dimension);
+            try
+            {
+                var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
+                behind = expected > index.Count;
+            }
+            catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
+                    + "source within its budget; treating the persisted index as possibly behind and repairing.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension);
+            }
         }
 
         if (!behind)
@@ -467,8 +1064,14 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index.TryGetKey(entry.Id, out _))
+            if (index.TryGetKey(entry.Id, out _)
+                && (deferred is null || !deferred.Contains(entry.Id)))
             {
+                // Present and not deferred: the build read it, so it is current.
+                // A deferred identifier is refreshed even when present, because
+                // that is exactly the case the build cannot have picked up - it
+                // had already streamed past that identifier when the write
+                // arrived.
                 continue;
             }
 
@@ -499,6 +1102,63 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     private async Task MaintainAsync(DurableVectorIndex index, CancellationToken cancellationToken)
     {
+        // THRESHOLD CROSSING FIRST, and it is a different question from drift.
+        // Drift asks "does the partitioning still describe the corpus"; this asks
+        // "is there now enough corpus to partition at all". An index that declined
+        // to partition can only ever be answered by the second, and until issue
+        // #2706 only the first was asked - so a plane that declined on an empty
+        // corpus stayed unpartitioned however large the corpus later grew.
+        if (ShouldPartition(index))
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is training a "
+                + "partitioning for {Count} vectors: an earlier training declined because the corpus was below "
+                + "the minimum training count of {Minimum}, and the corpus has since crossed it.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                index.Count,
+                _options.MinimumTrainingCount);
+
+            var attemptedAt = index.Count;
+            await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
+            _pendingFlush = 0;
+            _progress = index.Progress;
+
+            var partitioned = index.Status.PartitionCount > 0;
+            _partitioning?.RecordRepartition(partitioned);
+            if (partitioned)
+            {
+                _logger.LogInformation(
+                    "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
+                    + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now "
+                    + "approximate.",
+                    _repoId,
+                    _space.ModelId,
+                    _space.Dimension,
+                    _progress.VectorsIndexed,
+                    _progress.PartitionsTotal);
+                return;
+            }
+
+            // The corpus met the minimum and still resolved to fewer than two
+            // partitions, so repeating the attempt at this size would burn a full
+            // training pass per maintenance turn to reach the same answer. See
+            // _nextPartitionAttemptCount.
+            _nextPartitionAttemptCount = attemptedAt >= int.MaxValue / 2 ? int.MaxValue : Math.Max(1, attemptedAt) * 2;
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} met the minimum "
+                + "training count of {Minimum} with {Count} vectors but still resolves to fewer than two "
+                + "partitions, so it stays exhaustive and exact; the next attempt waits for {Next} vectors.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                _options.MinimumTrainingCount,
+                attemptedAt,
+                _nextPartitionAttemptCount);
+            return;
+        }
+
         // Retraining first: it rewrites every partition and commits a fresh
         // generation, which subsumes the flush the pending updates would have done.
         // It is synchronous and expensive, and it runs here - on the maintenance turn
@@ -531,11 +1191,55 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the corpus has crossed the training minimum since a training
+    /// declined to partition it, so a partitioning should be trained now.
+    /// <para>
+    /// <b>Every clause is read from the index itself, and that is the point.</b>
+    /// This condition holds no memory of the decline that produced the state, and
+    /// is not allowed to: the deployment issue #2706 measured had been latched for
+    /// hours before the fix existed, so any trigger keyed on something recorded at
+    /// decline time would have been keyed on a value that deployment does not have
+    /// and never will. <c>Ready</c> with no partitioning and a corpus at or above
+    /// the minimum is the whole signature, it is observable from a cold start over
+    /// untouched durable state, and it is what makes the repair self-healing rather
+    /// than something an operator has to trigger.
+    /// </para>
+    /// </summary>
+    /// <param name="index">The index to judge.</param>
+    /// <returns><see langword="true"/> when a partitioning should be trained.</returns>
+    private bool ShouldPartition(DurableVectorIndex index)
+    {
+        // Phase Ready means the build pipeline ran to the end. It does NOT mean the
+        // pipeline produced a partitioning, and the gap between those two is exactly
+        // the state being repaired.
+        if (index.Progress.Phase != VectorIndexBuildPhase.Ready
+            || index.Status.PartitionCount > 0
+            || index.Count < _options.MinimumTrainingCount)
+        {
+            return false;
+        }
+
+        return index.Count >= _nextPartitionAttemptCount;
+    }
+
     private bool ShouldRetrain(DurableVectorIndex index)
     {
-        // Only a trained index can drift: an untrained one has no partitioning for
-        // the corpus to move away from, and retraining it would be a no-op that
-        // rewrote every record for nothing.
+        // Only a PARTITIONED index can drift: drift is the corpus moving away from
+        // a partitioning, so an index that holds none has nothing to move away from
+        // and no fraction of it is meaningful. That is why this guard reads
+        // VectorIndexState.Ready, which is reached only when PartitionCount is
+        // positive.
+        //
+        // What this must not be read as saying - and did say, until issue #2706 -
+        // is that retraining an unpartitioned index would be a no-op. For an index
+        // that declined to partition because the corpus was below the minimum
+        // training count, retraining once the corpus has grown past it is not a
+        // no-op, it is the entire remedy, and asserting otherwise is what kept a
+        // deployment answering every query by brute-force scan for 8.6 hours with a
+        // corpus 7.5x the threshold. That case is a threshold crossing rather than
+        // drift, it is unreachable from this predicate by construction, and it is
+        // ShouldPartition's to answer.
         if (index.Progress.Phase != VectorIndexBuildPhase.Ready
             || index.Status.State != VectorIndexState.Ready
             || index.Count <= 0
@@ -547,6 +1251,15 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         return index.UpdatesSinceTraining >= index.Count * _options.RetrainAfterUpdateFraction;
     }
 
+    /// <summary>
+    /// Meters what the plane's partitioning looks like now that a build has
+    /// finished, so the large-and-unpartitioned state is readable from a series
+    /// instead of from three correlated log lines.
+    /// </summary>
+    private void RecordPartitioningState() => _partitioning?.RecordPartitioning(
+        RepoContextAnnPartitioningReporter.Classify(
+            _progress.PartitionsTotal, _progress.VectorsIndexed, _options.MinimumTrainingCount));
+
     private void MarkServing(DurableVectorIndex index)
     {
         _progress = index.Progress;
@@ -556,13 +1269,35 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
 
         Volatile.Write(ref _serving, true);
+
+        // The latch is deliberately NOT conditioned on the partition count. A
+        // build that finished without partitioning still serves, exhaustively and
+        // exactly, and declining to latch would spin EnsureBuiltAsync forever
+        // against a corpus that is simply too small to partition. What must not
+        // survive the partition count being zero is the CLAIM: announcing
+        // approximate retrieval for an index holding no partitioning is the
+        // dishonest half, and it is the half that is fixed here.
+        if (_progress.PartitionsTotal > 0)
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
+                + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension,
+                _progress.VectorsIndexed,
+                _progress.PartitionsTotal);
+            return;
+        }
+
         _logger.LogInformation(
-            "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} is serving "
-            + "{VectorsIndexed} vectors across {Partitions} partitions; semantic retrieval is now approximate.",
+            "Repository-context index for {RepoId} in space {ModelId}/{Dimension} is serving "
+            + "{VectorsIndexed} vectors with no partitioning, so semantic retrieval stays exhaustive and exact. "
+            + "Training declined to partition this corpus; it is below the minimum training count or resolves "
+            + "to fewer than two partitions.",
             _repoId,
             _space.ModelId,
             _space.Dimension,
-            _progress.VectorsIndexed,
-            _progress.PartitionsTotal);
+            _progress.VectorsIndexed);
     }
 }

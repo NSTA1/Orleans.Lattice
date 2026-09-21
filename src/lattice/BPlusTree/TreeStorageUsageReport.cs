@@ -24,6 +24,34 @@ public readonly record struct TreeStorageUsageReport
     [Id(1)] public long WalRetainedBytes { get; init; }
 
     /// <summary>
+    /// Summed <b>physical</b> WAL bytes across the tree's partitions: every
+    /// byte the backend occupies on the tree's behalf, inclusive of
+    /// per-record framing and of dead (trimmed but not yet reclaimed)
+    /// payload. This, not <see cref="WalRetainedBytes"/>, is the figure that
+    /// answers "how much disk is this tree's WAL using", and it is the term
+    /// <see cref="TotalBytes"/> sums.
+    /// <para>
+    /// The gap between the two is real and is not error. A log-structured
+    /// backend marks a trimmed prefix dead and returns the space only when it
+    /// rewrites the segment, so dead bytes are a designed-in component of
+    /// occupancy whose steady-state size is set by the compaction policy -
+    /// under the file provider's defaults they may approach the live payload,
+    /// making this figure up to roughly twice
+    /// <see cref="WalRetainedBytes"/>. A growing gap that never closes means
+    /// dead space is stranded below the compaction threshold; a sawtooth
+    /// means the tree is reclaiming normally (issue #3107).
+    /// </para>
+    /// <para>
+    /// Falls back to the retained figure for a provider that does not support
+    /// physical accounting, which is exact rather than approximate for a
+    /// backend whose trim deletes rows outright and so carries no dead bytes.
+    /// A partition that answered neither contributes nothing and sets
+    /// <see cref="Partial"/>.
+    /// </para>
+    /// </summary>
+    [Id(8)] public long WalPhysicalBytes { get; init; }
+
+    /// <summary>
     /// Snapshot blob bytes, read from snapshot-store metadata (content
     /// length) without a full blob read. <c>0</c> when no checkpoint exists.
     /// </summary>
@@ -36,11 +64,18 @@ public readonly record struct TreeStorageUsageReport
     [Id(3)] public long LeafStateBytes { get; init; }
 
     /// <summary>
-    /// Sum of the three surfaces (<see cref="WalRetainedBytes"/> +
+    /// Sum of the three surfaces (<see cref="WalPhysicalBytes"/> +
     /// <see cref="SnapshotBytes"/> + <see cref="LeafStateBytes"/>). A
     /// surface that reports "unsupported" contributes <c>0</c> to the sum
     /// and sets <see cref="Partial"/>; the total is therefore a lower bound
     /// when <see cref="Partial"/> is <c>true</c>.
+    /// <para>
+    /// The WAL term is the <i>physical</i> total, not
+    /// <see cref="WalRetainedBytes"/>, because this figure exists to answer
+    /// how much storage the tree occupies and the retained total omits dead
+    /// bytes - a term that can approach the size of the live payload
+    /// (issue #3107).
+    /// </para>
     /// </summary>
     [Id(4)] public long TotalBytes { get; init; }
 

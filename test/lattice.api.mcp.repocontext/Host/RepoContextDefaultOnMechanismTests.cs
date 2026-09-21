@@ -27,6 +27,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// not to shadow any mechanism default, since a named-options override replaces
 /// the whole option set for that tree.
 /// </para>
+/// <para>
+/// <b>One deliberate exception, and it is named rather than quietly excluded.</b>
+/// The host now also pins <see cref="LatticeOptions.WalMaxRetainedBytes"/> on every
+/// tree. That knob is not a bounded-cold-start mechanism and could never have been
+/// default-on: it is a capacity quota whose only correct value is a fraction of the
+/// volume the WAL lives on, which a library cannot know and a container can. Leaving
+/// it disabled cost this deployment every reclaimable byte - on a measured run every
+/// tree reported <c>policy_disabled</c> and reclaimed zero. So this fixture wires the
+/// retention extension too, and asserts the ceiling <em>is</em> the host's, not the
+/// library's null. Every other knob below must still equal the library default.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class RepoContextDefaultOnMechanismTests
@@ -45,8 +56,8 @@ public sealed class RepoContextDefaultOnMechanismTests
 
     /// <summary>
     /// Wires the host exactly as <c>RepoContextHostBuilder</c> does with respect
-    /// to Lattice options - which is to say, only the per-tree compaction
-    /// overrides - and hands back the monitor a grain would read through.
+    /// to Lattice options - the per-tree compaction overrides and the per-tree WAL
+    /// byte ceiling - and hands back the monitor a grain would read through.
     /// </summary>
     private static (ServiceProvider Provider, IOptionsMonitor<LatticeOptions> Options) WireHost()
     {
@@ -54,7 +65,9 @@ public sealed class RepoContextDefaultOnMechanismTests
         services.AddOptions();
 
         IConfiguration configuration = new ConfigurationBuilder().Build();
-        new CollectingSiloBuilder(services, configuration).ConfigureRepoContextCompaction();
+        var silo = new CollectingSiloBuilder(services, configuration);
+        silo.ConfigureRepoContextCompaction();
+        silo.ConfigureRepoContextWalRetention(configuration);
 
         var provider = services.BuildServiceProvider();
         return (provider, provider.GetRequiredService<IOptionsMonitor<LatticeOptions>>());
@@ -124,6 +137,9 @@ public sealed class RepoContextDefaultOnMechanismTests
         // library's own default on every tree, churn tree or not. A future host
         // edit that pinned one of them - even to the same value - would be the
         // first step back towards a deployment that has to be configured.
+        //
+        // WalMaxRetainedBytes is deliberately NOT in this list any more; it is
+        // asserted separately below as the host's one WAL-capacity opinion.
         var (provider, monitor) = WireHost();
         using var _ = provider;
 
@@ -135,7 +151,6 @@ public sealed class RepoContextDefaultOnMechanismTests
                 Assert.That(options.WalGcInterval, Is.EqualTo(LatticeOptions.DefaultWalGcInterval), tree);
                 Assert.That(options.WalGcStartupDelay, Is.EqualTo(LatticeOptions.DefaultWalGcStartupDelay), tree);
                 Assert.That(options.WalGcMinInterval, Is.EqualTo(LatticeOptions.DefaultWalGcMinInterval), tree);
-                Assert.That(options.WalMaxRetainedBytes, Is.Null, tree);
                 Assert.That(options.LeafHydrationResidentBytes, Is.EqualTo(LatticeOptions.DefaultLeafHydrationResidentBytes), tree);
                 Assert.That(options.HotShardMinSkewRatio, Is.EqualTo(LatticeOptions.DefaultHotShardMinSkewRatio), tree);
                 Assert.That(options.HotShardConsolidationSkewRatio, Is.EqualTo(LatticeOptions.DefaultHotShardConsolidationSkewRatio), tree);
@@ -150,8 +165,35 @@ public sealed class RepoContextDefaultOnMechanismTests
     }
 
     [Test]
-    public void The_compose_file_configures_no_lattice_option_at_all()
+    public void The_wal_byte_ceiling_is_the_hosts_one_capacity_opinion()
     {
+        // The named exception to the rule above, asserted rather than assumed. A
+        // capacity quota is the one class of setting that CANNOT be default-on:
+        // its only correct value is a fraction of the volume the WAL lives on,
+        // which the library has no way to learn. The container does, so it is the
+        // layer that names the number - and leaving it unnamed is not neutral, it
+        // is a deployment that reclaims nothing.
+        var (provider, monitor) = WireHost();
+        using var _ = provider;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new LatticeOptions().WalMaxRetainedBytes, Is.Null,
+                "the library still ships the policy disabled; if that changes, this host "
+                + "wiring should be reconsidered rather than silently duplicating it");
+
+            foreach (var tree in RepoContextHostTrees.All)
+            {
+                Assert.That(
+                    monitor.Get(tree).WalMaxRetainedBytes,
+                    Is.EqualTo(RepoContextWalRetention.DefaultMaxRetainedBytes),
+                    tree);
+            }
+        });
+    }
+
+    [Test]
+    public void The_compose_file_configures_no_lattice_option_at_all()    {
         // The acceptance criterion, asserted against the file itself rather than
         // against an assumption about it. If a future change reaches for a
         // compose entry to switch a mechanism on, this fails and the mechanism's

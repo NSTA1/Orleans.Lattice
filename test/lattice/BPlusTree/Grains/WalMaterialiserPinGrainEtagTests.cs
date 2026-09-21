@@ -46,7 +46,7 @@ public sealed class WalMaterialiserPinGrainEtagTests
         });
 
         var grain = new WalMaterialiserPinGrain(context, legacy, options, logger: null, pinStorage: store);
-        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         return grain;
     }
 

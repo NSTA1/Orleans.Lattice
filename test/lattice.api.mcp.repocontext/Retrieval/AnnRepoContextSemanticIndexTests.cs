@@ -485,8 +485,62 @@ public sealed class AnnRepoContextSemanticIndexTests
         Assert.That(matches, Is.Empty,
             "A stall reaches keyword recall either way, but propagating it classifies the answer as "
             + "keyword.index_degraded - a broken index - when what is true is a plane that is still building. "
-            + "No matches is the same answer the predicted skip gives, and resolves to "
-            + "keyword.vector_plane_unavailable.");
+            + "No matches is the same answer the predicted skip gives. The query that pays the stall resolves to "
+            + "keyword.vector_plane_unavailable; every query after it resolves to "
+            + "keyword.exact_fallback_suppressed, because by then the breaker is withholding the gather.");
+    }
+
+    [Test]
+    public void An_untripped_breaker_reports_the_exact_fallback_as_available()
+    {
+        var index = Create(BootstrappingPlaneWithCorpus(0), ExactReturning(), DefaultBudget());
+
+        Assert.That(index.IsExactFallbackSuppressed(RepoId), Is.False);
+    }
+
+    [Test]
+    public async Task A_stalled_gather_makes_the_index_report_the_fallback_as_suppressed()
+    {
+        var breaker = new RepoContextExactScanBreaker();
+        var index = Create(BootstrappingPlaneWithCorpus(0), ExactThatStalls(), DefaultBudget(),
+            NullLogger<AnnRepoContextSemanticIndex>.Instance, breaker);
+
+        await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(index.IsExactFallbackSuppressed(RepoId), Is.True,
+                "The search service reads this to explain an empty result, so it has to track the breaker rather "
+                + "than restate configuration.");
+            Assert.That(index.IsExactFallbackSuppressed("other-repo"), Is.False,
+                "The breaker is scoped per repository, and so is the explanation. Reporting a global suppression "
+                + "would mislabel every other repository's empty result.");
+        });
+    }
+
+    [Test]
+    public async Task A_recovered_plane_makes_the_index_report_the_fallback_as_available_again()
+    {
+        var breaker = new RepoContextExactScanBreaker();
+        var index = Create(BootstrappingPlaneWithCorpus(0), ExactThatStalls(), DefaultBudget(),
+            NullLogger<AnnRepoContextSemanticIndex>.Instance, breaker);
+
+        await index.SearchAsync(RepoId, new float[] { 1f, 0f, 0f }, Space, 5, Ct);
+        Assume.That(index.IsExactFallbackSuppressed(RepoId), Is.True);
+
+        breaker.Reset(RepoId);
+
+        Assert.That(index.IsExactFallbackSuppressed(RepoId), Is.False,
+            "The value names a live condition, not a latch. A stale 'suppressed' would outlive its cause in "
+            + "exactly the way the breaker itself used to.");
+    }
+
+    [Test]
+    public void The_suppression_query_rejects_a_null_repository()
+    {
+        var index = Create(BootstrappingPlaneWithCorpus(0), ExactReturning(), DefaultBudget());
+
+        Assert.That(() => index.IsExactFallbackSuppressed(null!), Throws.ArgumentNullException);
     }
 
     [Test]

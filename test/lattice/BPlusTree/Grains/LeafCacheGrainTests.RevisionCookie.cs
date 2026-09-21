@@ -54,7 +54,9 @@ public partial class LeafCacheGrainTests
     /// </summary>
     private static (LeafCacheGrain cache, BPlusLeafGrain registryPopulator, IBPlusLeafGrain mockPrimary, GrainId leafId) CreateCacheWithRegistryPopulator(
         string testName,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        IBPlusLeafGrain? populatorSibling = null,
+        int populatorMaxLeafKeys = 128)
     {
         var unique = $"{testName}-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
@@ -62,7 +64,10 @@ public partial class LeafCacheGrainTests
         // Real leaf: publishes the same-silo cookie via writes. Its
         // GrainId must match the cache's PrimaryLeafId, which the
         // cache parses from its own grain key.
-        var registryPopulator = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
+        var registryPopulator = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(
+            replicaId: unique,
+            siblingStub: populatorSibling,
+            maxLeafKeys: populatorMaxLeafKeys);
 
         // Mock primary: returned by the cache's grain factory, so the
         // cache's cross-grain calls land on a substitute we can assert
@@ -352,7 +357,7 @@ public partial class LeafCacheGrainTests
         // Re-activate with no writes at all. Everything the leaf does here
         // runs on the activation path.
         var second = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
-        await ((IGrainBase)second).OnActivateAsync(CancellationToken.None);
+        await LeafActivationHarness.ActivateAsync(second, CancellationToken.None);
 
         // If this fails at Received(1): the primary re-activated and rebuilt
         // its projection, but the cache stayed on its snapshot. With no

@@ -157,12 +157,18 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes) =>
-        ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
+    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    {
+        await AwaitReplayBarrierAsync();
+        return await ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
+    }
 
     /// <inheritdoc />
-    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks) =>
-        ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    {
+        await AwaitReplayBarrierAsync();
+        return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+    }
 
     /// <summary>
     /// Applies one typed CRDT delta. Shared by the single-key entry point and
@@ -264,7 +270,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else if (hasExistingRow && !existingDeferred)
         {
-            typedState = shape.DeserializeState(existing.Value!);
+            typedState = shape.DeserializeState(StripStateForFold(existing.Value!));
         }
         else if (hasExistingRow)
         {
@@ -274,7 +280,7 @@ internal sealed partial class BPlusLeafGrain
             // the row and decode it so correctness never depends on the
             // invariant holding.
             Cache.TryGetRow(key, out existing);
-            typedState = shape.DeserializeState(existing.Value!);
+            typedState = shape.DeserializeState(StripStateForFold(existing.Value!));
         }
         else
         {
@@ -494,7 +500,7 @@ internal sealed partial class BPlusLeafGrain
 
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
-        if (batch is null && Cache.Count > options.MaxLeafKeys)
+        if (batch is null && IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
         }
@@ -562,6 +568,8 @@ internal sealed partial class BPlusLeafGrain
     public async Task<SplitResult?> ApplyCrdtDeltaManyAsync(
         List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
     {
+        await AwaitReplayBarrierAsync();
+
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(deltas);
@@ -605,7 +613,7 @@ internal sealed partial class BPlusLeafGrain
         // pushed the leaf over the bound.
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
-        if (Cache.Count > options.MaxLeafKeys)
+        if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
         }

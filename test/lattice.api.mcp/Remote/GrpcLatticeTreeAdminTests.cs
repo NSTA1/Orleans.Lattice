@@ -560,6 +560,49 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
+    public async Task AuditOrphanedLeavesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeOrphanedLeafReport
+        {
+            TreeId = "orders",
+            DryRun = true,
+            LeavesWalked = 4,
+            ResumeFrom = "olp1:2:",
+        });
+
+        var result = await Adapter(invoker).AuditOrphanedLeavesAsync("orders", "olp1:1:kYQ==");
+
+        Assert.Multiple(() =>
+        {
+            var request = (TreeAdminOrphanedLeafRequest)invoker.LastRequest!;
+            Assert.That(request.TreeId, Is.EqualTo("orders"));
+            Assert.That(request.ResumeFrom, Is.EqualTo("olp1:1:kYQ=="), "a token altered in transit resumes the pass in the wrong place");
+            Assert.That(result.LeavesWalked, Is.EqualTo(4));
+            Assert.That(result.DryRun, Is.True);
+            Assert.That(result.ResumeFrom, Is.EqualTo("olp1:2:"), "the next token must survive the return trip or the pass is unfinishable");
+            Assert.That(result.IsComplete, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task RepairOrphanedLeavesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeOrphanedLeafReport { TreeId = "orders", DryRun = false, LeavesWalked = 4 });
+
+        var result = await Adapter(invoker).RepairOrphanedLeavesAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            var request = (TreeAdminOrphanedLeafRequest)invoker.LastRequest!;
+            Assert.That(request.TreeId, Is.EqualTo("orders"));
+            Assert.That(request.ResumeFrom, Is.Null, "an omitted token must travel as null, not as an empty string a decoder would reject");
+            Assert.That(result.DryRun, Is.False);
+            Assert.That(result.ResumeFrom, Is.Null);
+            Assert.That(result.IsComplete, Is.True);
+        });
+    }
+
+    [Test]
     public async Task PlanWalMoveAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(_ => new TreeWalMovePlan

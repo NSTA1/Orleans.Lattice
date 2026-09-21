@@ -7,6 +7,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using Orleans.Storage;
 using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -58,7 +59,9 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
         ILeafCacheGrain Cache,
         GrainId LeafId,
         ArmableOptionsMonitor Options,
-        ITimerRegistry TimerRegistry);
+        ITimerRegistry TimerRegistry,
+        IGrainTimer Timer,
+        IGrainContext Context);
 
     private static Harness CreateGrain(
         int preWarmCount = 4,
@@ -72,12 +75,13 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
         // the coalescing flush timer actually arms and its callback can be
         // captured and fired deterministically.
         var timerRegistry = Substitute.For<ITimerRegistry>();
+        var grainTimer = Substitute.For<IGrainTimer>();
         timerRegistry.RegisterGrainTimer(
                 Arg.Any<IGrainContext>(),
                 Arg.Any<Func<Func<CancellationToken, Task>, CancellationToken, Task>>(),
                 Arg.Any<Func<CancellationToken, Task>>(),
                 Arg.Any<GrainTimerCreationOptions>())
-            .Returns(Substitute.For<IGrainTimer>());
+            .Returns(grainTimer);
         var services = new ServiceCollection();
         services.AddSingleton(timerRegistry);
         context.ActivationServices.Returns(services.BuildServiceProvider());
@@ -122,7 +126,7 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
             NullLogger<ShardRootGrain>.Instance,
             TestMutationObservers.NoObservers());
 
-        return new Harness(grain, state, cache, leafId, monitor, timerRegistry);
+        return new Harness(grain, state, cache, leafId, monitor, timerRegistry, grainTimer, context);
     }
 
     /// <summary>
@@ -282,5 +286,395 @@ public sealed class ShardRootGrainLeafAccessResilienceTests
         await harness.Grain.WarmUpAsync();
 
         await harness.Cache.Received(1).PreWarmAsync();
+    }
+
+    /// <summary>
+    /// Fires one coalescing tick against a failing write. Two harness quirks make
+    /// the ordering load-bearing: the tick no-ops unless the model is dirty (so a
+    /// fresh access has to precede it, or consecutive "failures" silently merge
+    /// into one run), and <c>ThrowOnWrite</c> is one-shot, so a persistent fault
+    /// has to be re-armed for every tick rather than once.
+    /// </summary>
+    /// <param name="harness">The grain under test.</param>
+    /// <param name="tick">The captured flush-timer callback.</param>
+    /// <param name="sequence">A per-tick discriminator, so each tick dirties the model afresh.</param>
+    /// <param name="fault">
+    /// The fault to arm. Defaults to a transient one: the failure <em>class</em> is what
+    /// decides whether suspension also requests deactivation, so a helper that hard-coded
+    /// one class would make the discriminating tests untestable through it.
+    /// </param>
+    private static async Task FireFailingTickAsync(
+        Harness harness,
+        Func<CancellationToken, Task> tick,
+        int sequence,
+        Func<Exception>? fault = null)
+    {
+        await harness.Grain.GetAsync($"k-fail-{sequence}");
+        harness.State.ThrowOnWrite = fault is null
+            ? new InvalidOperationException("database is locked")
+            : fault();
+        await tick(CancellationToken.None);
+    }
+
+    /// <summary>Fires one tick that is allowed to succeed, against a dirty model.</summary>
+    private static async Task FireHealthyTickAsync(
+        Harness harness,
+        Func<CancellationToken, Task> tick,
+        int sequence)
+    {
+        await harness.Grain.GetAsync($"k-ok-{sequence}");
+        await tick(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task A_stale_etag_conflict_drops_the_window_but_still_counts_toward_the_ceiling()
+    {
+        // Pins the composition of the two behaviours, which are individually
+        // correct and jointly easy to break: dropping the window (because a
+        // stale ETag can never be satisfied by retrying) must NOT swallow the
+        // failure, or the consecutive-failure ceiling never trips and the loop
+        // runs unbounded again - the exact defect this change removes.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await harness.Grain.GetAsync($"k-conflict-{i}");
+            harness.State.ThrowOnWrite = new InconsistentStateException(
+                "Version conflict (WriteState): ETag=5220.");
+            await tick(CancellationToken.None);
+        }
+
+        harness.Timer.Received(1).Dispose();
+    }
+
+    [Test]
+    public async Task A_transient_write_fault_keeps_the_window_for_the_next_tick()
+    {
+        // The opposite half of the classification. A transient fault may well
+        // succeed next tick, so the observations must be RETAINED and retried
+        // rather than discarded - otherwise a brief storage blip silently costs
+        // a window of the model for no reason.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        await harness.Grain.GetAsync("k-transient");
+        harness.State.ThrowOnWrite = new InvalidOperationException("database is locked");
+        await tick(CancellationToken.None);
+
+        // Note the in-memory snapshot is assigned BEFORE the write, so
+        // state.State is a witness to the attempt, not to durability. Write
+        // counts are the only honest discriminator here.
+        var writesAfterFailure = harness.State.WriteCount;
+
+        // No new access: the retained window alone must be enough to make the
+        // next tick flush. A dropped window would make this tick a no-op.
+        await tick(CancellationToken.None);
+
+        Assert.That(harness.State.WriteCount, Is.GreaterThan(writesAfterFailure),
+            "a transient fault must retain the window so the next tick retries it");
+    }
+
+    [Test]
+    public async Task A_stale_etag_conflict_does_not_retry_the_same_window()
+    {
+        // Negative image of the test above, and the reason the classification
+        // exists: a stale ETag will never be satisfied by rewriting the same
+        // window, so the retry must not happen at all.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        await harness.Grain.GetAsync("k-conflict");
+        harness.State.ThrowOnWrite = new InconsistentStateException(
+            "Version conflict (WriteState): ETag=5220.");
+        await tick(CancellationToken.None);
+
+        var writesAfterConflict = harness.State.WriteCount;
+
+        await tick(CancellationToken.None);
+
+        Assert.That(harness.State.WriteCount, Is.EqualTo(writesAfterConflict),
+            "a stale-ETag window is dropped, so the next tick has nothing to rewrite");
+    }
+
+    [Test]
+    public async Task The_model_flush_loop_suspends_itself_after_the_consecutive_failure_ceiling()
+    {
+        // Issue 2419: this loop re-armed on every failure and retried for the life
+        // of the activation, so a shard root whose ETag no longer matched its
+        // stored row rewrote the same doomed state every 30 s indefinitely.
+        var harness = CreateGrain();
+        // The flush timer is armed by the first tracked access, so prime one
+        // before capturing the callback.
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i);
+        }
+
+        harness.Timer.Received(1).Dispose();
+    }
+
+    [Test]
+    public async Task A_version_conflict_suspension_requests_deactivation_so_a_later_activation_re_reads()
+    {
+        // Issue 2419 bounded the wasted writes and deliberately stopped there, which
+        // left the shard root stuck: its own warning said pending state "will not
+        // reach storage until it is re-read" while nothing re-read it. A grain timer
+        // does not shorten an activation's lifetime, so a shard root held active by
+        // inbound traffic stayed broken indefinitely - as two vector-membership shard
+        // roots on a live container did, neither ever logging a recovery.
+        //
+        // Deactivation is the re-read: the next activation loads the stored row and
+        // its current ETag, and writes are accepted again.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState): ETag=5220."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task A_transient_fault_suspension_does_not_request_deactivation()
+    {
+        // The discriminating arm, and the reason the repair is conditional. A fresh
+        // activation does not fix a storage layer that is down - it would re-fail on
+        // the same storage - so deactivating for a transient fault would trade a
+        // bounded write stall for an availability cost, and could recycle every shard
+        // root on a tree at once while the fault lasted.
+        //
+        // Both tests drive the SAME loop to the SAME ceiling and differ only in the
+        // failure class, so a fix that deactivated unconditionally passes the test
+        // above and fails here.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new TimeoutException("storage operation timed out"));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task A_version_conflict_below_the_ceiling_does_not_request_deactivation()
+    {
+        // Deactivation must be caused by the loop GIVING UP, not by seeing a conflict.
+        // Without this, an implementation that deactivated on the first version
+        // conflict would pass both tests above while tearing down a shard root that
+        // was still retrying - and the flush loop's whole retry budget would become
+        // dead code.
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures - 1; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState): ETag=5220."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.DidNotReceive().Dispose();
+            harness.Context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        });
+    }
+
+    /// <summary>
+    /// Pins the discriminator to the exception <em>type</em>, against the conflict
+    /// shape the deployed provider actually raises.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sibling arms above all arm a message reading <c>ETag=5220</c>, which makes
+    /// it easy to read the repair as keying off a mismatched etag - and the local it
+    /// used to be named for said the same. It does not, and it must not.
+    /// <c>AdoNetGrainStorage</c>, which this repository's own deployments register,
+    /// raises every conflict through the message-only constructor and leaves
+    /// <c>StoredEtag</c> and <c>CurrentEtag</c> empty: measured on a real deployment,
+    /// 0 of 134 conflicts carried a non-empty etag, including conflicts on rows that
+    /// plainly existed. <c>TopologySeedPersist</c> documents the same measurement.
+    /// </para>
+    /// <para>
+    /// So a future tightening to <c>ex is InconsistentStateException ise
+    /// &amp;&amp; !string.IsNullOrEmpty(ise.StoredEtag)</c> reads as a narrowing and
+    /// acts as a disabling: it is false for every conflict AdoNet can raise, so no
+    /// shard root would ever be deactivated and the #2432 repair would become dead
+    /// code in production while every other arm in this fixture stayed green.
+    /// </para>
+    /// <para>
+    /// This fixture is the one that can observe that, because it is the only one that
+    /// drives a flush loop to <see cref="ShardRootGrain.MaxConsecutiveFlushFailures"/>
+    /// and asserts on <c>Deactivate</c>. This arm differs from its sibling only in
+    /// carrying no etag text at all, so it fails - and reports
+    /// <c>Expected 1 call, actually received 0</c> - precisely when the
+    /// implementation has started to depend on etag content.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task A_version_conflict_carrying_no_etag_still_requests_deactivation()
+    {
+        var harness = CreateGrain();
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        // Assert the shape this arm depends on, so it cannot quietly decay into a
+        // duplicate of the sibling above if the constructor ever starts inferring
+        // etags from the message.
+        var adoNetShape = new InconsistentStateException("Version conflict (WriteState).");
+        Assert.Multiple(() =>
+        {
+            Assert.That(adoNetShape.StoredEtag, Is.Null.Or.Empty,
+                "AdoNetGrainStorage raises conflicts with the message-only constructor");
+            Assert.That(adoNetShape.CurrentEtag, Is.Null.Or.Empty,
+                "AdoNetGrainStorage raises conflicts with the message-only constructor");
+        });
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i,
+                () => new InconsistentStateException("Version conflict (WriteState)."));
+        }
+
+        Assert.Multiple(() =>
+        {
+            harness.Timer.Received(1).Dispose();
+            harness.Context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        });
+    }
+
+    [Test]
+    public async Task The_model_flush_loop_keeps_retrying_below_the_ceiling()    {
+        // Negative control for the test above: the suspension must be caused by
+        // reaching the ceiling, not merely by any failure at all. Without this,
+        // a loop that gave up on the FIRST failure would pass the suspension
+        // test while being far more destructive than the bug it replaced.
+        var harness = CreateGrain();
+        // The flush timer is armed by the first tracked access, so prime one
+        // before capturing the callback.
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures - 1; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i);
+        }
+
+        harness.Timer.DidNotReceive().Dispose();
+
+        // Still live: a tick that finds healthy storage persists the model.
+        await FireHealthyTickAsync(harness, tick, 0);
+        Assert.That(harness.State.State.LeafAccessModel, Is.Not.Null,
+            "the loop below the ceiling is still able to flush");
+    }
+
+    [Test]
+    public async Task A_successful_flush_resets_the_consecutive_failure_count()
+    {
+        // Only an UNBROKEN run of failures should suspend. An intermittent fault
+        // that recovers in between must never accumulate toward the ceiling,
+        // otherwise a merely flaky storage layer eventually stops the loop.
+        var harness = CreateGrain();
+        // The flush timer is armed by the first tracked access, so prime one
+        // before capturing the callback.
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+        var sequence = 0;
+
+        for (var round = 0; round < 3; round++)
+        {
+            for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures - 1; i++)
+            {
+                await FireFailingTickAsync(harness, tick, sequence++);
+            }
+
+            // A clean flush between bursts: resets the counter, so the next burst
+            // starts from zero and the ceiling is never reached.
+            await FireHealthyTickAsync(harness, tick, round);
+        }
+
+        harness.Timer.DidNotReceive().Dispose();
+    }
+
+    [Test]
+    public async Task A_suspended_model_flush_loop_is_not_re_armed_by_later_activity()
+    {
+        // The timer is re-armed from the tracking-initialisation and warm-up
+        // paths, so disposing it without latching would let the very next
+        // warm-up restart the loop and defeat the ceiling entirely.
+        var harness = CreateGrain();
+        // The flush timer is armed by the first tracked access, so prime one
+        // before capturing the callback.
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i);
+        }
+
+        var registrationsAtSuspension = harness.TimerRegistry.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(ITimerRegistry.RegisterGrainTimer));
+
+        await harness.Grain.GetAsync("k-after-suspension");
+        await harness.Grain.WarmUpAsync();
+
+        var registrationsAfter = harness.TimerRegistry.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(ITimerRegistry.RegisterGrainTimer));
+
+        Assert.That(registrationsAfter, Is.EqualTo(registrationsAtSuspension),
+            "a suspended flush loop must stay suspended for the rest of the activation");
+    }
+
+    [Test]
+    public async Task Suspending_the_model_flush_loop_still_leaves_the_final_deactivation_flush_to_run()
+    {
+        // Suspension bounds wasted retries; it must not silently discard the
+        // observations. The model stays dirty in memory and clean deactivation
+        // still gets its one best-effort attempt to bank it.
+        var harness = CreateGrain();
+        // The flush timer is armed by the first tracked access, so prime one
+        // before capturing the callback.
+        await harness.Grain.GetAsync("k-prime");
+        var tick = CapturedTimerCallback(harness.TimerRegistry);
+
+        for (var i = 0; i < ShardRootGrain.MaxConsecutiveFlushFailures; i++)
+        {
+            await FireFailingTickAsync(harness, tick, i);
+        }
+
+        var writesBefore = harness.State.WriteCount;
+        await ((IGrainBase)harness.Grain).OnDeactivateAsync(default, default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.State.WriteCount, Is.GreaterThan(writesBefore),
+                "the pending model is still flushed on deactivation");
+            Assert.That(harness.State.State.LeafAccessModel, Is.Not.Null,
+                "suspension must not discard the observations it could not write");
+        });
     }
 }

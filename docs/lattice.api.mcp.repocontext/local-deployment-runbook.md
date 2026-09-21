@@ -1,0 +1,1013 @@
+# Local deployment runbook
+
+How the tuned, long-lived local RepoContext container deployment is built, pinned,
+configured, verified, rolled back, and rebuilt from nothing.
+
+This document exists because the instructions it carries previously did not exist in
+any repository. They lived in a single durable agent-memory entry, and the tuned
+configuration lived in a single untracked, gitignored `docker-compose.override.yml`.
+Both were load-bearing for epic #2368's gate, and neither had review, history, or a
+diff. The memory entry was destroyed by an index reset, and nothing failed, nothing
+broke, and the container it described kept running. See issue #2609.
+
+## Scope, and what this is not
+
+This is **local operations**. It does not restate what is already documented
+elsewhere, and you should read those first:
+
+- [Container quickstart](container.md) - the product's container behaviour: topology,
+  durability profiles, health probing, graceful shutdown, and what each setting means.
+- [The container sample](../../samples/RepoContextContainer/README.md) - the
+  first-run walkthrough, the mounted workspace, the published port, and choosing an
+  embedding companion.
+
+What follows is only the part neither of those covers: how *this* deployment is
+produced and operated.
+
+### Before you start the stack
+
+**Every resource knob is now derived per-deployment, and the stack will refuse to
+start until you have derived them (#2779).** This changes the startup sequence:
+
+```bash
+cd samples/RepoContextContainer
+pwsh -File ./scripts/New-TuningEnv.ps1      # writes .env - REQUIRED, and not optional
+docker compose up -d
+```
+
+Skipping the first command does not produce a degraded stack, it produces no stack:
+the tuning overlay declares each knob as `${VAR:?...}` with **no default**, so compose
+exits non-zero naming the missing variable and the reason it exists. That is
+deliberate. The previous behaviour was a set of literals transcribed from one
+developer machine - 16 logical processors and 55.7 GiB of RAM - whose two `mem_limit`
+values summed to 17 GiB, so the stack could not start at all on a 16 GiB host, and
+silently oversubscribed every smaller one. A default would have carried that defect
+forward for anyone who did not know to override it.
+
+The memory grant in particular is derived from the **indexed corpus**, not from host
+RAM: the requirement is a property of the repository being indexed, so a fixed
+fraction of host memory grants far too much on a large machine and far too little on a
+small one for the identical corpus. Re-run the script after a substantial change in
+corpus size, or when moving the deployment to a different host.
+
+#### `${VAR:?...}` checks presence, not meaning (#2863)
+
+The refusal described above is narrower than it reads. `${VAR:?...}` errors when the
+variable is unset or empty; it **cannot inspect the value**, because compose
+interpolation has no value predicate. It establishes that something was supplied,
+never that what was supplied means what the supplier intended.
+
+Every one of these knobs has a falsy value inside its own valid syntax that means
+"ignore me" to whichever consumer finally reads it. `0` is non-empty, so it satisfies
+every guard on the overlay and then selects no CPU limit and no memory limit at all
+from Docker, the host core count from ONNX Runtime and from the CLR's garbage
+collector, and the runtime-derived WAL replay ceiling that these variables exist to
+pin. An operator who forgot to export a variable and one who deliberately pinned it to
+`0` produce byte-identical deployments, and the guard reports both as satisfied. That
+is worse than an unguarded knob, because this one is trusted.
+
+The remedy is not a stricter check. The information was destroyed before any check
+ran, when one spelling was given two meanings, and no guard can recover it. So `0` is
+retired as a spelling and the deliberate case gets its own:
+
+```bash
+REPOCONTEXT_MAX_CONCURRENT_REPLAYS=auto   # run the library's derivation on purpose
+EMBEDDER_INTRA_THREADS=auto               # derive from the enforced container CPU grant
+```
+
+`auto` is accepted on exactly those two knobs and on none of the other five. That
+split is a constraint, not a judgement about which knobs deserve the convenience: a
+token has to be interpreted by somebody, and compose cannot rewrite a value in
+transit. Those two are read by code in this repository - `ResolveMaxConcurrentReplays`
+and `ResolveIntraOpThreads` - so `auto` has somewhere to be translated into the
+behaviour it names. The remaining five are read finally by Docker or by the CLR, whose
+vocabularies are not ours to extend, and inventing a token for them would hand a
+foreign string to a parser that will shrug and carry on. The rule generalises: **you
+may only introduce a sentinel where you own the code that interprets it.**
+
+Both directions are adjudicated before anything is deployed:
+
+```bash
+pwsh -File ./scripts/Assert-TuningEnv.ps1
+```
+
+`New-TuningEnv.ps1` runs it over the `.env` it has just written, so the ordinary path
+is already covered; run it by hand after editing `.env` yourself. It refuses a retired
+`0` and a genuinely unset variable with **different** messages, because the remedies
+differ: the first is a migration, the second is a value you never supplied. It exits
+`0` when every knob carries a meaningful value, `2` when any does not, and `4` when
+the file cannot be read.
+
+If you are migrating an existing `.env` that carries `REPOCONTEXT_MAX_CONCURRENT_REPLAYS=0`
+or `EMBEDDER_INTRA_THREADS=0`, note that the deployed image must contain this change
+for `auto` to be understood. An older image throws on the replay knob, which is loud
+and safe, but **derives silently** on the embedder knob, which is indistinguishable
+from success. Confirm from the running container rather than from a clean boot:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml logs embedder | grep 'intra-op threads'
+```
+
+The provenance bracket on that line names who chose the value, so `DECLARED 'auto'`
+distinguishes a migrated deployment from one that merely started.
+
+### What this runbook does not establish
+
+**Agreement between this runbook and the tracked compose files says nothing
+whatsoever about any running container.** This section is not a disclaimer; it is the
+single most important thing on this page, and epic #2368's gate runs 1 and 2 both
+failed precisely by ignoring it.
+
+`docker compose up` reads the compose files in its **own working directory**,
+regardless of which checkout built the image it starts. The image and the runtime
+configuration are two independent inputs, only one of which is obviously
+version-controlled, and nothing in `docker compose up`'s output names a branch, a
+commit, or a directory. So a candidate image can run under a different checkout's
+configuration with no sign of it anywhere. In gate runs 1 and 2 the fix was present in
+the checkout and absent from the running container, the runs correctly observed the
+absence of its effect, and both concluded the fix itself was absent.
+
+No arrangement of checks over tracked files can catch that, because the repository
+agrees with itself perfectly throughout. Only a reading taken from the running process
+separates "the source does not carry the fix" from "the source carries it and this
+container never received it". That reading is the deployment-provenance assertion
+added by #2590 / #2592:
+
+```bash
+cd samples/RepoContextContainer
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+```
+
+### The workspace check is partly opt-in, and says so when it is not asked
+
+Check 7 adjudicates the tree the container actually indexes. Its STRUCTURAL arms
+run unconditionally - there is a `/workspace` mount, it is a bind rather than an
+anonymous volume, and its source is absolute - because none of those can be wrong
+on a correct deployment, so they cost nothing and they keep the check non-vacuous.
+
+Its two IDENTITY arms cannot be defaulted, because the correct values are absolute
+host paths that differ per machine and a default derived from the checkout would
+encode a layout guess and refuse correct deployments. Ask for them explicitly:
+
+```bash
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1 `
+  -ExpectedWorkspaceRoot 'C:\dev\copilot-worktrees\lattice' `
+  -ExpectedRepositoryRoot 'C:\dev\copilot-worktrees\lattice\bucket4' `
+  -IndexedRoot '/workspace/bucket4'
+```
+
+An arm that was not asked prints `<NOT ESTABLISHED ...>` rather than nothing, so
+an unasked question never reads as a passed one. Once asked, it FAILS CLOSED:
+naming `-ExpectedRepositoryRoot` without `-IndexedRoot` is a dissent, not a skip.
+
+`-IndexedRoot` is supplied rather than fetched deliberately. The script speaks
+`docker` and `git`; reading it from the running store would put an authenticated
+MCP transport inside a provenance checker, which widens what a provenance failure
+can mean. Read it from `repocontext_list_repos`, which reports `indexedRoot` per
+repository (#2617), and pass it in.
+
+### What its exit code means
+
+The script's exit status is part of its contract, so automation can gate on it
+(#2718):
+
+| Code | Meaning |
+| --- | --- |
+| `0` | all seven provenance checks agree |
+| `1` | unexpected error: the script itself failed and reached NO verdict |
+| `2` | provenance REFUSED: at least one check dissented |
+| `3` | the container could not be interrogated (not running, or docker unreachable) |
+| `4` | the expected configuration could not be read from the checkout |
+
+Codes `3` and `4` say the question could not be ASKED. They are an inconclusive run
+to be fixed and repeated, not a failed deployment, and reading them as "this
+container is wrong" is a misdiagnosis.
+
+Until #2718 the script never called `exit` at all, so its status was whatever its
+last internal git probe happened to leave behind - and on the PASSING path that was
+`128`, from the `git rev-parse` that CORRECTLY fails inside a memory archive located
+outside every checkout. The script's own success condition produced its failure
+status, and the only arrangement that would have left a zero there was a MISPLACED
+archive, which is the defect that check exists to reject.
+
+Note the invocation dependence, because it is why this survived a release. `pwsh
+-File` DISCARDS `$LASTEXITCODE` when a script ends without calling `exit`, so the
+form used throughout this runbook exited `0` and looked correct, while an operator
+running the script at a prompt - or any wrapper `.ps1` calling it with `&` - read
+`128` from the same run. One run, two contradictory statuses, neither chosen by the
+script.
+
+The same limit applies to this runbook's own guard test, which is discussed under
+[How this runbook is kept honest](#how-this-runbook-is-kept-honest).
+
+## What the box points at
+
+Every other setting in this document describes how the deployment *performs*. This
+one decides what it is *about*, and it is the only setting whose misconfiguration
+leaves every output surface looking healthy while every answer is wrong.
+
+| Setting | Intended value | Resolves to |
+| --- | --- | --- |
+| `REPO_PATH` | `C:\dev` | the host directory bound at `/workspace`, read-only |
+| indexed repository | `/workspace/lattice` | `C:\dev\lattice` |
+| `repoId` | `lattice` | the id every agent session queries |
+
+**Set `REPO_PATH` explicitly. Never let it default in this repository.**
+
+### Where the setting actually lives
+
+`REPO_PATH` is **not** in either compose file and never was. It lives in
+`samples/RepoContextContainer/.env`, which Docker Compose auto-loads from the
+directory it is **invoked from**, on every `up`, regardless of your shell
+environment. That file is gitignored. A tracked
+[`.env.example`](../../samples/RepoContextContainer/.env.example) carries the setting
+and its warning; copy it to `.env` before starting the stack.
+
+This mechanism is the whole of the root cause, and it is worth being precise about,
+because the obvious explanation is wrong. Nobody edited a mount. Nobody removed a
+setting. The deployment was configured by **two** untracked files with different jobs:
+`docker-compose.override.yml`, which pinned the image, and `.env`, which decided what
+the box was about. When the stack was re-composed from a git worktree, the override
+was copied across and the `.env` was not, so `REPO_PATH` silently fell back to the
+compose default.
+
+**The override survived because it is what people think of as "the config."** Its own
+header says it has *"one job only: pin the image"*. It was never a configuration
+capture mechanism, so copying it felt complete while leaving behind the setting that
+mattered most. Note what that means: the setting **was** written down, in a file that
+carried a correct and clearly-worded warning about exactly this failure, a month
+before it happened. It vanished anyway, because it was written in a file whose copying
+was optional.
+
+### The worktree trap
+
+The base compose file declares the mount as:
+
+```yaml
+- ${REPO_PATH:-../../..}:/workspace:ro
+```
+
+and documents the default as *this repo's parent directory, so this repo is one
+registerable child added at `/workspace/<repo>`*. That description is exactly correct
+for an ordinary clone at `C:\dev\lattice`: the grandparent of the compose file is
+`C:\dev` and the registerable child is `lattice`.
+
+It is **wrong for a git worktree**, and the difference is invisible. Composed from
+`C:\dev\copilot-worktrees\lattice\<worktree>\samples\RepoContextContainer`, `../../..`
+resolves to the *worktree collection directory*, so the registerable child is the
+**worktree's generated name** rather than the repository's. The default silently
+changes meaning according to where the compose file is invoked from, and in this
+repository every agent session runs from a worktree.
+
+This is not hypothetical. It is the deployment's observed state: `/workspace` was
+bound to `C:\dev\copilot-worktrees\lattice` and the indexed root was
+`/workspace/bucket4-merge`, a worktree pinned at an older commit. Every structural
+record, every ranked search result, and every `repocontext_context` bundle filed under
+repoId `lattice` was about that stale worktree rather than about `C:\dev\lattice`.
+
+**The symptom is silence.** `repocontext_list_repos` reports the expected `repoId`, a
+plausible file count, and a healthy converging index; searches return `mode: semantic`
+with sensibly ranked hits. Nothing in any output surface distinguishes *indexing the
+repository* from *indexing a stale worktree under the repository's name*. It also
+makes a documented instruction false against such a deployment:
+`.github/instructions/repocontext.instructions.md` tells every agent that in a
+worktree the repo id is still the base repository's and the base repository is what is
+indexed. Where this trap has fired, a worktree is indexed under the base repository's
+id, and an agent following the documented rule gets confidently wrong answers with no
+signal available to it that anything is amiss.
+
+### None of this prevents recurrence
+
+Stated plainly, because "documented and guarded" reads as "fixed" and it is not:
+
+- **`.env.example` is not prevention.** Compose does not load it. Someone still has to
+  copy it to `.env`, and a person who forgets the `.env` will equally forget to copy
+  the example. It makes the omission *discoverable by a reader who is already
+  looking*, which is precisely the reader this failure does not have.
+- **This runbook is not prevention.** It is a description. Nothing consults it at
+  `up` time.
+- **The guard test is not prevention.** It checks that this document still says these
+  words. See [Why the guard test cannot cover this](#why-the-guard-test-cannot-cover-this).
+
+Prevention requires the running system to make the wrong state *observable*, which is
+issue **#2617**: report the indexed root on every `repocontext_list_repos` row, log the
+resolved workspace root and every registered root at startup, warn when a registered
+root's basename differs from its `repoId`, and assert the indexed root from the
+running store in `Assert-ContainerProvenance.ps1`. Until that lands, the only defence
+is the two commands below, run by someone who already suspects something.
+
+### Verifying it
+
+Neither check reads a tracked file, and that is the point.
+
+```bash
+# 1. What the running container actually has mounted.
+docker inspect repocontextcontainer-repocontext-1 \
+  --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} ro={{.RW}}{{"\n"}}{{end}}'
+```
+
+```text
+# 2. What the running store believes its indexed root is. Must NOT report
+#    "outside the indexed root".
+repocontext_changed(repoId: "lattice", path: "/workspace/lattice")
+```
+
+The second is the stronger of the two, because it reads the indexed root out of the
+running store rather than out of a file. It therefore also catches the case where the
+mount is correct but the *registered* root is still the stale one, which a mount check
+alone passes.
+
+Both were exercised against this deployment, before and after its repair, and they do
+discriminate the states:
+
+| | Broken | Repaired |
+| --- | --- | --- |
+| `docker inspect` mount source | `C:\dev\copilot-worktrees\lattice` | `C:\dev` |
+| `repocontext_changed` on `/workspace/lattice` | refused: *"outside the indexed root of repository '/workspace/bucket4-merge'"* | returns a file list |
+
+The refusal is the useful part, and it is worth reading closely: it names the indexed
+root it is comparing against. That is the one place the wrong state is currently
+visible, and it is visible only because the call **failed**. Nothing reports it on
+success, which is what #2617 addresses.
+
+### Why the guard test cannot cover this
+
+The compose-settings guard described under
+[How this runbook is kept honest](#how-this-runbook-is-kept-honest) does **not** check
+`REPO_PATH`, and cannot be made to. This is worth stating plainly rather than leaving
+as a gap, because it is the third instance in this document of the same class:
+
+- `docker compose config` faithfully reports `../../..`, which is **correct as
+  written and wrong in effect**. A parity test over the resolved document would agree
+  with the file and miss the defect entirely.
+- The resolved bind source is an **absolute, machine-dependent path**, so any exact
+  assertion over it fails on every other machine and in CI.
+- There is no machine-independent invariant to assert instead. `../../..` genuinely
+  *is* the parent of the repository root in both the clone and the worktree case; the
+  path arithmetic is correct in both. The defect is that the registerable child is
+  named for a worktree, which is a fact about worktrees that no compose file knows.
+
+This is a **declared-versus-effective** case, the same class as `docker stop -t`
+overriding a configured `stop_grace_period`. Only a reading taken from the running
+container or the running store settles it, which is what the two commands above do.
+
+## The two compose files
+
+| File | Tracked | Loaded | Carries |
+| --- | --- | --- | --- |
+| `docker-compose.yml` | yes | always | topology, durability, workspace mount, published port, cadence defaults |
+| `docker-compose.tuning.yml` | yes | only when named with `-f` | the image pin, the tuned cadence, the GC settings, and the CPU and memory grants |
+
+The tuning overlay is deliberately **not** named `docker-compose.override.yml`. An
+override file is loaded automatically and silently, so it would change what every
+reader of that directory gets from a plain `docker compose up -d`. The tuning file
+changes nothing unless you name it, which is what makes it safe to track.
+
+Naming the files explicitly also **suppresses** compose's automatic pickup of any
+`docker-compose.override.yml` that happens to exist in that directory. That is
+intentional: it is what makes the deployed configuration reproducible from the
+checkout alone rather than from one machine's untracked state.
+
+`docker-compose.override.yml` remains gitignored and remains a legitimate personal
+escape hatch. If you use one, record what it changes under
+[Local-only deltas](#local-only-deltas), or you have recreated the defect this
+document exists to close.
+
+## Build and tag from a known sha
+
+The host image is built on the host from the repository root, from the **tracked**
+Dockerfile `apps/repocontext/Dockerfile`. That is the same build input
+`samples/RepoContextContainer/docker-compose.yml` declares - `context: ../..`, which
+from that directory resolves to the repository root, and
+`dockerfile: apps/repocontext/Dockerfile`, which is relative to that context - so
+building by hand and building through compose consume the same file with the same
+context. Run from the repository root:
+
+```powershell
+$env:GIT_COMMIT = (git rev-parse HEAD)
+# The secret spec MUST be built as a string first - see "Why the secret spec is
+# bound to a variable" below. Inlining it silently breaks the build.
+$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"
+docker build -f apps/repocontext/Dockerfile `
+  -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --build-arg GIT_COMMIT=$env:GIT_COMMIT `
+  --secret $secret .
+```
+
+**`.deploy/` is not a build input.** Nothing under it is tracked - `git ls-files
+.deploy` returns zero files - so a `.deploy/Dockerfile` exists only on whichever
+machine happened to create one, and a second operator, or the same operator in a
+fresh clone, cannot build from it at all. An earlier revision of this section named
+it. It is not the file compose declares, and the copy that exists on this host
+declares no `ARG GIT_COMMIT` and no `LABEL org.opencontainers.image.revision`, so a
+build from it cannot stamp the provenance `Assert-ContainerProvenance.ps1` reads -
+and `--build-arg GIT_COMMIT` against a Dockerfile that declares no such `ARG` is not
+an error, only a non-fatal "one or more build-args were not consumed" warning in the
+build log. If you have a `.deploy/` directory, ignore it.
+
+The build secret is not optional and not incidental: an in-container NuGet restore
+fails behind the corporate TLS proxy, so the restore needs the corporate feed from
+`%APPDATA%\NuGet\NuGet.Config`. A build that omits it fails during restore, which
+reads as a network fault rather than as a missing secret.
+
+### Why the secret spec is bound to a variable
+
+`$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"` is load-bearing, not
+style. Do not inline it back into the `docker build` line.
+
+When PowerShell passes a **bare** (unquoted) argument to a **native** command, a
+token containing a **comma** is passed through **literally** - the `$env:...` inside
+it is never expanded. Docker then receives the seven characters `$env:` as part of
+the path, fails to open it, and reports a missing-file error naming a path you can
+see is wrong but whose cause is not in the error. Binding the spec in a
+double-quoted string expands it before the call, so Docker receives a real path.
+
+The comma is the whole trigger, and it is worth being precise because the obvious
+mental model - "a variable expands only when the token starts with `$`" - is wrong
+in both directions, and following it produces a command that is still broken:
+
+| Bare argument token                  | Reaches the native command as |
+| ------------------------------------ | ----------------------------- |
+| `src=$env:VAR`                       | `src=VALUE` (expanded)        |
+| `--build-arg GIT_COMMIT=$env:VAR`    | `GIT_COMMIT=VALUE` (expanded) |
+| `a,src=$env:VAR`                     | `a,src=$env:VAR` (literal)    |
+| `$env:VAR,tail`                      | `$env:VAR,tail` (literal)     |
+| `"a,src=$env:VAR"` (double-quoted)   | `a,src=VALUE` (expanded)      |
+
+Rows 1 and 2 show a leading `$` is not necessary; row 4 shows it is not sufficient.
+Only the comma predicts the failure. This is why `--build-arg
+GIT_COMMIT=$env:GIT_COMMIT` on the line above is correct as written and must not be
+"fixed" to match - it has no comma - while `--secret` must be bound first.
+
+Both arguments matter, and they are not the same thing. `--build-arg GIT_COMMIT`
+stamps the sha **into the image** as `org.opencontainers.image.revision`, which is
+written by the build itself and travels with the image wherever it goes. The
+`candidate-<sha>` **tag** is assigned by a person afterwards and can be moved, so
+it is a fallback rather than the answer. `Assert-ContainerProvenance.ps1` reads the
+label first and falls back to the tag, and if neither resolves it **refuses** -
+supply at least one. Omitting both leaves the built commit unknowable, which is the
+state that cost this gate eleven hours of measurement against the wrong binary
+(issue 2686).
+
+Tag with the **commit sha you built**, not a branch name or a date.
+
+### Read the provenance back before you tag or deploy
+
+The build is not finished until you have read the label out of the image it
+produced. Do it at the machine that built it, before the retag in the next section:
+
+```powershell
+$stamped = docker inspect "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+if ($stamped -ne $env:GIT_COMMIT) {
+  throw "UNPROVENANCED IMAGE: revision label is '$stamped', expected " +
+        "'$env:GIT_COMMIT'. Re-build with GIT_COMMIT exported. Do not tag or deploy."
+}
+```
+
+**Why this is a step rather than something the build guarantees.**
+`apps/repocontext/Dockerfile` declares `ARG GIT_COMMIT=""`, so a build that forgets
+to export the variable **succeeds**. It exits 0, produces a runnable image, and
+leaves the revision label carrying no commit. The only trace is a line in a build
+log, which is the least likely place for it to be noticed, and the image is then
+indistinguishable by eye from a good one. Redirecting the `-f` path above fixes the
+case where the label *cannot* be stamped; it does nothing about the case where it
+simply *was not*, and that second case is the one this deployment has actually been
+in: the image running on this host resolves no revision at all.
+
+**Test the value, not the exit code.** `docker inspect --format` prints an empty line
+and exits **0** in all three of these cases: the label is present and empty, the label
+is absent from the image, and the label name you asked for does not exist at all. The
+first two are both unprovenanced, so telling them apart does not matter - but the third
+is why this matters to whoever maintains the command above. Mistype
+`org.opencontainers.image.revision` and the check still runs, still exits 0, and still
+prints nothing, so it would report every image as unprovenanced rather than reporting
+its own typo. A check that inspects `$LASTEXITCODE`, or that only looks for a non-zero
+exit, passes on all three. Compare the string, and keep the label name exact.
+
+`Assert-ContainerProvenance.ps1` applies the same rule later, against the running
+container: it reads this label first, falls back to a `candidate-<sha>` tag, and
+refuses when neither channel resolves. Checking here rather than there is what keeps
+an unprovenanced image from being tagged, deployed, and measured against before
+anyone asks the question.
+
+## Pin and roll back
+
+The base compose file declares `build:` and no `image:`, so nothing resolves an image
+for `up -d --no-build` on its own. `docker-compose.tuning.yml` supplies the pin, and
+the pin is a fixed tag - `repocontext-mcp:local` - which is *moved* between builds
+rather than edited in the file. The deploy step is therefore a retag:
+
+```bash
+# 1. Preserve whatever `local` currently points at, so it can be restored.
+docker tag repocontext-mcp:local repocontext-mcp:rollback-$(date +%Y%m%d-%H%M)
+
+# 2. Move the pin to the candidate you just built.
+docker tag repocontext-mcp:candidate-<sha> repocontext-mcp:local
+
+# 3. Deploy. --no-build is what makes the deployed bits the ones you tagged.
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d --no-build
+```
+
+Step 1 is the whole rollback story, and skipping it is unrecoverable in the sense
+that matters: the displaced build is still on the host but is no longer named, so
+you cannot say which of the anonymous layers it was. `docker images` on this host
+shows the convention held consistently, as `candidate-<sha>` and
+`rollback-<yyyyMMdd-HHmm>` pairs created at the same moment. The oldest recorded
+rollback point for the ONNX embedder migration is `repocontext-mcp:rollback-20260904-1510`,
+recorded alongside a full configuration backup in `C:\dev\rc-ab\backup-live-config\`.
+
+To roll back:
+
+```bash
+docker tag repocontext-mcp:rollback-<yyyyMMdd-HHmm> repocontext-mcp:local
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d --no-build
+```
+
+A rollback does **not** need a re-index in either direction, and it does not touch the
+`/data` volume.
+
+### Rolling back the embedder
+
+The ONNX Runtime companion is the committed default. The original Onyx companion
+remains available and is selected by layering a third file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
+```
+
+Both serve the same contract on the same port and emit numerically identical vectors,
+so switching does not invalidate an existing `/data` volume and needs no re-index. The
+evidence for that identity is recorded under
+[Provenance of the embedder migration](#provenance-of-the-embedder-migration).
+
+## The settings this deployment declares
+
+Every row below is a setting the **resolved** compose document declares when
+`docker-compose.yml` and `docker-compose.tuning.yml` are layered. The table is
+machine-checked against that document; see
+[How this runbook is kept honest](#how-this-runbook-is-kept-honest).
+
+Values are written as an operator writes them. `mem_limit` resolves to bytes and
+`cpus` to a bare number, and the guard normalises both before comparing.
+
+`REPO_PATH` is deliberately **not** in this table. It is not machine-checkable here,
+for the reasons set out under
+[Why the guard test cannot cover this](#why-the-guard-test-cannot-cover-this), and it
+matters more than anything below: a wrong `cpus` makes the box slow, a wrong
+`REPO_PATH` makes every answer it gives wrong while it looks healthy.
+
+<!-- compose-settings:begin -->
+
+| Service | Setting | Value | Why this value |
+| --- | --- | --- | --- |
+| `azurite-backup-sink` | `image` | `mcr.microsoft.com/azure-storage/azurite:latest` | The backup sink, added by the memory-backup work in this bucket. Its storage is a **host bind mount**, deliberately not a compose-managed volume, so `docker compose down -v` cannot reach it. See [container.md](container.md) for what that does and does not survive. |
+| `embedder` | `EMBED_PROVIDER` | `cpu` | Base default. `cpu`, or `cuda` on an NVIDIA host started with a device reservation. See the [sample README](../../samples/RepoContextContainer/README.md). |
+| `embedder` | `DOTNET_gcServer` | `0` | Workstation GC. Server GC allocates a heap and a dedicated GC thread per core, which on a 16-core host is the main driver of resident set for a latency-insensitive background service. This service also has little managed heap worth collecting in parallel: its footprint is dominated by the resident ONNX model, which is native. |
+| `embedder` | `EMBED_INTRA_THREADS` | `derived` | Pins the ONNX intra-op thread pool to the `cpus` grant below. ONNX Runtime sizes that pool from host cores and does not consult the cgroup quota, so under a 4.0-CPU grant on a 16-core host it ran 4x oversubscribed and the kernel throttled it in 296 of 298 consecutive scheduling periods during vectorising. #2610 derives this from the cgroup automatically, but the deployed image predates that change, so the value is still set explicitly. Derived from `EMBEDDER_CPUS` by [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779), so the explicit value cannot drift from the grant it restates. See [The pool-sizing class](#the-pool-sizing-class). |
+| `embedder` | `cpus` | `derived` | Reduced from an unlimited grant that measured 1014% CPU (about 10 of 16 cores) and made the host unusable for interactive work. The ONNX intra-op pool is sized against this grant, so `EMBED_INTRA_THREADS` above is derived from the same number rather than restated by hand. Set `EMBEDDER_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
+| `embedder` | `mem_limit` | `derived` | Measured at 4.08 GiB with no limit, and pinned at 2.486 GiB of a 2560m cap (99.4%) while essentially idle at 0.01% CPU, holding the resident ONNX model at its ceiling with no room to work. This grant is **workload**-derived rather than corpus-derived: it is dominated by the model resident in the image, so it does not grow with the repository. Set `EMBEDDER_MEM_LIMIT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
+| `repocontext` | `image` | `repocontext-mcp:local` | The base file declares `build:` and no `image:`, so `up -d --no-build` cannot resolve an image without this pin. The tag is moved between builds; see [Pin and roll back](#pin-and-roll-back). |
+| `repocontext` | `LATTICE_DURABILITY` | `local` | Base default: SQLite grain storage and reminders plus the file WAL, no external services. See [container.md](container.md). |
+| `repocontext` | `LATTICE_DATA_ROOT` | `/data` | Base default. All durable local state on one named volume, so it survives restart, recreation, and image upgrade. See [container.md](container.md). |
+| `repocontext` | `LATTICE_BACKUP_BLOB_CONNECTION_STRING` | `redacted` | Presence of this string is what **enables** backup at all; unset, the container runs with no backup and says so at WARNING rather than being silently indistinguishable from a backed-up one. The value is the fixed, public Azurite development account, published in Microsoft's own documentation and not a secret. It is tracked verbatim in the compose file and deliberately not copied here: reproducing a credential-shaped string in documentation teaches readers to read such strings as unremarkable. |
+| `repocontext` | `LATTICE_BACKUP_INCREMENTAL_MINUTES` | `60` | Library default, restated in the deployment so the configured cadence is visible here and not only in code. An initial full capture runs at startup, because manifest validation rejects an incremental with no base. |
+| `repocontext` | `LATTICE_BACKUP_FULL_HOURS` | `24` | Library default, restated for the same reason as the row above. |
+| `repocontext` | `LATTICE_BACKUP_RETENTION_KEEP_LAST` | `60` | Retention keeps a backup satisfying **either** bound, and always preserves the base chain a retained increment depends on. |
+| `repocontext` | `LATTICE_BACKUP_RETENTION_MAX_AGE_DAYS` | `14` | The other half of that pair. |
+| `repocontext` | `LATTICE_MCP_PORT` | `8080` | Base default. The container-side listener port, which must keep matching the container side of the published port mapping. |
+| `repocontext` | `LATTICE_WORKSPACE_ROOT` | `/workspace` | Base default. The read-only workspace root; every path passed to `repocontext_add_repo` must resolve under it. |
+| `repocontext` | `LATTICE_EMBEDDING_ENDPOINT` | `http://embedder:9000` | Base default. Points the default embedding provider at the companion container on the private network. |
+| `repocontext` | `LATTICE_WAL_PIN_BUCKETS` | `8` | Base opt-in. Splits the retention-floor pin state so an advancing floor rewrites a fraction of the blob; measured pin blobs on this box reached about 1.4 MB rewritten tens of thousands of times. Setting it back to `1` is a safe rollback. |
+| `repocontext` | `LATTICE_WAL_PIN_SHED_CEILING_SECONDS` | `120` | Bounds a continuous pin-report shed so the WAL GC durable offset floor cannot freeze indefinitely and silently (issue #3310, measured on this box: the vector-index floor held one offset for forty minutes while its WAL grew 175 MB). Watch `orleans_lattice_materialiser_pin_shed_stall_seconds` - a sawtooth is back-pressure working, a line that only climbs is the latch - and `..._pin_shed_forced_total`, where every increment is one deliberate override and an alarm rather than routine. Setting it to `0` is a safe rollback to unbounded retention growth, not to data loss. |
+| `repocontext` | `LATTICE_WAL_MAX_RETAINED_BYTES` | `8589934592` | Base opt-in. An advisory per-tree ceiling that lets WAL garbage collection lower its trim frontier toward 80% of the ceiling, within the frontier that was already safe. Unset, every tree on this box reported `wal_gc_backlog_bytes_unavailable{reason="policy_disabled"}` and `wal_compaction_reclaimed_bytes_total` was zero on all but one tree, so a 3048 MB WAL never gave a byte back. Sized at 8 GiB by issue #3242, as headroom against the growth that had consumed most of the 4 GiB of issue #3234. The ceiling is compared against PHYSICAL bytes summed over a tree's partitions, and WAL compaction only reclaims once a shard is 50% dead, so steady-state physical settles at about 2x logical; a ceiling below 2x a tree's logical working set is therefore unsatisfiable by construction, and at a 0.8 reclaim target it can never disarm. The 1 GiB original was calibrated during the issue #3229 incident, when repair was starved and occupancy was inflated by the very defect being measured. The 4 GiB replacement was calibrated against a measured 1077 MB logical `vector-index`; that tree then grew to about 1672 MB, putting the 2x floor at about 3344 MB against a 4096 MB ceiling - still satisfiable, but with only about 752 MB of margin left from an original 1942 MB. 8 GiB clears 2x the measured 1672 MB several times over on a 1 TB volume holding 6.4 GB of data. **An earlier revision of this row reported the 4096 MB ceiling as already overrun by 355 MB. That is withdrawn.** The 2226 MB behind it was `orleans_lattice_wal_compaction_eval_retained_bytes`, a Prometheus `summary`, read as an instantaneous value; `sum/count` on a summary is the lifetime mean since process start, so the figure was an average of every evaluation since startup rather than the current working set. The instantaneous logical size is the `orleans_lattice_storage_wal_bytes` gauge, which is sampled at scrape time. The two agree to within a percent on every tree with negligible dead bytes and diverge only where dead bytes are material, which is what identifies the gauge as the live one. Check a series' `# TYPE` line before differencing it or reading it as a level: a counter, a gauge and a summary all render as a number and only one of the three may be subtracted from its own past self. The durable lesson: a ceiling calibrated against a measured working set acquires an expiry date the moment that workload can grow, so re-check it against the tree rather than trusting a past calibration - issue #3242 adds an in-band guard so the next overrun reports itself instead of being found by hand. `0` is a safe rollback to the library default. |
+| `repocontext` | `LATTICE_WAL_COMPACTION_MAX_DEAD_BYTES` | `134217728` | Base opt-in (#3223), tracked here rather than in the untracked `.deploy/docker-compose.compaction.yml` it used to be supplied from. An absolute per-SHARD ceiling on dead (trimmed but not yet physically reclaimed) WAL bytes, checked before and independently of the 0.5 dead-byte ratio. Left unset, that ratio is the only arm of `FileWalShard.CompactIfNeeded` that can fire on a running tree, and a ratio is not a bound: it fires at dead >= live, so designed steady state is twice the live set and absolute waste grows with the tree. Measured on `repo-context-vector-index` the ratio sat at 200/1268 = 0.158, `wal_compactions_total` read zero on all three trigger tags, `wal_compaction_reclaimed_bytes_total` read zero, and physical size never decreased once in 37 samples (8971 -> 10174 MiB). 128 MiB is one eighth of each shard's 1024 MiB share of the 8 GiB tree ceiling in the row above (8 shards), against the one half the ratio permits, so the tree-wide dead bound becomes 1024 MiB. It is sized to FIRE against measured dead of 200 MiB per shard: the 256 MiB predecessor was sized in #3109 against a corpus holding about 344 MB dead per shard and is inert at the state actually measured, and this deployment's recurring failure is settings that look applied and do nothing. The cost is write amplification of live/ceiling = 1068/128 = 8.3x against 1.0x for the ratio, which at an accrual of at most 74 MiB/h per shard is a rewrite every 1.7 h, about 1.4 MiB/s sustained across 8 shards. Bandwidth is not the binding cost; the synchronous whole-shard rewrite inside `TrimAsync` is, and its duration is set by LIVE bytes so it does not shrink as this value shrinks - only the frequency rises, which is what rules out the small end. Do not probe it with a small value: low is the aggressive end, only `0` disables, and a ceiling below the 64 KiB `CompactionMinimumDeadBytes` floor is unconditionally true rather than inert (#3210), though since #3211 the registration-time validator refuses that configuration at startup. **Necessary and not sufficient**: reclaiming every dead byte still leaves retained at 8544 MiB above the 8192 MiB ceiling, because only an advancing trim frontier moves retained to dead and the durable offset floor is refusing that trim (#3310). Expect physical to fall about 10174 -> 8574 MiB on the first pass and then settle below about 9568 MiB. `0` is a safe rollback to the library default. |
+| `repocontext` | `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` | `240s` | Base default (#2589), raised from `120s` by #3304 after two real drains took 89.7s and 91.9s against the 90s budget the old value derived. The grant the host derives its drain budget from on SIGTERM, kept in step with compose's own `stop_grace_period`. |
+| `repocontext` | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | `/memory-archive` | Base default (#2611). Durable agent memory is archived outside the `/data` volume so a `down -v` cannot take it with the code index. |
+| `repocontext` | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Base default (#2611). How often the memory archive is refreshed. |
+| `repocontext` | `LATTICE_SELFINDEX_TICK_SECONDS` | `30` | Tuned from `5`. The self-index tick drives the out-of-band paged sweep. |
+| `repocontext` | `LATTICE_RECONCILE_INTERVAL_SECONDS` | `60` | Tuned from `5`. Every pass walks the workspace, so this is the dominant recurring cost and the source of continuous embedder load. |
+| `repocontext` | `LATTICE_RECONCILE_JITTER_SECONDS` | `15` | Tuned from `0`. Non-zero jitter stops passes across repositories phase-locking into simultaneous walks, which is what produced the observed load spikes. |
+| `repocontext` | `LATTICE_FULL_WALK_INTERVAL_SECONDS` | `3600` | Tuned from `120`. The full re-stat of every file, and the single heaviest operation. Counted in passes, not wall clock, so it moves with the reconcile interval and jitter above. |
+| `repocontext` | `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` | `3600` | Tuned from `300`. Two membership reads per indexed source, so on a converged repository it dominates a pass. Costs no healing latency: an actual gap forces an immediate in-pass scan regardless. |
+| `repocontext` | `DOTNET_gcServer` | `1` | Server GC, restored in #2596. It was `0`, to hold down resident set. That trade went unmeasured until gate run 2, which put it at 283 whole-process silence gaps of 5s or more, longest 29.3s, totalling 20.9% of wall-clock against a 30s Orleans request timeout; all 127 timed-out calls began executing within 0.5s of enqueue and then froze, so it was stop-the-world pausing rather than queueing. The footprint concern is now addressed by the explicit heap count below instead of by giving up parallel collection. |
+| `repocontext` | `DOTNET_GCHeapCount` | `derived` | Decouples the collector from the reported processor count, so Server GC does not allocate one heap per host core under a fractional CPU grant. It matches the `cpus` cap, and under #2779 it does so by construction: both read the same derived number, so two independently-edited literals can no longer drift apart. Set `REPOCONTEXT_GC_HEAP_COUNT` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
+| `repocontext` | `DOTNET_PROCESSOR_COUNT` | `unset` | Declared by NAME with no value, so it is ABSENT from the container unless the environment or `.env` supplies one (#2931). The `16` pin that used to be here is gone and is not coming back: it oversubscribed the replay gate 2.67x and resized every other processor-count consumer as a side effect. Deleting it removed the pin AND the name, which cost attribution rather than tuning - run 9's predicate bound it to run 8's grants including this variable, by which time it was absent rather than equal, so a replay-gate ceiling moving 16 -> 6 had two sufficient causes and no way to separate them. The bare declaration restores the ability to set it deliberately for a controlled comparison without editing a tracked file, while changing nothing today. Setting it remains an oversubscription hazard: it overrides `Environment.ProcessorCount` process-wide and wins over the cgroup quota. [`Assert-DeployManifest.ps1`](../../samples/RepoContextContainer/scripts/Assert-DeployManifest.ps1) reports the resolved count and where it came from on every deploy, so neither a set value nor an unset one can be silent. |
+| `repocontext` | `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` | `derived` | Sizes the WAL replay concurrency gate explicitly (#2279), replacing a `DOTNET_PROCESSOR_COUNT: 16` pin removed in #2779. That pin overrode a cgroup-aware default and held the gate at 16 permits against a 6.0-CPU quota - a 2.67x oversubscription measured on the live deployment, and the deployment half of the root cause in #2692. This knob has one job, where the pin also resized the GC, the thread pool, and every other processor-count consumer in the process. Set `REPOCONTEXT_MAX_CONCURRENT_REPLAYS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1). See [The pool-sizing class](#the-pool-sizing-class). |
+| `repocontext` | `cpus` | `derived` | Bounds a runaway without starving normal operation. This service measured about 92% of one core in steady state before any limit, so the grant is headroom rather than a working limit. It is also the source the heap count and the replay gate above are derived from. Set `REPOCONTEXT_CPUS` via [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) (#2779). |
+| `repocontext` | `mem_limit` | `derived` | Sized above the measured steady-state plateau, not below it. A 4g cap set earlier was about 40% of the known requirement; see [How an undersized memory cap presents](#how-an-undersized-memory-cap-presents). This is **corpus**-derived, not host-derived: the requirement is a property of the indexed corpus, so a fixed fraction of host RAM would grant far too much on a large machine and far too little on a small one for the identical repository. [`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1) sizes it from the corpus and clamps it to what the host can offer, refusing rather than silently granting less when the clamp binds (#2779). |
+
+<!-- compose-settings:end -->
+
+## The pool-sizing class
+
+Three of the settings above exist for the same underlying reason, and naming that
+reason as a **class** is more useful than documenting three coincidences: a runtime
+sizes a thread pool, a heap count, or a concurrency gate from the **host core count**,
+while the kernel enforces a **fractional cgroup CPU grant**. The pool is then
+oversubscribed by the ratio between the two, and nothing in any configuration file
+says so.
+
+Three instances in this one deployment:
+
+1. **The WAL replay concurrency gate.** `BPlusLeafGrain` sizes a process-wide
+   semaphore from `Environment.ProcessorCount` when the option is left non-positive,
+   once, as a structural constant. `Environment.ProcessorCount` *is* cgroup-aware, so
+   adding `cpus: 2.0` silently shrank that gate from 16 permits to 2 - an 8x cut to
+   leaf-activation concurrency, invisible in configuration and unattributable from the
+   logs. That decoupling is a real requirement. `DOTNET_PROCESSOR_COUNT: "16"` used to
+   supply it, and was removed in #2779: it bought the decoupling by overriding a
+   cgroup-aware default, holding the gate at 16 permits against a 6.0-CPU quota - a
+   2.67x oversubscription, and the deployment half of the root cause in #2692. That
+   second effect was not noticed when the pin was introduced, and it later became this
+   deployment's own instance of the class: see the note below.
+   `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` (#2279) supplies the same decoupling with one
+   job instead of three.
+2. **The GC heap count.** Server GC allocates a heap and a GC thread per core, and
+   takes that count from `DOTNET_PROCESSOR_COUNT` when it is set. On `repocontext`
+   that variable used to be pinned to 16 for instance 1's reasons, so server GC
+   would have allocated 16 heaps against a 6.0-CPU grant. This was originally avoided by turning
+   server GC off entirely, at the cost measured in gate run 2; #2596 instead derives
+   `DOTNET_GCHeapCount` from the grant, which addresses the footprint directly.
+   The embedder keeps `DOTNET_gcServer: "0"`, having no large managed heap.
+3. **The ONNX intra-op thread pool.** ONNX Runtime sizes its pool from the host core
+   count and does **not** consult the cgroup quota. Under the 4.0-CPU grant on this
+   16-core host that produced a pool of 16: the kernel throttled 296 of 298
+   consecutive scheduling periods, and the pool accumulated 346.3 CPU-seconds stalled
+   against 118.8 run. The cost is far worse than proportional, because ONNX Runtime
+   synchronises intra-op threads at every operator boundary. Observed embedding rate
+   was 1.8 files per minute, projecting about 77 hours for one 8,315-file checkout.
+
+Instance 3 is **fixed in the source** as of #2610: `EMBED_INTRA_THREADS` now defaults
+to the enforced cgroup quota read from `/sys/fs/cgroup/cpu.max` rather than to
+`Environment.ProcessorCount`, and the server logs its provenance (declared, derived
+from the grant, or derived from the processor count) at startup.
+
+**Instance 1 became this class's own fourth instance, and is fixed in the source as of
+#2816.** The decoupling in instance 1 was introduced to stop a `cpus` limit shrinking
+the gate, and it did that. What it also did was remove the only thing holding the gate
+at the grant: with `DOTNET_PROCESSOR_COUNT: "16"` set against a 6.0-CPU grant, the gate
+resolved to **16 permits on 6 CPUs**, a 2.67x oversubscription of a CPU-bound path,
+measured live on this rig. The only remedy the library offered was to pin
+`LATTICE_WAL_MAX_CONCURRENT_REPLAYS` by hand - an operator knob nobody had reason to
+know to set, which would drift from the `cpus` limit the moment either changed. Both
+halves are now closed, and from opposite directions. The gate's default is the
+**lesser** of `Environment.ProcessorCount` and the enforced cgroup grant, read the same
+way the embedder reads it, so the library no longer depends on an operator knowing the
+knob exists. Where the deployment does set it explicitly, #2779 derives it from the
+same `cpus` grant rather than restating it by hand, so the drift this paragraph warns
+about cannot open. `DOTNET_PROCESSOR_COUNT` is no longer set on either service (#2779)
+and so decouples nothing now; `DOTNET_GCHeapCount` is derived from the grant directly
+instead, which is the same protection without the second effect. The
+resolved ceiling, the configured option, the processor count, and the grant are now
+stated together in one startup log line, so the disagreement this passage describes is
+read rather than inferred.
+
+**It is not yet exercised in this deployment.** The tuning overlay sets
+`EMBED_INTRA_THREADS: "4"` explicitly, and the deployed embedder image predates
+#2610, so the value in force is the declared one and the derived path has never run
+here. The pin reproduces on the old image what the fixed image would choose for
+itself, which is the right call for the running stack and also means a green
+deployment tells you nothing about the fix. Removing the pin, on an image built from
+#2610 or later, and confirming the value still lands at 4 with derived-from-grant
+provenance, is what would establish it. Until then the mechanism's only evidence is
+its unit tests, and what has been verified in production is the manual override it
+was built to replace.
+
+Note the interaction
+with instance 1: `DOTNET_PROCESSOR_COUNT` overrides `Environment.ProcessorCount` and
+wins over the quota, so an embedder that copied the `repocontext` environment block
+would have silently restored the 4x oversubscription. That is why the fix reads
+the quota directly, and it is why the variable is no longer set on either service
+(#2779).
+
+**The point of naming the class was the fourth instance, and naming it is what found
+one.** The fourth turned out not to be a new setting at all but the *remedy* applied to
+instance 1, which reintroduced the same defect in the opposite direction - so the
+fifth is still out there. When adding a container limit, or a setting that sizes
+anything per core, check which figure the runtime actually reads, and check it again
+after changing anything that decouples a runtime figure from the grant.
+`Assert-ContainerProvenance.ps1` and the effective configuration report (#2593, #2600)
+exist so the answer is read rather than assumed.
+
+One caution on the throttling figures quoted in instance 3, because they have already
+been misread once: they measure **CPU scatter**, not pool size against grant, and they
+cannot corroborate a pool-sizing fix. See
+[CPU scatter under a fractional quota](#cpu-scatter-under-a-fractional-quota) for what
+that statistic does measure and for the retraction.
+
+## CPU scatter under a fractional quota
+
+This is a **different defect from the pool-sizing class above**, and the two are easy
+to conflate because they share a cause upstream (a fractional grant on a wide host)
+and a symptom downstream (throttling). Keeping them apart matters, because a
+statistic that measures this one was once quoted as evidence about that one.
+
+**The mechanism.** A container given a fractional CPU quota and no `cpuset` is
+*entitled* to 4 CPUs but *visible* on all 16. CFS bandwidth control vends quota to
+**per-CPU run queues in 5 ms slices** (`kernel.sched_cfs_bandwidth_slice_us`), and a
+thread waking on a run queue draws a whole slice whether it then runs for 5 ms or
+5 us; the unused remainder is returned only lazily. Threads scattered across many run
+queues therefore exhaust the quota by **reservation** rather than by execution, and
+the cgroup is throttled while its actual utilisation is a small fraction of its
+entitlement. The effect scales with the number of run queues threads can land on,
+which is the **visible CPU count**, not the quota.
+
+Note what this is not. The pool-sizing class is about a runtime *creating too many
+threads*. This is about *where the threads it creates are allowed to run*, and it
+happens at any thread count.
+
+**The measurement** (#2623). Throwaway `alpine` containers, identical synthetic load,
+identical `--cpus=4` quota, varying **only** `--cpuset-cpus`. Counters read from the
+host cgroup `cpu.stat`.
+
+| cpuset | periods | throttled | ratio | mean CPU | quota used |
+| --- | --- | --- | --- | --- | --- |
+| `0-15` | 907 | 49 | 5.4% | ~68% | ~17% |
+| `0-3` | 953 | **0** | **0.0%** | ~104% | ~26% |
+
+The load confound is **inverted** in that run, which is what makes it decisive: the
+arm offering *more* work throttled **zero**, and the arm offering *less* throttled at
+17% of its quota. Utilisation cannot produce that ordering; scatter can. A heavier
+first experiment reached 47.7% against 0.0% on the same single variable, and both
+pinned arms recorded zero throttled periods and zero throttled microseconds.
+
+### Two things this statistic must not be used for
+
+Both are retractions of readings previously made in epic #2368, recorded here so they
+are not made again.
+
+1. **It is not a measure of thread-pool oversubscription.** The throttling ratio was
+   once quoted (99.3% before, 30.9% after) as evidence that the ONNX intra-op fix in
+   [the pool-sizing class](#the-pool-sizing-class) had taken effect. That reading is
+   **withdrawn.** The statistic tracks how many CPUs the container can see. A
+   container doing no work at all measures approximately 31% on this host, so the
+   residual is a **floor, not a remainder**, and must never be read as "some
+   oversubscription persists". Establish pool sizing **structurally** - from `/proc`,
+   from configuration, or from source - never from this counter.
+2. **`cpu.stat` is not untrustworthy under Docker Desktop.** An earlier suspicion that
+   it might be is also **withdrawn**: it responds cleanly, deterministically and
+   monotonically to CPU scatter across both experiments. Figures read from it are real
+   data.
+
+A third reading worth stating positively: throttling at very low CPU utilisation is
+**expected** here rather than anomalous, and on its own is not evidence of a defect.
+
+### Enabling it
+
+Pinning is **opt-in and unset by default**, through two variables the base compose
+file declares as `${REPOCONTEXT_CPUSET:-}` and `${EMBEDDER_CPUSET:-}`. Unset, Compose
+omits the `cpuset` key from the resolved document **entirely** rather than emitting an
+empty one, so a stack that ignores them resolves byte-for-byte what it resolved before
+the knob existed. Set them in `.env` beside `REPO_PATH`; see
+[.env.example](../../samples/RepoContextContainer/.env.example).
+
+```bash
+# In samples/RepoContextContainer/.env
+REPOCONTEXT_CPUSET=0-5
+EMBEDDER_CPUSET=6-9
+```
+
+Derive the values rather than copying them:
+
+1. **One range per service, sized to the ceiling of that service's `cpus` grant.**
+   `cpus: 6.0` wants six CPUs, `cpus: 4.0` wants four.
+2. **The ranges must not overlap**, or you have traded throttling for contention,
+   which is a worse deal than the one you started with. The two services are busy
+   simultaneously by construction, since the reconcile pass is what feeds the embedder.
+3. **Leave headroom** for the host and for any service with no grant.
+   `azurite-backup-sink` declares no `cpus`, so it has no quota to be throttled
+   against and is deliberately left unpinned.
+
+The values above are for the 16-CPU host the tuning overlay was measured on and are
+**not portable**. Docker refuses to start a container whose `cpuset` names a CPU the
+host does not have, so a copied value fails loudly at `up` on a smaller machine rather
+than silently - that is the good case. The bad case is a host where the ranges are
+valid but no longer disjoint from what else runs there.
+
+### When not to enable it
+
+**Not between a measurement run's T0 and its final scrape.** Epic #2368 adopted a
+precondition that no service configuration may change inside that window, after a
+mid-run service recreation voided gate run 3 for every criterion that spanned it. A
+change of this kind lands **before** a run's T0 and **alone**, or not at all. The knob
+ships unset precisely so that enabling it is an act on the record at a moment somebody
+chose, rather than a default that arrives with a `git pull`.
+
+What it buys, stated without overclaim: **latency jitter and scheduling determinism**.
+It licenses **no throughput claim**. The measurement is synthetic load on `alpine`
+containers, and its transfer to the ONNX embedder and to the repocontext silo is an
+inference rather than a measurement.
+
+### What is deliberately not changed
+
+`DOTNET_PROCESSOR_COUNT: "16"` on the `repocontext` service was a number above the
+effective grant and belonged to the same family, but it was **not** touched by this
+knob and is not a thread pool: it held the WAL replay concurrency gate at the value
+every prior field measurement on this box was taken against, which is instance 1 of
+[the pool-sizing class](#the-pool-sizing-class). This paragraph used to add that
+aligning it was "a separate change with a separate blast radius, and it must be
+measured on its own rather than ridden in on this one."
+
+That was correct, and #2779 is that separate change. The pin is gone; the gate is
+sized by `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` (#2279) instead. Two things are worth
+keeping from how it read before, because both generalise past this one variable.
+
+First, the pin was **defensible**, not careless: it was protecting comparability with
+prior field runs. That goal is real. What made it cost more than it bought is that
+the condition it held constant was itself the defect - so every measurement it
+preserved was taken in the 2.67x-oversubscribed state, and they are comparable to
+each other and to nothing that should be run again.
+
+Second, its comment was meticulous about that continuity argument and silent about
+cost. A thorough comment is harder to doubt than a missing one, which is exactly why
+the axis it does **not** discuss is the one to check.
+
+## How an undersized memory cap presents
+
+Worth keeping because the symptom points at the wrong subsystem.
+
+A `mem_limit` below the working set does **not** present as a resource event. .NET
+sizes its heap hard limit from the cgroup limit and collects harder as it approaches
+it, rather than being OOM-killed at it, so there is no container kill, no restart, no
+exit code, and nothing in `docker events`. Instead the runtime throws
+`System.OutOfMemoryException` inside a Newtonsoft deserialize of a leaf-snapshot blob,
+and it surfaces as a **storage** fault:
+
+```text
+AdoNetGrainStorage[200416] Error reading grain state:
+GrainType=leaf-snapshot ... System.OutOfMemoryException
+  at Newtonsoft.Json.JsonTextReader.ReadData(...)
+```
+
+Measured on the 4g cap: 2,929 such lines in one multi-hour run, 756 of them within
+seven minutes of a cold start, with the container sitting at 3.5 GiB of 4 GiB (88%).
+
+It compounds. A failed leaf-snapshot read means the leaf cannot rehydrate, so it
+activates **cold** and replays its whole WAL window, which costs more memory again.
+Observed as 259 cold activations across only 64 distinct leaves (4.05x repeat-cold) -
+the exact "same few leaves going cold repeatedly" shape that indicates a snapshot or
+rehydrate defect, here caused by a memory cap.
+
+## Restart, drain, and verification
+
+`docker compose restart repocontext` is a full recreation: it evicts the in-memory
+projection and forces a WAL replay or cold rebuild on next access. That is the point
+of running it - it is the durability proof - but it is not free, and it is what the
+cold-start rig measures.
+
+On SIGTERM the host flips readiness to not-ready **first**, then drains: the silo
+deactivates and the WAL commit log flushes buffered records before exit, within the
+`LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` budget above. Verify in this order:
+
+```bash
+# 1. Liveness: process and silo host alive.
+curl -fsS http://localhost:8080/health/live
+
+# 2. Readiness: silo joined, activation-time WAL replay done, durable stores proven
+#    reachable, MCP serving. 503 during startup replay AND during drain, so a 503
+#    immediately after a restart is expected, not a fault.
+curl -fsS http://localhost:8080/health/ready
+
+# 3. Provenance: what this container actually received. See the warning at the top.
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+```
+
+A persistent 503 has its own diagnosis section in the
+[sample README](../../samples/RepoContextContainer/README.md); do not skip it in
+favour of restarting again, because a restart discards the evidence.
+
+## Recover the deployment from nothing
+
+Assumes only a clone and a Docker daemon. Steps 1 and 2 are shell-specific because
+the commit has to survive from the build into the check; the rest is not.
+
+```powershell
+# 1. Build the host image from the sha you intend to deploy, from the repository
+#    root and from the TRACKED Dockerfile compose declares. `.deploy/` is untracked
+#    and is not a build input - see Build and tag from a known sha.
+$env:GIT_COMMIT = (git rev-parse HEAD)
+# The secret spec MUST be built as a string first - see "Why the secret spec is
+# bound to a variable" below. Inlining it silently breaks the build.
+$secret = "id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config"
+docker build -f apps/repocontext/Dockerfile `
+  -t "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --build-arg GIT_COMMIT=$env:GIT_COMMIT `
+  --secret $secret .
+
+# 2. Verify the build stamped the commit, BEFORE tagging. A missing GIT_COMMIT does
+#    not fail the build; it yields an image the provenance gate cannot resolve.
+$stamped = docker inspect "repocontext-mcp:candidate-$env:GIT_COMMIT" `
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+if ($stamped -ne $env:GIT_COMMIT) {
+  throw "UNPROVENANCED IMAGE: revision label is '$stamped'. Do not tag or deploy."
+}
+```
+
+```bash
+# 3. Pin it. (Nothing to preserve on a clean host; on an existing one, save the
+#    displaced tag first - see Pin and roll back.)
+docker tag repocontext-mcp:candidate-<sha> repocontext-mcp:local
+
+# 4. Bring up the tuned stack. The embedder builds from its own small context;
+#    --no-build applies to the pinned host image.
+cd samples/RepoContextContainer
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d
+
+# 5. Wait for readiness.
+curl -fsS http://localhost:8080/health/ready
+
+# 6. Register the workspace repositories over MCP (repocontext_add_repo with a path
+#    under /workspace), then watch repocontext_index_status until filesEmbedded
+#    reaches filesScanned. Until it does, semantic search answers only over the
+#    already-embedded slice, so a missing hit is not evidence of missing code.
+
+# 7. Confirm what you deployed.
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+```
+
+Durable agent memory is archived outside the `/data` volume (#2611), so a
+`docker compose down -v` destroys the code index but not the captured decisions,
+gotchas, and conventions. The code index rebuilds from the working files; memory does
+not rebuild from anything.
+
+## Local-only deltas
+
+Anything this host runs that the tracked overlay does not declare belongs here, so
+the running configuration always traces to something in the checkout.
+
+| Delta | Why it is not tracked | Retire when |
+| --- | --- | --- |
+| `Logging__LogLevel__Orleans.Lattice.Api.Mcp.RepoContext.RepoContextVectorWriter: Debug` | A diagnostic for issue #2252 (distinguishing `Disabled` from `NotReturned`, which is reachable only at Debug), not tuning. It ships commented out in `docker-compose.tuning.yml`. | #2252 closes. |
+| `LATTICE_BACKUP_*` on `repocontext`, and the `azurite-backup-sink` service | **No longer a delta.** These were machine-local when this runbook was first written and are now tracked in `docker-compose.yml` by the memory-backup work in this bucket. They are documented in the table above. | Retired. Kept here only so a reader of an older revision is not left looking for them. |
+| `REPO_PATH` | Machine-specific by nature: it names a host path. It is not a delta to be tolerated but a setting to be **set deliberately**, and leaving it to default is the defect described under [The worktree trap](#the-worktree-trap). Its tracked example is [`.env.example`](../../samples/RepoContextContainer/.env.example). | Never. Set it explicitly on every host. |
+| `LATTICE_WAL_COMPACTION_MAX_DEAD_BYTES` on `repocontext`, previously supplied by an untracked `.deploy/docker-compose.compaction.yml` | **No longer a delta.** The absolute dead-byte compaction ceiling added in #3107 and wired to this host in #3109 was machine-local at 256 MiB when this row was written, and #3223 measured the consequence: a redeploy dropped it, nothing reported that it was gone, and the ratio trigger declined on every sweep while physical WAL reached 10174 MiB against an 8192 MiB ceiling. It is now tracked in `docker-compose.yml` at `134217728` (128 MiB) and documented in the table above. It was re-sized on the way in rather than restored: 256 MiB was calibrated against a corpus holding about 344 MB dead per shard, and present dead is 200 MiB per shard, so the old figure would have been inert at the state actually measured. Tracking it retires the hazard this row used to carry - that **a redeploy omitting the override silently restores unbounded WAL growth** - because the base file can no longer be deployed without it, which is a stronger guarantee than a provenance assertion over an untracked overlay. | Retired. Kept here only so a reader of an older revision is not left looking for it. |
+
+The list above is only as good as the discipline that maintains it, and nothing
+enforces it. A delta that is running and not written down here is indistinguishable
+from one that was never applied, which is the failure this document exists to close.
+`Assert-ContainerProvenance.ps1` is what reads the running truth back.
+
+## Provenance of the embedder migration
+
+The ONNX Runtime companion replaced the Onyx companion as the committed default in
+PR #2008. The controlled local A/B behind that decision ran over `psf/requests`
+(125 files) with the embedder as the only variable, and its raw results are on this
+host under `C:\dev\rc-ab\results\`. The claims and their actual sources:
+
+| Claim | Source file | Figures |
+| --- | --- | --- |
+| Vectors are numerically equivalent | `embedder-ab.json` | 200 chunks. Passage cosine mean 0.9999688, min 0.9953171; query cosine min 0.999999999998 over 20 queries. |
+| Retrieval quality is identical | `comparison.json` | MRR 0.7238095 in both arms; hit@1 0.6, hit@10 0.95 in both; same top-1 on 20 of 20 queries; mean top-10 Jaccard 1.000. |
+| Query latency improved | `comparison.json` | Median 122.37 ms to 43.72 ms. |
+| Embedding throughput improved about 1.32x | `throughput-paired.json` | Paired ratio median 1.3222 over 6 rounds (min 1.2469, max 1.5173). |
+
+**Do not cite `embedder-ab.json` for the throughput or latency claims.** Its own arm
+timings are *unpaired* and show ONNX slower per single embed (mean 930.5 ms against
+Onyx 317.4 ms; corpus 134.0 s against 103.5 s), because the two arms ran under
+different host contention. The paired study exists precisely because the unpaired one
+is not decisive. `embedder-ab.json` is authoritative for the cosine parity study and
+nothing else.
+
+The single worst parity chunk (0.9953) is in `AUTHORS.rst`, an accented-name case.
+That divergence was root-caused - invariant globalization collapsed accented words to
+`[UNK]` - and fixed in PR #2008, so it is a record of a resolved defect, not a
+standing caveat.
+
+## How this runbook is kept honest
+
+`LocalDeploymentRunbookHygieneTests` (in `test/lattice/Hygiene/`) resolves
+`docker-compose.yml` and `docker-compose.tuning.yml` with `docker compose config` and
+asserts, in both directions, that the settings table above enumerates exactly what
+that document declares. A setting added to either compose file without a table row
+fails the test, and a table row naming a setting the merge does not actually produce
+fails it too.
+
+It evaluates the **resolved** document rather than the raw files on purpose: compose
+merge and interpolation decide what a setting resolves to, so a raw-file comparison
+can be green about a value the merge discards.
+
+The same fixture also holds the **build input** to the one compose declares. Every
+`docker build -f` in this document must name the Dockerfile the `repocontext` build
+stanza names, that stanza's context must still resolve to the repository root, every
+documented build must pass `--build-arg GIT_COMMIT=`, and the document must still tell
+the operator to read `org.opencontainers.image.revision` back out of the result. That
+guard exists because those two files drifted apart silently and nothing noticed: #2690
+moved the tracked build onto `apps/repocontext/Dockerfile` and added the arg that
+stamps the label, and this runbook went on pointing at an untracked `.deploy/Dockerfile`
+that could not stamp it at all (#2707). It asserts over build *commands*, not over
+every occurrence of the word, so the warning above that `.deploy/` is not a build input
+is permitted rather than forbidden.
+
+The same fixture holds the **opt-in** guarantee for CPU pinning: it asserts that with
+`REPOCONTEXT_CPUSET` and `EMBEDDER_CPUSET` unset the resolved document declares no
+`cpuset` on any service, and, textually, that every `cpuset` a tracked compose file
+declares is variable-driven with an **empty** default. The second half is what stops a
+literal range being hard-coded later, which would make pinning a default rather than a
+choice - and would perturb exactly the measurement window this knob is kept unset for.
+
+**What a green run of that test establishes: that two tracked files agree with each
+other. Nothing else.** It does not establish that any container is running, that a
+running container was composed from these files, that it is executing an image built
+from this checkout, or that any of these limits are in force anywhere. For those, run
+`Assert-ContainerProvenance.ps1` against the container itself.

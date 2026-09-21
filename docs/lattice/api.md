@@ -244,8 +244,8 @@ no duplicates, no gaps, original ordering preserved.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
-| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility and reconnect guarantees as `ScanKeysAsync`. |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`) and, capped at `LatticeExtensions.DefaultScanStallResumeAttempts = 2`, its budget for resuming a `ScanPageStalledException`; `maxAttempts: 0` disables both. A stalled scan resumes from its last yielded key and refuses to resume when it has not advanced since the previous stall, so it either yields the full range or rethrows the stall - it never returns a short prefix as though the range were complete. A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility, reconnect, and stall-resume guarantees as `ScanKeysAsync`. |
 | `DeleteRangeAsync` | `Task<long> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize = 256, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
 
 Prefer the resilient `DeleteRangeAsync` drain helper over an
@@ -920,6 +920,49 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 
 `Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
+### Reading an empty range read under a gate
+
+A denied **point** read throws. A denied **range** read does not: it resolves to a
+reject-all key filter and returns a clean, successful, **empty** result. So
+`KeysAsync`, `EntriesAsync`, their predicate overloads, both `CountAsync`
+overloads, and the snapshot cursors all report "you may not look here" and "there
+is nothing here" identically - no exception, no log, every instrument healthy.
+
+That is deliberate. A denied scan stays cheap and non-fatal, and making it throw
+would break every existing caller. The cost is that **emptiness alone is
+uninterpretable under a gate**, so a caller that draws a conclusion from an empty
+range read must confirm the range was actually readable:
+
+```csharp verify
+static async Task<bool> RangeIsGenuinelyEmptyAsync(
+    ILattice tree, string startInclusive, string endExclusive, CancellationToken ct)
+{
+    await foreach (var key in tree.KeysAsync(startInclusive, endExclusive, cancellationToken: ct))
+    {
+        return false; // Not empty at all.
+    }
+
+    // Empty. Ask whether that is a fact about the store or about authorization.
+    var coverage = await tree.GetRangeReadGateCoverageAsync(startInclusive, endExclusive, ct);
+    return coverage == LatticeRangeReadGateCoverage.Unrestricted;
+}
+```
+
+`GetRangeReadGateCoverageAsync` reports `Unrestricted`, `Filtered`, or `Denied`.
+Only `Unrestricted` licenses reading emptiness as absence: under `Filtered` an
+unknown subset of keys is withheld, and under `Denied` every key is. It is a
+coverage classification and never names the withheld keys, for the same reason
+`GatedMultiReadResult.PrunedByAccessGate` is a count - identities would make any
+range read an authorization oracle.
+
+Call it **only when a range read came back empty** and you are about to act on
+that emptiness. The scan hot path pays nothing.
+
+A background component is the classic victim, because its turn carries no caller
+credential at all: under a fail-closed gate every one of its scans returns empty,
+so it concludes the store is empty and does nothing, forever, with a healthy log
+at every layer. If a component reads on a background turn, give it a credential
+(see the trusted system-origin scope below) rather than relying on this check.
 ### Trusted system-origin scope
 
 A co-hosted infrastructure extension that must run a trusted, gate-bypassing
@@ -1211,6 +1254,194 @@ long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
 See [Projection Rebuild](projection-rebuild.md#operator-tooling-rebuild-and-lag)
 for the rebuild semantics, the topology-preservation guarantees, and
 the recommended monitoring shape for lag.
+
+## Operator tooling: orphaned-leaf repair
+
+An **orphaned leaf** is a leaf that is present in a shard's doubly
+linked sibling chain but is not reachable by descent from the shard
+root - no routing entry points at it. Such a leaf can only arise from
+an interrupted split that spliced a new sibling into the chain before
+publishing its routing entry. The immediate cause of that window is
+fixed, but a tree that already acquired an orphan before the fix has
+no self-healing path: empty-leaf reclaim rejects a candidate on
+`LiveRowCount != 0` before it ever evaluates descent reachability, and
+an orphan is rarely empty - activation-time WAL replay admits records
+by `(ShardIndex, LowKeyInclusive, HighKeyExclusive)` and never by leaf
+identity, so an orphan sharing bounds with a live leaf materialises a
+shadow copy of that range. The orphan's projection checkpoint then
+pins the WAL trim floor indefinitely, and because compaction is
+downstream of trim, the WAL grows without bound.
+
+Two `ILattice` methods provide the operator path.
+
+| Method | Description |
+|--------|-------------|
+| `InspectOrphanedLeavesAsync(string?, CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
+| `RepairOrphanedLeavesAsync(string?, CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
+
+The leading `string?` on both is the **resume token** from the previous
+call's report. Pass `null` (the default) to start a new pass; pass
+`report.ResumeFrom` back unaltered to continue one. See
+[Driving a pass to completion](#driving-a-pass-to-completion) below -
+it is not optional detail, because one call is one bounded batch and a
+caller that ignores the token only ever sees the first one.
+
+The verification in step two **fails closed**. If the orphan holds any
+key that the routed live leaf does not hold, the leaf is left exactly
+as it was and reported `RefusedUnverifiedKeys` with the offending key;
+unsplicing it would lose data. Key *values* are deliberately not
+compared, because an orphan and a live leaf replay the same WAL
+records on independent horizons and a benign version difference must
+not produce a spurious refusal. Other refusal dispositions -
+`RefusedKeyCountExceeded`, `RefusedBlockingState`, `RefusedChainRace`,
+`RefusedRoutingContradiction` - are likewise no-ops on the tree.
+
+The unsplice deliberately does **not** widen the surviving predecessor
+to absorb the orphan's key range, which is where it diverges from
+empty-leaf reclaim. A reclaimed leaf is routed, so its range must be
+re-homed; an orphan is not routed, so the routed leaves already tile
+the keyspace and widening a neighbour over the orphan's bounds would
+create an overlap - and therefore a second materialisation of that
+range.
+
+### Driving a pass to completion
+
+One call to either verb is **one bounded batch**. It returns when its
+work budget is spent, leaving `ResumeFrom` non-null and `IsComplete`
+false; pass that token back unaltered to continue from exactly where it
+stopped. The bound is deliberate: an earlier revision drove the whole
+fan-out inside a single call, and on an ordinary tree that had
+accumulated 236 orphans it ran past the Orleans client response deadline
+and surfaced a `TimeoutException` to the caller - after the grain had
+already completed every repair. The operation reported failure having
+entirely succeeded.
+
+### Read `VerdictComplete` too, and read it before `Findings`
+
+`IsComplete` and `VerdictComplete` answer different questions.
+`IsComplete` says how far the pass got; `VerdictComplete` says whether
+it could judge what it reached.
+
+A report carries `Gaps`: every region of the tree the pass could not
+establish a verdict over. A shard that declined because it was mid-split
+or already draining, a sibling chain severed part-way across the
+keyspace, a leaf whose declared bounds make reachability undecidable,
+and a shard-level budget exhausted with no position to resume from are
+all reported here rather than silently folded into an empty findings
+list.
+
+This matters because the enumeration walks each shard's sibling chain
+from its head, and the chain is the same structure an orphan damages.
+Before issue 3301 a pointer severed mid-keyspace ended the walk, the
+drive read the resulting null resume position as completion, and the
+shard was reported examined and clean - while range scans, which enter
+the chain by descending on their own lower bound, kept reaching the
+segment past the break and reporting orphans in it. Both were telling
+the truth about the same shard.
+
+`VerdictComplete` is true only when `Gaps` is empty. **An empty
+`Findings` list is a clean bill of health only when `IsComplete` and
+`VerdictComplete` are both true.** When either is false the answer is
+"this could not be established", not "there is nothing here", and it
+does not rule an orphan out as the cause of an unbounded WAL.
+
+```csharp verify
+// Dry run first: see what would be repaired, and why anything is refused.
+// One call is one bounded batch, so drive it until IsComplete.
+var findings = new List<OrphanedLeafFinding>();
+var gaps = new List<OrphanedLeafAuditGap>();
+string? cursor = null;
+int refused = 0;
+do
+{
+    OrphanedLeafRepairReport batch =
+        await tree.InspectOrphanedLeavesAsync(cursor, cancellationToken);
+    findings.AddRange(batch.Findings);
+    gaps.AddRange(batch.Gaps);
+    refused += batch.RefusedCount;
+    cursor = batch.ResumeFrom;
+}
+while (cursor is not null);
+
+foreach (OrphanedLeafAuditGap gap in gaps)
+{
+    // Read this BEFORE the findings: a region that could not be judged
+    // contributes no findings by construction.
+    _ = (gap.ShardIndex, gap.Reason, gap.LeafId, gap.KeyHint);
+}
+
+foreach (OrphanedLeafFinding finding in findings)
+{
+    if (finding.IsRefusal)
+    {
+        // Investigate before escalating - a refusal means repair is unsafe.
+        _ = (finding.ShardIndex, finding.LeafId, finding.Disposition, finding.UnverifiedKey);
+    }
+}
+
+if (gaps.Count == 0 && findings.Count == 0)
+{
+    // The only reading that actually rules the defect out: the pass was
+    // driven to completion AND it could judge everything it reached.
+}
+
+if (findings.Count > 0 && refused == 0)
+{
+    cursor = null;
+    do
+    {
+        OrphanedLeafRepairReport batch =
+            await tree.RepairOrphanedLeavesAsync(cursor, cancellationToken);
+        _ = (batch.LeavesWalked, batch.RepairedCount);
+        cursor = batch.ResumeFrom;
+    }
+    while (cursor is not null);
+
+    // Then RE-AUDIT. The repair's own return is not the source of truth.
+}
+```
+
+Both calls are safe to run against a live tree under load, and both are
+idempotent: re-running cannot double-repair, because a leaf already
+unspliced is gone from the chain and a refused one is refused again on
+the same evidence. A pass restarted from `null` re-establishes the truth
+from scratch rather than compounding anything.
+
+Three consequences are worth stating plainly, because each is a way to
+read a correct report incorrectly.
+
+- **An empty `Findings` on a partial batch is not a clean tree.** It
+  says only that the part of the tree *this* batch reached was clean.
+  The clean bill of health requires `IsComplete`.
+- **An empty `Findings` with a non-empty `Gaps` is not a clean tree
+  either.** A region the pass could not judge contributes zero findings
+  by construction, so the clean bill of health requires
+  `VerdictComplete` as well.
+- **If you see a timeout or any transport error, the return value is
+  not authoritative, and its absence is not evidence that nothing
+  happened.** The reply may have been lost after the work landed.
+  Do not guess and do not simply retry: run the audit - which mutates
+  nothing - and let it establish the true state. The safe loop is
+  **audit, repair to completion, then RE-AUDIT**.
+- **A retry is not free even though it is safe.** A second repair pass
+  started while the first is still running mutates the same leaf chains
+  under compare-and-swap. It cannot corrupt the tree, but it wastes the
+  budget re-verifying work the other pass is doing. Drive one pass to
+  completion rather than starting a second.
+
+The work budget is wall-clock, not a leaf count, because the cost of
+this pass is dominated by per-key verification rather than by leaves
+traversed: in the incident above the tree that blew the deadline had
+walked *fewer* leaves (2121) than the tree that returned comfortably
+(2443), but held roughly 83 keys per orphaned leaf, each verified by an
+individual descent. Any leaf cap that admitted the second tree would
+have admitted the first.
+
+One residual bound is worth knowing: a single leaf's key verification is
+atomic and cannot be split, since a partial verification proves nothing
+about safety. A pathological leaf approaching the 100,000-key
+verification ceiling can therefore still overrun on its own. The
+guarantee is bounded work *per call*, not an absolute wall-clock cap.
 
 ## Metrics
 
@@ -1649,6 +1880,7 @@ constraints, and per-tree overrides via the
 | `WalFlushPreflightTimeout` | `TimeSpan` | 5 s | Hard ceiling on the per-shard WAL `FlushAsync` preflight region (the synchronous setup and initial scheduler yield that precede the bounded provider call). If the activation's grain scheduler never resumes the post-yield continuation within the deadline, the slot would sit in `_inFlight` with no provider-call deadline armed (`WalFlushTimeout` only covers the provider call, which has not been issued yet). The faulted preflight surfaces as a `TimeoutException` routed through the normal failure handler, the slot drains, and the `orleans.lattice.wal.flush.preflight.timeouts` counter attributes the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalAppendDispatchTimeout` | `TimeSpan` | 30 s | Hard ceiling on a single writer-side outbound WAL shard append-batch / append dispatch. A dispatch that exceeds it is abandoned and surfaced as a `TimeoutException` so the request pipeline releases its slot rather than back-filling behind a wedged shard until the Orleans response deadline (default 3 minutes). Does **not** fix any wedge mechanism - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge attributable to a specific `(tree, shard)` via the `orleans.lattice.wal.append_dispatch.timeouts` counter in O(timeout) instead of O(response timeout) time. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalDrainBudget` | `TimeSpan` | 75 s | Hard ceiling on how long a per-shard WAL grain's `OnDeactivateAsync` drain may run before the remaining in-flight slots are force-faulted and the chain is released so the activation can finish tearing down. Bounds the host-level SIGTERM drain so the silo's shutdown accounting always settles within bounded time of the SIGTERM, regardless of whether the storage provider is healthy. The drain signals every in-flight flush's linked cancellation token at drain entry (so a co-operative provider gives up promptly), waits for the chain to settle naturally for up to this budget, and then force-faults any slot that has not unlinked with a typed `TimeoutException` so callers parked on `AppendAsync` / `AppendBatchAsync` are released. The matching `orleans.lattice.wal.shard.drain.budget.expirations` counter and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram attribute the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded-drain behaviour. |
+| `StarvationDriveBudget` | `TimeSpan` | 5 min | Hard ceiling on how long a single WAL GC starved-leaf checkpoint drive may run while holding a permit on the per-silo WAL replay concurrency gate, before it abandons its replay and releases that permit (issue #3065). Before this budget existed every await inside the permit-guarded region was passed `CancellationToken.None`, so a drive whose commit-log read never returned held one of a small number of per-silo permits indefinitely and could not be cancelled; the gate drained and the silo presented as an activation outage. A caller-side timeout does not address this - the sweep's grain call already times out at the Orleans response-timeout default while the grain-side method keeps running and keeps holding its permit - so the budget is enforced inside the region, with a real `CancellationTokenSource` for work that honours cancellation and a bound on the drive's own wait for host-supplied storage that does not. The permit is acquired and released in the outer frame so abandonment cannot skip the release. Default is `4 * WalDrainBudget`, comfortably above a legitimately slow full replay. Unlike most timeout options here, **`InfiniteTimeSpan` is rejected** rather than honoured, because an infinite budget restores exactly the outage this option bounds; zero and negative values are rejected too. An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` and returns the `LeafStarvationDriveOutcome.TimedOut` verdict. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. Trimmed by a WAL GC driver: the built-in `WalGcInterval` scheduler (on by default), or the replication maintenance grain for replicated trees. |
 | `WalGcInterval` | `TimeSpan` | 1 hour (enabled) | Cadence at which the per-silo core WAL garbage-collection scheduler runs `ILatticeWalGc.RunOnceAsync` over every registered tree, so a durable-WAL host gets bounded WAL retention without the replication package and for non-replicated trees. Default-on (hourly) makes `WalRetention` effective out of the box; a pass is retention housekeeping, so the coarse default keeps the storage cost low (cost scales with `trees x WalPartitions` per silo). Composes with the replication maintenance grain - `RunOnceAsync` and the underlying WAL `TrimAsync` are idempotent, and the pass honours the minimum consumer cursor and leaf-materialiser checkpoint floor, so it never over-trims. Global knob read from the default (unnamed) options; per-tree overrides do not apply. `TimeSpan.Zero` or a negative value disables the scheduler. |
 | `WalMaxRetainedBytes` | `long?` | `null` | Optional advisory ceiling on retained WAL bytes per tree. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (`BytePressureTriggered`), and `BytePressureOverThreshold` reports whether the tree is still over after the trim. Advisory only - the GC never trims past the safe frontier to honour it. `null` disables the policy. |

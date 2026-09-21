@@ -416,6 +416,30 @@ internal sealed partial class LatticeGrain
         string? endExclusive,
         CancellationToken cancellationToken)
     {
+        var (filter, _) = await ResolveRangeReadCoverageAsync(
+            startInclusive, endExclusive, cancellationToken);
+        return filter;
+    }
+
+    /// <summary>
+    /// Resolves the read-path key-filter for a range read exactly as
+    /// <see cref="ResolveRangeReadKeyFilterAsync"/> does, and additionally
+    /// reports which of the three possible gate outcomes produced it.
+    /// <para>
+    /// The decision is three-way (admit the range, narrow it, deny it) but the
+    /// filter it is projected onto is two-way, so a plain deny and a partial
+    /// allow are indistinguishable once the predicate is all that is left. That
+    /// collapse is why a denied scan is reported to callers as an ordinary empty
+    /// result. Keeping the coverage alongside the filter is what lets
+    /// <see cref="GetRangeReadGateCoverageAsync"/> answer for it.
+    /// </para>
+    /// </summary>
+    private async ValueTask<(Func<string, bool>? Filter, LatticeRangeReadGateCoverage Coverage)>
+        ResolveRangeReadCoverageAsync(
+            string? startInclusive,
+            string? endExclusive,
+            CancellationToken cancellationToken)
+    {
         var decision = await AuthorizeAsync(
             LatticeOperation.RangeRead, key: null, startInclusive, endExclusive, cancellationToken);
         // Fail-closed: a plain deny carries no key-filter, so translate it into a
@@ -424,10 +448,23 @@ internal sealed partial class LatticeGrain
         // every key of a range the caller is not authorized to read).
         if (!decision.Allowed)
         {
-            return static _ => false;
+            return (static _ => false, LatticeRangeReadGateCoverage.Denied);
         }
 
-        return decision.KeyFilter;
+        return decision.KeyFilter is null
+            ? (null, LatticeRangeReadGateCoverage.Unrestricted)
+            : (decision.KeyFilter, LatticeRangeReadGateCoverage.Filtered);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeRangeReadGateCoverage> GetRangeReadGateCoverageAsync(
+        string? startInclusive = null,
+        string? endExclusive = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, coverage) = await ResolveRangeReadCoverageAsync(
+            startInclusive, endExclusive, cancellationToken);
+        return coverage;
     }
 
     /// <summary>

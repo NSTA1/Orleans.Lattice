@@ -36,10 +36,23 @@
 -- indexes or some combinations of them to make it work. It looks like fitting strategy
 -- could be to use table compression.
 --
--- 6. For the aforementioned reasons, grain state DELETE will set NULL to the data fields
--- and updates the Version number normally. This should alleviate the need for index or
--- statistics maintenance with the loss of some bytes of storage space. The table can be scrubbed
--- in a separate maintenance operation.
+-- 6. Upstream, grain state DELETE sets NULL to the data fields and updates the Version
+-- number normally, on the reasoning that this alleviates the need for index or statistics
+-- maintenance at the cost of some bytes of storage space, and that the table can be
+-- scrubbed in a separate maintenance operation.
+--
+-- This deployment deliberately does NOT do that. It defines DeleteStorageKey below and
+-- runs with AdoNetGrainStorageOptions.DeleteStateOnClear enabled, so a cleared grain row
+-- is removed outright. The upstream reasoning does not hold for this workload: several of
+-- its grain types are keyed generationally (a per-leaf generation counter, a per-cursor
+-- GUID), so a nulled row is never revisited by a later write and the population only ever
+-- grows. Measured on the deployed container, 29.8% of OrleansStorage rows were nulled
+-- tombstones accumulating at roughly 3,000/day, which costs row count, IX_OrleansStorage
+-- depth and scan cost, and makes it impossible to tell a live grain from a dead one.
+-- The separate maintenance operation upstream assumes is not available here: this is an
+-- embedded SQLite file inside a running container, with no scheduled maintenance window.
+-- Note this reclaims no space on its own - a nulled row holds no payload bytes by
+-- construction - it bounds the row count.
 --
 -- 7. In the storage operations queries the columns need to be in the exact same order
 -- since the storage table operations support optionally streaming.
@@ -90,6 +103,33 @@ CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, Grai
 -- the total_changes() / temp-table version bookkeeping is connection-scoped and
 -- independent of any surrounding transaction. Each statement therefore
 -- auto-commits and no open transaction can leak onto a pooled connection.
+--
+-- The two trailing SELECTs report the new version to Orleans, which reads them
+-- with SingleOrDefault(): more than one returned row throws
+-- InvalidOperationException("Sequence contains more than one element") out of
+-- AdoNetGrainStorage.WriteStateAsync. Both therefore compute the version as a
+-- scalar rather than selecting Version back out of OrleansStorage, because that
+-- read returns one row PER STORAGE ROW matching the grain identity. Nothing in
+-- this schema constrains that to one row - IX_OrleansStorage is deliberately
+-- non-unique (see design criterion 4 above), so a grain that ever acquires a
+-- second row becomes permanently unwritable while still reading cleanly, since
+-- ReadFromStorageKey below caps itself with LIMIT 1. Observed in production as a
+-- storm of write failures against leaf, internal and leaf-snapshot rows.
+--
+-- This is a deliberate divergence from the upstream script this file is derived
+-- from, which reads the version back out of the table in both queries and is
+-- affected. Reported as dotnet/orleans#11303; every other Orleans dialect
+-- (PostgreSQL, SQL Server, MySQL, Oracle) already computes the version as a
+-- scalar, so revert this local change once upstream SQLite does the same.
+--
+-- The scalar is exact, not an approximation of the stored value. The UPDATE
+-- matches only on Version = @GrainStateVersion and sets Version = Version + 1,
+-- so a successful update always lands @GrainStateVersion + 1; the INSERT fires
+-- only when @GrainStateVersion IS NULL and always writes 1. Exactly one of the
+-- two can fire - the UPDATE cannot match when @GrainStateVersion is NULL
+-- (Version = NULL is never true) and the INSERT is gated on it being NULL - so
+-- @GrainStateVersion IS NULL discriminates them precisely. This also removes a
+-- redundant indexed lookup from every write.
 INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('WriteToStorageKey', '
     CREATE TEMP TABLE IF NOT EXISTS OrleansStorageWriteState
@@ -125,13 +165,8 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
         AND ServiceId = @ServiceId
     );
 
-    SELECT Version AS NewGrainStateVersion FROM OrleansStorage
-    WHERE total_changes() > (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
-        AND GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
-        AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
-        AND GrainTypeString = @GrainTypeString
-        AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId;
+    SELECT (CASE WHEN @GrainStateVersion IS NULL THEN 1 ELSE @GrainStateVersion + 1 END) AS NewGrainStateVersion
+    WHERE total_changes() > (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1);
 
     SELECT @GrainStateVersion AS NewGrainStateVersion
     WHERE total_changes() = (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
@@ -156,6 +191,11 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Clears the grain state by setting the payload to null and incrementing the version for consistency.
+-- The version is computed as a scalar for the same reason as WriteToStorageKey
+-- above: selecting Version back out of OrleansStorage returns one row per
+-- storage row, and Orleans' SingleOrDefault() throws on more than one. The
+-- UPDATE matches only on Version = @GrainStateVersion and sets Version + 1, so
+-- a cleared row is always at @GrainStateVersion + 1.
 INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('ClearStorageKey', '
     UPDATE OrleansStorage
@@ -171,13 +211,55 @@ INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
         AND ServiceId = @ServiceId
         AND Version = @GrainStateVersion;
 
-    SELECT Version AS NewGrainStateVersion FROM OrleansStorage
-    WHERE changes() > 0
-        AND GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
+    SELECT @GrainStateVersion + 1 AS NewGrainStateVersion
+    WHERE changes() > 0;
+
+    SELECT @GrainStateVersion AS NewGrainStateVersion
+    WHERE changes() = 0
+        AND @GrainStateVersion IS NOT NULL;
+');
+
+-- Removes the grain state row outright. Orleans issues this instead of ClearStorageKey
+-- when AdoNetGrainStorageOptions.DeleteStateOnClear is enabled, which this host sets for
+-- the SQLite branch in DurabilitySelector.ConfigureGrainStorage. See design criterion 6
+-- above for why this deployment deletes rather than nulls.
+--
+-- The two queries are coupled and must land together. Orleans looks the query text up by
+-- the exact key literal 'DeleteStorageKey' during AdoNetGrainStorage.Init - the key it
+-- selects for in its public DefaultInitializationQuery constant - and throws at SILO
+-- STARTUP, not at the first clear, when the option is enabled and the key is absent.
+-- ClearStorageKey above is retained because Orleans resolves it unconditionally at Init
+-- whether or not the delete path is in use.
+--
+-- The version is reported as a scalar for exactly the same reason as WriteToStorageKey
+-- and ClearStorageKey above, and the reason bites harder here. The upstream PostgreSQL
+-- form of this query uses DELETE ... RETURNING Version + 1, which emits one row PER
+-- DELETED ROW. Nothing in this schema constrains a grain identity to a single row -
+-- IX_OrleansStorage is deliberately non-unique (design criterion 4) - so against a grain
+-- that had acquired a duplicate row, RETURNING would hand Orleans two rows and its
+-- SingleOrDefault() would throw InvalidOperationException("Sequence contains more than
+-- one element"), reintroducing the precise wedge the scalar form was adopted to remove.
+-- Computing the version as a scalar returns exactly one row however many were deleted.
+--
+-- The scalar is exact rather than an approximation. The DELETE matches only on
+-- Version = @GrainStateVersion, so the row it removed was at @GrainStateVersion and the
+-- version Orleans should carry forward for its CheckVersionInconsistency check is
+-- @GrainStateVersion + 1. When nothing matched, reporting @GrainStateVersion back
+-- unchanged is what makes Orleans raise an InconsistentStateException, since a reported
+-- version equal to the version held in memory is its definition of a conflict.
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
+('DeleteStorageKey', '
+    DELETE FROM OrleansStorage
+    WHERE
+        GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
         AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
         AND GrainTypeString = @GrainTypeString
         AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId;
+        AND ServiceId = @ServiceId
+        AND Version = @GrainStateVersion;
+
+    SELECT @GrainStateVersion + 1 AS NewGrainStateVersion
+    WHERE changes() > 0;
 
     SELECT @GrainStateVersion AS NewGrainStateVersion
     WHERE changes() = 0

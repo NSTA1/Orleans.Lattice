@@ -122,12 +122,20 @@ public partial class TreeShardConsolidationGrainTests
 
         ShardMap? persistedMap = existingMap ?? ShardMap.CreateDefault(VirtualShardCount, 2);
         registry.GetShardMapAsync(TreeId).Returns(_ => Task.FromResult<ShardMap?>(persistedMap));
-        registry.SetShardMapAsync(TreeId, Arg.Any<ShardMap>()).Returns(ci =>
-        {
-            persistedMap = (ShardMap)ci[1];
-            log.Record("registry.SetShardMap");
-            return Task.CompletedTask;
-        });
+        // Mirrors LatticeRegistryGrain.ReassignSlotsAsync: the slot diff is
+        // applied to the live map inside the call, so a coordinator carrying a
+        // stale fallback view cannot erase another coordinator's reassignment.
+        registry.ReassignSlotsAsync(TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>())
+            .Returns(ci =>
+            {
+                var basis = persistedMap ?? (ShardMap)ci[3];
+                var newSlots = (int[])basis.Slots.Clone();
+                foreach (var slot in (int[])ci[1])
+                    newSlots[slot] = (int)ci[2];
+                persistedMap = new ShardMap { Slots = newSlots, Version = basis.Version + 1 };
+                log.Record("registry.ReassignSlots");
+                return Task.FromResult(persistedMap);
+            });
 
         var donor = Substitute.For<IShardRootGrain>();
         var survivor = Substitute.For<IShardRootGrain>();
@@ -401,6 +409,8 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.PersistedMap!.Slots, Is.EqualTo(mapBefore).AsCollection,
             "Opening the shadow window must leave routing untouched so the tree stays fully online.");
         await h.Registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+        await h.Registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
     }
 
     [Test]
@@ -565,7 +575,7 @@ public partial class TreeShardConsolidationGrainTests
         await h.Grain.SwapAsync();
 
         Assert.That(h.Log.IndexOf("donor.MarkLeavesMovedAway"), Is.LessThan(h.Log.IndexOf("donor.EnterReject")));
-        Assert.That(h.Log.IndexOf("donor.EnterReject"), Is.LessThan(h.Log.IndexOf("registry.SetShardMap")),
+        Assert.That(h.Log.IndexOf("donor.EnterReject"), Is.LessThan(h.Log.IndexOf("registry.ReassignSlots")),
             "Flipping first would let a stale-routing reader serve a value the survivor has superseded.");
     }
 
@@ -594,7 +604,7 @@ public partial class TreeShardConsolidationGrainTests
 
         Assert.That(h.Log.IndexOf("survivor.MergeMany"), Is.LessThan(h.Log.IndexOf("survivor.ReclaimSlots")),
             "Unsealing before the copy is authoritative would expose a partially drained survivor.");
-        Assert.That(h.Log.IndexOf("survivor.ReclaimSlots"), Is.LessThan(h.Log.IndexOf("registry.SetShardMap")),
+        Assert.That(h.Log.IndexOf("survivor.ReclaimSlots"), Is.LessThan(h.Log.IndexOf("registry.ReassignSlots")),
             "Flipping onto a still-sealed survivor makes every folded key permanently unreachable.");
     }
 
@@ -632,6 +642,33 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.PersistedMap!.Slots[0], Is.EqualTo(4),
             "A fold must not clobber a slot it does not own.");
         Assert.That(h.PersistedMap!.Slots[1], Is.EqualTo(0));
+    }
+
+    /// <summary>
+    /// Call-site guard. The fold must apply its slot diff through the
+    /// registry's single-call reassignment, never by composing
+    /// <c>GetShardMapAsync</c> with <c>SetShardMapAsync</c> here.
+    /// <para>
+    /// Non-reentrancy serialises each individual grain call, not a sequence of
+    /// two, so a caller-side get-modify-set lets a concurrent split persist in
+    /// the gap and then erases it. The split's moved slots would keep routing
+    /// to the shard it had already drained, which is how an acknowledged write
+    /// goes missing. This asserts the shape rather than the outcome, because a
+    /// test that only inspected the resulting map would pass either way
+    /// whenever the two coordinators happen not to interleave.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Swap_applies_its_slot_diff_without_a_caller_side_get_modify_set()
+    {
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Swap));
+
+        await h.Grain.SwapAsync();
+
+        await h.Registry.Received(1).ReassignSlotsAsync(
+            TreeId, Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
+        await h.Registry.DidNotReceive().GetShardMapAsync(TreeId);
+        await h.Registry.DidNotReceive().SetShardMapAsync(TreeId, Arg.Any<ShardMap>());
     }
 
     [Test]
@@ -862,6 +899,8 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.State.State.Cancelled, Is.True);
         Assert.That(h.State.State.Complete, Is.False);
         await h.Registry.DidNotReceive().SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+        await h.Registry.DidNotReceive()
+            .ReassignSlotsAsync(Arg.Any<string>(), Arg.Any<int[]>(), Arg.Any<int>(), Arg.Any<ShardMap>());
     }
 
     [Test]

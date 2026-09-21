@@ -344,6 +344,43 @@ public class LatticeOptionsValidatorTests
         Assert.That(LatticeOptions.DefaultWalReplayMaxRecordsPerTurn, Is.EqualTo(256));
     }
 
+    // Issue #2898. A width below one cannot be served at all: a zero-width read
+    // returns nothing and the replay loop never advances, so the floor is a
+    // real servability boundary rather than a tidiness convention. There is
+    // deliberately no upper bound - every positive width IS servable, because
+    // the width is a request the provider may refuse and a refusal for memory
+    // pressure is what the narrow-and-retry already handles. An invented
+    // ceiling would be a constant with no derivation, which is the defect class
+    // this epic is about.
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(-256)]
+    public void WalReplaySliceBudget_below_one_fails(int value)
+    {
+        var result = Validate(o => o.WalReplaySliceBudget = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage,
+            Does.Contain(nameof(LatticeOptions.WalReplaySliceBudget)));
+    }
+
+    [TestCase(1)]
+    [TestCase(64)]
+    [TestCase(256)]
+    [TestCase(int.MaxValue)]
+    public void WalReplaySliceBudget_positive_passes(int value)
+    {
+        var result = Validate(o => o.WalReplaySliceBudget = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalReplaySliceBudget_default_is_256()
+    {
+        Assert.That(new LatticeOptions().WalReplaySliceBudget, Is.EqualTo(256));
+        Assert.That(LatticeOptions.DefaultWalReplaySliceBudget, Is.EqualTo(256));
+    }
+
     [TestCase(-1)]
     [TestCase(-100)]
     public void LeafSnapshotReClassifyEveryNCheckpoints_must_be_non_negative(int value)
@@ -761,6 +798,66 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void StarvationDriveBudget_default_is_four_wal_drain_budgets()
+    {
+        // Issue #3065. Asserted as the multiple rather than as the literal five
+        // minutes, because the derivation is what is load-bearing: the budget
+        // must exceed a legitimately slow full replay, and a full replay is
+        // bounded by the drain budget per partition. Restating "5 minutes"
+        // alone would let the two drift apart silently.
+        Assert.That(
+            LatticeOptions.DefaultStarvationDriveBudget,
+            Is.EqualTo(4 * LatticeOptions.DefaultWalDrainBudget));
+        Assert.That(new LatticeOptions().StarvationDriveBudget, Is.EqualTo(LatticeOptions.DefaultStarvationDriveBudget));
+
+        // The declaration-order hazard this default sits one edit away from: a
+        // static readonly derived from a field declared BELOW it initialises
+        // from that field's default, so moving this declaration above
+        // DefaultWalDrainBudget yields TimeSpan.Zero - silently, and the
+        // "4 x" assertion above would still hold, because 0 == 4 * 0. Pin the
+        // absolute value too, so the reordering cannot pass.
+        Assert.That(LatticeOptions.DefaultStarvationDriveBudget, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        Assert.That(LatticeOptions.DefaultStarvationDriveBudget, Is.GreaterThan(TimeSpan.Zero));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_positive_passes()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.FromSeconds(30));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void StarvationDriveBudget_infinite_fails()
+    {
+        // Deliberately NOT an escape hatch, unlike WalSaturationSampleInterval
+        // above. An infinite budget restores exactly the defect this option
+        // exists to bound: a drive parked in host-supplied storage holding one
+        // of two per-silo replay permits forever. A knob whose extreme value
+        // reintroduces the outage is a trap, so it is rejected at validation
+        // rather than honoured at runtime.
+        var result = Validate(o => o.StarvationDriveBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_zero_fails()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
+    public void StarvationDriveBudget_negative_fails()
+    {
+        var result = Validate(o => o.StarvationDriveBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.StarvationDriveBudget)));
+    }
+
+    [Test]
     public void WalSaturationThrottledRatio_default_is_zero_point_seventy_five()
     {
         Assert.That(new LatticeOptions().WalSaturationThrottledRatio, Is.EqualTo(0.75));
@@ -967,6 +1064,37 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void WalDrainLagConsumerFreshness_default_is_five_minutes()
+    {
+        Assert.That(new LatticeOptions().WalDrainLagConsumerFreshness, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        Assert.That(LatticeOptions.DefaultWalDrainLagConsumerFreshness, Is.EqualTo(TimeSpan.FromMinutes(5)));
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_positive_passes()
+    {
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.FromMinutes(1));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_zero_passes()
+    {
+        // Zero is the documented compatibility setting: the lag plane
+        // includes every registered consumer, matching the historical input.
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainLagConsumerFreshness_negative_fails()
+    {
+        var result = Validate(o => o.WalDrainLagConsumerFreshness = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalDrainLagConsumerFreshness)));
+    }
+
+    [Test]
     public void DefaultLockLeaseDuration_zero_fails()
     {
         // A zero fallback lease is granted verbatim, so LeaseExpiresAtTicks equals
@@ -1117,5 +1245,33 @@ public class LatticeOptionsValidatorTests
         var result = Validate(o => o.HotShardMinShardEntries = -1);
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardMinShardEntries)));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(LatticeOptions.DefaultLeafSnapshotMaxCoverageLagSeconds)]
+    [TestCase(430)]
+    [TestCase(LatticeOptions.MaxLeafSnapshotCoverageLagSeconds)]
+    public void LeafSnapshotMaxCoverageLagSeconds_within_range_succeeds(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotMaxCoverageLagSeconds = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    /// <summary>
+    /// The ceiling is a real bound, not decoration. The option exists so that a
+    /// leaf held permanently active by read traffic cannot hold its tree's WAL
+    /// trim floor indefinitely (issue #3194); a lag configured in weeks concedes
+    /// exactly the property the option was added to guarantee, so it is rejected
+    /// at configuration time rather than silently accepted.
+    /// </summary>
+    [TestCase(-1)]
+    [TestCase(LatticeOptions.MaxLeafSnapshotCoverageLagSeconds + 1)]
+    [TestCase(int.MaxValue)]
+    public void LeafSnapshotMaxCoverageLagSeconds_outside_range_fails(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotMaxCoverageLagSeconds = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)));
     }
 }

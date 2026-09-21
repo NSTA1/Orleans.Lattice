@@ -386,8 +386,8 @@ public sealed class RepoContextVectorWriterMembershipTests
         await writer.AddMembersAsync(RepoId, new[] { embeddedKey }, Ct);
         await writer.MarkContentlessAsync(RepoId, new[] { contentlessKey }, Ct);
 
-        var embedded = await writer.ProbeEmbeddedMembersAsync(
-            RepoId, new[] { embeddedKey, contentlessKey }, Ct);
+        var embedded = (await writer.ProbeEmbeddedMembersAsync(
+            RepoId, new[] { embeddedKey, contentlessKey }, Ct)).SourceIds;
 
         Assert.Multiple(() =>
         {
@@ -408,7 +408,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         var keyB = RepoContextKeys.File(RepoId, "src/B.cs");
         await writer.AddMembersAsync(RepoId, new[] { keyA, keyB }, Ct);
 
-        var probed = await writer.ProbeEmbeddedMembersAsync(RepoId, new[] { keyA }, Ct);
+        var probed = (await writer.ProbeEmbeddedMembersAsync(RepoId, new[] { keyA }, Ct)).SourceIds;
         var whole = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
 
         Assert.Multiple(() =>
@@ -433,8 +433,8 @@ public sealed class RepoContextVectorWriterMembershipTests
         await writer.AddMembersAsync(RepoId, new[] { embeddedKey }, Ct);
         await writer.MarkContentlessAsync(RepoId, new[] { contentlessKey }, Ct);
 
-        var covered = await writer.ProbeCoveredSourceIdsAsync(
-            RepoId, new[] { embeddedKey, contentlessKey, uncoveredKey }, Ct);
+        var covered = (await writer.ProbeCoveredSourceIdsAsync(
+            RepoId, new[] { embeddedKey, contentlessKey, uncoveredKey }, Ct)).SourceIds;
 
         Assert.Multiple(() =>
         {

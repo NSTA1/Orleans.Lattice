@@ -1285,6 +1285,92 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     }
 
     /// <inheritdoc />
+    public async Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+
+        var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+            .InspectOrphanedLeavesAsync(resumeFrom, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToOrphanedLeafReport(report, treeId);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+
+        var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+            .RepairOrphanedLeavesAsync(resumeFrom, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToOrphanedLeafReport(report, treeId);
+    }
+
+    /// <summary>
+    /// Projects the core orphaned-leaf report onto the control-API mirror, echoing
+    /// the caller's own unqualified tree name so the tenant composition never leaks
+    /// onto the wire.
+    /// </summary>
+    private static TreeOrphanedLeafReport ToOrphanedLeafReport(
+        OrphanedLeafRepairReport report, string treeId)
+    {
+        var source = report.Findings;
+        var findings = ImmutableArray.CreateBuilder<TreeOrphanedLeafFinding>(source?.Count ?? 0);
+        if (source is not null)
+        {
+            foreach (var finding in source)
+            {
+                findings.Add(new TreeOrphanedLeafFinding
+                {
+                    ShardIndex = finding.ShardIndex,
+                    LeafId = finding.LeafId ?? string.Empty,
+                    LowKeyInclusive = finding.LowKeyInclusive,
+                    HighKeyExclusive = finding.HighKeyExclusive,
+                    KeyCount = finding.KeyCount,
+                    VerifiedKeyCount = finding.VerifiedKeyCount,
+                    Disposition = (TreeOrphanedLeafDisposition)finding.Disposition,
+                    UnverifiedKey = finding.UnverifiedKey,
+                });
+            }
+        }
+
+        var gapSource = report.Gaps;
+        var gaps = ImmutableArray.CreateBuilder<TreeOrphanedLeafGap>(gapSource?.Count ?? 0);
+        if (gapSource is not null)
+        {
+            foreach (var gap in gapSource)
+            {
+                gaps.Add(new TreeOrphanedLeafGap
+                {
+                    ShardIndex = gap.ShardIndex,
+                    Reason = (TreeOrphanedLeafGapReason)gap.Reason,
+                    LeafId = gap.LeafId,
+                    KeyHint = gap.KeyHint,
+                });
+            }
+        }
+
+        return new TreeOrphanedLeafReport
+        {
+            TreeId = treeId,
+            DryRun = report.DryRun,
+            LeavesWalked = report.LeavesWalked,
+            Findings = findings.MoveToImmutable(),
+            Gaps = gaps.MoveToImmutable(),
+            ResumeFrom = report.ResumeFrom,
+        };
+    }
+
+    /// <inheritdoc />
     public async Task<TreeWalMovePlan> PlanWalMoveAsync(
         string treeId, int partition, string targetProviderKey,
         CancellationToken cancellationToken = default)

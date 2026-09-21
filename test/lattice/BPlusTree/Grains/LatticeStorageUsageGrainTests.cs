@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -43,10 +44,13 @@ public sealed class LatticeStorageUsageGrainTests
         int walPartitions,
         Func<int, Task<ShardStorageUsage>> shardBehaviour,
         Func<int, Task<long>> walBehaviour,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        string? treeId = null,
+        Func<int, Task<long>>? walPhysicalBehaviour = null)
     {
+        var tree = treeId ?? TreeId;
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("ol.lsu", TreeId));
+        context.GrainId.Returns(GrainId.Create("ol.lsu", tree));
 
         var factory = Substitute.For<IGrainFactory>();
         options ??= new LatticeOptions();
@@ -54,8 +58,8 @@ public sealed class LatticeStorageUsageGrainTests
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(Math.Max(16, shardCount), shardCount);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new RoutingInfo(TreeId, map));
-        factory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new RoutingInfo(tree, map));
+        factory.GetGrain<ILattice>(tree).Returns(lattice);
 
         for (var i = 0; i < shardCount; i++)
         {
@@ -63,7 +67,7 @@ public sealed class LatticeStorageUsageGrainTests
             var shard = Substitute.For<IShardRootGrain>();
             shard.GetStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(_ => shardBehaviour(idx));
             shard.RefreshLeafByteFootprintsAsync(Arg.Any<CancellationToken>()).Returns(_ => shardBehaviour(idx));
-            factory.GetGrain<IShardRootGrain>($"{TreeId}/{idx}").Returns(shard);
+            factory.GetGrain<IShardRootGrain>($"{tree}/{idx}").Returns(shard);
         }
 
         for (var p = 0; p < walPartitions; p++)
@@ -72,7 +76,13 @@ public sealed class LatticeStorageUsageGrainTests
             var wal = Substitute.For<IWalShardGrain>();
             wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
                 .Returns(_ => walBehaviour(partition));
-            factory.GetGrain<IWalShardGrain>($"{TreeId}/{partition}").Returns(wal);
+            // Physical size defaults to mirroring retained, which is the
+            // shape of a backend holding no dead bytes. A test that needs
+            // the two to diverge - the whole point of the split - passes
+            // walPhysicalBehaviour explicitly.
+            wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>())
+                .Returns(_ => (walPhysicalBehaviour ?? walBehaviour)(partition));
+            factory.GetGrain<IWalShardGrain>($"{tree}/{partition}").Returns(wal);
         }
 
         var usageMetrics = new LatticeStorageUsageMetrics();
@@ -96,6 +106,107 @@ public sealed class LatticeStorageUsageGrainTests
             SnapshotBytes = snapshot,
             LiveKeys = liveKeys,
         });
+
+    /// <summary>
+    /// Scrapes one observable gauge for one tree, returning <c>null</c> when the
+    /// gauge reported no measurement at all for it. The null/value distinction
+    /// is the whole point: it is what separates "never measured" from
+    /// "measured and zero" (issue #2693).
+    /// </summary>
+    private static long? ReadGauge(string instrument, string tree)
+    {
+        long? found = null;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (inst, l) =>
+            {
+                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter) && inst.Name == instrument)
+                {
+                    l.EnableMeasurementEvents(inst);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            foreach (var t in tags)
+            {
+                if (t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree)
+                {
+                    found = value;
+                }
+            }
+        });
+        listener.Start();
+        listener.RecordObservableInstruments();
+        return found;
+    }
+
+    // --- Issue #2693: the gauges must agree with real stored state ---
+
+    /// <summary>
+    /// End-to-end ground truth for issue #2693, across the real aggregation
+    /// pipeline rather than against the metrics sink in isolation: the shard
+    /// roots hold a known-nonzero footprint, the grain assembles and publishes
+    /// the report, and the gauges must read back exactly that footprint. This
+    /// is the assertion that would have contradicted the retracted #2692
+    /// diagnosis, which read a zero off these gauges while 137 MB of
+    /// leaf-snapshot state existed on disk.
+    /// </summary>
+    [Test]
+    public async Task GetReportAsync_publishes_the_real_shard_footprint_to_the_byte_gauges()
+    {
+        var tree = $"usage-e2e-{Guid.NewGuid():N}";
+        var grain = CreateGrain(
+            shardCount: 2,
+            walPartitions: 1,
+            shardBehaviour: _ => Usage(leaf: 1_000, snapshot: 137_000, liveKeys: 9),
+            walBehaviour: _ => Task.FromResult(500L),
+            treeId: tree);
+
+        await grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReadGauge(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(2_000),
+                "the leaf-state gauge must report the summed shard footprint, not a zero");
+            Assert.That(ReadGauge(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(274_000),
+                "the snapshot gauge must report the summed shard footprint, not a zero");
+            Assert.That(ReadGauge(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(276_500));
+            Assert.That(ReadGauge(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+                "a report assembled from the shard roots is a deep measurement");
+        });
+    }
+
+    /// <summary>
+    /// The same pipeline with a genuinely empty tree: every gauge must export
+    /// an explicit zero, and the depth gauge must read 1. Paired with
+    /// <see cref="GetReportAsync_publishes_the_real_shard_footprint_to_the_byte_gauges"/>
+    /// this pins both directions of the discrimination - a measured zero is
+    /// reported as a zero, and (in
+    /// <c>LatticeStorageUsageMetricsTests</c>) an unmeasured surface is
+    /// reported as nothing at all.
+    /// </summary>
+    [Test]
+    public async Task GetReportAsync_publishes_an_explicit_zero_for_a_genuinely_empty_tree()
+    {
+        var tree = $"usage-e2e-{Guid.NewGuid():N}";
+        var grain = CreateGrain(
+            shardCount: 2,
+            walPartitions: 1,
+            shardBehaviour: _ => Usage(leaf: 0, snapshot: 0, liveKeys: 0),
+            walBehaviour: _ => Task.FromResult(0L),
+            treeId: tree);
+
+        await grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReadGauge(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(0));
+            Assert.That(ReadGauge(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(0));
+            Assert.That(ReadGauge(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
+                "an empty tree was still measured, so the depth gauge must say so");
+        });
+    }
 
     // --- Problem 1: a failed shard must not silently understate the tree ---
 
@@ -165,6 +276,37 @@ public sealed class LatticeStorageUsageGrainTests
             Assert.That(report.LiveKeys, Is.EqualTo(15));
             Assert.That(report.WalRetainedBytes, Is.EqualTo(14));
             Assert.That(report.TotalBytes, Is.EqualTo(344));
+        });
+    }
+
+    [Test]
+    public async Task GetReportAsync_totals_physical_bytes_not_live_payload()
+    {
+        // The defect issue #3107 measured: a log-structured WAL reclaims
+        // space only by rewriting the file, so payload that has been trimmed
+        // but not yet compacted is real occupancy the retained figure does
+        // not count. Here each of the two partitions holds 7 live bytes
+        // inside a 50-byte file, the ~7x gap a real shard reaches as dead
+        // bytes accumulate. The report must carry both, and the total - the
+        // number a capacity decision is made on - must be the physical one.
+        var grain = CreateGrain(
+            shardCount: 3,
+            walPartitions: 2,
+            shardBehaviour: _ => Usage(leaf: 100, snapshot: 10, liveKeys: 5),
+            walBehaviour: _ => Task.FromResult(7L),
+            walPhysicalBehaviour: _ => Task.FromResult(50L));
+
+        var report = await grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.False);
+            Assert.That(report.WalRetainedBytes, Is.EqualTo(14), "live payload across both partitions");
+            Assert.That(report.WalPhysicalBytes, Is.EqualTo(100), "actual file footprint across both partitions");
+            Assert.That(
+                report.TotalBytes,
+                Is.EqualTo(430),
+                "330 of shard state plus the 100 physical WAL bytes; totalling the 14 retained bytes instead understates the tree by the dead space, which is the whole defect");
         });
     }
 

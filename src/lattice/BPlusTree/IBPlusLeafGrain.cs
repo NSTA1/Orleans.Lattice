@@ -383,6 +383,46 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task AbandonRetirementAsync();
 
     /// <summary>
+    /// Latches this leaf closed so an operator-invoked orphan repair can
+    /// unsplice it, and returns whether the latch was taken. Reopened by
+    /// <see cref="AbandonRetirementAsync"/>, exactly like
+    /// <see cref="TryBeginRetirementAsync"/>.
+    /// <para>
+    /// This is the same latch <see cref="TryBeginRetirementAsync"/> takes,
+    /// under a <b>different safety argument</b>, and the difference is the
+    /// only reason it is a separate method.
+    /// <see cref="TryBeginRetirementAsync"/> derives its safety from the leaf
+    /// being empty - what it measures is what gets destroyed - and refuses
+    /// anything holding a row. An orphaned leaf is characteristically not
+    /// empty, because rows materialise at activation by WAL replay through a
+    /// predicate keyed on the leaf's shard and declared bounds and never on
+    /// its identity, so an orphan sharing bounds with a live leaf materialises
+    /// a full shadow copy of that leaf's range. The emptiness gate therefore
+    /// refuses precisely the leaves that need retiring, which is why the
+    /// empty-leaf reclaim pass has never been able to dispose of one
+    /// (issue 3269).
+    /// </para>
+    /// <para>
+    /// <b>The replacement argument is the caller's to make, and this method
+    /// cannot check it.</b> A leaf sees only itself, and unreachability is a
+    /// property of the tree. Before calling this, the shard root must have
+    /// proven that no descent from the root reaches this leaf, and that every
+    /// key this leaf holds is readable from the descent-reachable leaf that
+    /// owns it. The first makes the row set frozen - no write can be routed
+    /// here - and the second makes clearing the leaf lossless. Calling this
+    /// without both proofs destroys data.
+    /// </para>
+    /// <para>
+    /// What it does still check: no mutation in flight, and no split, seal or
+    /// prepared-transaction state that could resurrect rows after the
+    /// caller's proof was taken. A mutation in flight is reported as a
+    /// refusal rather than waited out, because on a leaf no descent reaches it
+    /// is evidence the unreachability finding is wrong.
+    /// </para>
+    /// </summary>
+    Task<bool> TryBeginOrphanRetirementAsync();
+
+    /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
@@ -390,6 +430,52 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>Returns the tree ID this leaf is associated with, or <c>null</c> if not yet set.</summary>
     Task<string?> GetTreeIdAsync();
+
+    /// <summary>
+    /// Drives this leaf's WAL replay forward and reports, per leaf, whether the
+    /// persisted checkpoint actually advanced (issue #2692 Half B). Called by the
+    /// WAL GC blocked-leaf sweep against the leaf whose unusable durable
+    /// materialiser pin is blocking its tree's cursor floor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists rather than a read-only touch.</b> The per-partition
+    /// checkpoint advance is reached from exactly one call site in the whole
+    /// solution, inside <c>OnActivateAsync</c>. For a leaf that is <i>already
+    /// active</i> that site is not merely unlikely to run, it is unreachable, so
+    /// a resident leaf never replays, its checkpoint stays at the sentinel, its
+    /// Zero block pin is permanent, and its tree cannot trim. The sweep's
+    /// previous touch was a read-only <see cref="GetTreeIdAsync"/> chosen because
+    /// "the work is done by activation, not by the call" - correct for a dormant
+    /// leaf and precisely the defect for a live one, which returns promptly and
+    /// replays nothing.
+    /// </para>
+    /// <para>
+    /// <b>Why replaying a live leaf is safe.</b> The checkpoint is a <i>read</i>
+    /// position, not an applied position - the highest offset this leaf has
+    /// scanned, inclusive. Re-applying an entry is idempotent under the CRDT and
+    /// HLC merge, and the per-leaf range and shard filter drops entries this leaf
+    /// does not own while still moving the read position forward. So a drive on a
+    /// live leaf performs exactly the act the claim describes.
+    /// </para>
+    /// <para>
+    /// <b>Why it is <see cref="AlwaysInterleaveAttribute"/>.</b> A drive replays
+    /// the readable WAL window and can run for a long time. Left on the ordinary
+    /// turn-based path it would block every foreground read and write on the leaf
+    /// for its duration, converting a retention defect into a latency outage. The
+    /// leaf bounds itself to one concurrent drive per activation instead, and
+    /// reports <see cref="LeafStarvationDriveOutcome.AlreadyDriving"/> rather than
+    /// stacking a second whole-window replay on the same leaf.
+    /// </para>
+    /// <para>
+    /// Failure propagates to the caller as an ordinary faulted call, which is the
+    /// reason the drive lives on a grain method and not in the activation hook:
+    /// Orleans does not run <c>OnDeactivateAsync</c> when <c>OnActivateAsync</c>
+    /// throws, so a failure there may not legally propagate.
+    /// </para>
+    /// </remarks>
+    [AlwaysInterleave]
+    Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync();
 
     /// <summary>
     /// Stores a grain reference to the parent internal node so this leaf
@@ -476,23 +562,6 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafKeyRange> GetKeyRangeAsync();
 
     /// <summary>
-    /// Stamps an initial projection-checkpoint offset on a freshly
-    /// created leaf so its first activation can skip replaying WAL
-    /// entries that were already materialised into its
-    /// <c>Entries</c> at birth. Called by
-    /// <c>CompleteSplitAsync</c> on the donor leaf with the shard's
-    /// WAL head offset captured at split time, after the donor has
-    /// populated the sibling's entries via
-    /// <see cref="MergeEntriesAsync"/>. Routes through
-    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
-    /// existing unresolved-prepare clamp is honoured; for a sibling
-    /// at birth there are no unresolved prepares so the clamp is a
-    /// no-op. Idempotent: a re-call with a smaller offset is a
-    /// no-op (the underlying seam enforces monotonic non-decrease).
-    /// </summary>
-    Task SetCheckpointOffsetHintAsync(long offset);
-
-    /// <summary>
     /// Seeds every birth-time metadata slot on a freshly created split
     /// sibling in a single round-trip: tree id, shard index, ownership
     /// key range, and the next/prev sibling pointers. Replaces the five
@@ -512,15 +581,42 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Applies a batch of per-partition projection-checkpoint hints in a
-    /// single round-trip. <paramref name="offsetsByPartition"/> index
-    /// <c>p</c> is the WAL head offset to hint for partition <c>p</c>;
-    /// a non-positive entry is skipped. Replaces the per-partition
-    /// <see cref="SetCheckpointOffsetHintAsync"/> fan-out the split
-    /// donor used to issue once per WAL partition, each a separate
-    /// cross-grain round-trip. Each partition's hint is still applied
-    /// under that partition's <c>LatticeApplyOffsetContext</c> scope so
-    /// the sibling's clamp targets the correct offset space.
+    /// single round-trip, stamping initial checkpoint offsets on a freshly
+    /// created leaf so its first activation can skip replaying WAL entries
+    /// that were already materialised into its <c>Entries</c> at birth.
+    /// Called by <c>CompleteSplitAsync</c> on the donor leaf with the
+    /// shard's per-partition WAL head offsets captured at split time, after
+    /// the donor has populated the sibling's entries via
+    /// <see cref="MergeEntriesAsync"/>.
+    /// <para>
+    /// <paramref name="offsetsByPartition"/> index <c>p</c> is the WAL head
+    /// offset to hint for partition <c>p</c>; a non-positive entry is
+    /// skipped. Each partition's hint is applied under that partition's
+    /// <c>LatticeApplyOffsetContext</c> scope, opened <em>inside</em> this
+    /// method, so the sibling's clamp targets the correct offset space.
+    /// </para>
+    /// <para>
+    /// <b>The partition must travel in the argument, which is why there is no
+    /// singular form.</b> A prior <c>SetCheckpointOffsetHintAsync(long)</c>
+    /// took only an offset and resolved its partition from
+    /// <c>LatticeApplyOffsetContext.CurrentPartition ?? 0</c>. That context is
+    /// an <c>AsyncLocal</c>, and an <c>AsyncLocal</c> does not flow across an
+    /// Orleans grain call, so over a grain reference the scope was always
+    /// absent at the callee and every hint landed on partition 0 whatever the
+    /// caller meant - silently, with no error, under a name that reads as
+    /// partition-agnostic. It was removed rather than documented (issue #2699).
+    /// To hint a single partition <c>p</c>, pass an array whose only positive
+    /// entry is at index <c>p</c>.
+    /// </para>
+    /// <para>
+    /// Routes through <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
+    /// existing unresolved-prepare clamp is honoured; for a sibling at birth
+    /// there are no unresolved prepares so the clamp is a no-op. Idempotent:
+    /// a re-call with a smaller offset is a no-op (the underlying seam
+    /// enforces monotonic non-decrease).
+    /// </para>
     /// </summary>
+    /// <param name="offsetsByPartition">Per-partition WAL head offsets, indexed by partition ordinal. Must not be <see langword="null"/>.</param>
     Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition);
 
     /// <summary>
@@ -684,8 +780,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
     /// preserving original timestamps. Used during splits to transfer entries without
     /// re-stamping them. Idempotent - re-merging the same entries is a no-op.
+    /// <para>
+    /// The batch is marked <see cref="ImmutableAttribute"/> so that a same-silo
+    /// call hands the caller's dictionary and payload arrays straight through
+    /// instead of deep-copying every value. Without the marker Orleans clones
+    /// each <c>byte[]</c> on a co-located call, so a bounded batch sized to fit
+    /// a memory budget transiently occupies twice that budget - the copy is
+    /// unconditional on the same-silo path and every caller of this method is
+    /// co-located in a single-silo deployment.
+    /// </para>
+    /// <para>
+    /// THE INVARIANT THIS BUYS THE PERFORMANCE WITH: a caller must not mutate
+    /// the dictionary, or any payload array in it, after handing it over. The
+    /// callee retains the payload references in its cache, so a post-call write
+    /// by the caller would be observable as silent corruption of committed leaf
+    /// state rather than as a failure. This is the same bargain <c>WalRecord</c>
+    /// already makes: its payload crosses to the WAL grain uncopied for exactly
+    /// this reason, and the arrays it shares are the very ones passed to this
+    /// method. All callers are internal
+    /// (<c>EnsureInternalOrigin</c> forbids an external origin), so the
+    /// invariant is checkable by inspection rather than hoped for.
+    /// </para>
     /// </summary>
-    Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries);
+    Task MergeEntriesAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) keys in this leaf
