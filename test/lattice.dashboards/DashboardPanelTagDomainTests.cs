@@ -160,6 +160,17 @@ public sealed class DashboardPanelTagDomainTests
             // 1 on a perfectly healthy estate. The five omitted arms are all
             // charted on panel 160 on this same dashboard, which is the by-arm
             // breakdown this panel deliberately is not.
+            //
+            // recheck_no_durable_checkpoint (issue #3300) is omitted here for
+            // the same structural reason and NOT because it is benign - it is
+            // the opposite, a data-loss-risk arm. It cannot enter this quotient
+            // because the drive in the denominator does not discharge it: that
+            // drive discharges the stale frozen-holder population, whereas this
+            // arm is a leaf that has never checkpointed at all. Adding it would
+            // put a numerator term in the ratio that the denominator can never
+            // retire, so the number would diverge while describing nothing. It
+            // is charted on panel 160 on its own isolated target D, deliberately
+            // not folded into that panel's collapsed benign target.
             ["CommitPath|161|orleans.lattice.leaf.snapshot.driver.declines|reason"] =
             [
                 "deactivate_unproven_coverage_current",
@@ -167,6 +178,7 @@ public sealed class DashboardPanelTagDomainTests
                 "recheck_cadence_not_reached",
                 "recheck_capture_in_flight",
                 "recheck_coverage_current",
+                "recheck_no_durable_checkpoint",
             ],
 
             // Panel 143 charts both arms on its unfiltered target, and adds a
