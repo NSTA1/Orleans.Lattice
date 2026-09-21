@@ -181,6 +181,16 @@ def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
         handle.write("\n")
 
     # -- Vacuity: a shard that ran nothing anywhere ---------------------------
+    #
+    # This is also the non-zero executed-test assertion that the
+    # emulator-backed packages depend on (#3329). Fixtures categorised
+    # AzureStorageEmulator call Assert.Inconclusive when Azurite is
+    # unreachable, and NUnit counts an inconclusive as neither passed, failed,
+    # nor skipped: the leg still prints `Passed!` with `Skipped: 0`, and only
+    # the Total drops. Counting outcomes therefore cannot tell a suite that
+    # ran from one that self-skipped wholesale. Summing TRX
+    # ResultSummary/Counters@executed can, and does - a wholesale inconclusive
+    # run sums to zero and fails here. Do not relax this to "no failures".
     per_shard: dict[tuple[str, str], int] = defaultdict(int)
     for item in items:
         if item["outcome"] in ("passed", "empty", "failed"):

@@ -62,10 +62,21 @@ public sealed class DurableActiveActiveTests
     /// </para>
     /// <para>
     /// Part B (normal acked write, then sender restart): Site A writes a
-    /// second key with no fault injected, waits for it to converge onto Site
-    /// B, then cold-restarts Site A. Nothing is lost, and the delivery count
-    /// for that key's tree does not grow again after the restart because the
-    /// shipper's durable cursor already advanced past it before the restart.
+    /// second key with no fault injected and waits for it to converge onto
+    /// Site B, then waits for Site A's shipper to <em>durably persist</em> a
+    /// ship cursor covering everything delivered, and only then cold-restarts
+    /// Site A. Nothing is lost, and the delivery count for that key's tree
+    /// grows by exactly the one fresh post-restart write - the entries the
+    /// durable cursor already covers are not re-delivered.
+    /// </para>
+    /// <para>
+    /// The durable-cursor wait is load-bearing, not decoration. Shipping is
+    /// at-least-once: <c>ReplicationShipperGrain.AdvanceCursorAsync</c>
+    /// deliberately defers the durable cursor write and documents that a
+    /// crash inside that window replays entries for the receiver to dedupe.
+    /// So "no re-delivery" is only a property of a sender whose cursor
+    /// advance has actually reached storage, and a test that restarts before
+    /// establishing that is asserting a guarantee the product does not make.
     /// </para>
     /// </summary>
     [Test]
@@ -105,12 +116,21 @@ public sealed class DurableActiveActiveTests
             },
             "Site A and Site B both read the lost-ack value after Site A's cold restart");
 
+        // Part A's retry is still owed at this point and the convergence probe
+        // above cannot see it: Site B applied the value before the injected
+        // ack rejection, so its state does not change when the retry lands.
+        // Draining it here keeps a late Part A delivery from being counted
+        // against Part B's restart below.
+        await _fixture.WaitForDurableShipCursorToCoverDeliveriesAsync(
+            Site.A,
+            treeId,
+            "Site A's retry of the lost-ack write completes and is durably cursor-advanced");
+
         // Part B: a normal acked write, then a sender restart. Nothing is
         // lost and the shipper does not re-deliver an already-cursor-past
         // entry after restart.
         var keyAcked = "acked-key";
         var valueAcked = Encode("acked-value");
-        var acceptedBefore = FaultInjectingReplicationTransport.AcceptedAckCount(treeId);
         await _fixture.TreeOn(Site.A, treeId).SetAsync(keyAcked, valueAcked);
 
         await DurableActiveActiveClusterFixture.WaitForConvergenceAsync(
@@ -121,35 +141,112 @@ public sealed class DurableActiveActiveTests
             },
             "Site B applies the normally-acked value");
 
-        await DurableActiveActiveClusterFixture.WaitForConvergenceAsync(
-            () => Task.FromResult(FaultInjectingReplicationTransport.AcceptedAckCount(treeId) > acceptedBefore),
-            "the sender receives a positive acknowledgement for the normal write");
-
         // A later accepted delivery is a sequencing barrier: the shipper
         // cannot send it until it has advanced past the first acknowledged
         // batch.
-        await _fixture.TreeOn(Site.A, treeId).SetAsync("ack-barrier", Encode("ack-barrier-value"));
+        const string keyBarrier = "ack-barrier";
+        await _fixture.TreeOn(Site.A, treeId).SetAsync(keyBarrier, Encode("ack-barrier-value"));
         await DurableActiveActiveClusterFixture.WaitForConvergenceAsync(
-            () => Task.FromResult(FaultInjectingReplicationTransport.AcceptedAckCount(treeId) > acceptedBefore + 1),
-            "the shipper advances through a later acknowledged batch");
+            async () =>
+            {
+                var onB = await _fixture.TreeOn(Site.B, treeId).GetAsync(keyBarrier);
+                return onB is not null;
+            },
+            "Site B applies the barrier write");
 
-        var deliveriesBeforeRestart = FaultInjectingReplicationTransport.DeliveryCount(treeId);
+        // Count the entries themselves, not the batches that carried them.
+        // DeliveryCount is per-batch and per-tree, so it also moves for a
+        // batch boundary that falls differently or a send in the opposite
+        // direction - neither of which is a re-delivery of these writes.
+        //
+        // Wait on the same quantity the assertion below reads, rather than on
+        // a proxy for it. Site B holding the key proves an apply happened but
+        // does not prove this transport counted a delivery for that key, and a
+        // baseline captured at zero would make the no-re-delivery assertion
+        // vacuous: it could never fail, because there is nothing to re-deliver
+        // from zero. This must also come BEFORE the durable-cursor wait below,
+        // because that wait is satisfied trivially while a write is still
+        // undelivered - the delivered watermark it compares against does not
+        // yet include it.
+        await DurableActiveActiveClusterFixture.WaitForConvergenceAsync(
+            () => Task.FromResult(
+                FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyAcked) > 0
+                && FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyBarrier) > 0),
+            "the transport has recorded a delivery for both the acked write and the barrier write");
+
+        // The precondition the no-re-delivery assertion below actually
+        // depends on, and the one this test used to leave to chance: Site A's
+        // shipper must have *durably persisted* a cursor covering everything
+        // already delivered.
+        //
+        // Without that edge this assertion is unsound as a matter of
+        // documented contract, not merely of timing.
+        // docs/lattice.replication/api.md states: "A transport must be
+        // idempotent at the batch boundary: sender retries can redeliver a
+        // batch, and the receiver deduplicates by origin and HLC." The ship
+        // cursor write is deliberately deferred and coalesced (since #147,
+        // per-partition resume cursor), so at the instant of a cold restart
+        // there is no guarantee it has flushed and resuming one entry early is
+        // designed behaviour. Asserting an exact delivery count against an
+        // at-least-once contract can only ever be a race.
+        //
+        // So make the premise true rather than weakening the assertion: the
+        // shipper reports to the cursor registry only after its
+        // WriteStateAsync succeeds, so a registry cursor at or past the
+        // delivered watermark is a real happens-before edge, and "already
+        // cursor-advanced" genuinely holds when the restart happens. Waiting
+        // on a transport acknowledgement count instead - as this test did -
+        // observes the receiver producing an ack before the sender has even
+        // seen it, which orders nothing against the sender's durable write.
+        await _fixture.WaitForDurableShipCursorToCoverDeliveriesAsync(
+            Site.A,
+            treeId,
+            "Site A durably persists a ship cursor covering every entry already delivered to Site B");
+
+        var ackedDeliveriesBeforeRestart = FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyAcked);
+        var barrierDeliveriesBeforeRestart = FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyBarrier);
+        Assert.That(
+            ackedDeliveriesBeforeRestart, Is.GreaterThan(0),
+            "precondition: the acked write must have been delivered before the restart, or the no-re-delivery assertion below is vacuous");
+        Assert.That(
+            barrierDeliveriesBeforeRestart, Is.GreaterThan(0),
+            "precondition: the barrier write must have been delivered before the restart, or the no-re-delivery assertion below is vacuous");
 
         await _fixture.ColdRestartSiteAsync(Site.A);
 
-        // Give the post-restart driver a full poll cycle to (not) redeliver,
-        // then assert both no data loss and no re-delivery of the
-        // already-shipped entry.
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        // Rather than sleeping and hoping the restarted shipper has had its
+        // chance to (not) redeliver, give it a positive reason to run: a
+        // fresh write whose arrival on Site B proves the post-restart ship
+        // loop is live and has drained. At that point the delivery count is
+        // settled, so the no-re-delivery assertion is deterministic - it must
+        // have grown by exactly the one new entry.
+        var keyProbe = "post-restart-probe";
+        var valueProbe = Encode("post-restart-value");
+        await _fixture.TreeOn(Site.A, treeId).SetAsync(keyProbe, valueProbe);
+        await DurableActiveActiveClusterFixture.WaitForConvergenceAsync(
+            async () =>
+            {
+                var onB = await _fixture.TreeOn(Site.B, treeId).GetAsync(keyProbe);
+                return onB is not null && onB.AsSpan().SequenceEqual(valueProbe);
+            },
+            "the restarted Site A shipper resumes and ships a fresh write to Site B");
 
         var onAAfterRestart = await _fixture.TreeOn(Site.A, treeId).GetAsync(keyAcked);
         var onBAfterRestart = await _fixture.TreeOn(Site.B, treeId).GetAsync(keyAcked);
         Assert.That(onAAfterRestart is not null && onAAfterRestart.AsSpan().SequenceEqual(valueAcked), Is.True, "Site A retains the acked write across its own restart");
         Assert.That(onBAfterRestart is not null && onBAfterRestart.AsSpan().SequenceEqual(valueAcked), Is.True, "Site B retains the acked write across Site A's restart");
         Assert.That(
-            FaultInjectingReplicationTransport.DeliveryCount(treeId),
-            Is.EqualTo(deliveriesBeforeRestart),
-            "the already-shipped, cursor-advanced entry must not be re-delivered after the sender's restart");
+            FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyAcked),
+            Is.EqualTo(ackedDeliveriesBeforeRestart),
+            "the already-shipped, durably-cursor-advanced acked write must not be re-delivered after the sender's restart");
+        Assert.That(
+            FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyBarrier),
+            Is.EqualTo(barrierDeliveriesBeforeRestart),
+            "the already-shipped, durably-cursor-advanced barrier write must not be re-delivered after the sender's restart");
+        Assert.That(
+            FaultInjectingReplicationTransport.EntryDeliveryCount(treeId, keyProbe),
+            Is.EqualTo(1),
+            "the one fresh post-restart write is shipped exactly once");
     }
 
     /// <summary>
