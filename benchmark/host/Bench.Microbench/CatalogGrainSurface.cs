@@ -242,6 +242,8 @@ internal sealed class CatalogGrainSurface
 
         public Task SetMaxCacheValueBytesAsync(string treeId, long? maxCacheValueBytes) => throw NotDriven();
 
+        public Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes) => throw NotDriven();
+
         public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) => throw NotDriven();
 
         public Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap) => throw NotDriven();

@@ -745,6 +745,17 @@ byte-pressure policy once a trim has reclaimed enough, so a tree hovering near
 the ceiling is not trimmed on every pass. It is inert unless
 `WalMaxRetainedBytes` is set.
 
+`WalMaxRetainedBytes` also accepts a **per-tree override set at runtime**
+(issue #3333). The silo-wide option is the default for every tree; a single
+tree can pin its own ceiling through `lattice_treeadmin_tree_set_config`
+(`applyWalMaxRetainedBytes`), which is persisted on the tree's registry entry
+and re-read on every GC pass, so it takes effect on that tree's next pass with
+no silo restart. Passing `null` clears the override. Because the ceiling is
+advisory in both forms, an override can never trim past the consumer frontier
+and so cannot lose data - it only moves where byte-pressure trimming and the
+cadence floor engage. See
+[Configuration](configuration.md#walmaxretainedbytes).
+
 > **Production caution - set at least one absolute cap.** With every knob at
 > its default (`WalRetention = null`, `WalMaxRetainedBytes = null`), the *only*
 > active bound is the consumer frontier. The WAL shrinks as consumers catch up,

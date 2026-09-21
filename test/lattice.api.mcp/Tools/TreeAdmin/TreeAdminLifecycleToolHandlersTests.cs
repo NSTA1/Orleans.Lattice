@@ -115,7 +115,7 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             applyHistoryRetention: true,
             historyRetentionMode: HistoryRetentionMode.FullValue,
             historyRetentionWindowTicks: 500,
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
         await admin.Received(1).SetTreeConfigAsync(
@@ -145,7 +145,51 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Arg.Is<TreeConfigurationUpdate>(u =>
                 !u.ApplyPublishEvents &&
                 !u.ApplyMaintainProjectionDigest &&
+                !u.ApplyHistoryRetention &&
+                !u.ApplyWalMaxRetainedBytes),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetTreeConfigAsync_forwards_the_wal_ceiling_override()
+    {
+        var admin = TreeAdmin();
+        admin.SetTreeConfigAsync("orders", Arg.Any<TreeConfigurationUpdate>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeConfigurationReport { TreeId = "orders" });
+
+        await TreeAdminLifecycleToolHandlers.SetTreeConfigAsync(
+            admin,
+            "orders",
+            applyWalMaxRetainedBytes: true,
+            walMaxRetainedBytes: 21474836480);
+
+        await admin.Received(1).SetTreeConfigAsync(
+            "orders",
+            Arg.Is<TreeConfigurationUpdate>(u =>
+                u.ApplyWalMaxRetainedBytes &&
+                u.WalMaxRetainedBytes == 21474836480 &&
+                !u.ApplyPublishEvents &&
+                !u.ApplyMaintainProjectionDigest &&
                 !u.ApplyHistoryRetention),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetTreeConfigAsync_forwards_a_null_wal_ceiling_as_a_clear()
+    {
+        var admin = TreeAdmin();
+        admin.SetTreeConfigAsync("orders", Arg.Any<TreeConfigurationUpdate>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeConfigurationReport { TreeId = "orders" });
+
+        await TreeAdminLifecycleToolHandlers.SetTreeConfigAsync(
+            admin,
+            "orders",
+            applyWalMaxRetainedBytes: true,
+            walMaxRetainedBytes: null);
+
+        await admin.Received(1).SetTreeConfigAsync(
+            "orders",
+            Arg.Is<TreeConfigurationUpdate>(u => u.ApplyWalMaxRetainedBytes && u.WalMaxRetainedBytes == null),
             Arg.Any<CancellationToken>());
     }
 

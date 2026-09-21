@@ -1,9 +1,10 @@
 namespace Orleans.Lattice.Api.TreeAdmin;
 
 /// <summary>
-/// A partial update to a tree's per-tree registry configuration. Each of the three
+/// A partial update to a tree's per-tree registry configuration. Each of the four
 /// independent runtime knobs (publish-events, projection-digest maintenance,
-/// durable-history retention) carries its own <c>Apply*</c> flag so a caller can
+/// durable-history retention, WAL retained-byte ceiling) carries its own
+/// <c>Apply*</c> flag so a caller can
 /// update one dimension without disturbing the others: a dimension is written only
 /// when its <c>Apply*</c> flag is <see langword="true"/>, and a <see langword="null"/>
 /// value on an applied dimension <b>clears</b> that override so the knob falls back to
@@ -74,4 +75,28 @@ public sealed record TreeConfigurationUpdate
     /// <see langword="true"/>.
     /// </summary>
     [Id(6)] public long? HistoryRetentionWindowTicks { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, write the <see cref="WalMaxRetainedBytes"/>
+    /// override (a <see langword="null"/> value clears it); when
+    /// <see langword="false"/>, leave the tree's WAL retained-byte ceiling override
+    /// unchanged.
+    /// </summary>
+    [Id(7)] public bool ApplyWalMaxRetainedBytes { get; init; }
+
+    /// <summary>
+    /// The per-tree advisory WAL retained-byte ceiling to pin, or
+    /// <see langword="null"/> to clear it (fall back to the silo-wide
+    /// <c>LatticeOptions.WalMaxRetainedBytes</c>). Must be strictly positive when
+    /// supplied. Honoured only when <see cref="ApplyWalMaxRetainedBytes"/> is
+    /// <see langword="true"/>.
+    /// <para>
+    /// The ceiling is advisory throughout: it never changes what a WAL
+    /// garbage-collection pass is allowed to trim, and the durability frontier
+    /// always wins, so lowering it cannot cause over-trimming or data loss. It
+    /// takes effect on the tree's next garbage-collection pass, with no silo
+    /// restart (issue #3333).
+    /// </para>
+    /// </summary>
+    [Id(8)] public long? WalMaxRetainedBytes { get; init; }
 }

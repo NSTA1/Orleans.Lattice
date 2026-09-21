@@ -685,6 +685,23 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (walMaxRetainedBytes is { } ceiling && ceiling < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(walMaxRetainedBytes), ceiling,
+                $"{nameof(LatticeOptions.WalMaxRetainedBytes)} must be greater than or equal to 1 when set "
+                + "(null disables the advisory byte-pressure policy for this tree; a positive value sets the "
+                + "retained-byte ceiling the WAL garbage collector evaluates byte pressure against).");
+        }
+
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { WalMaxRetainedBytes = walMaxRetainedBytes };
+        await UpdateAsync(treeId, updated);
+    }
+
     public async Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);

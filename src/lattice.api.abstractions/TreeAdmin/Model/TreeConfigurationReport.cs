@@ -3,7 +3,8 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// A read-only snapshot of a tree's registry-backed configuration: its structural
 /// sizing pins, its alias target, and its per-tree runtime overrides (publish-events,
-/// projection-digest maintenance, durable-history retention). Returned by reading a
+/// projection-digest maintenance, durable-history retention, WAL retained-byte
+/// ceiling). Returned by reading a
 /// tree's config and by setting it (the resulting state after the mutation).
 /// </summary>
 /// <remarks>
@@ -72,4 +73,12 @@ public sealed record TreeConfigurationReport
     /// the tree pins no age bound (the timeline is retained until an explicit rebuild).
     /// </summary>
     [Id(10)] public long? HistoryRetentionWindowTicks { get; init; }
+
+    /// <summary>
+    /// The per-tree advisory WAL retained-byte ceiling override, or
+    /// <see langword="null"/> when the tree pins no override and the silo-wide
+    /// <c>LatticeOptions.WalMaxRetainedBytes</c> applies (which is itself
+    /// <see langword="null"/> - policy disabled - by default).
+    /// </summary>
+    [Id(11)] public long? WalMaxRetainedBytes { get; init; }
 }

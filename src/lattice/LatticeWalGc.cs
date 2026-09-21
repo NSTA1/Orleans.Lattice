@@ -444,8 +444,23 @@ public sealed class LatticeWalGc(
         // Sample retained bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
+        //
+        // The ceiling is re-resolved per pass rather than read off the static
+        // options, so a per-tree runtime override set through
+        // ILatticeRegistry.SetWalMaxRetainedBytesAsync takes effect on the next
+        // pass with no silo restart (issue #3333). The correct ceiling is a
+        // function of the tree's live set, which grows, so a value calibrated at
+        // deployment time goes stale with no code change and no misconfiguration
+        // - and before this it could only be corrected by a restart. When the
+        // resolver is unavailable (the bare-IServiceProvider construction a unit
+        // test uses) fall back to the static option, which keeps the
+        // no-override path byte-identical to the previous behaviour.
+        var effectiveCeiling = OptionsResolver is { } ceilingResolver
+            ? await ceilingResolver.GetWalMaxRetainedBytesAsync(treeName).ConfigureAwait(false)
+            : resolved.WalMaxRetainedBytes;
+
         var (ceiling, retainedBefore, logicalBefore) = await SampleRetainedBytesAsync(
-            ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            ResolvePartitionProvider, resolved, effectiveCeiling, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
         if (triggered)
         {
@@ -620,7 +635,7 @@ public sealed class LatticeWalGc(
         }
 
         var (_, retainedAfter, logicalAfter) = await SampleRetainedBytesAsync(
-            ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            ResolvePartitionProvider, resolved, effectiveCeiling, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
@@ -1852,11 +1867,12 @@ public sealed class LatticeWalGc(
     private static async Task<(long? Ceiling, long? Retained, long? Logical)> SampleRetainedBytesAsync(
         Func<int, IWalStorageProvider?> resolveProvider,
         LatticeOptions resolved,
+        long? effectiveCeiling,
         string treeName,
         int partitions,
         CancellationToken cancellationToken)
     {
-        if (resolved.WalMaxRetainedBytes is not { } ceiling || ceiling <= 0)
+        if (effectiveCeiling is not { } ceiling || ceiling <= 0)
         {
             // Byte-pressure policy disabled - zero hot-path cost.
             //

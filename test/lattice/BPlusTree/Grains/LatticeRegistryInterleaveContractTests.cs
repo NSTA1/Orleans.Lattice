@@ -93,6 +93,7 @@ public sealed class LatticeRegistryInterleaveContractTests
         nameof(ILatticeRegistry.SetHistoryRetentionAsync),
         nameof(ILatticeRegistry.SetMaintainProjectionDigestAsync),
         nameof(ILatticeRegistry.SetMaxCacheValueBytesAsync),
+        nameof(ILatticeRegistry.SetWalMaxRetainedBytesAsync),
         nameof(ILatticeRegistry.LatchProjectionDigestPermanentlyDisabledAsync),
         nameof(ILatticeRegistry.UpdateWalPlacementAsync),
     ];

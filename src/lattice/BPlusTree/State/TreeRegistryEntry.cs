@@ -193,4 +193,36 @@ internal sealed record TreeRegistryEntry
     /// option's validation.
     /// </summary>
     [Id(14)] public long? MaxCacheValueBytes { get; init; }
+
+    /// <summary>
+    /// Per-tree runtime override for <see cref="LatticeOptions.WalMaxRetainedBytes"/>.
+    /// When <c>null</c> (the default), the silo-wide option value is used; when
+    /// set to a positive byte count, the override takes priority over the silo
+    /// option for this tree only, setting the advisory retained-byte ceiling the
+    /// WAL garbage collector evaluates byte pressure and ceiling satisfiability
+    /// against. Mutated at runtime through
+    /// <see cref="ILatticeRegistry.SetWalMaxRetainedBytesAsync(string, long?)"/>
+    /// and read back through <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>
+    /// (both the full <c>ResolveAsync</c> record and the lightweight
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver.GetWalMaxRetainedBytesAsync(string)"/>
+    /// fast path).
+    /// <para>
+    /// Propagation is prompt rather than best-effort, unlike the cache-value cap
+    /// beside it: <c>LatticeWalGc.RunOnceAsync</c> re-resolves the ceiling on
+    /// every pass rather than capturing it at activation, so a change takes
+    /// effect on the next garbage-collection pass for the tree with no restart
+    /// and no activation churn.
+    /// </para>
+    /// <para>
+    /// The ceiling is advisory throughout - it never changes what a pass is
+    /// allowed to trim, and the durability frontier always wins - so an override
+    /// can never cause over-trimming or data loss. It exists because the correct
+    /// ceiling is a function of the tree's live set, which grows, so a value
+    /// calibrated correctly at deployment time becomes wrong over time with no
+    /// code change and no misconfiguration (issue #3333). Validated to be
+    /// greater than or equal to 1 when supplied, exactly mirroring the
+    /// silo-wide option's validation.
+    /// </para>
+    /// </summary>
+    [Id(15)] public long? WalMaxRetainedBytes { get; init; }
 }
