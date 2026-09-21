@@ -347,6 +347,99 @@ services:
       # consumer cursor. Setting it to "0" restores the library default and is a
       # safe rollback that over-retains rather than over-trims.
       LATTICE_WAL_MAX_RETAINED_BYTES: "8589934592"
+      # Absolute per-SHARD ceiling on dead (trimmed but not yet physically
+      # reclaimed) WAL bytes, above which a compaction evaluation rewrites the
+      # shard whatever the ratio above says.
+      #
+      # WHY THIS EXISTS (issue #3223, measured on this box). FileWalShard
+      # .CompactIfNeeded is the only thing that returns bytes to the
+      # filesystem, and with this UNSET its only arm that can fire on a running
+      # tree is the 0.5 dead-byte RATIO. A ratio is not a bound. It fires at
+      # dead >= live, so designed steady state is TWICE the live set and the
+      # absolute waste grows with the tree. Measured on
+      # repo-context-vector-index the ratio was 200/1268 = 0.158, so the arm
+      # declined correctly and forever: wal_compactions_total read 0 on ALL
+      # THREE trigger tags, wal_compaction_reclaimed_bytes_total read 0, and
+      # physical size never decreased once in 37 samples (8971 -> 10174 MiB).
+      #
+      # THE MEASUREMENT THIS VALUE IS SIZED FROM. Per shard, over 8 shards:
+      #   retained  1068 MiB   (x8 = 8544; gauge storage_wal_bytes read 8564)
+      #   dead       200 MiB   (x8 = 1600)
+      #   total     1268 MiB   (x8 = 10144; du -sm on the volume read 10174)
+      # Both identities close to within 0.3%, so the du-versus-gauge gap IS the
+      # dead bucket. storage_wal_bytes is RETAINED-ONLY and the sum is not
+      # exported at all (#3205) - do not read that gauge as physical size.
+      #
+      # SIZING. 134217728 = 128 MiB per shard. Three things fix it, in order.
+      #
+      # 1. THE GATE IS SHARD-LOCAL. _deadBytes is one shard's, never the
+      #    tree's, so the tree-wide bound is this value TIMES the shard count.
+      #    The ceiling above already declares 8192 MiB per tree and
+      #    vector-index has 8 shards, so each shard's share of physical budget
+      #    is 1024 MiB. 128 MiB caps dead at ONE EIGHTH of that share, i.e.
+      #    1024 MiB tree-wide, where the ratio arm permits one HALF. The
+      #    derivation is anchored on a number this file already owns and on the
+      #    shard count - not on a corpus snapshot - which is deliberate: see
+      #    the expiry-date lesson in the block above. It is not snapshot-free
+      #    though: RESHARDING vector-index moves the tree-wide bound
+      #    proportionally without touching this line.
+      #
+      # 2. IT MUST FIRE AGAINST MEASURED DEAD, AND ABOVE ~200 MiB IT DOES NOT.
+      #    The untracked predecessor was 256 MiB, sized in #3109 against a
+      #    corpus holding ~344 MB dead per shard. Present dead is 200 MiB per
+      #    shard, so 256 MiB is INERT at the state actually measured. This
+      #    deployment's recurring failure is settings that look applied and do
+      #    nothing, so prefer the value whose effect is observable within one
+      #    GC pass: 128 < 200, so the first evaluation after deploy compacts
+      #    and wal_compactions_total{trigger="ceiling"} leaves zero. The
+      #    asymmetry is the whole argument - too high forfeits the entire
+      #    benefit, modestly too low costs a bounded, quantified amount of I/O.
+      #    192 MiB would also fire but sits at 96% of a single snapshot of a
+      #    quantity that is still climbing, which is no margin at all.
+      #
+      # 3. THE COST IS WRITE AMPLIFICATION, AND 128 MiB BUYS IT CHEAPLY. A
+      #    compaction rewrites every LIVE byte to reclaim the dead ones, so
+      #    work per byte reclaimed is live/ceiling = 1068/128 = 8.3x, against
+      #    1.0x for the ratio arm. Dead reached 200 MiB per shard within the
+      #    2h42m since the container was recreated, so accrual is AT MOST
+      #    ~74 MiB/h per shard while ingesting: a shard rewrites about every
+      #    1.7 h, i.e. ~620 MiB/h per shard and ~4.8 GiB/h over 8 shards, which
+      #    is 1.4 MiB/s sustained on a volume with ~598 GB free. Bandwidth is
+      #    therefore NOT the constraint. LATENCY is: Compact() runs
+      #    synchronously inside TrimAsync while holding that shard's gate, so
+      #    every rewrite stalls the shard for a ~1 GiB file copy. The stall
+      #    SIZE is set by live bytes and does not shrink as this value shrinks;
+      #    only the FREQUENCY rises. That is what rules out the small end far
+      #    more than the amplification arithmetic does - 32 MiB would quadruple
+      #    the stalls and reclaim not one byte more.
+      #
+      # DO NOT PROBE THIS WITH A SMALL VALUE (issue #3210). Low is the
+      # AGGRESSIVE end and only "0" disables. CompactionMinimumDeadBytes
+      # (64 KiB by default, and this host never sets it) is evaluated FIRST, so
+      # every shard reaching the ceiling comparison has already cleared the
+      # floor; a sub-floor ceiling is then unconditionally true and rewrites
+      # the whole shard on every trim. 128 MiB is 2048x that floor. Since #3211
+      # the registration-time validator refuses 0 < ceiling < floor outright,
+      # so getting this wrong downward now costs a refused start rather than
+      # silent amplification - but the validator only sees values this host
+      # passes through, so it is a backstop and not a licence to guess.
+      #
+      # WHAT THIS DOES NOT FIX, AND IT IS NOT A DETAIL. Reclaiming EVERY dead
+      # byte leaves retained at 8544 MiB, still above the 8192 MiB ceiling
+      # above - per shard, 1068 MiB of live data already exceeds its own
+      # 1024 MiB share. Compaction only ever moves dead -> free; only an
+      # advancing trim frontier moves retained -> dead, and the durable offset
+      # floor is currently refusing that trim (#3310). Expect physical to fall
+      # about 10174 -> 8574 MiB on the first pass and then settle below
+      # ~9568 MiB: a ~7.3 GiB cut to the designed steady state, and still a
+      # breach of the ceiling. NECESSARY, NOT SUFFICIENT.
+      #
+      # Setting this to "0" restores the library default and disarms the
+      # ceiling, which is a safe rollback to unbounded dead-byte growth rather
+      # than to data loss. Watch wal_compactions_total{trigger="ceiling"} and
+      # wal_compaction_reclaimed_bytes_total: both flat while entries_trimmed
+      # climbs for the same shard is this defect returning.
+      LATTICE_WAL_COMPACTION_MAX_DEAD_BYTES: "134217728"
       # Per-silo ceiling on concurrent activation-time leaf WAL replays. Left
       # UNSET here deliberately, so this sample behaves identically on every
       # host: unset defers to the library, which sizes the gate from
