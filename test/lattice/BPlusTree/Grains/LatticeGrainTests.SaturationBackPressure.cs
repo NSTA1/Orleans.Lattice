@@ -293,4 +293,78 @@ public partial class LatticeGrainTests
         await shard0.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
         await shard1.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
     }
+
+    private sealed class FanOutSentinelException(string message) : Exception(message);
+
+    [Test]
+    public async Task SetManyAsync_leaves_no_unobserved_fault_when_every_branch_settles_first()
+    {
+        // The fail-fast race has a corner that is easy to get wrong. When every
+        // branch - the faulted one included - has already completed before
+        // Task.WhenAny is evaluated, WhenAny resolves the already-settled pair
+        // in ARGUMENT order and returns the aggregate, not the fault signal. The
+        // signal is then faulted, already bypassed, and about to be dropped. If
+        // nothing observes it, it resurfaces on finalization as an unobserved
+        // task exception. This is the ordinary case for a mocked or co-located
+        // shard, not an exotic one.
+        const string treeId = "saturation-setmany-observed-fault";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        // Both settle synchronously, so the whole fan-out is complete before the
+        // race is evaluated. A distinctive type keeps this assertion immune to
+        // unobserved faults raised by any other fixture in the process.
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns<Task>(_ => throw new FanOutSentinelException("branch refused"));
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var unobserved = 0;
+        void OnUnobserved(object? _, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception?.InnerExceptions.Any(x => x is FanOutSentinelException) != true)
+                return;
+
+            Interlocked.Increment(ref unobserved);
+            e.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            var batch = new List<KeyValuePair<string, byte[]>>
+            {
+                new(FindKeyForSlot(0, 2), [1]),
+                new(FindKeyForSlot(1, 2), [2]),
+            };
+
+            // Asserting the throw first is what stops this guard going vacuous:
+            // it cannot pass by never having run the fan-out at all.
+            Assert.ThrowsAsync<FanOutSentinelException>(async () => await grain.SetManyAsync(batch));
+
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                await Task.Yield();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        Assert.That(unobserved, Is.Zero,
+            "The first-fault signal lost the race and was dropped without being observed. "
+            + "It resurfaced on finalization as an unobserved task exception.");
+    }
 }
