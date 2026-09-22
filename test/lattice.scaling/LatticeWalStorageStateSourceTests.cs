@@ -110,6 +110,42 @@ public sealed class LatticeWalStorageStateSourceTests
     }
 
     [Test]
+    public async Task Per_tree_ceiling_is_carried_from_the_cluster_report()
+    {
+        // Each tree's already-resolved WalMaxRetainedBytes must ride onto its own
+        // sample: the scaling axis has no options monitor of its own, so this is
+        // the only route by which a per-tree ceiling reaches it (issue #3336).
+        var report = new ClusterStorageUsageReport
+        {
+            TreeCount = 3,
+            Trees =
+            [
+                new TreeStorageUsageReport { TreeId = "small", WalRetainedBytes = 1, WalMaxRetainedBytes = 1_000L },
+                new TreeStorageUsageReport { TreeId = "large", WalRetainedBytes = 2, WalMaxRetainedBytes = 1_000_000L },
+                new TreeStorageUsageReport { TreeId = "unbounded", WalRetainedBytes = 3, WalMaxRetainedBytes = null },
+            ],
+        };
+
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(report);
+        admin.GetWalPlacementAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Placement((string)ci[0], (0, "acct-a")));
+
+        var source = new LatticeWalStorageStateSource(
+            new MutableTimeProvider(T0), Catalog("acct-a"), grainFactory: FactoryFor(admin));
+
+        var sample = await source.SampleAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.Trees, Has.Count.EqualTo(3));
+            Assert.That(sample.Trees[0].WalMaxRetainedBytes, Is.EqualTo(1_000L));
+            Assert.That(sample.Trees[1].WalMaxRetainedBytes, Is.EqualTo(1_000_000L));
+            Assert.That(sample.Trees[2].WalMaxRetainedBytes, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task Continuous_saturation_accrues_across_ticks()
     {
         var admin = Substitute.For<ILatticeAdmin>();

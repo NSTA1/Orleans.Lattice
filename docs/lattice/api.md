@@ -569,6 +569,7 @@ The `TreeStorageUsageReport` fields are:
 | `Partial` | `bool` | `true` when a storage surface could not be accounted - a WAL provider without byte accounting, or a shard root / WAL partition that failed or timed out. The unaccounted surface contributes nothing rather than a zero, so the report is a flagged lower bound. |
 | `SampledAt` | `DateTimeOffset` | When the underlying fan-out was sampled. |
 | `LiveKeys` | `long` | Summed live (non-tombstone) key count across every shard - the figure per-tree admission control compares against `LatticeOptions.MaxLiveKeys`. Best-effort / eventually-consistent (see [Metrics - admission control](metrics.md#per-tree-admission-control)). A lower bound when `Partial` is `true` due to a shard that did not answer; a WAL-only cause of `Partial` leaves it exact. |
+| `WalMaxRetainedBytes` | `long?` | The *effective* retained-WAL ceiling for this tree - the registry runtime override if one is set, else the named `LatticeOptions` for the tree, else the silo-wide default - or `null` when no ceiling applies. A diagnostic echo of the resolved value; it never changes trim behaviour. Always exact, so `Partial` says nothing about it. Consumed by `Orleans.Lattice.Scaling`, which has no options monitor of its own and would otherwise have to read the silo-wide default for every tree. |
 
 For a cluster-wide roll-up across every registered tree, resolve the
 `ILatticeAdmin` grain (see [`ILatticeAdmin`](#ilatticeadmin)).
