@@ -320,12 +320,21 @@ internal sealed partial class WalShardGrain(
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
 
         var options = optionsMonitor.Get(_treeId);
-        // Resolve WalPartitions through the tree-registry pin (via
-        // LatticeOptionsResolver) so the metric tag reflects the
-        // routing-truth shape used by WalCommitLogWriter and the
-        // activation-time materialiser, not the live IOptionsMonitor
-        // value that may have drifted since the tree was registered.
-        var resolved = await optionsResolver.ResolveAsync(_treeId).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        // Resolve WalPartitions through the tree-registry pin so the metric
+        // tag reflects the routing-truth shape used by WalCommitLogWriter and
+        // the activation-time materialiser, not the live IOptionsMonitor value
+        // that may have drifted since the tree was registered.
+        //
+        // This deliberately uses the pure GetWalPartitionsAsync fast path
+        // rather than the full ResolveAsync. ResolveAsync performs lazy
+        // first-use seeding: when the registry row is absent it calls
+        // RegisterAsync to create one. A WAL shard can activate *after* a
+        // tree has been purged (the purge's own writes keep the WAL alive
+        // past the registry unregister), and seeding from that activation
+        // re-creates the row, resurrecting the purged tree so TreeExistsAsync
+        // reports it as still present. An activation that only needs a metric
+        // tag must never mutate the registry.
+        var walPartitions = await optionsResolver.GetWalPartitionsAsync(_treeId);
         // Phase A attribution tags. The values are captured once at
         // activation; if the operator retunes WalMaxPendingBatches
         // through IOptionsMonitor while activations are live, existing
@@ -339,7 +348,7 @@ internal sealed partial class WalShardGrain(
         // cached tag matches the routing shape for the lifetime of the
         // tree.
         _walPartitionsTag = new KeyValuePair<string, object?>(
-            LatticeMetrics.TagWalPartitions, resolved.WalPartitions);
+            LatticeMetrics.TagWalPartitions, walPartitions);
         _walMaxPendingBatchesTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagWalMaxPendingBatches, options.WalMaxPendingBatches);
 

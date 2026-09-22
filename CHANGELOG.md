@@ -36,6 +36,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - Purged tree resurrection.** A WAL shard activating after its tree was purged resolved options through the lazy seeding path, re-creating the registry row and resurrecting the tree. The activation now uses the pure fast path, which never mutates the registry. ([#3343](https://github.com/NSTA1/Orleans.Lattice/issues/3343)) (`Orleans.Lattice`)
+
 - **Container - Grain-state rows.** Nothing in the RepoContext host ever removed a row from grain storage: a clear nulled the payload and left the row behind, so generationally-keyed grains accumulated dead rows without bound. Cleared state is now deleted. ([#3307](https://github.com/NSTA1/Orleans.Lattice/issues/3307)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **ANN - Bounded build slice.** The build slice is bounded by wall clock, not only by vector count, and a declined training is re-evaluated once the corpus crosses the minimum. ([#2406](https://github.com/NSTA1/Orleans.Lattice/issues/2406), [#2447](https://github.com/NSTA1/Orleans.Lattice/issues/2447), [#2453](https://github.com/NSTA1/Orleans.Lattice/issues/2453), [#2483](https://github.com/NSTA1/Orleans.Lattice/issues/2483), [#2578](https://github.com/NSTA1/Orleans.Lattice/issues/2578), [#2706](https://github.com/NSTA1/Orleans.Lattice/issues/2706), [#2751](https://github.com/NSTA1/Orleans.Lattice/issues/2751), [#3286](https://github.com/NSTA1/Orleans.Lattice/issues/3286)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
