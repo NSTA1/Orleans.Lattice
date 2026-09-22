@@ -352,6 +352,8 @@ The `orleans.lattice.tag_index.reconcile.*` family is emitted by the background 
 | `orleans.lattice.wal.compaction.eval.dead_bytes` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
 | `orleans.lattice.wal.compaction.eval.retained_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
 | `orleans.lattice.wal.compaction.eval.dead_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.recovery.torn_tail_bytes` | counter | `tree`, `shard`, `tenant` | WAL recovery discard |
+| `orleans.lattice.wal.recovery.torn_tail_records` | counter | `tree`, `shard`, `tenant` | WAL recovery discard |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter | `tree`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.dead_letter.removed` | counter | `tree`, `reason`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter | `tree`, `tenant` | Apply correctness violations |
