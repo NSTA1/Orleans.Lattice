@@ -23,6 +23,14 @@ namespace Orleans.Lattice.Tests;
 /// needs editing when an exception is added nor depends on the order in which
 /// concurrent work lands.
 /// </para>
+/// <para>
+/// Anti-vacuity is asserted in two layers, because the two ways this guard can
+/// silently stop guarding are different. The outer layer asserts that the scan
+/// saw exception types at all; the inner layer asserts that it resolved some of
+/// them as foreign-based, which is the population the contract actually ranges
+/// over. Only the inner layer catches a change to base resolution that leaves
+/// the outer count healthy and the offender list empty for the wrong reason.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class DomainFaultMarkerContractTests
@@ -77,18 +85,35 @@ public sealed class DomainFaultMarkerContractTests
     {
         var declared = DeclaredExceptionTypes();
 
-        // Anti-vacuity: assert the DENOMINATOR of the scan, never the size of the
-        // match set. An empty offender list is the desired outcome and must stay
-        // legal, so the only way to tell a working guard from one that reflected
-        // over nothing is to assert what it examined.
+        // Anti-vacuity, first layer: assert the DENOMINATOR of the scan, never the
+        // size of the match set. An empty offender list is the desired outcome and
+        // must stay legal, so the only way to tell a working guard from one that
+        // reflected over nothing is to assert what it examined.
         HygieneDenominator.RequireExamined(
             declared.Count,
             nameof(DomainFaultMarkerContractTests),
             "exception types",
             $"assembly '{PackageAssembly.GetName().Name}', anchored on {nameof(LatticeWriteFencedException)}");
 
-        var offenders = declared
+        var foreignBased = declared
             .Where(t => HasForeignExceptionBase(t, PackageAssembly))
+            .ToList();
+
+        // Anti-vacuity, second layer: the population the contract actually ranges
+        // over is not every exception, it is every exception with a foreign base.
+        // The likeliest way to silently empty THAT set is not a refactor of this
+        // fixture but a change to how the base is resolved - a reflection detail
+        // that would leave the outer count healthy, the offender list empty, and
+        // this test green while asserting nothing. Re-parenting was rejected for
+        // this package (the base type of a public exception is shipped contract),
+        // so a zero here means the detection broke, never that the hazard is gone.
+        HygieneDenominator.RequireExamined(
+            foreignBased.Count,
+            nameof(DomainFaultMarkerContractTests),
+            "exception types with a foreign base",
+            $"assembly '{PackageAssembly.GetName().Name}', resolved by {nameof(HasForeignExceptionBase)}");
+
+        var offenders = foreignBased
             .Where(t => !typeof(ILatticeDomainFault).IsAssignableFrom(t))
             .Select(t => $"  {t.FullName} : {t.BaseType?.Name}")
             .ToList();
