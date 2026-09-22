@@ -44,7 +44,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **CRDT - Full-state merge read form.** A replication full-state merge read local state through the client read path, which strips the schema envelope and upcasts, then folded and wrote that decoded value back. The merge now reads the stored form through the replication-apply seam. ([#2813](https://github.com/NSTA1/Orleans.Lattice/issues/2813)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
-- **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. The pass verdict is now classified explicitly and counted, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+- **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. A pass that reaches the verdict now classifies it explicitly and counts it, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Tests - Guards that could not fail.** Two gates could not detect the defect they existed for: a sweep-count guard passed on its own failure mode, and the leaf cursor reporter was never pinned to the WAL garbage-collection floor advance. Both now fail when the behaviour is removed. ([#2656](https://github.com/NSTA1/Orleans.Lattice/issues/2656), [#3310](https://github.com/NSTA1/Orleans.Lattice/issues/3310)) (`repository-wide`)
 
