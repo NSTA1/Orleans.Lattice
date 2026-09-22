@@ -204,6 +204,12 @@ param(
 	# recovery unattributable across three simultaneous changes.
 	[int] $SetManyFanOutBudgetSec = 30,
 	[int] $WalAdmissionCallBudgetSec = 15,
+	# (#3396) Layer 3 only. WAL append coalescing in-flight threshold. -1
+	# (the default) leaves the silo on the shipping library default; 0 is the
+	# control arm that reproduces the pre-#3396 unconditional flush kick.
+	# 0 cannot double as the inherit sentinel here because, unlike the two
+	# budgets above, 0 is itself a meaningful value for this option.
+	[int] $WalAppendCoalescingInFlightThreshold = -1,
 
 	[string] $NamePrefix,
 	[string] $ParametersFile
@@ -1242,6 +1248,7 @@ function Invoke-Layer3Cohorts {
 		# deployment that configures nothing is fixed.
 		[int] $SetManyFanOutBudgetSec = 30,
 		[int] $WalAdmissionCallBudgetSec = 15,
+		[int] $WalAppendCoalescingInFlightThreshold = -1,
 		[scriptblock] $OnCellComplete
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
@@ -1301,6 +1308,7 @@ function Invoke-Layer3Cohorts {
 						-WalPartitions    $WalPartitions `
 						-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
 						-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
+						-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 						-CohortTag        $cohortTag | Out-Host
 				} catch {
 					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -2671,6 +2679,7 @@ function Main {
 				-WalMaxPendingBatches $l3WalMaxPendingBatches `
 				-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
+				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 				-OnCellComplete $checkpoint
 
 			$l3State.layer3.cohorts = $l3Cells

@@ -200,6 +200,15 @@ param(
 	# 0 means infinite (inherit the library default).
 	[int] $SetManyFanOutBudgetSec = 30,
 	[int] $WalAdmissionCallBudgetSec = 15,
+	# (#3396) WAL append coalescing threshold. Unlike the two budgets above,
+	# 0 here is a MEANINGFUL value (coalescing disabled, the historical
+	# unconditional final-entry flush kick) rather than "infinite", so it
+	# cannot double as the inherit sentinel. -1 means "do not set the env
+	# var at all", leaving the silo on the shipping library default.
+	#
+	# This is the knob the #3396 arms differ in: -1/4 is the shipped
+	# behaviour, 0 is the control arm that reproduces pre-#3396 main.
+	[int] $WalAppendCoalescingInFlightThreshold = -1,
 	[int] $SettleSec = 30
 )
 
@@ -274,6 +283,13 @@ $siloEnv = @(
 	'BENCH_INGEST_MODE=cluster',
 	'BENCH_TOTAL_DURATION_SEC=0'
 )
+
+# (#3396) Only pinned when explicitly requested, so an ordinary sweep measures
+# the shipping default rather than a value this script chose. The control arm
+# passes 0 to reproduce pre-#3396 behaviour.
+if ($WalAppendCoalescingInFlightThreshold -ge 0) {
+	$siloEnv += "BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=$WalAppendCoalescingInFlightThreshold"
+}
 
 $startedUtc = (Get-Date).ToUniversalTime()
 $execName = $null
