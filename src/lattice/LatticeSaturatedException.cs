@@ -107,6 +107,23 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     public string TreeId { get; }
 
     /// <summary>
+    /// Which admission seam refused the operation.
+    /// <see cref="LatticeSaturationSource.Unspecified"/> on the constructors
+    /// that take no source, and on an exception deserialised from a host that
+    /// predates source attribution.
+    /// <para>
+    /// A caller choosing a <b>retry policy</b> must branch on this rather than
+    /// on the exception type: only
+    /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> refuses
+    /// before the caller has done any work, and so is the only source an
+    /// automatic retry does not amplify. See
+    /// <see cref="LatticeSaturationSource"/> for the per-seam reasoning.
+    /// </para>
+    /// </summary>
+    [Id(1)]
+    public LatticeSaturationSource SaturationSource { get; }
+
+    /// <summary>
     /// Initialises a new instance with no diagnostic message and an
     /// empty <see cref="TreeId"/>. Provided to satisfy the framework's
     /// exception construction contract; production throw sites use
@@ -171,6 +188,42 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     {
         ArgumentNullException.ThrowIfNull(treeId);
         TreeId = treeId;
+    }
+
+    /// <summary>
+    /// Initialises a new instance with the specified diagnostic message,
+    /// originating tree id, and the admission seam that refused the operation.
+    /// Preferred over <see cref="LatticeSaturatedException(string, string)"/>
+    /// at any throw site, because <see cref="Source"/> is what lets a caller
+    /// retry the one refusal that is safe to retry without also retrying the
+    /// three that amplify.
+    /// </summary>
+    /// <param name="message">Diagnostic context describing which operation was refused and why.</param>
+    /// <param name="treeId">Logical tree id whose saturation regime caused the refusal.</param>
+    /// <param name="source">The admission seam that refused the operation.</param>
+    public LatticeSaturatedException(string message, string treeId, LatticeSaturationSource source)
+        : base(message)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        TreeId = treeId;
+        SaturationSource = source;
+    }
+
+    /// <summary>
+    /// Initialises a new instance with the specified diagnostic message,
+    /// originating tree id, admission seam, and wrapped inner exception.
+    /// </summary>
+    /// <param name="message">Diagnostic context describing which operation was refused and why.</param>
+    /// <param name="treeId">Logical tree id whose saturation regime caused the refusal.</param>
+    /// <param name="source">The admission seam that refused the operation.</param>
+    /// <param name="innerException">The underlying cause.</param>
+    public LatticeSaturatedException(
+        string message, string treeId, LatticeSaturationSource source, Exception innerException)
+        : base(message, innerException)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        TreeId = treeId;
+        SaturationSource = source;
     }
 }
 

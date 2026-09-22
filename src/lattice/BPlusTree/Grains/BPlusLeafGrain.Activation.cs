@@ -1474,7 +1474,8 @@ internal sealed partial class BPlusLeafGrain
                 + "backoff, or raise "
                 + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
                 + "(zero restores an unbounded queue).",
-                state.State.TreeId!);
+                state.State.TreeId!,
+                LatticeSaturationSource.ReplayPermitAdmission);
         }
 
         _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
