@@ -222,6 +222,31 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
+// BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
+// the shape the replay admission gate is sized to refuse, and refusing it here
+// is a measurement artefact rather than a finding.
+//
+// The gate's bound is queueDepthPerPermit x ceiling, where the ceiling is a
+// process-wide static derived from this silo's own CPU grant. An ACA silo gets
+// 4 vCPU, so the ceiling is 4 permits and the default depth of 4 admits 16
+// concurrent replaying activations (12 for a Bulk caller, since the last
+// ceiling's worth of slots is reserved for Interactive work). A Layer 3 cohort
+// opens against a cold 64-shard tree, so the warm-up needs every shard root
+// live at once: 64 activations on one silo, or 32 each across two. Both exceed
+// the bound, the warm-up is refused with LatticeSaturatedException, and the
+// cohort dies before the measurement window opens.
+//
+// The reservation the gate is protecting exists to keep a foreground read from
+// queueing behind an O(corpus) background walk. The bench has no foreground
+// reader - the cold fan-out IS the work - so there is nothing to protect and
+// the refusal buys nothing. The exception's own remediation text names this
+// option, so raising it is the sanctioned response rather than a workaround.
+//
+// Default is the library default, so the Layer 1/2 single-silo path, which
+// never sets this, reproduces out-of-the-box behaviour exactly. Only Layer 3
+// raises it, and the multi-silo document records that it does.
+var walReplayQueueDepth = ReadIntAllowZero(
+    "BENCH_WAL_REPLAY_QUEUE_DEPTH", LatticeOptions.DefaultWalReplayPermitQueueDepthPerPermit);
 // Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
 // a ';'-delimited list of additional storage-account table endpoints wired in
 // by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
@@ -413,7 +438,7 @@ var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
 // it later does the override path must update these tokens too.
 var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
 var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} clustering={clusteringMode} ingestMode={ingestMode} siloClusterPort={siloClusterPort} gatewayPort={gatewayPort} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} walReplayQueueDepth={walReplayQueueDepth} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} clustering={clusteringMode} ingestMode={ingestMode} siloClusterPort={siloClusterPort} gatewayPort={gatewayPort} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 // F-086: echo the saturation knobs so the cohort log shows the exact
 // values the TCP-read gating + the silo's sampler use. A "default"
@@ -602,6 +627,10 @@ builder.UseOrleans(silo =>
         o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(saturationSampleMs);
         o.WalSaturationThrottledRatio = saturationThrottledRatio;
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
+        // See the BENCH_WAL_REPLAY_QUEUE_DEPTH block above. Assigned
+        // unconditionally because the default IS the library default, so
+        // the single-silo path is byte-for-byte unchanged.
+        o.WalReplayPermitQueueDepthPerPermit = walReplayQueueDepth;
     });
 
     // Storage-usage poller cadence is left at the library default (15s).

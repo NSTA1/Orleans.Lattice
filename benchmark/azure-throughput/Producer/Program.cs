@@ -517,14 +517,23 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
             && (IsOrleansMessageRejection(ex)
                 || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
                 || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
-                || WarmUpRetryClassifier.IsTransientSaturation(ex)))
+                || WarmUpRetryClassifier.IsTransientSaturation(ex)
+                || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
         {
             lastException = ex;
             var isSaturation = WarmUpRetryClassifier.IsTransientSaturation(ex);
+            var isTimeout = !isSaturation && WarmUpRetryClassifier.IsTransientRequestTimeout(ex);
+            // A timed-out warm-up is still running on the silo, so the useful
+            // thing to do is re-ask almost immediately and let the next attempt
+            // inherit the progress the abandoned one is still making. Backing
+            // off here would idle the client while the server works.
             var backoffMs = isSaturation
                 ? Math.Min(2000 * attempt, MaxWarmUpSaturationBackoffMs)
-                : Math.Min(100 * (1 << (attempt - 1)), MaxWarmUpBackoffMs);
-            Console.WriteLine($"[producer] warmup treeId={treeId} transient{(isSaturation ? " SATURATED" : string.Empty)} ({ex.GetType().Name}); retrying in {backoffMs}ms");
+                : isTimeout
+                    ? 500
+                    : Math.Min(100 * (1 << (attempt - 1)), MaxWarmUpBackoffMs);
+            var kind = isSaturation ? " SATURATED" : isTimeout ? " TIMEOUT" : string.Empty;
+            Console.WriteLine($"[producer] warmup treeId={treeId} transient{kind} ({ex.GetType().Name}); retrying in {backoffMs}ms");
             await Task.Delay(backoffMs, ct).ConfigureAwait(false);
         }
     }

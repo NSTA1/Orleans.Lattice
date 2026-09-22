@@ -116,6 +116,12 @@ param(
 	# becomes less reliable", which is the one conclusion this benchmark
 	# must not fabricate.
 	[int] $InFlightTailBudgetSec = 120,
+	# Replay admission queue depth per permit, handed to the silos. See the
+	# BENCH_WAL_REPLAY_QUEUE_DEPTH entry in $siloEnv below for why the
+	# library default refuses a cold 64-shard warm-up on a 4-vCPU host.
+	# 64 admits one shard root per shard against a 4-permit ceiling, which
+	# is the smallest value that cannot refuse this topology's cold start.
+	[int] $WalReplayQueueDepth = 64,
 	[string] $TreeId,
 	# Disambiguates the cohort log when the same (silos, workload) cell is
 	# repeated N times. Without it every repeat overwrites the previous
@@ -166,6 +172,16 @@ $siloEnv = @(
 	# are silo-to-silo in a multi-silo cluster, so leaving these at the 30s
 	# default would time out the fan-out even when the client is patient.
 	"BENCH_RESPONSE_TIMEOUT_SEC=$ResponseTimeoutSec",
+	# The replay admission gate's bound is (depth x ceiling), and the ceiling
+	# is derived from this silo's own CPU grant: 4 vCPU on ACA Consumption
+	# gives 4 permits, so the default depth of 4 admits 16 concurrently
+	# replaying activations. A cohort opens against a cold 64-shard tree and
+	# the warm-up needs every shard root live at once, which exceeds that
+	# bound on any N we measure and refuses the warm-up outright. The gate
+	# reserves capacity for foreground readers queueing behind a background
+	# walk; the bench has no foreground reader, so there is nothing to
+	# protect. Raising it is the remediation the exception itself names.
+	"BENCH_WAL_REPLAY_QUEUE_DEPTH=$WalReplayQueueDepth",
 	'BENCH_SHARD_COUNT=0',
 	'BENCH_CLUSTERING=azuretable',
 	'BENCH_INGEST_MODE=cluster',

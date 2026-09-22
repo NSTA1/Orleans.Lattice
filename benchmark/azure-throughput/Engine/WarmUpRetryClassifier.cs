@@ -138,4 +138,54 @@ public static class WarmUpRetryClassifier
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// an Orleans request timeout - the "Response did not arrive on time"
+    /// <see cref="TimeoutException"/> raised client-side when a grain call
+    /// outlives the configured response timeout.
+    /// <para>
+    /// This is retryable <em>specifically for warm-up</em>, and the reason is
+    /// that the timeout is client-side only: Orleans abandons the response, but
+    /// the silo keeps executing <c>WarmUpAsync</c>. A cold multi-silo cohort
+    /// opens against a freshly resharded tree whose shard roots must all
+    /// activate and replay before warm-up can return, and on a large shard
+    /// count that can legitimately outlast a response timeout sized for the
+    /// measurement window's per-call latency. The next attempt then arrives
+    /// against a tree the abandoned attempt has already been warming, so each
+    /// retry starts strictly warmer than the last and the loop converges.
+    /// </para>
+    /// <para>
+    /// Retrying is therefore self-healing rather than a way of waiting out a
+    /// real fault, and it is preferable to simply raising the response timeout:
+    /// the timeout also governs the measurement window, where a long deadline
+    /// would convert genuine overload into latency and hide the very knee this
+    /// benchmark exists to find. A warm-up that is failing for a real reason
+    /// still exhausts the bounded attempt budget and aborts loudly.
+    /// </para>
+    /// <para>
+    /// Matched by type and by message fragment for the same wrapping reasons
+    /// <see cref="IsTransientSaturation"/> gives: the exception arrives through
+    /// Orleans' serialization envelope and may be rewrapped.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientRequestTimeout(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is TimeoutException)
+            {
+                return true;
+            }
+
+            var message = cur.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("Response did not arrive on time", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
