@@ -521,7 +521,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
