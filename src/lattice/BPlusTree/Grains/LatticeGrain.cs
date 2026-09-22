@@ -2399,6 +2399,13 @@ internal sealed partial class LatticeGrain(
                     await firstFault.Task;
                 }
 
+                // `all` won the race, which includes the case where every
+                // branch - fault and all - had already completed before the
+                // race was even evaluated, because WhenAny resolves an
+                // already-settled pair in argument order. The signal may
+                // therefore be faulted and about to be dropped unobserved, so
+                // observe it before awaiting the aggregate that will rethrow.
+                ObserveInBackground(firstFault.Task);
                 await all;
             }
         }
@@ -2432,19 +2439,20 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Observes a fan-out aggregate that the caller has stopped awaiting, so an
-    /// abandoned branch fault cannot surface later as an unobserved task
-    /// exception and tear down the process.
+    /// Observes a fan-out task the caller has stopped awaiting - either the
+    /// abandoned aggregate or the first-fault signal that lost its race - so a
+    /// dropped fault cannot surface later as an unobserved task exception and
+    /// tear down the process.
     /// </summary>
-    private static void ObserveInBackground(Task all)
+    private static void ObserveInBackground(Task task)
     {
-        if (all.IsCompleted)
+        if (task.IsCompleted)
         {
-            _ = all.Exception;
+            _ = task.Exception;
             return;
         }
 
-        _ = all.ContinueWith(
+        _ = task.ContinueWith(
             static t => _ = t.Exception,
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted
