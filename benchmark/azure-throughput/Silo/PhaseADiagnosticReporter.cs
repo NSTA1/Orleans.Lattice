@@ -39,6 +39,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Hosting;
 using Orleans.Lattice;
+using VehicleFleetSimulator.AzureThroughput.Engine;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo;
 

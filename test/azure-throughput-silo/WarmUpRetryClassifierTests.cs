@@ -1,4 +1,4 @@
-using VehicleFleetSimulator.AzureThroughput.Silo;
+using VehicleFleetSimulator.AzureThroughput.Engine;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;
 
@@ -125,5 +125,64 @@ public class WarmUpRetryClassifierTests
     public void Null_exception_is_not_transient_placement_convergence()
     {
         Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(null), Is.False);
+    }
+
+    [Test]
+    public void Orleans_response_timeout_is_a_transient_request_timeout()
+    {
+        // The exact shape Orleans raises client-side when a grain call
+        // outlives the response timeout. The silo keeps executing the call,
+        // so the next warm-up attempt inherits its progress.
+        var ex = new TimeoutException(
+            "Response did not arrive on time in 00:03:00 for message: Request "
+            + "Orleans.Lattice.ILattice.WarmUpAsync(System.Threading.CancellationToken)");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(ex), Is.True);
+    }
+
+    [Test]
+    public void Wrapped_response_timeout_is_a_transient_request_timeout()
+    {
+        // Orleans may rewrap the timeout as it crosses the serialization
+        // envelope, so the predicate walks the whole inner chain.
+        var ex = new InvalidOperationException(
+            "warm-up failed",
+            new TimeoutException("Response did not arrive on time in 00:03:00"));
+
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(ex), Is.True);
+    }
+
+    [Test]
+    public void Message_only_response_timeout_is_a_transient_request_timeout()
+    {
+        // Rewrapping can also lose the concrete type, leaving only the
+        // message, which is why matching is by type OR fragment.
+        var ex = new InvalidOperationException("Response did not arrive on time in 00:03:00");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(ex), Is.True);
+    }
+
+    [Test]
+    public void Unrelated_exception_is_not_a_transient_request_timeout()
+    {
+        var ex = new InvalidOperationException("cold tree - warm-up genuinely failed");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(ex), Is.False);
+    }
+
+    [Test]
+    public void A_cancellation_is_not_misclassified_as_a_request_timeout()
+    {
+        // TaskCanceledException has its own classifier; keeping the two
+        // disjoint is what lets the retry loop pick the right backoff.
+        var ex = new TaskCanceledException("A task was canceled.");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(ex), Is.False);
+    }
+
+    [Test]
+    public void Null_exception_is_not_a_transient_request_timeout()
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(null), Is.False);
     }
 }

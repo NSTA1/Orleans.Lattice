@@ -15,7 +15,7 @@
 using System.Diagnostics.Metrics;
 using Orleans.Lattice;
 
-namespace VehicleFleetSimulator.AzureThroughput.Silo;
+namespace VehicleFleetSimulator.AzureThroughput.Engine;
 
 /// <summary>
 /// Read-only, allocation-light observer of a materialised view's apply lag and

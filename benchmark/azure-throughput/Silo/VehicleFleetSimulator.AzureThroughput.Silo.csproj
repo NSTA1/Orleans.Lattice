@@ -15,27 +15,28 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Shared ingest/measurement engine (drain, flush, dispatch, reporting,
+      stall watchdog). Lives in its own assembly so the multi-silo rig's
+      Orleans-client producer runs the identical measured code path; see
+      that project's header for why that is what makes Layer 2 and
+      Layer 3 comparable. It also carries the Microsoft.Diagnostics.Runtime
+      reference the StallWatchdog needs, which reaches this project
+      transitively.
+    -->
+    <ProjectReference Include="..\Engine\VehicleFleetSimulator.AzureThroughput.Engine.csproj" />
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
     <!--
       Bumped from 1.13.1 to satisfy the Microsoft.Diagnostics.Runtime 4.0
-      transitive floor (>= 1.21.0); the diagnostics package is referenced
-      below by the StallWatchdog.
+      transitive floor (>= 1.21.0), which now arrives through the Engine
+      project reference above rather than directly.
     -->
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
-    <!--
-      In-process stall watchdog (StallWatchdog.cs): when the WAL write
-      pipeline wedges at WalMaxPendingBatches the only ACI exfil channel
-      is stdout (the deploy script streams it to .run/silo-*.log), so the
-      watchdog self-snapshots with ClrMD and prints the parked async
-      state-machine chain - the in-process equivalent of `dumpasync` /
-      `dotnet-stack` - rather than writing a core dump we have no mount to
-      retrieve.
-    -->
-    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.726401" />
   </ItemGroup>
 
   <!--
