@@ -1387,6 +1387,13 @@ internal sealed partial class ReplicationApplier(
         }
 
         var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
+        // Local state is read through the apply seam, never through
+        // ILattice.GetWithVersionAsync: the public surface runs the read-path
+        // value decoder, so folding its output and writing the fold back would
+        // strip the per-value schema envelope off the stored row and make the
+        // storage form of a key depend on whether it pre-existed the merge
+        // (issue #2813). Writes stay on ILattice.SetIfVersionAsync for the CAS.
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var stateSerializer = JsonLatticeSerializer<TState>.Default;
         var incoming = stateSerializer.Deserialize(entry.Value);
 
@@ -1394,7 +1401,7 @@ internal sealed partial class ReplicationApplier(
 
         for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
         {
-            var versioned = await lattice.GetWithVersionAsync(entry.Key);
+            var versioned = await apply.ReadStoredWithVersionAsync(entry.Key);
             if (versioned.Value is null)
             {
                 var installed = await lattice.SetIfVersionAsync(entry.Key, entry.Value, versioned.Version);
@@ -1486,13 +1493,17 @@ internal sealed partial class ReplicationApplier(
         }
 
         var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
+        // See ApplyFullStateMergeAsync: local state is read through the apply
+        // seam so the fold sees the stored (enveloped) form and the write-back
+        // preserves it (issue #2813).
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var incoming = shape.DeserializeState(entry.Value);
 
         using var scope = LatticeOriginContext.With(entry.OriginClusterId);
 
         for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
         {
-            var versioned = await lattice.GetWithVersionAsync(entry.Key);
+            var versioned = await apply.ReadStoredWithVersionAsync(entry.Key);
             if (versioned.Value is null)
             {
                 var installed = await lattice.SetIfVersionAsync(entry.Key, entry.Value, versioned.Version);
