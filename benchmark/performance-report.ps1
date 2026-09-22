@@ -1364,6 +1364,19 @@ function Aggregate-Layer3Cells {
 				Write-Warning "[aggregate-l3] mode=$mode silos=${key}: no positive throughput samples; cell omitted"
 				continue
 			}
+			# A cohort can be graded HEALTHY - it produced productive
+			# measurement windows - and still contribute no throughput
+			# sample, because the FINAL line never landed in the harvest
+			# window (the engine was observed still inside DrainAsync when
+			# the harvest closed). Such a cohort is silently absent from the
+			# median above. Publishing $healthy.Count as the cell's n would
+			# then overstate how much evidence backs the number, which is
+			# the same "announces more than it did" failure this harness has
+			# been bitten by repeatedly. Count the samples actually used,
+			# and say so when the two disagree.
+			if ($throughputs.Count -lt $healthy.Count) {
+				Write-Warning "[aggregate-l3] mode=$mode silos=${key}: $($healthy.Count - $throughputs.Count)/$($healthy.Count) HEALTHY cohort(s) produced no FINAL throughput line and are excluded from the median; publishing n=$($throughputs.Count)"
+			}
 			$p50s = @($healthy | ForEach-Object { $_.perCallP50Ms } | Where-Object { $null -ne $_ })
 			$p99s = @($healthy | ForEach-Object { $_.perCallP99Ms } | Where-Object { $null -ne $_ })
 			$perCount["$key"] = @{
@@ -1372,7 +1385,7 @@ function Aggregate-Layer3Cells {
 				throughputBasis     = $throughputBasis
 				perCallP50Ms        = if ($p50s.Count -gt 0) { [math]::Round((Get-Median $p50s), 2) } else { $null }
 				perCallP99Ms        = if ($p99s.Count -gt 0) { [math]::Round((Get-Median $p99s), 2) } else { $null }
-				cohortN             = $healthy.Count
+				cohortN             = $throughputs.Count
 				offeredKeysPerSec   = [int](($healthy | Select-Object -First 1).rungVehicles) * [int](($healthy | Select-Object -First 1).rungTickHz)
 			}
 		}

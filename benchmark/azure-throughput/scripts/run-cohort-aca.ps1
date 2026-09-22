@@ -145,12 +145,35 @@ param(
 	# per cohort, which an unattended silo-count sweep multiplies by every
 	# cell. A healthy warm-up on this topology completes in about a second.
 	#
-	# Sized to admit at least two full-length attempts at the response
-	# timeout above. At the previous 300s it admitted only one-and-a-bit,
-	# so a single slow-but-healthy warm-up exhausted the budget and failed
-	# the cohort with no real retry - the budget was cutting in before the
-	# retry it exists to bound could ever happen.
-	[int] $WarmUpBudgetSec = 900,
+	# Sized to admit exactly one full-length attempt at the response timeout
+	# above, and deliberately NOT two.
+	#
+	# The earlier 900s sizing was reasoned from "a budget that admits fewer
+	# than two attempts is not a retry budget". That is sound when a retry
+	# can plausibly succeed, and it is wrong here, because the two failure
+	# modes a warm-up retry faces are not alike:
+	#
+	#   * A FAST transient (activation cancellation, placement not yet
+	#     converged) fails in seconds. This budget still admits its retries -
+	#     the loop only checks the budget before starting an attempt, so an
+	#     attempt that failed at t=5s is followed immediately by another.
+	#     Nothing about the fast path is lost here.
+	#
+	#   * A HUNG warm-up burns the entire response timeout and has never
+	#     been observed to recover. Measured directly on set-many N=4:
+	#     attempts at 0s, 421s and 842s each timed out at 7:00, with grain
+	#     diagnostics showing Total Enqueued == Total processed,
+	#     QueuedWorkItems=0 and NumRunning=1 - drained, then awaiting a
+	#     fan-out that never returns. Worse, LatticeGrain is
+	#     StatelessWorkerPlacement, so each retry spawns a NEW activation
+	#     rather than replacing the stuck one, piling concurrent 64-root
+	#     fan-outs onto an already struggling cluster.
+	#
+	# So on the only mode where a long budget changes the outcome, retrying
+	# cannot help and actively makes it worse. The budget's real job is to
+	# decide how long a doomed cohort bills N silos before being abandoned:
+	# 900s spends about 21 minutes per wedge, this spends about 7.
+	[int] $WarmUpBudgetSec = 400,
 	[string] $TreeId,
 	# Disambiguates the cohort log when the same (silos, workload) cell is
 	# repeated N times. Without it every repeat overwrites the previous
