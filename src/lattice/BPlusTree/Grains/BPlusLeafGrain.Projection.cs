@@ -390,7 +390,13 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// Each failure is recorded at warning with its exception, never
     /// swallowed silently, so a genuine upward cascade (for example an
-    /// issue #2218-class fault) stays observable. The digest stays dirty
+    /// issue #2218-class fault) stays observable. Each is ALSO counted on
+    /// <see cref="LatticeMetrics.LeafCheckpointFlushTailFailures"/>, tagged
+    /// with the step, because a log line was the only signal these steps
+    /// produced: the enclosing <c>checkpoint_flush</c> deactivation barrier
+    /// reports success when the durable write lands and only the tail
+    /// faults, so the barrier counter read zero while every leaf in a silo
+    /// faulted here (issue #3393). The digest stays dirty
     /// on a failed publish (<c>PublishCurrentDigestAndClearDirtyAsync</c>
     /// clears the flag only on success) so the coalescing timer or the
     /// next mutation re-drives it; the cursor report and snapshot recheck
@@ -408,6 +414,7 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (Exception ex)
         {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailCursorReport);
             ResolveLogger()?.LogWarning(
                 ex,
                 "Leaf {GrainId}: cursor report failed after a durable checkpoint flush; the checkpoint is "
@@ -427,6 +434,7 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (Exception ex)
         {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailInlineDigestPublish);
             ResolveLogger()?.LogWarning(
                 ex,
                 "Leaf {GrainId}: inline upward digest publish failed after a durable checkpoint flush; the "
@@ -450,12 +458,74 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (Exception ex)
         {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailSnapshotRecheck);
             ResolveLogger()?.LogWarning(
                 ex,
                 "Leaf {GrainId}: periodic snapshot recheck failed after a durable checkpoint flush; the "
                 + "checkpoint is persisted and the recheck re-runs on the next flush. The activation is "
                 + "retained (#2220).",
                 context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// Records one checkpoint-flush TAIL failure against
+    /// <see cref="LatticeMetrics.LeafCheckpointFlushTailFailures"/> (issue
+    /// #3393), and never throws.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tail's containment is deliberate (#2220) and unchanged by this
+    /// method: the durable write has already committed and a failed
+    /// notification must not tear the activation down. What was missing was any
+    /// signal other than a log line - the enclosing <c>checkpoint_flush</c>
+    /// deactivation barrier reports SUCCESS when only the tail faults, so
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierFailures"/> stayed at
+    /// zero while a production drain took 1,699 inline-digest-publish faults.
+    /// </para>
+    /// <para>
+    /// Tags are resolved defensively and INDIVIDUALLY, exactly as the barrier
+    /// path does. Both helpers read grain state, which throws "Attempt to
+    /// access an invalid activation" once the activation has been invalidated -
+    /// and this tail is reachable from the deactivation hook, where that is not
+    /// merely possible but the observed norm. Resolving them as arguments to
+    /// <c>Add</c> would let a throwing tag lookup suppress the measurement
+    /// entirely, so the fault this method exists to report would itself report
+    /// as nothing. Telemetry must never decide whether a fault is observable
+    /// (the #2312 rule).
+    /// </para>
+    /// </remarks>
+    private void RecordCheckpointFlushTailFailure(KeyValuePair<string, object?> step)
+    {
+        try
+        {
+            var treeTag = TryResolveTailTag(LeafTreeTag, LatticeMetrics.TagTree);
+            var tenantTag = TryResolveTailTag(
+                LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
+
+            LatticeMetrics.LeafCheckpointFlushTailFailures.Add(1, treeTag, step, tenantTag);
+        }
+        catch (Exception)
+        {
+            // Observability must never fail a checkpoint flush.
+        }
+
+        // Resolves one tag without letting the lookup itself suppress the
+        // measurement it is meant to label. The empty value is what these
+        // instruments already record for a leaf whose tree is unregistered, so
+        // it adds no new tag value and no new cardinality.
+        static KeyValuePair<string, object?> TryResolveTailTag(
+            Func<KeyValuePair<string, object?>> resolve,
+            string fallbackKey)
+        {
+            try
+            {
+                return resolve();
+            }
+            catch (InvalidOperationException)
+            {
+                return new KeyValuePair<string, object?>(fallbackKey, string.Empty);
+            }
         }
     }
 

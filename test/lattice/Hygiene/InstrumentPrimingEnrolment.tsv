@@ -233,6 +233,7 @@ src/lattice/LatticeMetrics.cs#LeafBisectRefusals	unresolved	reason=unrecognised 
 src/lattice/LatticeMetrics.cs#LeafByteOverflows	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafCachePreWarmDurationMs	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafCachePreWarmed	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafCheckpointFlushTailFailures	unresolved	reason=dimension (unread-tag-argument:treeTag, step, tenantTag): tag argument(s) treeTag, step, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafColdReplayLoop	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#LeafCommitDuration	unresolved	reason=dimension tree: unrecognised value expression: state.State.TreeId ?? string.Empty
 src/lattice/LatticeMetrics.cs#LeafCommitInFlight	unresolved	reason=dimension (unread-tag-argument:LeafTreeTag(), LeafTenantTag()): tag argument(s) LeafTreeTag(), LeafTenantTag() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
