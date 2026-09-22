@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice;
+using VehicleFleetSimulator.AzureThroughput.Engine;
 using VehicleFleetSimulator.AzureThroughput.Silo;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;

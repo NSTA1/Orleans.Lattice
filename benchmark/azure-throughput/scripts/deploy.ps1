@@ -138,7 +138,11 @@ Write-Host "Setting subscription $($p.SubscriptionId)" -ForegroundColor Cyan
 az account set --subscription $p.SubscriptionId | Out-Null
 
 Write-Host "Ensuring resource group $($p.ResourceGroup) in $($p.Location)" -ForegroundColor Cyan
-az group create --name $p.ResourceGroup --location $p.Location --output none
+# Tag the group with the run prefix. performance-report.ps1's teardown refuses
+# to delete a group whose latticeBenchRun tag disagrees with the prefix it was
+# asked to tear down, which is what stops a mis-set prefix from running
+# `az group delete` against something unrelated and irreversible.
+az group create --name $p.ResourceGroup --location $p.Location --tags "latticeBenchRun=$($p.NamePrefix)" --output none
 
 $bicep = Join-Path $infraDir 'main.bicep'
 $cloudInit = Join-Path $infraDir 'cloud-init.yaml'

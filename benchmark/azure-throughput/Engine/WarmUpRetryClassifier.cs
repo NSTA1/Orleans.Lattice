@@ -1,3 +1,5 @@
+namespace VehicleFleetSimulator.AzureThroughput.Engine;
+
 /// <summary>
 /// Classifies exceptions thrown by the silo's proactive shard warm-up loop
 /// so a transient, self-healing failure can be retried instead of aborting
@@ -87,6 +89,98 @@ public static class WarmUpRetryClassifier
             var message = cur.Message;
             if (!string.IsNullOrEmpty(message)
                 && message.Contains("No active nodes are compatible with grain", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// Lattice's typed WAL back-pressure refusal.
+    /// <para>
+    /// <c>LatticeSaturatedException</c> means the tree's per-silo WAL replay
+    /// permit queue refused admission rather than queueing behind work the
+    /// caller could not outlast. It is explicitly a <em>retry-after-backoff</em>
+    /// condition - the exception's own message says so - not a terminal error,
+    /// and it is exactly what a cold multi-silo reshard provokes: pinning a
+    /// fresh tree to S shards asks the cluster to activate S shard roots at
+    /// once, each of which needs a replay permit, so a large S transiently
+    /// overruns a ceiling that drains within seconds.
+    /// </para>
+    /// <para>
+    /// Matching is by type NAME, not by a typed <c>catch</c>. The benchmark
+    /// Engine assembly deliberately does not reference the core Lattice
+    /// package's exception types beyond <c>ILattice</c>, and the exception
+    /// arrives here wrapped in Orleans' serialization envelope, so a name
+    /// match is both sufficient and robust to the wrapping. The blast radius
+    /// of a false positive is one extra bounded retry.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientSaturation(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (string.Equals(cur.GetType().Name, "LatticeSaturatedException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var message = cur.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("LatticeSaturatedException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// an Orleans request timeout - the "Response did not arrive on time"
+    /// <see cref="TimeoutException"/> raised client-side when a grain call
+    /// outlives the configured response timeout.
+    /// <para>
+    /// This is retryable <em>specifically for warm-up</em>, and the reason is
+    /// that the timeout is client-side only: Orleans abandons the response, but
+    /// the silo keeps executing <c>WarmUpAsync</c>. A cold multi-silo cohort
+    /// opens against a freshly resharded tree whose shard roots must all
+    /// activate and replay before warm-up can return, and on a large shard
+    /// count that can legitimately outlast a response timeout sized for the
+    /// measurement window's per-call latency. The next attempt then arrives
+    /// against a tree the abandoned attempt has already been warming, so each
+    /// retry starts strictly warmer than the last and the loop converges.
+    /// </para>
+    /// <para>
+    /// Retrying is therefore self-healing rather than a way of waiting out a
+    /// real fault, and it is preferable to simply raising the response timeout:
+    /// the timeout also governs the measurement window, where a long deadline
+    /// would convert genuine overload into latency and hide the very knee this
+    /// benchmark exists to find. A warm-up that is failing for a real reason
+    /// still exhausts the bounded attempt budget and aborts loudly.
+    /// </para>
+    /// <para>
+    /// Matched by type and by message fragment for the same wrapping reasons
+    /// <see cref="IsTransientSaturation"/> gives: the exception arrives through
+    /// Orleans' serialization envelope and may be rewrapped.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientRequestTimeout(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is TimeoutException)
+            {
+                return true;
+            }
+
+            var message = cur.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("Response did not arrive on time", StringComparison.Ordinal))
             {
                 return true;
             }

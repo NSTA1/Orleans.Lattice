@@ -41,7 +41,7 @@
 
 using System.Diagnostics.Metrics;
 
-namespace VehicleFleetSimulator.AzureThroughput.Silo;
+namespace VehicleFleetSimulator.AzureThroughput.Engine;
 
 internal static class BenchMetrics
 {

@@ -23,11 +23,12 @@ as "what the silo settles into once the cluster is warm", not as "what
 every individual call will look like".
 
 The horizontal-scaling story (multi-silo deployments, where work fans out
-across activations on multiple hosts) is **out of scope for this document**
-and will be covered separately once the multi-silo benchmark axis is built
-out. Today's numbers are the single-silo ceiling; multi-silo throughput
-will be a multiple of these figures, bounded primarily by the storage
-provider's per-account budget.
+across activations on multiple hosts) has its own document:
+[Performance: multi-silo scaling guide](performance-multi-silo.md). Today's
+numbers are the single-silo ceiling; that document measures what adding
+hosts actually buys, and where the curve flattens. Note that its throughput
+figures are computed on a deliberately more conservative basis than Layer 2
+here, for reasons it explains, so the two are not directly interchangeable.
 
 You should **measure your own workload**. The shapes here cover point reads,
 point writes, batched multi-key reads and writes, and atomic multi-key
