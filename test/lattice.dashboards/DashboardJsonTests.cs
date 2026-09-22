@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Orleans.Lattice;
 using Orleans.Lattice.Dashboards;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Dashboards.Tests;
 
@@ -31,6 +32,51 @@ public sealed class DashboardJsonTests
 {
     private static readonly Regex InstrumentTokenRegex =
         new(@"\borleans_lattice(?:_replication)?_[a-z0-9_]+\b", RegexOptions.Compiled);
+
+    private const string PanelMapRelativePath = "docs/lattice.dashboards/metrics-to-panel-map.md";
+
+    /// <summary>
+    /// Matches a meter section heading in the panel map, which is where the set of
+    /// charted meters is written down. Attribution is read from the document rather
+    /// than hard-coded here so that a meter added by a future package enters this
+    /// gate's population the moment its section lands, without an edit to this file.
+    /// </summary>
+    private static readonly Regex PanelMapMeterHeadingRegex =
+        new(@"^##\s+`(?<meter>orleans\.lattice(?:\.[a-z0-9_]+)*)`\s+meter\s*$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Floor on the number of meter sections the panel map must yield. Nine sections
+    /// exist at the time of writing, eight of them under the <c>orleans.lattice</c>
+    /// prefix this gate reads; the floor sits well below that so retiring a package
+    /// does not fail the guard, but far enough above zero that a heading-format
+    /// change which silently stops matching does.
+    /// </summary>
+    private const int MinimumChartedMeterNames = 5;
+
+    /// <summary>
+    /// Floor on the number of distinct <c>orleans.lattice.*</c> instruments the
+    /// source-derived scan must contribute. Several hundred are declared across the
+    /// shipped packages; the floor guards against the scan silently matching nothing,
+    /// which would make every assertion built on it vacuous.
+    /// </summary>
+    private const int MinimumSourceDeclaredInstruments = 100;
+
+    /// <summary>
+    /// Floor on the number of distinct meters the resolved token map spans. This is
+    /// the guard specific to issue #2811: the map used to be scoped by reference
+    /// equality against exactly two meters, so any regression back to meter-identity
+    /// scoping collapses this count to two and fails here rather than passing green
+    /// while silently covering nothing beyond the core and replication meters.
+    /// </summary>
+    private const int MinimumDistinctMeters = 3;
+
+    /// <summary>
+    /// Floor on the number of bundled dashboards the token-resolution guard runs
+    /// over. Bound to <see cref="LatticeDashboards.All"/> at run time, so the floor
+    /// only has to rule out an empty population rather than track the real count.
+    /// </summary>
+    private const int MinimumBundledDashboards = 5;
 
     /// <summary>
     /// Canonical dotted names of instruments that are intentionally not charted
@@ -86,12 +132,56 @@ public sealed class DashboardJsonTests
             "orleans.lattice.registry.admission.queue.depth",
         };
 
+    /// <summary>
+    /// The meters the panel map documents, longest name first so that prefix
+    /// resolution against an instrument name picks the most specific meter (for
+    /// example <c>orleans.lattice.replication.grpc</c> ahead of
+    /// <c>orleans.lattice.replication</c> and <c>orleans.lattice</c>).
+    /// </summary>
+    /// <remarks>
+    /// Declared above <see cref="ExpectedTokenToMeter"/> deliberately: static field
+    /// initialisers run in declaration order, and the map's initialiser reads this
+    /// value, so a later declaration would observe <see langword="null"/> here.
+    /// </remarks>
+    private static readonly Lazy<IReadOnlyList<string>> ChartedMeterNamesLazy =
+        new(ReadChartedMeterNames, isThreadSafe: true);
+
+    /// <summary>The meter names read from the panel map, longest first.</summary>
+    internal static IReadOnlyList<string> ChartedMeterNames => ChartedMeterNamesLazy.Value;
+
     private static IReadOnlyDictionary<string, string> ExpectedTokenToMeter { get; } =
         BuildExpectedTokenToMeterMap();
 
     private static Dictionary<string, string> BuildExpectedTokenToMeterMap()
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // ISSUE #2811. This population used to be scoped by REFERENCE EQUALITY
+        // against exactly two Meter instances (see EnumerateLiveInstruments
+        // below), which is not a policy choice - it is the only thing this test
+        // project's reference graph makes expressible, because the metrics types
+        // of the auth, membership, backup, scaling, tenancy and gRPC packages are
+        // not loadable here at all. The consequence was that a dashboard token or
+        // a panel-map row belonging to any other shipped meter was dropped before
+        // its name was ever considered, so this gate certified six of the eleven
+        // bundled dashboards without being able to read a single one of their
+        // instruments.
+        //
+        // The source-derived pass below removes that scoping. It reads every
+        // instrument declared anywhere in src/ (via DeclaredInstruments, which
+        // this fixture already consults for instrument kind) and attributes each
+        // one to a meter by longest-prefix match over the meters the panel map
+        // documents. Both halves are live sources: a new instrument or a new
+        // meter enters this gate's population the moment it lands, with no edit
+        // here and no checked-in list of names to drift.
+        //
+        // It runs FIRST so that the live-reflection pass below, which is
+        // authoritative for the two meters it can actually see, overwrites any
+        // attribution this pass inferred.
+        foreach (var (instrumentName, meterName) in EnumerateSourceDeclaredInstruments())
+        {
+            AddInstrumentForms(map, instrumentName, meterName);
+        }
 
         foreach (var (instrumentName, meterName) in EnumerateLiveInstruments())
         {
@@ -227,6 +317,78 @@ public sealed class DashboardJsonTests
         }
     }
 
+    /// <summary>
+    /// Reads the meter section headings from the panel map, longest name first.
+    /// </summary>
+    /// <remarks>
+    /// The panel map is the repository's written record of which meters are charted
+    /// and which instruments each one publishes, and it is already pinned to source
+    /// in both directions by the per-package <c>MetricsDocCoverage</c> fixtures. That
+    /// makes it a live source rather than a copy: reading meter attribution from it
+    /// here cannot drift from the code without one of those fixtures failing first.
+    /// </remarks>
+    private static IReadOnlyList<string> ReadChartedMeterNames()
+    {
+        var path = Path.Combine(
+            HygieneRepository.FindRepoRoot(),
+            PanelMapRelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        var names = new List<string>();
+        foreach (var line in File.ReadLines(path))
+        {
+            var match = PanelMapMeterHeadingRegex.Match(line.TrimEnd());
+            if (match.Success)
+            {
+                names.Add(match.Groups["meter"].Value);
+            }
+        }
+
+        // Longest first, so a prefix walk stops at the most specific meter.
+        names.Sort(static (left, right) => right.Length.CompareTo(left.Length));
+        return names;
+    }
+
+    /// <summary>
+    /// Every instrument declared anywhere in <c>src/</c> whose name falls under a
+    /// meter the panel map documents, paired with that meter.
+    /// </summary>
+    /// <remarks>
+    /// This is the enrolment that replaces meter reference-identity scoping
+    /// (issue #2811). Attribution is by longest matching meter-name prefix, which is
+    /// exact rather than heuristic because every shipped meter publishes instruments
+    /// under its own dotted name; an instrument matching no documented meter is
+    /// skipped rather than guessed at.
+    /// </remarks>
+    internal static IEnumerable<(string Name, string MeterName)> EnumerateSourceDeclaredInstruments()
+    {
+        var meters = ChartedMeterNames;
+
+        foreach (var dotted in DeclaredInstruments.ByDottedName.Keys)
+        {
+            foreach (var meter in meters)
+            {
+                if (dotted.Length > meter.Length
+                    && dotted[meter.Length] == '.'
+                    && dotted.StartsWith(meter, StringComparison.Ordinal))
+                {
+                    yield return (dotted, meter);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The instruments this assembly can observe through a live
+    /// <see cref="MeterListener"/>.
+    /// </summary>
+    /// <remarks>
+    /// Necessarily limited to the two meters whose types this test project
+    /// references; the other shipped meters are not loadable here, which is why the
+    /// source-derived pass in <see cref="BuildExpectedTokenToMeterMap"/> carries the
+    /// enrolment and this pass only refines it. Do not treat this method as the
+    /// gate's population - see issue #2811.
+    /// </remarks>
     private static IEnumerable<(string Name, string MeterName)> EnumerateLiveInstruments()
     {
         // Force type-initialisers on the static metric classes so every instrument is registered.
@@ -310,7 +472,20 @@ public sealed class DashboardJsonTests
             // belong on the Replication dashboard's WAL-throughput panel
             // alongside the replication-meter ship/append counters. Overview /
             // CommitPath / AtomicWrites dashboards remain strictly core-meter.
-            if (kind != LatticeDashboardKind.Replication && meterName == LatticeReplicationMetrics.MeterName)
+            //
+            // Issue #2811. Before the known-instrument population was widened beyond
+            // the two locally-referenced meters, a token belonging to the auth,
+            // membership, backup, scaling, tenancy or gRPC meter could not resolve at
+            // all, so this rule only ever had to separate core from replication and
+            // could be written as a single negative test. Those tokens now resolve,
+            // which means confinement has to be stated positively or a Backup
+            // instrument charted on the Overview dashboard would newly pass.
+            var alsoAllowedMeter = kind == LatticeDashboardKind.Replication
+                ? LatticeMetrics.MeterName
+                : expectedMeter;
+
+            if (!string.Equals(meterName, expectedMeter, StringComparison.Ordinal)
+                && !string.Equals(meterName, alsoAllowedMeter, StringComparison.Ordinal))
             {
                 unknown.Add($"{token} (resolved to '{meterName}', expected '{expectedMeter}')");
             }
@@ -319,6 +494,108 @@ public sealed class DashboardJsonTests
         Assert.That(unknown, Is.Empty,
             $"Dashboard '{kind}' references metric tokens that do not resolve to instruments on '{expectedMeter}':{Environment.NewLine}  - " +
             string.Join(Environment.NewLine + "  - ", unknown));
+    }
+
+    /// <summary>
+    /// Every bundled dashboard, bound to its live source so that a dashboard added
+    /// to <see cref="LatticeDashboardKind"/> is covered without an edit here.
+    /// </summary>
+    internal static IEnumerable<LatticeDashboardKind> AllDashboardKinds => LatticeDashboards.All;
+
+    /// <summary>
+    /// The widened token-resolution guard: every metric token on <b>every</b>
+    /// bundled dashboard must name an instrument that is actually declared in
+    /// <c>src/</c>, on whichever meter owns it.
+    /// </summary>
+    /// <remarks>
+    /// Issue #2811. The older guard is confined to five dashboards and, until the
+    /// population was widened, could only read two meters, so the six dashboards it
+    /// does not name - Authorization, Backup, Autoscaling Signal, Replication
+    /// Transport (gRPC), Per-Tenant Observability and Grain Index - were charted
+    /// against instruments no gate in this repository could resolve. This test
+    /// enrols every dashboard and asserts resolution only; per-dashboard meter
+    /// confinement stays with the older guard, which is where the rule that a
+    /// dashboard may chart its own meter (plus core, for Replication) is written
+    /// down.
+    /// </remarks>
+    [TestCaseSource(nameof(AllDashboardKinds))]
+    public void Every_metric_token_on_every_bundled_dashboard_resolves_to_a_declared_instrument(
+        LatticeDashboardKind kind)
+    {
+        var json = LatticeDashboards.GetGrafanaDashboardJson(kind);
+        var referencedTokens = ExtractInstrumentTokens(json);
+
+        Assert.That(referencedTokens, Is.Not.Empty,
+            $"Dashboard '{kind}' references no orleans_lattice instruments - that is almost certainly a bug, "
+            + "and it would make this case vacuous.");
+
+        var unknown = new List<string>();
+        foreach (var token in referencedTokens)
+        {
+            if (!ExpectedTokenToMeter.ContainsKey(token))
+            {
+                unknown.Add(token);
+            }
+        }
+
+        Assert.That(unknown, Is.Empty,
+            $"Dashboard '{kind}' references metric tokens that no instrument declared in src/ can produce "
+            + $"under any meter:{Environment.NewLine}  - "
+            + string.Join(Environment.NewLine + "  - ", unknown));
+    }
+
+    /// <summary>
+    /// Anti-vacuity guard for this fixture's own enrolment: the population it draws
+    /// on must be non-empty, must span more than the two meters this assembly can
+    /// reference, and must cover every dashboard kind the library ships.
+    /// </summary>
+    /// <remarks>
+    /// Issue #2811. The defect this fixture carried was not a wrong assertion but an
+    /// empty one: enrolment scoped by meter reference-identity silently excluded
+    /// every instrument outside two meters, so the gate reported green over a
+    /// population it had already discarded. The floors below fail loudly if a future
+    /// refactor empties any of the three scans, and the distinct-meter floor fails
+    /// specifically if enrolment collapses back to meter identity. Every figure is
+    /// bound to a live source - the enum, the panel map, and the <c>src/</c>
+    /// declaration scan - rather than to a checked-in count or list of names, so
+    /// this test is independent of what other work adds or removes.
+    /// </remarks>
+    [Test]
+    public void Known_instrument_population_is_not_scoped_to_the_locally_referenced_meters()
+    {
+        var chartedMeters = ChartedMeterNames;
+        Assert.That(chartedMeters, Has.Count.AtLeast(MinimumChartedMeterNames),
+            $"Only {chartedMeters.Count} meter heading(s) were read from '{PanelMapRelativePath}'. "
+            + "The heading format this fixture parses has probably changed, which would silently empty "
+            + "its meter attribution rather than fail it.");
+
+        var declared = EnumerateSourceDeclaredInstruments().ToList();
+        Assert.That(declared, Has.Count.AtLeast(MinimumSourceDeclaredInstruments),
+            $"Only {declared.Count} instrument(s) declared in src/ were attributed to a charted meter. "
+            + "This scan is the enrolment that replaced meter reference-identity scoping (issue #2811); "
+            + "if it matches nothing, every assertion built on it is vacuous.");
+
+        var distinctMeters = declared.Select(static pair => pair.MeterName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        Assert.That(distinctMeters, Has.Count.AtLeast(MinimumDistinctMeters),
+            $"The known-instrument population spans only {distinctMeters.Count} meter(s): "
+            + string.Join(", ", distinctMeters)
+            + ". Issue #2811 is precisely the state where this gate can only see the meters whose types "
+            + "this test project references, so a count of two means enrolment has regressed to meter "
+            + "reference-identity and the gate is certifying dashboards it cannot read.");
+
+        var dashboards = LatticeDashboards.All;
+        Assert.That(dashboards, Has.Count.AtLeast(MinimumBundledDashboards),
+            "The bundled dashboard population is empty or implausibly small, which would make the "
+            + "per-dashboard token-resolution cases vacuous.");
+
+        var missing = Enum.GetValues<LatticeDashboardKind>()
+            .Where(kind => !dashboards.Contains(kind))
+            .ToList();
+        Assert.That(missing, Is.Empty,
+            "These dashboard kinds are declared but absent from LatticeDashboards.All, so no case of "
+            + $"the token-resolution guard runs over them: {string.Join(", ", missing)}.");
     }
 
     [Test]
