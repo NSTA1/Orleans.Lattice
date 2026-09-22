@@ -2180,7 +2180,7 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly Counter<long> WalGcDurabilityHoldEngaged =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.durability_hold_engaged",
-            description: "WAL garbage-collection passes on which the durability hold engaged and retained the scan, tagged by tree and by reason: never_pinned or pin_regressed.");
+            description: "WAL garbage-collection passes on which the durability hold engaged and retained the scan, tagged by tree and by reason: never_pinned, pin_regressed, or cursor_unreadable.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>never_pinned</c> - the durability hold
