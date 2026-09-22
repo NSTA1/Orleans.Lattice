@@ -165,6 +165,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.grain.call.outstanding_depth` | histogram (`{call}`) | `grain_type`, `tenant` | Overview | Outstanding calls per target activation, by grain type |
 | `orleans.lattice.grain.call.duration` | histogram (ms) | `grain_type`, `outcome`, `tenant` | Overview | Grain-call duration by grain type and outcome |
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.scan_page.chain_regressions` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.ceiling_outcomes` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.leaf_read_outcomes` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Scan-page leaf-read coalescing (issued, joined, served) |

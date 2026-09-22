@@ -8136,6 +8136,64 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafStrandedTag =
         new(TagOutcome, "stranded");
 
+    /// <summary>
+    /// Count of range-scan chain regressions suppressed by a shard root - rows
+    /// dropped from a leaf whose keys sit at or behind the scan's chain
+    /// watermark, which proves the leaf is not reachable by descent for the
+    /// range it claims to own (issue 3271). Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagShard"/>, <see cref="TagOutcome"/> and the tenant label.
+    /// <para>
+    /// This counter exists because the suppression used to be reported
+    /// <em>only</em> as a log warning, and that is not an aggregate anyone can
+    /// read. One field burst emitted 110,322 warnings in about eight minutes -
+    /// roughly 2,354 lines a second, 99.3% of all warning output - which filled
+    /// half of a 100 MB container log ring and collapsed that host's log
+    /// retention to about 108 seconds. Nothing on the box could be diagnosed
+    /// after the fact while it ran. The log line is now bounded (issue 3341) and
+    /// this counter carries the magnitude the log used to carry.
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>suppression</c> - one per suppression event, which is once per
+    ///   offending leaf per page fill. This is the rate the log used to
+    ///   represent line-for-line, so it is the arm to read for how hard the
+    ///   condition is firing.</item>
+    ///   <item><c>distinct-leaf</c> - one the first time a shard-root activation
+    ///   observes a given leaf regress. Summed over an activation it is the
+    ///   <em>distinct damaged-leaf count</em>, which is the quantity an operator
+    ///   actually needs and the one that used to be obtainable only by
+    ///   de-duplicating the warning stream by leaf id. The census is deliberately
+    ///   an aggregate rather than a per-leaf tag: one series per B+ leaf grain is
+    ///   an unbounded-cardinality defect (issue 2518).</item>
+    /// </list>
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are primed at zero from shard-root
+    /// activation through the same recorder the live path uses, so an absent
+    /// series means the build does not carry the instrument rather than that the
+    /// shard's chain is intact. Read the two together: <c>suppression</c> far
+    /// above <c>distinct-leaf</c> is a small set of damaged leaves re-encountered
+    /// on every page, which is the shape the field burst had, whereas the two
+    /// moving together is fresh damage spreading across the chain.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanChainRegressions =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.chain_regressions", unit: "{regression}",
+            description: "Count of range-scan rows suppressed from leaves that regressed the scan's chain watermark, by whether the event is a suppression or the first sighting of a distinct damaged leaf.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>suppression</c> (one range-scan chain
+    /// regression suppressed, counted once per offending leaf per page fill).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanChainRegressionSuppressionTag =
+        new(TagOutcome, "suppression");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>distinct-leaf</c> (the first time this
+    /// shard-root activation observed this particular leaf regress, so the arm
+    /// sums to the distinct damaged-leaf count).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanChainRegressionDistinctLeafTag =
+        new(TagOutcome, "distinct-leaf");
+
 
     /// <summary>
     /// Count of client-side resilient scans
