@@ -1141,6 +1141,18 @@ internal sealed partial class BPlusLeafGrain(
     /// ordinary per-key Set for each written entry and no predicate is
     /// re-evaluated downstream); the returned <see cref="ConditionalSetManyResult.WrittenKeys"/>
     /// reports exactly the committed subset.
+    /// <para>
+    /// Declared-span admission runs <b>before</b> the guard pass, and the order
+    /// matters. "No live committed value" is only sound evidence of a guard
+    /// miss for a key this leaf declares. For a key whose row a split moved to
+    /// a sibling, the absence says nothing about the guard - the real value
+    /// still lives on the declaring leaf and may well satisfy it - yet the two
+    /// cases were previously indistinguishable, so a matching key was dropped
+    /// from the written set with no error and no metric while the caller was
+    /// told the batch completed. Such entries are therefore forwarded to the
+    /// leaf that declares them and the guard is evaluated there. See
+    /// <c>BPlusLeafGrain.SpanAdmission.cs</c> and issue #2663.
+    /// </para>
     /// </summary>
     public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
@@ -1150,6 +1162,47 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
+        }
+
+        // Admission precedes the guard: see the remarks above. On a leaf with
+        // no declared span - the steady state - this returns on its first line,
+        // so the common path pays nothing.
+        if (ContainsOutOfSpanKey(entries))
+        {
+            return await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate);
+        }
+
+        // Every entry is in span, so the guard's "absent means non-matching"
+        // inference is sound for all of them and the matched set cannot
+        // straddle the span either.
+        return await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
+    }
+
+    /// <summary>
+    /// Evaluates the guard against this leaf's own committed rows and commits
+    /// the matching subset. Every caller must have established that the
+    /// entries belong here, either because
+    /// <see cref="ContainsOutOfSpanKey(List{KeyValuePair{string, byte[]}})"/>
+    /// cleared them or because
+    /// <see cref="ForwardOutOfSpanConditionalSetManyAsync"/> retained them
+    /// under the fail-open rule.
+    /// </summary>
+    /// <param name="entries">The candidate entries, already span-admitted.</param>
+    /// <param name="predicate">The guard evaluated against each key's current committed value.</param>
+    /// <param name="mayContainOutOfSpanKey">
+    /// <see langword="true"/> when the caller retained entries it could not
+    /// route, so the matched set must be re-scanned for out-of-span keys before
+    /// the batched commit; <see langword="false"/> when admission already
+    /// cleared the whole batch and that scan would be redundant.
+    /// </param>
+    private async Task<ConditionalSetManyResult> SetManyWherePredicateLocalAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate,
+        bool mayContainOutOfSpanKey)
+    {
         if (entries.Count == 0)
         {
             return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
@@ -1181,12 +1234,13 @@ internal sealed partial class BPlusLeafGrain(
 
         SplitResult? split;
         var splitInProgress = HasInterruptedSplit;
-        // The matched set is drawn from this leaf's own cache, so an out-of-span
-        // entry can only appear here if a row was orphaned before this rule
-        // existed. Routing it per key keeps the guard uniform across every
-        // batched write path and stops such a row being re-committed out of
-        // span. See BPlusLeafGrain.SpanAdmission.cs.
-        if (splitInProgress || MergeObserverActive || ContainsOutOfSpanKey(matched))
+        // An out-of-span entry can only reach the matched set when the caller
+        // retained it here under the fail-open forward rule, or when a row was
+        // orphaned before this rule existed. Routing it per key keeps the guard
+        // uniform across every batched write path and stops such a row being
+        // re-committed out of span. See BPlusLeafGrain.SpanAdmission.cs.
+        if (splitInProgress || MergeObserverActive
+            || (mayContainOutOfSpanKey && ContainsOutOfSpanKey(matched)))
         {
             // Mirror SetManyAsync's split-in-progress fallback: the split
             // recovery in SetCoreAsync forwards mid-batch entries across two
