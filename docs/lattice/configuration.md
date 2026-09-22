@@ -201,6 +201,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
+| [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) | `int` | 4 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -1527,6 +1528,20 @@ Maximum number of in-flight storage-provider flushes the partition grain admits 
 Set to `1` to restore the historical single-in-flight shape (strict ordering against the provider; no pipeline depth). Most workloads on durable backing stores benefit from the default; the strict-ordering shape is useful only when targeting a provider whose ordering guarantees are weaker than per-request linearisability.
 
 The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput - more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait. At the canonical `WalPartitions = 8` the combined fan-out is `8 * 16 = 128` concurrent flushes against the provider, which is at the edge of a single Azure Tables Standard storage account's sustained throughput budget; see [WAL Tuning](wal-tuning.md) for the envelope above which the storage account becomes the binding constraint and the recovery path (`WalPartitions` fan-out across accounts, not a higher per-partition cap).
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+
+### `WalAppendCoalescingInFlightThreshold`
+
+In-flight flush depth at or above which the partition grain stops kicking a flush for the final entry of an arriving append batch, letting that batch instead accumulate into the next flush window (default: 4; `0` disables coalescing and restores the historical unconditional kick).
+
+The problem it solves is that a batched write arrives at any one partition already *divided twice*. `ILattice.SetManyAsync` fans a batch out over the tree's shards, and each shard's slice then fans out over that shard's WAL partitions, so at the canonical 4,096-key batch, 64 shards and 16 partitions, a `WalShardGrain` sees `4096 / 64 / 16 = 4` entries per arrival. Before this option existed, the flush-kick predicate treated the final entry of *every* arriving batch as a reason to flush immediately, so each of those four-entry slices paid a full storage round trip. Append cost therefore never amortised with load: offering more work bought more concurrent *small* appends rather than fuller ones, and measured per-append entry counts *fell* as offered load rose (see [#3396](https://github.com/NSTA1/Orleans.Lattice/issues/3396)).
+
+Suppressing that kick cannot strand a batch, which is why no timer is involved. Suppression requires the in-flight count to be at or above the threshold, and the threshold is at least `1` whenever coalescing is enabled, so a flush is necessarily outstanding at the moment of suppression; the flush-completion path already re-kicks whenever pending segments remain and the in-flight count is below `WalMaxPendingBatches`. The accumulating batch therefore has a guaranteed later drain. A threshold of `0` would be the one unsafe value - suppressing with nothing in flight - and is not expressible, because `0` means disabled.
+
+The default is deliberately well below `WalMaxPendingBatches` so it engages before the in-flight cap does; a threshold at or above that cap could never fire, since admission already requires `in_flight < WalMaxPendingBatches`. A threshold of `1` is maximum coalescing (every arrival behind an outstanding flush accumulates) but overrides the measured pipeline-depth tuning for partitions whose batches are already well filled.
+
+The option is **self-disabling below its threshold**: until that many flushes are concurrently in flight, the predicate is identical to the historical one, so a quiet or moderately loaded partition behaves exactly as before. It changes no method signature, wire format, ordering, durability, or offset assignment - offsets are still assigned under the state gate and each flush window is still strictly above every in-flight window - only how many entries share a window. Accumulation stays bounded by `WalMaxBatchEntries` and `WalMaxBatchBytes`, which cut a flush over regardless of the threshold.
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 

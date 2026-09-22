@@ -33,6 +33,7 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalMaxPendingBatches", o => o.WalMaxPendingBatches = 0);
         yield return Case("MaxSnapshotReplayEntries", o => o.MaxSnapshotReplayEntries = 0);
         yield return Case("WalPartitions", o => o.WalPartitions = 0);
+        yield return Case("WalAppendCoalescingInFlightThreshold", o => o.WalAppendCoalescingInFlightThreshold = -1);
         yield return Case("SnapshotLeafIdleTtl", o => o.SnapshotLeafIdleTtl = TimeSpan.Zero);
         yield return Case("SnapshotBaselineTtl", o => o.SnapshotBaselineTtl = TimeSpan.Zero);
         yield return Case("WalFlushTimeout", o => o.WalFlushTimeout = TimeSpan.Zero);
@@ -57,6 +58,46 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalAdmissionSaturationWaitBudget", o => o.WalAdmissionSaturationWaitBudget = NegOne);
         yield return Case("WalThrottledAdmissionPace", o => o.WalThrottledAdmissionPace = NegOne);
         yield return Case("StarvationDriveBudget", o => o.StarvationDriveBudget = TimeSpan.Zero);
+    }
+
+    [Test]
+    public void WalAppendCoalescingInFlightThreshold_is_enabled_by_default()
+    {
+        // #3396: this default is the load-bearing decision, not an
+        // incidental constant. Coalescing ships on because the
+        // deployments that suffer tiny-append fragmentation are exactly
+        // those that would never opt in. It is safe on by default only
+        // because it is self-disabling below the threshold, which
+        // requires the default to be >= 1 (a positive depth) and well
+        // under WalMaxPendingBatches (so it engages before the in-flight
+        // cap, rather than never).
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold,
+                Is.GreaterThanOrEqualTo(1),
+                "A zero default would disable coalescing and help nobody who does not opt in.");
+            Assert.That(
+                LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold,
+                Is.LessThan(LatticeOptions.DefaultWalMaxPendingBatches),
+                "A threshold at or above the in-flight cap can never engage, since admission already requires inFlight < cap.");
+            Assert.That(
+                new LatticeOptions().WalAppendCoalescingInFlightThreshold,
+                Is.EqualTo(LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold));
+        });
+    }
+
+    [Test]
+    public void WalAppendCoalescingInFlightThreshold_accepts_zero_as_the_disable_escape_hatch()
+    {
+        // Operators must retain a supported way back to the historical
+        // unconditional final-entry flush kick.
+        var options = new LatticeOptions { WalAppendCoalescingInFlightThreshold = 0 };
+
+        Assert.That(
+            new LatticeOptionsValidator().Validate(null, options).Failed,
+            Is.False,
+            "Zero must remain valid; it is the documented way to disable coalescing.");
     }
 
     private static TestCaseData Case(string field, Action<LatticeOptions> mutate) =>

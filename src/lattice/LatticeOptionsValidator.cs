@@ -257,6 +257,13 @@ if (options.WalMaxPendingBatches < 1)
         $"{nameof(LatticeOptions.WalMaxPendingBatches)} must be greater than or equal to 1. "
         + "The in-memory backlog cap must permit at least one in-flight flush.");
 }
+if (options.WalAppendCoalescingInFlightThreshold < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalAppendCoalescingInFlightThreshold)} must be greater than or equal to 0. "
+        + "Use 0 to disable append coalescing; a positive value is the in-flight depth at which "
+        + "the final-entry flush kick is suppressed so arrivals coalesce into the pending batch.");
+}
 if (options.MaxSnapshotReplayEntries < 1)
     return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxSnapshotReplayEntries)} must be greater than or equal to 1.");
 if (options.WalPartitions < 1)
