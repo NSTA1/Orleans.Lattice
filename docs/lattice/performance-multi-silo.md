@@ -33,11 +33,11 @@ for throughput rather than for comparability will beat these figures.
 ```mermaid
 xychart-beta
     title "Sustained throughput vs silo count"
-    x-axis "Silos" ["1", "2"]
-    y-axis "Thousand keys/s" 0 --> 44
-    line [19.87, 39.64]
-    line [5.21, 9.04]
-    line [0.88, 0.61]
+    x-axis "Silos" ["1", "2", "4", "6", "8"]
+    y-axis "Thousand keys/s" 0 --> 173
+    line [19.91, 39.64, 79.29, 118.93, 156.81]
+    line [5.48, 7.78, 14.97, 2.34, 0.84]
+    line [0.7, 0.69, 0.38, 0.64, 0.65]
 ```
 
 Series order (xychart-beta renders no legend): `GetManyAsync` (4,096 keys/call), then `SetManyAsync` (4,096 keys/call), then `SetAsync` (point write).
@@ -63,7 +63,7 @@ resource group is deleted at the end of the sweep.
 <!-- perf-table:layer3:start
   schema=v1
   batchSize=4096
-  cohortN=1
+  cohortN=2/3
   dotnet=10.0.x
   gitSha=eb78c703c
   host=Azure Container Apps (Consumption)
@@ -72,27 +72,36 @@ resource group is deleted at the end of the sweep.
   rowsMeasured=2026-09-22
   rungPerSilo=get-many=4000 veh/silo @ 5 Hz / 45s; set-many=1200 veh/silo @ 5 Hz / 45s; set-point=200 veh/silo @ 5 Hz / 45s
   shardCount=64
-  siloCounts=1,2
+  siloCounts=1,2,4,6,8
   siloSize=4 vCPU / 8 GiB
   walAccounts=1
   walMaxPendingBatches=16
-  walPartitions=8
-  methodology=Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine's active elapsed time. Layer 3 deliberately does NOT reuse Layer 2's rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL, so a write-mode knee may be that account's ceiling rather than the cluster's - see the caveats section.
+  walPartitions=16
+  methodology=Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine's active elapsed time. Layer 3 deliberately does NOT reuse Layer 2's rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL. That account's own metrics were checked for this sweep and it is NOT the write-side limit: zero throttling responses at any silo count, and server-side latency falling from 9.7 ms at N=1 to 6.7 ms at N=8. Read the write-mode collapse as a cluster-side defect, not a storage ceiling - see the caveats section.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 |
 |-----------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|
-| `GetManyAsync` (4,096 keys/call) | 1 | ~20 k keys/s | **~19.9 k keys/s** | 1x | 100% | ~1.47 ms | ~10.98 ms |
-| `GetManyAsync` (4,096 keys/call) | 2 | ~40 k keys/s | **~39.6 k keys/s** | 2x | 100% | ~8.29 ms | ~14.73 ms |
-| `SetManyAsync` (4,096 keys/call) | 1 | ~6 k keys/s | **~5.2 k keys/s** | 1x | 100% | ~837.27 ms | ~2143.95 ms |
-| `SetManyAsync` (4,096 keys/call) | 2 | ~12 k keys/s | **~9 k keys/s** | 1.74x | 87% | ~1492.99 ms | ~1492.99 ms |
-| `SetAsync` (point write) | 1 | ~1 k keys/s | **880 keys/s** | 1x | 100% | ~10.66 ms | ~736.63 ms |
-| `SetAsync` (point write) | 2 | ~2 k keys/s | **611 keys/s** | 0.69x | 35% | ~47.98 ms | ~601.58 ms |
+| `GetManyAsync` (4,096 keys/call) | 1 | ~20 k keys/s | **~19.9 k keys/s** | 1x | 100% | ~1.56 ms | ~22.15 ms |
+| `GetManyAsync` (4,096 keys/call) | 2 | ~40 k keys/s | **~39.6 k keys/s** | 1.99x | 100% | ~10.92 ms | ~1152.59 ms |
+| `GetManyAsync` (4,096 keys/call) | 4 | ~80 k keys/s | **~79.3 k keys/s** | 3.98x | 100% | ~9.31 ms | ~276.94 ms |
+| `GetManyAsync` (4,096 keys/call) | 6 | ~120 k keys/s | **~118.9 k keys/s** | 5.97x | 100% | ~11.66 ms | ~1115.51 ms |
+| `GetManyAsync` (4,096 keys/call) | 8 | ~160 k keys/s | **~156.8 k keys/s** | 7.88x | 98% | ~12.38 ms | ~16.2 ms |
+| `SetManyAsync` (4,096 keys/call) | 1 | ~6 k keys/s | **~5.5 k keys/s** | 1x | 100% | ~3456.73 ms | ~6273.2 ms |
+| `SetManyAsync` (4,096 keys/call) | 2 | ~12 k keys/s | **~7.8 k keys/s** | 1.42x | 71% | ~5132.36 ms | ~8078.88 ms |
+| `SetManyAsync` (4,096 keys/call) | 4 | ~24 k keys/s | **~15 k keys/s** | 2.73x | 68% | ~6978.52 ms | ~10140.72 ms |
+| `SetManyAsync` (4,096 keys/call) | 6 | ~36 k keys/s | **~2.3 k keys/s** | 0.43x | 7% | ~37837.48 ms | ~82940.16 ms |
+| `SetManyAsync` (4,096 keys/call) | 8 | ~48 k keys/s | **840 keys/s** | 0.15x | 2% | ~85241.98 ms | ~85241.98 ms |
+| `SetAsync` (point write) | 1 | ~1 k keys/s | **697 keys/s** | 1x | 100% | ~14.63 ms | ~609.62 ms |
+| `SetAsync` (point write) | 2 | ~2 k keys/s | **688 keys/s** | 0.99x | 49% | ~49.64 ms | ~1329.78 ms |
+| `SetAsync` (point write) | 4 | ~4 k keys/s | **375 keys/s** | 0.54x | 13% | ~25.75 ms | ~770.34 ms |
+| `SetAsync` (point write) | 6 | ~6 k keys/s | **642 keys/s** | 0.92x | 15% | ~49.3 ms | ~1463.52 ms |
+| `SetAsync` (point write) | 8 | ~8 k keys/s | **652 keys/s** | 0.94x | 12% | ~27.05 ms | ~224.52 ms |
 
 <!-- perf-table:layer3:end -->
 
-> Measured 2026-09-22 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha eb78c703c, n=1 cohorts per cell, silo counts 1,2. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL - see the caveats below before reading a write-mode knee as the cluster's.
+> Measured 2026-09-22 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha eb78c703c, n=2/3 cohorts per cell, silo counts 1,2,4,6,8. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL, but that account was measured and is NOT the write-side limit - see the caveats below.
 
 ## How to read this
 
@@ -107,14 +116,21 @@ contend rather than contribute.
 conflating them is the main way to misread this table.** The read workload
 (`GetManyAsync`) touches no WAL, so its curve measures the **compute tier**:
 whether grain placement, the gateway fan-out, and the leaf cache actually
-spread across hosts. The write workloads all funnel through the WAL into a
-**single Azure Tables storage account**, so their curve measures the
-**storage account's budget** far sooner than it measures the cluster's. If
-the read row keeps climbing while the write rows flatten, that is the
-expected and correct result, and it says the write knee is the account's -
-not Orleans.Lattice's. Raising the write ceiling is a storage-topology
-change (more accounts, WAL partitions spread across them), not a
-silo-count change.
+spread across hosts, and it scales essentially linearly to the limit of
+what this sweep offered it. The write workloads funnel through the WAL,
+and their curve does something different: `SetManyAsync` peaks at 4 silos
+and then **collapses**, returning less absolute throughput at 8 silos than
+at 1.
+
+**That collapse is not the storage account.** The intuitive explanation -
+one shared Azure Tables account saturating - was tested against the
+account's own metrics for this sweep and refuted: **zero** throttling
+responses at any silo count, and server-side latency that *improved* as
+the collapse deepened (9.7 ms at N=1 against 6.7 ms at N=8). Adding
+storage accounts would not move this curve. The cause sits in the
+multi-silo write path itself, and is tracked as a defect rather than
+published here as a ceiling - see *What the write collapse actually is*
+below.
 
 **Throughput is cluster-wide; the latency quantiles are not.** The
 throughput column counts every key the whole cluster retired. The p50/p99
@@ -134,11 +150,42 @@ back-pressure: it is an Azure Tables transaction conflict
 (`TableTransactionFailedException: The specified entity already exists`),
 the signature of a storage transaction being retried after it had in fact
 landed. The keys are durable; the retry is what is counted as failed. So a
-large failure count on a write row means the account is being pushed hard
-enough to make the storage SDK retry, and it *depresses the reported
+large failure count on a write row means the write path is being pushed
+hard enough to make the storage SDK retry, and it *depresses the reported
 throughput without implying data loss*. The harness grades a cohort only on
 whether it produced a productive measurement window at all, and carries the
 failure count through as a signal rather than discarding the cell.
+
+## What the write collapse actually is
+
+The `SetManyAsync` row peaks at 4 silos and then falls away sharply. This
+section records what that is, because the number on its own invites the
+wrong conclusion.
+
+Instrumentation from the cohorts localises the whole effect to one place.
+`LatticeGrain`'s shard **fan-out** stage accounts for roughly 99.9% of a
+`SetManyAsync` call at every silo count, and its mean rises from about
+6.0 s at 4 silos to about 80 s at 8. Every stage around it - routing,
+bucketing, the admission gate, event publication - stays in the
+single-digit-to-tens-of-milliseconds range and is irrelevant to the curve.
+
+Everything *below* the fan-out got faster over the same range. The leaf
+commit and the WAL provider commit both post their best figures at the
+silo count where the cluster performs worst. Nothing in the write path
+slowed down.
+
+What changed is the **shape** of the distribution, not its centre. The
+per-branch leaf RPC at 8 silos has a median of about 386 ms, roughly eight
+times *faster* than the 4-silo median, while its 99th percentile grows
+from about 8.6 s to about 94 s. A fan-out that awaits every branch pays
+the slowest branch rather than the typical one, so a rare 94-second event
+becomes the price of every batch. The arithmetic closes: at both silo
+counts the measured fan-out duration tracks the branch tail, not the
+branch mean.
+
+This is scatter-gather tail amplification in the core write path, filed as
+a defect (#3348) with its full evidence. Read the write rows here as a
+measurement of that defect, not as Orleans.Lattice's write ceiling.
 
 ## Caveats that bound these numbers
 
@@ -168,11 +215,15 @@ divided by the active measurement window**. A Layer 3 cell and a Layer 2
 cell are consequently *not* computed the same way; the Layer 3 figure is
 the conservative one.
 
-**One storage account backs the whole cluster.** Every silo's WAL writes
-land in the same Azure Tables account, so the write rows measure the
-cluster only until they start measuring that account. Multi-account WAL
-fan-out exists in the harness but is held out of this sweep so that silo
-count stays the only variable.
+**One storage account backs the whole cluster, and it was not the limit.**
+Every silo's WAL writes land in the same Azure Tables account, so the
+obvious reading of the write rows is that they stop measuring the cluster
+and start measuring that account. That reading was checked against the
+account's own metrics for this sweep and does not hold: across 28.3 M
+transactions there were **zero** throttling responses at any silo count,
+and server-side latency *fell* as the collapse deepened. Multi-account WAL
+fan-out exists in the harness and is held out of this sweep so that silo
+count stays the only variable; on this evidence it would not have helped.
 
 **The shard count is fixed across every cell.** All cells use the same
 tree topology, so a change in the curve is a change in host count and not

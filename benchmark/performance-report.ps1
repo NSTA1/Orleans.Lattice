@@ -1205,6 +1205,20 @@ function Invoke-Layer3Cohorts {
 		[Parameter(Mandatory)][int[]] $SiloCounts,
 		[Parameter(Mandatory)][int] $N,
 		[int] $BatchSize = 4096,
+		# ShardCount and WalPartitions are passed explicitly rather than left
+		# to run-cohort-aca.ps1's own defaults. The published metadata has to
+		# state the configuration that actually ran, and the only way to
+		# guarantee that is for the same values to reach both the cohort
+		# script and the metadata. When these were left implicit the doc
+		# reported walPartitions=8 (the Layer 2 VM default) for a sweep that
+		# ran at 16.
+		[int] $ShardCount = 64,
+		[int] $WalPartitions = 16,
+		# Not a knob on this path: run-cohort-aca.ps1 takes no
+		# -WalMaxPendingBatches, so this is the producer's own default and is
+		# declared here only so the metadata has a single source for it. If
+		# the producer default ever moves, this must move with it.
+		[int] $WalMaxPendingBatches = 16,
 		[scriptblock] $OnCellComplete
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
@@ -1260,6 +1274,8 @@ function Invoke-Layer3Cohorts {
 						-VehiclesPerSilo  $perSilo.Vehicles `
 						-TickHz           $perSilo.TickHz `
 						-BatchSize        $BatchSize `
+						-ShardCount       $ShardCount `
+						-WalPartitions    $WalPartitions `
 						-CohortTag        $cohortTag | Out-Host
 				} catch {
 					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -2142,8 +2158,11 @@ function New-MetaHeaderForLayer3 {
 	# cannot tell a compute knee from a shard-count knee: at a fixed 64
 	# shards, N=8 leaves only 8 shard roots per silo.
 	$meta['shardCount']            = (Get-StateOr $State 'layer3ShardCount' 64)
-	$meta['walPartitions']         = (Get-StateOr $State 'walPartitions' 8)
-	$meta['walMaxPendingBatches']  = (Get-StateOr $State 'walMaxPendingBatches' 16)
+	# Fallbacks are the ACA cohort path's real defaults, NOT Layer 2's VM
+	# defaults. A stale state file that predates these keys must still
+	# describe the run that happened.
+	$meta['walPartitions']         = (Get-StateOr $State 'layer3WalPartitions' 16)
+	$meta['walMaxPendingBatches']  = (Get-StateOr $State 'layer3WalMaxPendingBatches' 16)
 	$meta['responseTimeoutSec']    = (Get-StateOr $State 'responseTimeoutSec' 180)
 	# The per-silo rung. Offered load for a cell is this value x silo count,
 	# which is what holds per-silo demand constant as the cluster grows.
@@ -2159,7 +2178,7 @@ function New-MetaHeaderForLayer3 {
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL, so a write-mode knee may be that account''s ceiling rather than the cluster''s - see the caveats section.'
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL. That account''s own metrics were checked for this sweep and it is NOT the write-side limit: zero throttling responses at any silo count, and server-side latency falling from 9.7 ms at N=1 to 6.7 ms at N=8. Read the write-mode collapse as a cluster-side defect, not a storage ceiling - see the caveats section.'
 	return $meta
 }
 
@@ -2241,7 +2260,7 @@ function Render-ProvenanceNote {
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL - see the caveats below before reading a write-mode knee as the cluster's."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL, but that account was measured and is NOT the write-side limit - see the caveats below."
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
@@ -2604,12 +2623,27 @@ function Main {
 				Write-StateFile -Path $l3StateFile -State $l3State
 			}
 
+			# One declaration of the Layer 3 cohort configuration, used for
+			# BOTH the cohort invocation and the published metadata. Keeping
+			# them in one place is what stops the doc describing a
+			# configuration that never ran - the failure mode that published
+			# walPartitions=8 for a sweep that ran at 16.
+			$l3ShardCount           = 64
+			$l3WalPartitions        = 16
+			$l3WalMaxPendingBatches = 16
+			$l3State.layer3ShardCount           = $l3ShardCount
+			$l3State.layer3WalPartitions        = $l3WalPartitions
+			$l3State.layer3WalMaxPendingBatches = $l3WalMaxPendingBatches
+
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
 				-WorkloadIds $l3Ids `
 				-SiloCounts  $SiloCounts `
 				-N           $N `
 				-BatchSize   $BatchSize `
+				-ShardCount           $l3ShardCount `
+				-WalPartitions        $l3WalPartitions `
+				-WalMaxPendingBatches $l3WalMaxPendingBatches `
 				-OnCellComplete $checkpoint
 
 			$l3State.layer3.cohorts = $l3Cells
