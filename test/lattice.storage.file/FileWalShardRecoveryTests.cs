@@ -460,7 +460,13 @@ public sealed class FileWalShardRecoveryTests
 
         await Assert.MultipleAsync(async () =>
         {
-            Assert.That(await shard.GetHighestOffsetAsync(CancellationToken.None), Is.EqualTo(-1L));
+            Assert.That(
+                await shard.GetHighestOffsetAsync(CancellationToken.None),
+                Is.EqualTo(5L),
+                "The recorded watermark is the shard's high-water mark even with "
+                + "no entries, so the next allocated offset is 6. Reporting -1 "
+                + "would allocate at 0, beneath the trim floor, and recovery "
+                + "would discard the write (issue #3366).");
             Assert.That(await shard.GetRetainedByteSizeAsync(CancellationToken.None), Is.Zero);
         });
     }
