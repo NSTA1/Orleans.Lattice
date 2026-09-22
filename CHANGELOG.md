@@ -44,6 +44,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Docs - Link check reported a count it never read.** docfx colours its summary line on CI, defeating the anchored pattern parsing it, so the count kept its `0` default and `-MaxWarnings 0` passed while two broken anchors shipped. It now reads stripped output, and an unreadable count fails. ([#3406](https://github.com/NSTA1/Orleans.Lattice/issues/3406)) (`repository-wide`)
+
 - **WAL - In-memory provider reused offsets after a full trim.** `InMemoryWalStorageProvider` restarted allocation at `0` once a trim removed every live entry. It keeps no durable state, so offsets were reused rather than data lost. `IWalStorageProvider` now states the high-water-mark contract. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice`)
 
 - **WAL - An unreadable cursor registry released the durability hold.** A failed consumer-cursor registry read classified the tree's cursors as durable, which disabled the durability hold and let the collector trim WAL entries with no durability evidence at all. It was silent as well as wrong: the counter that reports such a release is gated on the same hold, so the fault switched off the instrument that would have announced it. An unreadable registry is now its own classification, engages the hold, and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice`)
