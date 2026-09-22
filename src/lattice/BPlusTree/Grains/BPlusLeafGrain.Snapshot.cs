@@ -2153,6 +2153,25 @@ internal sealed partial class BPlusLeafGrain
     {
         if (state.State.TreeId is null)
         {
+            // Instrument the early return (issue #3366). This was previously a
+            // bare `return` with no signal of any kind, which made it
+            // indistinguishable from the two other ways a graceful teardown
+            // produces total silence - an earlier deactivation barrier throwing,
+            // and the hook never running at all - despite the three having
+            // materially different remedies. The reason is already declared in
+            // this instrument's own reason set and documented as "capture was
+            // invoked on a leaf that was never attached to a tree", so this
+            // fills a gap the instrument already claimed to cover rather than
+            // widening its contract.
+            //
+            // Routed through ObserveSnapshotCaptureDecline rather than emitted
+            // directly, so it carries the derived tenant dimension the rest of
+            // this instrument's sites carry. A bare Add here would emit with no
+            // tenant at all, splitting the instrument's series across two
+            // attribution rules and making this measurement invisible to every
+            // tenant-scoped query - the same "cannot tell unattributable from
+            // missed" ambiguity the instrument exists to remove.
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoTreeId);
             return;
         }
 

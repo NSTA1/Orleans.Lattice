@@ -73,6 +73,92 @@ internal sealed partial class BPlusLeafGrain(
         var coverageLagTimer = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
         coverageLagTimer?.Dispose();
 
+        // Each barrier below is contained INDEPENDENTLY (issue #3366). They
+        // previously shared a single try with a single anonymous bare catch
+        // that had no logger, ordered most-fragile-first, so a fault in an
+        // early barrier silently cancelled every later one: a checkpoint-flush
+        // failure also skipped the snapshot capture AND the durable frontier
+        // pin, and the whole teardown emitted nothing whatsoever. That made
+        // three materially different failures - an early barrier throwing, the
+        // capture's uninstrumented early return, and this hook never running -
+        // render as byte-identical silence, while each demands a different
+        // remedy. Per-barrier containment preserves the original ordering and
+        // the original "a storage failure on shutdown must never block
+        // deactivation" guarantee, and additionally makes each fault
+        // attributable rather than merely survivable.
+        //
+        // The metric is deliberately NOT zero-primed: a tree that never faults
+        // exports no series, so a reader must not read absence as a proven
+        // zero. What it buys is the converse - a NON-zero reading names the
+        // barrier, which is what no signal previously did.
+        async Task RunBarrierAsync(
+            KeyValuePair<string, object?> barrier,
+            Func<CancellationToken, Task> barrierAction)
+        {
+            try
+            {
+                await barrierAction(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    // Tags are resolved defensively and INDIVIDUALLY, before
+                    // the Add. Both helpers read grain state, which throws
+                    // "Attempt to access an invalid activation" once the
+                    // activation has been invalidated - and a deactivation hook
+                    // is precisely where that is reachable. Resolving them as
+                    // arguments to Add meant a throwing tag lookup suppressed
+                    // the measurement entirely via the outer guard below, so
+                    // the barrier failure this catch exists to report was
+                    // itself reported as nothing. Telemetry must never decide
+                    // whether a fault is observable (the #2312 rule, applied to
+                    // this path).
+                    var treeTag = TryResolveTag(LeafTreeTag, LatticeMetrics.TagTree);
+                    var tenantTag = TryResolveTag(
+                        LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
+
+                    LatticeMetrics.LeafDeactivationBarrierFailures.Add(
+                        1,
+                        treeTag,
+                        barrier,
+                        tenantTag);
+
+                    ResolveLogger()?.LogWarning(
+                        ex,
+                        "Graceful-deactivation barrier '{Barrier}' faulted for leaf '{LeafId}' of tree "
+                        + "'{TreeId}'. The barriers ordered after it STILL RUN (issue #3366); before that "
+                        + "fix a fault here silently cancelled every remaining durability barrier and "
+                        + "emitted no signal of any kind.",
+                        barrier.Value,
+                        context.GrainId.ToString(),
+                        treeTag.Value);
+                }
+                catch (Exception)
+                {
+                    // Observability must never fail a deactivation.
+                }
+            }
+
+            // Resolves one tag without letting the lookup itself suppress the
+            // measurement it is meant to label. The empty value is what these
+            // histograms already record for a leaf whose tree is unregistered,
+            // so it adds no new tag value and no new cardinality.
+            static KeyValuePair<string, object?> TryResolveTag(
+                Func<KeyValuePair<string, object?>> resolve,
+                string fallbackKey)
+            {
+                try
+                {
+                    return resolve();
+                }
+                catch (InvalidOperationException)
+                {
+                    return new KeyValuePair<string, object?>(fallbackKey, string.Empty);
+                }
+            }
+        }
+
         try
         {
             // c2-xxviii: drain any pending coalesced digest publish
@@ -82,17 +168,23 @@ internal sealed partial class BPlusLeafGrain(
             // design; the digest is staleness-tolerant and the next
             // mutation on reactivation will republish. Gated on the
             // coalescing window being active because the
-            // synchronous-publish path (window=0, the wire-compat
-            // default) already publishes inline on every mutation -
-            // running the drain in that case can re-publish a
-            // post-publish state that races with materialiser-driven
-            // projection rebuilds and changes the parent's observed
-            // hash.
+            // synchronous-publish path (window=0) already publishes
+            // inline on every mutation - running the drain in that case
+            // can re-publish a post-publish state that races with
+            // materialiser-driven projection rebuilds and changes the
+            // parent's observed hash. Note the DEFAULT window is
+            // LatticeOptions.DefaultDigestCoalescingWindowMs (5), not 0,
+            // so this arm is enabled unless a host opts out.
             if (_digestCoalescingWindowMs > 0)
             {
-                await FlushPendingDigestPublishAsync(cancellationToken);
+                await RunBarrierAsync(
+                    LatticeMetrics.DeactivationBarrierDigestPublish,
+                    async ct => await FlushPendingDigestPublishAsync(ct));
             }
-            await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+
+            await RunBarrierAsync(
+                LatticeMetrics.DeactivationBarrierCheckpointFlush,
+                async ct => await ((ILeafProjection)this).FlushCheckpointAsync(ct));
 
             // Liveness barrier (issue #1537): before the durable pin flush,
             // capture a snapshot for any checkpointed-but-uncovered partition
@@ -104,7 +196,9 @@ internal sealed partial class BPlusLeafGrain(
             // to the now-covered frontier and the WAL GC can trim the prefix;
             // best-effort, so a capture failure simply leaves the block pin in
             // place (retained, never trimmed ahead of coverage).
-            await TryCaptureSnapshotOnDeactivateAsync(cancellationToken);
+            await RunBarrierAsync(
+                LatticeMetrics.DeactivationBarrierSnapshotCapture,
+                async ct => await TryCaptureSnapshotOnDeactivateAsync(ct));
 
             // Retention barrier: after the final checkpoint flush, AWAIT a
             // durable write of this leaf's checkpoint frontier into the
@@ -116,13 +210,9 @@ internal sealed partial class BPlusLeafGrain(
             // deactivation. Crash deactivations bypass this hook by design; the
             // first-real-frontier barrier on the checkpoint path already left a
             // durable floor for any leaf that had checkpointed.
-            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
-        }
-        catch
-        {
-            // A storage failure on shutdown must not block deactivation;
-            // the persisted offset still bounds replay cost on the next
-            // activation.
+            await RunBarrierAsync(
+                LatticeMetrics.DeactivationBarrierFrontierPin,
+                async ct => await FlushDurableMaterialiserFrontierAsync(ct));
         }
         finally
         {

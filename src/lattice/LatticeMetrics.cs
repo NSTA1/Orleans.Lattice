@@ -5148,6 +5148,75 @@ public static class LatticeMetrics
     public const string LeafSnapshotDriverDeclinesName = "orleans.lattice.leaf.snapshot.driver.declines";
 
     /// <summary>
+    /// Counter of graceful-deactivation DURABILITY BARRIERS that faulted,
+    /// tagged with <see cref="TagTree"/>, <see cref="TagReason"/> (which barrier)
+    /// and the tenant dimension.
+    /// <para>
+    /// <b>Why this exists (issue #3366).</b> The deactivation hook runs four
+    /// durability barriers in order - the digest publish, the projection
+    /// checkpoint flush, the deactivate-time snapshot capture, and the durable
+    /// materialiser frontier pin. They used to share one <c>try</c> and one
+    /// ANONYMOUS bare <c>catch</c> with no logger, so a fault in an early
+    /// barrier silently cancelled every later one and emitted nothing at all.
+    /// Because the snapshot capture's own decline instrument
+    /// (<see cref="LeafSnapshotDriverDeclines"/>) is raised INSIDE that capture,
+    /// a fault before it produced neither a capture, nor a decline, nor a log
+    /// line - three distinct failures rendered as byte-identical silence, with
+    /// three different remedies.
+    /// </para>
+    /// <para>
+    /// Each barrier is now contained independently, so this counter names
+    /// exactly which one faulted and the later barriers still run. Read a
+    /// non-zero value as a durability barrier that did NOT complete for that
+    /// tree: the checkpoint-flush arm in particular means an activation's
+    /// projection progress was not banked.
+    /// </para>
+    /// <para>
+    /// NOT zero-primed, matching the rest of this family: a series appears on
+    /// first fault. Absence therefore does not establish that the build carries
+    /// the instrument, only that no fault was recorded.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDeactivationBarrierFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.failures", unit: "{failure}",
+            description: "Graceful-deactivation durability barriers that faulted, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Each barrier is contained independently, so a fault in one no longer cancels the barriers after it.");
+
+    /// <summary>Canonical name of <see cref="LeafDeactivationBarrierFailures"/>.</summary>
+    public const string LeafDeactivationBarrierFailuresName = "orleans.lattice.leaf.deactivation.barrier.failures";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the coalesced projection-digest publish
+    /// barrier. Benign in isolation - the digest is staleness-tolerant and the
+    /// next mutation republishes it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DeactivationBarrierDigestPublish =
+        new(TagReason, "digest_publish");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the projection-checkpoint flush barrier.
+    /// Above zero this is a DURABILITY fault: the activation's checkpoint
+    /// progress was not banked, so the next activation replays from an older
+    /// offset and any progress the WAL no longer carries is lost.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DeactivationBarrierCheckpointFlush =
+        new(TagReason, "checkpoint_flush");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the deactivate-time snapshot capture
+    /// barrier (the issue #1537 liveness barrier).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DeactivationBarrierSnapshotCapture =
+        new(TagReason, "snapshot_capture");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the durable materialiser frontier pin
+    /// barrier. Above zero the leaf may leave a pin below its own checkpoint,
+    /// which retains the tree's shared WAL.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DeactivationBarrierFrontierPin =
+        new(TagReason, "frontier_pin");
+
+    /// <summary>
     /// Counter of zero-coverage leaf snapshot repair EVALUATIONS (issues #2692,
     /// #2940), tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
     /// Six arms partition every invocation of
