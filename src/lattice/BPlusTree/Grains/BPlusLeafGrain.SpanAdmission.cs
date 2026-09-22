@@ -283,4 +283,136 @@ internal sealed partial class BPlusLeafGrain
 
         return local;
     }
+
+    /// <summary>
+    /// The conditional-bulk-write counterpart of
+    /// <see cref="ForwardOutOfSpanMergeAsync"/>. Splits a conditional batch by
+    /// declared span, forwards each out-of-span group to the leaf that declares
+    /// it so the guard is evaluated against the key's real committed value,
+    /// evaluates the remainder locally, and returns the union of both written
+    /// sets. Entries that are out of span but have no resolvable forward target
+    /// are retained locally, matching the fail-open rule documented on this
+    /// class.
+    /// <para>
+    /// This exists because the conditional path cannot reuse the per-key
+    /// fallback the unconditional <c>SetManyAsync</c> diverts to: the guard has
+    /// to be evaluated where the value lives, and <c>SetAsync</c> carries no
+    /// guard. Without it, a key whose row a split moved to a sibling probes
+    /// absent in this leaf's cache and is read as a guard miss, so a matching
+    /// key is silently dropped from the written set (issue #2663).
+    /// </para>
+    /// <para>
+    /// Grouping by target rather than forwarding per key keeps the batched
+    /// shape the caller asked for: a conditional batch that straddles one
+    /// boundary costs one extra grain call, not one per row. Termination is the
+    /// same chain argument as the merge forward - a leaf's high bound equals
+    /// its successor's low bound, so a forward is strictly monotonic along the
+    /// chain and cannot bounce back to the sender.
+    /// </para>
+    /// </summary>
+    private async Task<ConditionalSetManyResult> ForwardOutOfSpanConditionalSetManyAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        var local = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        Dictionary<GrainId, List<KeyValuePair<string, byte[]>>>? buckets = null;
+
+        foreach (var entry in entries)
+        {
+            if (!TryResolveSpanForwardTarget(entry.Key, out var target))
+            {
+                local.Add(entry);
+                continue;
+            }
+
+            buckets ??= new Dictionary<GrainId, List<KeyValuePair<string, byte[]>>>();
+            if (!buckets.TryGetValue(target, out var bucket))
+            {
+                buckets[target] = bucket = new List<KeyValuePair<string, byte[]>>();
+            }
+
+            bucket.Add(entry);
+        }
+
+        if (buckets is null)
+        {
+            // Every out-of-span entry fell open to a local commit, so the
+            // matched set can still straddle the span and the re-scan stands.
+            return await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true);
+        }
+
+        HashSet<string>? forwardWritten = null;
+        foreach (var (target, bucket) in buckets)
+        {
+            var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+
+            // Shadow markers are deliberately NOT transferred here. The merge
+            // forward above moves rows this leaf currently holds, so their
+            // gates must travel with them; a conditional write forwards a
+            // caller's proposed value for a row this leaf does not hold, which
+            // is the foreground shape SetCoreAsync's span forward takes - and
+            // that path transfers no markers either.
+            //
+            // The forwarded SplitResult is discarded for the same reason the
+            // merge forward discards it: it describes a split of the sibling,
+            // and the shard root installs the separator it is returned against
+            // the leaf it called.
+            var forwarded = await sibling.SetManyWherePredicateAsync(bucket, predicate);
+            var written = forwarded.WrittenKeys;
+            for (var i = 0; i < written.Count; i++)
+            {
+                (forwardWritten ??= new HashSet<string>(StringComparer.Ordinal)).Add(written[i]);
+            }
+        }
+
+        var localResult = await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true);
+        if (forwardWritten is null)
+        {
+            return localResult;
+        }
+
+        return localResult with
+        {
+            WrittenKeys = MergeSpanForwardedWrittenKeys(entries, localResult.WrittenKeys, forwardWritten),
+        };
+    }
+
+    /// <summary>
+    /// Re-emits the union of the keys committed locally and the keys a span
+    /// forward committed on a sibling, in the caller's original entry order.
+    /// <para>
+    /// The order is load-bearing, not cosmetic.
+    /// <c>ShardRootGrain.ForwardWrittenEntriesToShadowIfNeededAsync</c> pairs a
+    /// leaf's written keys back against the slice it dispatched with an
+    /// allocation-free two-pointer walk that assumes the written set is an
+    /// in-order subsequence of that slice. Appending the forwarded keys after
+    /// the local ones would desynchronise that walk and mis-attribute shadow
+    /// forwards, so the union is re-derived by walking the original entries.
+    /// </para>
+    /// </summary>
+    private static List<string> MergeSpanForwardedWrittenKeys(
+        List<KeyValuePair<string, byte[]>> entries,
+        IReadOnlyList<string> localWritten,
+        HashSet<string> forwardWritten)
+    {
+        var merged = new List<string>(localWritten.Count + forwardWritten.Count);
+        var next = 0;
+        foreach (var entry in entries)
+        {
+            // The local written set is itself an in-order subsequence of
+            // entries, so one forward-only cursor settles local membership
+            // without a second lookup structure.
+            if (next < localWritten.Count
+                && string.Equals(entry.Key, localWritten[next], StringComparison.Ordinal))
+            {
+                merged.Add(entry.Key);
+                next++;
+            }
+            else if (forwardWritten.Contains(entry.Key))
+            {
+                merged.Add(entry.Key);
+            }
+        }
+
+        return merged;
+    }
 }
