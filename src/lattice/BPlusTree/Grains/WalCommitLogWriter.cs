@@ -352,6 +352,7 @@ internal sealed class WalCommitLogWriter(
         string treeId,
         int partition,
         TimeSpan budget,
+        TimeSpan callBudget,
         CancellationToken cancellationToken,
         CancellationToken drainToken)
     {
@@ -367,65 +368,132 @@ internal sealed class WalCommitLogWriter(
         var state = GetGateState(treeId, partition);
         if (state != WalSaturationState.Saturated) return;
 
+        // (#3348) Charge this wait against the enclosing top-level call's
+        // remaining share. Without this the three nested retry layers on the
+        // write path each open a fresh `budget`, multiplying a 5 s bound into
+        // the 90 s branches observed at 8 silos. Zero here means the call has
+        // already spent its share, so the gate refuses without waiting again
+        // rather than granting a fresh one.
+        var effectiveBudget = ResolveEffectiveGateBudget(budget, callBudget);
+        var callBudgetExhausted = effectiveBudget == TimeSpan.Zero;
+        // The per-call bound is what an operator should be told about whenever
+        // it is the binding constraint, not only when it is fully spent. A
+        // wait truncated from 5 s to 1.2 s because the call had 1.2 s left is
+        // a per-call refusal; blaming the per-append budget there would send
+        // the operator to raise a knob that was never reached.
+        var callBudgetBinding = callBudgetExhausted || effectiveBudget != budget;
+
         // Saturated regime observed. Park on WaitForHealthyAsync up
-        // to the configured budget, observing both the caller's token
+        // to the effective budget, observing both the caller's token
         // and the writer's drain token via a linked CTS.
         CancellationTokenSource? linkedCts = null;
         try
         {
-            linkedCts = budget == Timeout.InfiniteTimeSpan
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken)
-                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken);
-            if (budget != Timeout.InfiniteTimeSpan)
+            if (!callBudgetExhausted)
             {
-                linkedCts.CancelAfter(budget);
-            }
-            try
-            {
-                await WaitForGateHealthyAsync(treeId, partition, linkedCts.Token);
-                // Recovery observed within the budget; the caller
-                // proceeds into the admission semaphore as normal.
-                return;
-            }
-            catch (OperationCanceledException)
-            {
-                // Disambiguate the three cancellation sources, in
-                // priority order: caller-driven cancellation wins (the
-                // caller asked to abandon), drain cancellation second
-                // (the silo is shutting down), budget expiry last
-                // (the saturation regime persisted past the budget).
-                if (cancellationToken.IsCancellationRequested)
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken);
+                if (effectiveBudget != Timeout.InfiniteTimeSpan)
                 {
-                    throw;
+                    linkedCts.CancelAfter(effectiveBudget);
                 }
-                if (drainToken.IsCancellationRequested)
+                try
                 {
-                    throw new LatticeShuttingDownException(
-                        $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the owning WalCommitLogWriter is shutting down ({nameof(LatticeOptions.WalDrainBudget)}).");
-                }
-                // Budget expiry: re-check the signal once - if the
-                // tree recovered between the wait expiring and us
-                // re-reading, suppress the refusal so a borderline
-                // recovery is not penalised.
-                if (GetGateState(treeId, partition) != WalSaturationState.Saturated)
-                {
+                    await WaitForGateHealthyAsync(treeId, partition, linkedCts.Token);
+                    // Recovery observed within the budget; the caller
+                    // proceeds into the admission semaphore as normal.
                     return;
                 }
-                LatticeMetrics.WalAppendAdmissionSaturationRefusals.Add(
-                    1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
-                    LatticeTenantLabel.ForTree(treeId));
-                throw new LatticeSaturatedException(
-                    $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the saturation signal for this partition stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget}); offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
-                    treeId,
-                    LatticeSaturationSource.WalAdmission);
+                catch (OperationCanceledException)
+                {
+                    // Disambiguate the three cancellation sources, in
+                    // priority order: caller-driven cancellation wins (the
+                    // caller asked to abandon), drain cancellation second
+                    // (the silo is shutting down), budget expiry last
+                    // (the saturation regime persisted past the budget).
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    if (drainToken.IsCancellationRequested)
+                    {
+                        throw new LatticeShuttingDownException(
+                            $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the owning WalCommitLogWriter is shutting down ({nameof(LatticeOptions.WalDrainBudget)}).");
+                    }
+                }
             }
+            else
+            {
+                // The call's share is spent, so there is no wait to observe
+                // cancellation on. Honour an already-cancelled caller token
+                // ahead of the refusal so abandonment still wins.
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            // Budget expiry: re-check the signal once - if the
+            // partition recovered between the wait expiring and us
+            // re-reading, suppress the refusal so a borderline
+            // recovery is not penalised.
+            if (GetGateState(treeId, partition) != WalSaturationState.Saturated)
+            {
+                return;
+            }
+            LatticeMetrics.WalAppendAdmissionSaturationRefusals.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                LatticeTenantLabel.ForTree(treeId));
+            var bound = callBudgetBinding
+                ? $"the enclosing call exhausted its {nameof(LatticeOptions.WalAdmissionSaturationCallBudget)} ({callBudget}) waiting at this gate"
+                : $"the saturation signal for this partition stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget})";
+            throw new LatticeSaturatedException(
+                $"WAL append dispatch to tree '{treeId}' partition {partition} refused: {bound}; offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
+                treeId,
+                LatticeSaturationSource.WalAdmission);
         }
         finally
         {
             linkedCts?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// (#3348) Resolves how long this individual wait may park at the
+    /// saturation gate, as the lesser of the per-append
+    /// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/> and
+    /// whatever remains of the enclosing top-level call's
+    /// <see cref="LatticeOptions.WalAdmissionSaturationCallBudget"/>.
+    /// <para>
+    /// Returns <see cref="TimeSpan.Zero"/> when the call's share is already
+    /// spent, which the caller reads as "refuse now" rather than as the
+    /// gate-disabled meaning <see cref="TimeSpan.Zero"/> carries on the
+    /// per-append budget - that case is short-circuited before this is called.
+    /// </para>
+    /// <para>
+    /// Falls back to the per-append budget unchanged when the per-call budget
+    /// is infinite (the default, so behaviour is untouched unless a host opts
+    /// in) or when no ambient call-start stamp is present, which is the case
+    /// for convergence-only and background writes that never passed through a
+    /// public entry-point.
+    /// </para>
+    /// </summary>
+    private static TimeSpan ResolveEffectiveGateBudget(TimeSpan appendBudget, TimeSpan callBudget)
+    {
+        if (callBudget == Timeout.InfiniteTimeSpan) return appendBudget;
+
+        var startTicks = LatticeTransactionContext.CallStartUtcTicks;
+        if (startTicks is null) return appendBudget;
+
+        // Wall-clock difference, because the stamp crosses silos where
+        // monotonic tick origins are not comparable. A clock stepping
+        // backwards yields a negative elapsed and so a remaining larger than
+        // the budget; clamping to the budget keeps the bound honest either way.
+        var elapsedTicks = DateTimeOffset.UtcNow.UtcTicks - startTicks.Value;
+        var remainingTicks = callBudget.Ticks - elapsedTicks;
+        if (remainingTicks <= 0) return TimeSpan.Zero;
+
+        var remaining = TimeSpan.FromTicks(Math.Min(remainingTicks, callBudget.Ticks));
+        if (appendBudget == Timeout.InfiniteTimeSpan) return remaining;
+        return appendBudget < remaining ? appendBudget : remaining;
     }
 
     /// <summary>
@@ -614,7 +682,7 @@ internal sealed class WalCommitLogWriter(
         // of parking on the admission semaphore for
         // WalAppendDispatchTimeout. No-op when no signal is registered
         // or the budget is Zero.
-        await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
+        await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, cancellationToken, _drainCts.Token);
 
         // Local-path Throttled pacing. Gives the drain-lag back-pressure
         // teeth on the single-silo write path by applying a bounded
@@ -980,7 +1048,7 @@ internal sealed class WalCommitLogWriter(
 
         // Pre-admission saturation gate (batched path).
         // Same shape as the single-entry overload above.
-        await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
+        await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, cancellationToken, _drainCts.Token);
 
         // Local-path Throttled pacing (batched path); same shape as the
         // single-entry overload above.

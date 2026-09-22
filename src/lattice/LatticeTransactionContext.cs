@@ -56,6 +56,14 @@ internal static class LatticeTransactionContext
     /// </summary>
     public static Guid EnsureCurrent()
     {
+        // (#3348) Stamp the call's start instant before the transaction-id
+        // fast path returns. A nested public entry-point inherits a non-empty
+        // id and exits early, and it must inherit the outermost call's start
+        // instant too - re-stamping here would hand the WAL admission gate a
+        // fresh budget on every nesting level, which is the multiplication the
+        // per-call budget exists to remove.
+        EnsureCallStart();
+
         var raw = RequestContext.Get(LatticeEventConstants.TransactionIdRequestContextKey);
         if (raw is Guid existing && existing != Guid.Empty)
         {
@@ -66,6 +74,42 @@ internal static class LatticeTransactionContext
         RequestContext.Set(LatticeEventConstants.TransactionIdRequestContextKey, fresh);
         return fresh;
     }
+
+    /// <summary>
+    /// (#3348) Records the instant the current top-level logical call began,
+    /// if it has not been recorded already, so downstream back-pressure gates
+    /// can bound their cumulative wait per call rather than per operation.
+    /// Preserving an existing value is the whole point: the stamp must belong
+    /// to the outermost call, not to whichever nested entry-point observed it
+    /// last.
+    /// </summary>
+    /// <returns>
+    /// The UTC tick count at which the enclosing logical call began.
+    /// </returns>
+    public static long EnsureCallStart()
+    {
+        var raw = RequestContext.Get(LatticeEventConstants.CallStartTicksRequestContextKey);
+        if (raw is long existing)
+        {
+            return existing;
+        }
+
+        var now = DateTimeOffset.UtcNow.UtcTicks;
+        RequestContext.Set(LatticeEventConstants.CallStartTicksRequestContextKey, now);
+        return now;
+    }
+
+    /// <summary>
+    /// (#3348) Gets the instant the current top-level logical call began, or
+    /// <c>null</c> when the ambient context carries no stamp - which is the
+    /// case for convergence-only and background paths that never passed
+    /// through a public entry-point. Callers treat <c>null</c> as "no per-call
+    /// budget applies" and fall back to their own per-operation bound.
+    /// </summary>
+    public static long? CallStartUtcTicks
+        => RequestContext.Get(LatticeEventConstants.CallStartTicksRequestContextKey) is long ticks
+            ? ticks
+            : null;
 
     /// <summary>
     /// Sets the ambient transaction id to <paramref name="transactionId"/>,
