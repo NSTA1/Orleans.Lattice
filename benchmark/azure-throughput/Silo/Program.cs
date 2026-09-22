@@ -53,6 +53,18 @@
 //                           three nested retry layers each open a fresh per-append
 //                           budget, which is the #3348 multiplication. Set 0 for
 //                           infinite.
+//   BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD
+//                           In-flight flush depth at or above which an arriving
+//                           batch's final entry stops kicking its own flush, so
+//                           small fanned-out slices accumulate into the next
+//                           flush window instead of each paying a round trip
+//                           (defaults to
+//                           LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold
+//                           so the harness tracks the shipping default). 0
+//                           disables coalescing and restores the historical
+//                           unconditional kick - use it as the control arm of a
+//                           sweep. The shipping default was chosen on the
+//                           fan-out arithmetic (#3396) and needs measuring.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -239,6 +251,7 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
+var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
 // the shape the replay admission gate is sized to refuse, and refusing it here
 // is a measurement artefact rather than a finding.
@@ -495,7 +508,7 @@ var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
 // it later does the override path must update these tokens too.
 var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
 var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} walReplayQueueDepth={walReplayQueueDepth} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} clustering={clusteringMode} ingestMode={ingestMode} siloClusterPort={siloClusterPort} gatewayPort={gatewayPort} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} walAppendCoalescing={walAppendCoalescing} walReplayQueueDepth={walReplayQueueDepth} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} clustering={clusteringMode} ingestMode={ingestMode} siloClusterPort={siloClusterPort} gatewayPort={gatewayPort} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 // F-086: echo the saturation knobs so the cohort log shows the exact
 // values the TCP-read gating + the silo's sampler use. A "default"
@@ -667,6 +680,12 @@ builder.UseOrleans(silo =>
     {
         o.WalPartitions = walPartitions;
         o.WalMaxPendingBatches = walMaxPending;
+        // #3396: in-flight depth at or above which an arriving batch's
+        // final entry stops kicking its own flush. Exposed as a bench
+        // knob (defaulting to the library value) so a cohort sweep can
+        // vary it without a redeploy - the default itself was chosen on
+        // the fan-out arithmetic and needs measuring, not asserting.
+        o.WalAppendCoalescingInFlightThreshold = walAppendCoalescing;
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library
