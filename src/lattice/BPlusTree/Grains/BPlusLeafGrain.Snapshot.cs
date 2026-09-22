@@ -706,6 +706,154 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Consecutive coverage-lag ticks a leaf must show an unchanged durable
+    /// checkpoint, while holding live data, before
+    /// <see cref="IsCheckpointStalledBehindLiveData"/> routes it to the
+    /// starvation drive (issue #3389).
+    /// <para>
+    /// Greater than one so that a leaf which is merely idle between writes is
+    /// not charged a WAL replay: an idle leaf legitimately shows an unchanged
+    /// checkpoint. It is the PERSISTENCE of that reading across ticks, on a
+    /// leaf that holds rows, which distinguishes a frozen checkpoint from a
+    /// quiet one.
+    /// </para>
+    /// </summary>
+    private const int CheckpointStallTicksBeforeDrive = 3;
+
+    /// <summary>
+    /// Running signature of the per-partition durable checkpoints as of the
+    /// last coverage-lag tick, or <see cref="long.MinValue"/> before the first
+    /// tick has established a baseline.
+    /// </summary>
+    private long _lastCheckpointProgressSignature = long.MinValue;
+
+    /// <summary>
+    /// Consecutive coverage-lag ticks on which the checkpoint signature was
+    /// unchanged while the leaf held live data.
+    /// </summary>
+    private int _consecutiveCheckpointStallTicks;
+
+    /// <summary>
+    /// Whether this leaf holds rows and its durable checkpoint, though present,
+    /// has STOPPED ADVANCING across
+    /// <see cref="CheckpointStallTicksBeforeDrive"/> consecutive coverage-lag
+    /// ticks (issue #3389).
+    /// <para>
+    /// This is the population <see cref="IsStarvedOfDurableCheckpoint"/>
+    /// excludes by construction. That predicate returns <c>false</c> the moment
+    /// ANY partition reports <c>checkpoint(p) &gt;= 0</c>, because it was
+    /// written for a leaf frozen at the <c>-1</c> birth sentinel. The condition
+    /// that actually costs data is not "has never checkpointed" but "the
+    /// checkpoint is not advancing", and a leaf frozen at a stale NON-NEGATIVE
+    /// offset is in at least as much trouble: it passes every eligibility gate,
+    /// hydrates successfully on restart, and therefore looks healthy to every
+    /// existing detector.
+    /// </para>
+    /// <para>
+    /// <b>Why the loop is stable without this.</b> Writes after the freeze land
+    /// in the WAL and are acknowledged. Compaction classifies them dead and
+    /// reclaims them, taking retained WAL to zero. An empty WAL means the GC
+    /// finds no blocking pin; no blocking pin means the blocked-leaf sweep never
+    /// runs; and that sweep is the only other route to the starvation drive. So
+    /// compaction, by operating correctly, erases the very signal that would
+    /// trigger the repair - the better it works, the more completely the repair
+    /// path is starved of its trigger. Measured on a live deployment: the
+    /// durable pin did not advance across 512 opportunities, the floor was
+    /// stalled for 26 minutes, every blocked-leaf reactivation arm read zero,
+    /// and a raw scan of the durable store found NONE of the entries written
+    /// after the freeze.
+    /// </para>
+    /// <para>
+    /// <b>Detection is temporal because the leaf holds no static witness.</b>
+    /// The highest applied WAL offset is a replay-time local, not persisted
+    /// state, so "checkpoint is behind live data" cannot be read directly from
+    /// a field. What CAN be read is whether the checkpoint moved between ticks.
+    /// The signature is a plain sum of the per-partition checkpoints, which is
+    /// sound precisely because checkpoints are monotonic non-decreasing: an
+    /// unchanged sum therefore means no partition advanced, with no collision
+    /// to worry about, and a changed sum means at least one did.
+    /// </para>
+    /// <para>
+    /// <b>It cannot latch into hammering.</b> The stall counter is reset when
+    /// the drive is requested, so a leaf that stays frozen is re-driven at most
+    /// once per <see cref="CheckpointStallTicksBeforeDrive"/> ticks rather than
+    /// on every tick, and the drive owns its own permit, budget, timeout and
+    /// single-flight latch. It relaxes no no-loss precondition: the drive
+    /// advances the checkpoint only from offsets it actually read out of the
+    /// WAL, so this adds no route to stamping coverage the leaf has not earned.
+    /// </para>
+    /// <para>
+    /// The distinct
+    /// <see cref="LatticeMetrics.DriverDeclineRecheckCheckpointStalled"/> arm is
+    /// deliberate rather than reuse of the existing one. Folding this into
+    /// <see cref="LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint"/>
+    /// would make a frozen leaf indistinguishable from a never-checkpointed
+    /// one, and those have different causes and different remedies.
+    /// </para>
+    /// </summary>
+    private bool IsCheckpointStalledBehindLiveData(int partitionCount)
+    {
+        long signature = 0;
+        var anyCheckpointed = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            var checkpoint = GetCurrentCheckpointForPartition(p);
+            if (checkpoint >= 0)
+            {
+                anyCheckpointed = true;
+            }
+
+            signature += checkpoint;
+        }
+
+        if (!anyCheckpointed)
+        {
+            // Never-checkpointed leaf. IsStarvedOfDurableCheckpoint owns that
+            // population; claiming it here too would double-drive it.
+            _lastCheckpointProgressSignature = signature;
+            _consecutiveCheckpointStallTicks = 0;
+            return false;
+        }
+
+        if (signature != _lastCheckpointProgressSignature)
+        {
+            _lastCheckpointProgressSignature = signature;
+            _consecutiveCheckpointStallTicks = 0;
+            return false;
+        }
+
+        // Unchanged. That is only a fault if there are rows whose durability
+        // depends on the checkpoint advancing: a genuinely empty leaf has
+        // nothing to lose and must not be charged a replay on every tick.
+        var liveData = ComputePartitionsWithLiveData(partitionCount);
+        var holdsLiveData = false;
+        for (var p = 0; p < liveData.Length; p++)
+        {
+            if (liveData[p])
+            {
+                holdsLiveData = true;
+                break;
+            }
+        }
+
+        if (!holdsLiveData)
+        {
+            _consecutiveCheckpointStallTicks = 0;
+            return false;
+        }
+
+        if (++_consecutiveCheckpointStallTicks < CheckpointStallTicksBeforeDrive)
+        {
+            return false;
+        }
+
+        // Re-arm rather than latch: a leaf that stays frozen is re-driven once
+        // per threshold, not once per tick.
+        _consecutiveCheckpointStallTicks = 0;
+        return true;
+    }
+
+    /// <summary>
     /// Whether a caller-supplied per-partition coverage claim asserts coverage
     /// for at least one partition, and so would produce a blob
     /// <c>LeafSnapshotStorageGrain.HasCapturedPrefix</c> accepts.
@@ -2464,6 +2612,29 @@ internal sealed partial class BPlusLeafGrain
             // here rather than falling through is what keeps that a single
             // evaluation on the post-replay state instead of two, the second of
             // which would re-decline on the pre-replay reading.
+            await DriveStarvedCheckpointAsync();
+            return;
+        }
+
+        // Issue #3389. The predicate above returns false the moment ANY
+        // partition holds a non-negative checkpoint, so it covers only a leaf
+        // that has NEVER checkpointed. A leaf that checkpointed successfully
+        // and then STOPPED is excluded by construction, and is the more
+        // dangerous of the two: it hydrates cleanly, satisfies every gate, and
+        // reports recheck_coverage_current forever because coverage and
+        // checkpoint are frozen EQUAL, so checkpoint > covered is false. Writes
+        // taken after the freeze are acknowledged, served correctly from the
+        // live activation, and lost on the next restart.
+        //
+        // The remedy is the same drive, for the same reason: it replays the WAL
+        // from the checkpoint, which is precisely what advances a checkpoint
+        // that has stopped advancing. Nothing is relaxed - the drive banks only
+        // offsets it actually read - and the stall counter re-arms rather than
+        // latches, so a leaf that stays frozen is re-driven once per threshold
+        // rather than on every tick.
+        if (IsCheckpointStalledBehindLiveData(starvationPartitionCount))
+        {
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
             await DriveStarvedCheckpointAsync();
             return;
         }
