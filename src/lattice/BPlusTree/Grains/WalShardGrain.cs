@@ -334,9 +334,7 @@ internal sealed partial class WalShardGrain(
         // re-creates the row, resurrecting the purged tree so TreeExistsAsync
         // reports it as still present. An activation that only needs a metric
         // tag must never mutate the registry.
-        var walPartitions = await optionsResolver
-            .GetWalPartitionsAsync(_treeId)
-            .ConfigureAwait(true);
+        var walPartitions = await optionsResolver.GetWalPartitionsAsync(_treeId);
         // Phase A attribution tags. The values are captured once at
         // activation; if the operator retunes WalMaxPendingBatches
         // through IOptionsMonitor while activations are live, existing
