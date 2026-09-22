@@ -1716,6 +1716,76 @@ public static class LatticeMetrics
     public const string WalCompactionReclaimedBytesName = "orleans.lattice.wal.compaction.reclaimed_bytes";
 
     /// <summary>
+    /// Bytes truncated from a WAL shard log by activation-time recovery
+    /// because the bytes occupying them were never sealed by a commit record,
+    /// tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Zero-primed per shard.
+    /// <para>
+    /// Recovery rolls forward every committed batch and truncates the unsealed
+    /// tail. That truncation is correct - an unsealed record was never durable,
+    /// and replaying it would violate the batch atomicity the commit record
+    /// exists to provide - but until issue #3366 it was also entirely silent,
+    /// which left a shard that discarded a tail indistinguishable from one that
+    /// recovered with nothing to discard.
+    /// </para>
+    /// <para>
+    /// <b>This counter does not measure a fault on its own.</b> It measures a
+    /// quantity whose interpretation depends on how the previous host exited.
+    /// After a crash or a kill, a non-zero reading is the expected and benign
+    /// case: writes were in flight and never sealed. After a drain that
+    /// completed, the expected reading is exactly zero, because a completed
+    /// drain has flushed and sealed every batch it acknowledged - so a non-zero
+    /// reading there reports acknowledged writes that did not survive the
+    /// restart. Read it against the recorded exit, never alone.
+    /// </para>
+    /// <para>
+    /// It is also the only point at which the quantity is observable at all:
+    /// recovery destroys the evidence it is derived from by truncating the
+    /// file, so a measurement not taken here cannot be recovered afterwards
+    /// from the log, from the shard, or from a snapshot.
+    /// </para>
+    /// <para>
+    /// Zero-priming is load-bearing for the reason given on
+    /// <see cref="WalCompactions"/>: an absent series and a zero series carry
+    /// opposite meanings, and issue #3107 established in this codebase how
+    /// expensive that particular ambiguity is to diagnose. Priming is per
+    /// shard, so a shard that is not reporting stays distinguishable from a
+    /// shard that recovered cleanly even after a sibling has reported.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalRecoveryTornTailBytes =
+        Meter.CreateCounter<long>("orleans.lattice.wal.recovery.torn_tail_bytes", unit: "By",
+            description: "Bytes truncated from a WAL shard log by activation-time recovery because they were never sealed by a commit record, tagged by tree and by storage shard. Not a fault on its own: after a crash a non-zero reading is expected and benign, while after a drain that completed the expected reading is exactly zero, so a non-zero reading there reports acknowledged writes that did not survive the restart. Read it against the recorded exit. Recovery truncates the evidence this is derived from, so a measurement not taken here cannot be recovered later. Zero-primed per shard.");
+
+    /// <summary>Canonical name of <see cref="WalRecoveryTornTailBytes"/>.</summary>
+    public const string WalRecoveryTornTailBytesName = "orleans.lattice.wal.recovery.torn_tail_bytes";
+
+    /// <summary>
+    /// Count of complete data records discarded from a WAL shard log by
+    /// activation-time recovery because no commit record ever sealed them,
+    /// tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Zero-primed per shard.
+    /// <para>
+    /// The companion to <see cref="WalRecoveryTornTailBytes"/>, and both are
+    /// needed because they separate two different causes that the byte figure
+    /// alone conflates. The byte figure also covers the torn trailing bytes of
+    /// a single partially-written record, which are not a complete record and
+    /// so contribute no count. A reading of bytes greater than zero with a
+    /// record count of zero is therefore one interrupted write, which is the
+    /// ordinary shape of a process killed mid-append. A non-zero record count
+    /// is a run of complete records that were written and never committed,
+    /// which is a different and more serious shape: the batch reached the file
+    /// intact and the commit that would have made it durable never followed.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalRecoveryTornTailRecords =
+        Meter.CreateCounter<long>("orleans.lattice.wal.recovery.torn_tail_records", unit: "{record}",
+            description: "Complete data records discarded from a WAL shard log by activation-time recovery because no commit record sealed them, tagged by tree and by storage shard. Read with orleans.lattice.wal.recovery.torn_tail_bytes, which it disambiguates: bytes above zero with a record count of zero is a single interrupted write (the ordinary shape of a kill mid-append), whereas a non-zero record count is a run of complete records that were written and never committed. Zero-primed per shard.");
+
+    /// <summary>Canonical name of <see cref="WalRecoveryTornTailRecords"/>.</summary>
+    public const string WalRecoveryTornTailRecordsName = "orleans.lattice.wal.recovery.torn_tail_records";
+
+    /// <summary>
     /// Retained (live) payload bytes a WAL shard held at the moment its
     /// compaction threshold was evaluated, tagged with <see cref="TagTree"/>
     /// and <see cref="TagShard"/>. Sampled once per evaluation, before any arm
