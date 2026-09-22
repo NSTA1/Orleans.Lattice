@@ -199,6 +199,17 @@ public interface ILattice : IGrainWithStringKey
     /// compensating rollback. Use <see cref="SetManyAtomicAsync"/> when all-or-nothing
     /// semantics are required.
     /// </para>
+    /// <para>
+    /// <b>Fails fast.</b> The first branch to fault surfaces immediately rather than
+    /// after the slowest branch has settled, so a batch that is already doomed does not
+    /// pay the fan-out tail. Sibling branches are deliberately <i>not</i> cancelled and
+    /// may still be in flight when the exception is observed: they would have committed
+    /// either way, so the durable outcome is unchanged and only the moment the caller
+    /// learns of the failure moves. A caller that needs the settled state must re-read
+    /// the affected keys rather than assume the batch has quiesced. When no branch
+    /// faults the call still awaits every one of them, because the per-entry
+    /// <c>Set</c> events are published only once all shard writes have committed.
+    /// </para>
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 

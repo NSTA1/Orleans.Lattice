@@ -65,7 +65,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. A pass that reaches the verdict now classifies it explicitly and counts it, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340), [#3354](https://github.com/NSTA1/Orleans.Lattice/issues/3354)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Tests - Guards that could not fail.** Two gates could not detect the defect they existed for: a sweep-count guard passed on its own failure mode, and the leaf cursor reporter was never pinned to the WAL garbage-collection floor advance. Both now fail when the behaviour is removed. ([#2656](https://github.com/NSTA1/Orleans.Lattice/issues/2656), [#3310](https://github.com/NSTA1/Orleans.Lattice/issues/3310)) (`repository-wide`)
+
 - **WAL - Saturation refusal re-fanned the whole batch.** `LatticeSaturatedException` derives from `InvalidOperationException`, so the write path's stale-routing catch discarded every routing cache and re-issued the batch across all shards. The refusal now propagates, gated on a routing predicate. ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348)) (`Orleans.Lattice`)
+
+- **WAL - Doomed batch waited out every shard branch.** `SetManyAsync` fanned out under `Task.WhenAll`, so a batch one branch had already refused still paid the slowest branch - a 94 s tail against a 386 ms median. A faulted branch now surfaces at once; the success path still awaits every branch. ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348)) (`Orleans.Lattice`)
 
 - **Container - Grain-state rows.** Nothing in the RepoContext host ever removed a row from grain storage: a clear nulled the payload and left the row behind, so generationally-keyed grains accumulated dead rows without bound. Cleared state is now deleted. ([#3307](https://github.com/NSTA1/Orleans.Lattice/issues/3307)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 

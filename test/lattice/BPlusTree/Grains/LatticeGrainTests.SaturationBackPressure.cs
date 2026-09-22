@@ -188,4 +188,109 @@ public partial class LatticeGrainTests
         Assert.That(calls, Is.EqualTo(2),
             "A plain InvalidOperationException must still earn exactly one retry on the point-write path.");
     }
+
+    [Test]
+    public async Task SetManyAsync_fails_fast_instead_of_awaiting_the_slowest_branch()
+    {
+        // #3348's headline mechanism: the fan-out awaited every branch, so a
+        // batch that one branch had already doomed still paid the slowest
+        // branch. Here shard 0 refuses immediately and shard 1 never completes
+        // at all - the unbounded form of "a rare 94-second event becomes the
+        // cost of every write batch". Under the previous Task.WhenAll this call
+        // could not return, so the assertion is deterministic in the passing
+        // direction rather than a wall-clock threshold.
+        const string treeId = "saturation-setmany-fail-fast";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns<Task>(_ => throw new LatticeSaturatedException(
+                "WAL admission gate refused the append.", treeId));
+
+        // The straggler. Never completes on its own.
+        var straggler = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => straggler.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var call = grain.SetManyAsync(batch);
+
+        // Generous, because it only bounds the FAILING direction; a correct
+        // implementation settles this in microseconds.
+        var settled = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.That(settled, Is.SameAs(call),
+            "The fan-out is still awaiting a branch that has no bearing on the outcome. "
+            + "The batch was already doomed when shard 0 refused.");
+
+        var thrown = Assert.ThrowsAsync<LatticeSaturatedException>(async () => await call);
+        Assert.That(thrown!.TreeId, Is.EqualTo(treeId),
+            "Failing fast must not blur the typed refusal the back-off contract depends on.");
+
+        // Release the straggler so the abandoned aggregate settles through the
+        // observation path rather than being left to the finalizer.
+        straggler.SetResult();
+    }
+
+    [Test]
+    public async Task SetManyAsync_still_awaits_every_branch_when_none_fail()
+    {
+        // Control for the test above, and the invariant that bounds it: the
+        // success path must NOT return early. SetManyAsync publishes one Set
+        // event per entry only after every shard write has committed, so a
+        // fan-out that returned on first completion would let a subscriber
+        // observe a Set for a key that had not been persisted.
+        const string treeId = "saturation-setmany-fail-fast-control";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var slow = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => slow.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var call = grain.SetManyAsync(batch);
+
+        var early = await Task.WhenAny(call, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        Assert.That(early, Is.Not.SameAs(call),
+            "The fan-out returned before every branch had committed.");
+
+        slow.SetResult();
+        await call;
+
+        await shard0.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        await shard1.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
 }
