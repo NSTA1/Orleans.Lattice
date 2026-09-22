@@ -350,6 +350,12 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 // already get a partition from the depth-ratio path.
                 acc.AttributedPartition ??= snap.Partition;
             }
+
+            // (#3348) Retain this partition's own reading so the
+            // classifier can be re-run per partition below. The roll-up
+            // above is what every tree-wide consumer sees; this is what
+            // the writer's own admission gate consults.
+            acc.Partitions.Add((snap.Partition, ratio, snap.HasParkedCallers));
         }
 
         // Snapshot the per-(tree, shard) cumulative dispatch-timeout
@@ -796,6 +802,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             //   classifier behaves as the pre-recovery-window shape
             //   did (per-tick classification drives the regime
             //   directly).
+            var throttledByRecoveryWindow = false;
             if (newState == WalSaturationState.Saturated)
             {
                 _lastSaturatedTickUtc[acc.TreeId] = observedAt;
@@ -807,6 +814,81 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     || (observedAt - lastSat) < recoveryWindow))
             {
                 newState = WalSaturationState.Throttled;
+                throttledByRecoveryWindow = true;
+            }
+
+            // (#3348) Publish a per-partition verdict alongside the
+            // tree-wide roll-up. Re-runs the same classifier once per
+            // observed partition with that partition's own admission
+            // depth and parked-caller reading substituted for the
+            // tree-wide worst case, so every genuinely tree-wide cause
+            // (dispatch timeouts, provider failures, flush latency,
+            // drain lag, pin latency) still lands on every partition
+            // while the admission-depth inputs become partition-local.
+            //
+            // Done BEFORE the UpdateState / `continue` below, which
+            // short-circuits on an unchanged tree verdict: a partition
+            // can transition while the tree-wide max does not.
+            //
+            // The accumulator's roll-up fields are restored afterwards
+            // because the pooled instance is reused and AttributeCause
+            // has already read them. The sampler is single-threaded per
+            // tick, so the temporary substitution is not observable.
+            if (acc.Partitions.Count > 0)
+            {
+                var savedRatio = acc.MaxDepthRatio;
+                var savedParked = acc.HasParkedCallers;
+                foreach (var (partition, ratio, parked) in acc.Partitions)
+                {
+                    acc.MaxDepthRatio = ratio;
+                    acc.HasParkedCallers = parked;
+                    var partitionState = Classify(
+                        acc,
+                        throttledRatio,
+                        dispatchThreshold,
+                        providerFailureThreshold,
+                        flushLatencyConsecutiveWindows,
+                        flushLatencyEnabled ? flushLatencySampleWindows : 0,
+                        drainLagConsecutiveWindows,
+                        drainLagEnabled ? drainLagSampleWindows : 0,
+                        pinLatencyConsecutiveWindows,
+                        pinLatencyEnabled ? pinLatencySampleWindows : 0);
+
+                    // A partition never reads healthier than a tree the
+                    // *recovery window* is holding at Throttled: that
+                    // hysteresis exists to stop the regime flapping at
+                    // the sampler cadence, and it is a genuinely
+                    // tree-wide cause, so it belongs on every partition.
+                    //
+                    // It is deliberately NOT applied when the tree reads
+                    // Throttled because `Classify` said so, because the
+                    // only input that can do that is `acc.MaxDepthRatio`
+                    // - the max across partitions - which is precisely
+                    // the #3348 coupling. Flooring on it would hand every
+                    // idle partition the busiest partition's verdict and
+                    // re-create the defect one layer down.
+                    //
+                    // The distinction is load-bearing rather than
+                    // cosmetic: Throttled is not free. PaceOnThrottleAsync
+                    // charges WalThrottledAdmissionPace per append on the
+                    // strength of this verdict, so a floor applied to the
+                    // depth-driven case taxes every append to every idle
+                    // partition because one partition is busy. An earlier
+                    // revision justified the unconditional floor as "a
+                    // pure back-off that does not engage the admission
+                    // gate's refusal" - true, but refusal is not the only
+                    // cost, and the pacing cost is the one that scales
+                    // with fan-out.
+                    if (throttledByRecoveryWindow
+                        && partitionState == WalSaturationState.Healthy)
+                    {
+                        partitionState = WalSaturationState.Throttled;
+                    }
+
+                    _signal.UpdatePartitionState(acc.TreeId, partition, partitionState);
+                }
+                acc.MaxDepthRatio = savedRatio;
+                acc.HasParkedCallers = savedParked;
             }
 
             var previousState = _signal.UpdateState(acc.TreeId, newState);
@@ -1018,6 +1100,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public int? AttributedPartition;
         public int? AttributedShard;
 
+        // (#3348) Per-partition admission readings for this tick, kept
+        // alongside the MaxDepthRatio roll-up above so the sampler can
+        // publish a per-partition verdict without a second walk of the
+        // tracker map. The list is reused across ticks with the pooled
+        // accumulator.
+        public readonly List<(int Partition, double Ratio, bool Parked)> Partitions = new();
+
         // Zeroes every field so a pooled instance carries no state from the
         // tick it was last used on. Must clear ALL fields - a missed field
         // would leak a prior tree's reading into the next tick's classification.
@@ -1033,6 +1122,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             MaterialiserPinLatencyTripDeltaInWindow = 0;
             AttributedPartition = null;
             AttributedShard = null;
+            Partitions.Clear();
         }
     }
 }

@@ -485,6 +485,14 @@ if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
         $"{nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the admission-gate budget the WAL writer waits on WaitForHealthyAsync under Saturated before refusing the dispatch with LatticeSaturatedException; zero disables the gate, infinite waits forever for recovery).");
 }
+if (options.WalAdmissionSaturationCallBudget < TimeSpan.Zero
+    && options.WalAdmissionSaturationCallBudget != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalAdmissionSaturationCallBudget)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the total time one top-level call may spend waiting at the WAL admission saturation gate across every append and retry layer; "
+        + "infinite is the default and leaves only the per-append WalAdmissionSaturationWaitBudget in force, while zero refuses at the gate without waiting).");
+}
 if (options.SetManyFanOutBudget <= TimeSpan.Zero
     && options.SetManyFanOutBudget != Timeout.InfiniteTimeSpan)
 {

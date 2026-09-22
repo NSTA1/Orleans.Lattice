@@ -181,6 +181,25 @@ param(
 	# links to and makes the aggregation depend on parsing each log before
 	# the next run clobbers it.
 	[string] $CohortTag,
+	# (#3348) The two saturation budgets the rig deliberately sets rather than
+	# inheriting. Both default to Timeout.InfiniteTimeSpan in the library so
+	# the bounds are opt-in on the released 9.x line (#3386, #3390), and both
+	# are inert-to-harmful at that default for what this rig measures: an
+	# unbounded fan-out IS the #3348 collapse, and an unbounded per-call gate
+	# allowance is the retry multiplication behind it.
+	#
+	# They are parameters, not silo-binary defaults, because the rig now has
+	# to run two arms that differ only in these values: an arm at the SHIPPED
+	# defaults (pass 0 for both), which is the arm that says whether a
+	# deployment setting nothing is fixed by the default-on per-partition gate
+	# change, and an arm at the RECOMMENDED values, which says what an
+	# operator following the docs gets. Passing them explicitly also puts the
+	# values in the cohort's own env, so a log states the configuration that
+	# ran instead of leaving it implicit in whichever image was built.
+	#
+	# 0 means infinite (inherit the library default).
+	[int] $SetManyFanOutBudgetSec = 30,
+	[int] $WalAdmissionCallBudgetSec = 15,
 	[int] $SettleSec = 30
 )
 
@@ -245,6 +264,10 @@ $siloEnv = @(
 	# walk; the bench has no foreground reader, so there is nothing to
 	# protect. Raising it is the remediation the exception itself names.
 	"BENCH_WAL_REPLAY_QUEUE_DEPTH=$WalReplayQueueDepth",
+	# (#3348) Stated explicitly so the cohort's configuration is in its own
+	# env rather than implicit in the silo binary's defaults. 0 = infinite.
+	"BENCH_SET_MANY_FANOUT_BUDGET_SEC=$SetManyFanOutBudgetSec",
+	"BENCH_WAL_ADMISSION_CALL_BUDGET_SEC=$WalAdmissionCallBudgetSec",
 	"BENCH_CLUSTER_ID=$ClusterId",
 	'BENCH_SHARD_COUNT=0',
 	'BENCH_CLUSTERING=azuretable',

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -23,7 +24,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// beyond the underlying recovery.
 /// </para>
 /// </summary>
-internal sealed class WalSaturationSignal : IWalSaturationSignal
+internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionSaturationSignal
 {
     private static readonly object RegistrationLock = new();
     private static volatile WalSaturationSignal? _current;
@@ -35,6 +36,14 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
     // transition has happened, the entry is left untouched).
     private readonly ConcurrentDictionary<string, WalSaturationState> _states
         = new(StringComparer.Ordinal);
+
+    // (#3348) Per-(tree, partition) current state cache, populated by
+    // the sampler alongside the per-tree roll-up above. The writer's
+    // pre-admission gate consults this so one partition at its
+    // admission cap cannot refuse appends routed at its idle siblings.
+    // A ValueTuple key keeps the hot-path lookup allocation-free.
+    private readonly ConcurrentDictionary<(string TreeId, int Partition), WalSaturationState> _partitionStates
+        = new();
 
     // Per-tree wait registrations for WaitForHealthyAsync. The signal
     // completes every TCS for a tree the moment it transitions back to
@@ -114,6 +123,42 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
     }
 
     /// <inheritdoc />
+    public WalSaturationState GetCurrentState(string treeId, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        // Absent entry means the sampler has never observed a tracker
+        // for this partition, which in turn means nothing has ever been
+        // admitted against it - it has no admission queue to be
+        // saturated. Healthy is therefore the correct answer, and it is
+        // also the only safe one: the tracker is created on first
+        // admission, which happens AFTER this gate, so falling back to
+        // the tree-wide verdict here would refuse a partition's very
+        // first append forever whenever a sibling was saturated - the
+        // refusal would prevent the admission that would create the
+        // tracker that would publish the state.
+        //
+        // The cost is a bounded, self-healing window: if the tree is
+        // saturated by a genuinely tree-wide cause, a partition that
+        // has never been touched admits its first append rather than
+        // being refused. That append creates the tracker, and the next
+        // sampler tick (one WalSaturationSampleInterval) publishes the
+        // partition at the tree's verdict, closing the gate. One append
+        // on a cold partition is a far smaller price than a permanent
+        // deadlock on it.
+        return _partitionStates.TryGetValue((treeId, partition), out var state)
+            ? state
+            : WalSaturationState.Healthy;
+    }
+
+    /// <summary>
+    /// Composes the <see cref="_waiters"/> key for a partition-scoped
+    /// wait. Allocates, so it is only ever called on the slow path,
+    /// after the caller has established the partition is not Healthy.
+    /// </summary>
+    private static string PartitionWaitKey(string treeId, int partition)
+        => string.Create(CultureInfo.InvariantCulture, $"{treeId}\u0000{partition}");
+
+    /// <inheritdoc />
     public Task WaitForHealthyAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -126,6 +171,31 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
             return Task.CompletedTask;
         }
 
+        return WaitCoreAsync(treeId, treeId, partition: -1, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task WaitForHealthyAsync(string treeId, int partition, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (GetCurrentState(treeId, partition) == WalSaturationState.Healthy)
+        {
+            return Task.CompletedTask;
+        }
+
+        return WaitCoreAsync(PartitionWaitKey(treeId, partition), treeId, partition, cancellationToken);
+    }
+
+    /// <summary>
+    /// Shared slow path for both wait overloads. <paramref name="waitKey"/>
+    /// is the <see cref="_waiters"/> bucket to register against;
+    /// <paramref name="partition"/> is negative for a tree-scoped wait
+    /// and selects which state probe the in-lock re-check uses.
+    /// </summary>
+    private Task WaitCoreAsync(string waitKey, string treeId, int partition, CancellationToken cancellationToken)
+    {
         // Slow path: allocate a TCS + WaiterEntry, register them, and
         // arm a cancellation hook that faults the TCS with
         // OperationCanceledException if the caller's token fires before
@@ -140,14 +210,17 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
             // us registered against an already-healthy tree (which
             // would only resolve on the next transition, defeating the
             // gate's contract).
-            if (GetCurrentState(treeId) == WalSaturationState.Healthy)
+            var current = partition < 0
+                ? GetCurrentState(treeId)
+                : GetCurrentState(treeId, partition);
+            if (current == WalSaturationState.Healthy)
             {
                 return Task.CompletedTask;
             }
-            if (!_waiters.TryGetValue(treeId, out var list))
+            if (!_waiters.TryGetValue(waitKey, out var list))
             {
                 list = new List<WaiterEntry>(capacity: 2);
-                _waiters[treeId] = list;
+                _waiters[waitKey] = list;
             }
             list.Add(entry);
         }
@@ -163,25 +236,25 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
             // cancellation.
             entry.Registration = cancellationToken.Register(static state =>
             {
-                var pair = ((WalSaturationSignal Signal, string TreeId, WaiterEntry Entry))state!;
+                var pair = ((WalSaturationSignal Signal, string WaitKey, WaiterEntry Entry))state!;
                 if (pair.Entry.Tcs.TrySetCanceled())
                 {
                     // Remove the cancelled entry from the wait list so
                     // a later recovery does not see it.
                     lock (pair.Signal._waitGate)
                     {
-                        if (pair.Signal._waiters.TryGetValue(pair.TreeId, out var list))
+                        if (pair.Signal._waiters.TryGetValue(pair.WaitKey, out var list))
                         {
                             list.Remove(pair.Entry);
                             if (list.Count == 0)
                             {
-                                pair.Signal._waiters.Remove(pair.TreeId);
+                                pair.Signal._waiters.Remove(pair.WaitKey);
                             }
                         }
                     }
                     pair.Entry.Registration.Dispose();
                 }
-            }, (this, treeId, entry));
+            }, (this, waitKey, entry));
         }
 
         return tcs.Task;
@@ -217,31 +290,67 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
             // per-wait disposal cost off a separate continuation Task
             // (the per-await ContinueWith chain the entry was
             // explicitly designed to avoid).
-            List<WaiterEntry>? toComplete = null;
-            lock (_waitGate)
-            {
-                if (_waiters.TryGetValue(treeId, out var list))
-                {
-                    toComplete = list;
-                    _waiters.Remove(treeId);
-                }
-            }
-            if (toComplete is not null)
-            {
-                for (var i = 0; i < toComplete.Count; i++)
-                {
-                    var entry = toComplete[i];
-                    // Dispose the CTR first to remove the cancellation
-                    // hook before the TCS resolves; this prevents the
-                    // cancellation callback from seeing a settled TCS
-                    // and racing against the recovery completion.
-                    entry.Registration.Dispose();
-                    entry.Tcs.TrySetResult();
-                }
-            }
+            CompleteWaiters(treeId);
         }
 
         return previous;
+    }
+
+    /// <summary>
+    /// (#3348) Sampler-side write path for a single WAL partition.
+    /// Mirrors <see cref="UpdateState"/> but scoped to one
+    /// <c>(tree, partition)</c> pair: updates the per-partition cache
+    /// and, on a transition back to
+    /// <see cref="WalSaturationState.Healthy"/>, completes every
+    /// partition-scoped waiter. Returns the previous state.
+    /// </summary>
+    internal WalSaturationState UpdatePartitionState(string treeId, int partition, WalSaturationState newState)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var key = (treeId, partition);
+        var previous = _partitionStates.TryGetValue(key, out var existing)
+            ? existing
+            : WalSaturationState.Healthy;
+        _partitionStates[key] = newState;
+
+        if (newState == WalSaturationState.Healthy && previous != WalSaturationState.Healthy)
+        {
+            CompleteWaiters(PartitionWaitKey(treeId, partition));
+        }
+
+        return previous;
+    }
+
+    /// <summary>
+    /// Completes and unregisters every waiter parked on
+    /// <paramref name="waitKey"/>. Shared by the tree-scoped and
+    /// partition-scoped write paths.
+    /// </summary>
+    private void CompleteWaiters(string waitKey)
+    {
+        List<WaiterEntry>? toComplete = null;
+        lock (_waitGate)
+        {
+            if (_waiters.TryGetValue(waitKey, out var list))
+            {
+                toComplete = list;
+                _waiters.Remove(waitKey);
+            }
+        }
+        if (toComplete is not null)
+        {
+            for (var i = 0; i < toComplete.Count; i++)
+            {
+                var entry = toComplete[i];
+                // Dispose the CTR first to remove the cancellation
+                // hook before the TCS resolves; this prevents the
+                // cancellation callback from seeing a settled TCS
+                // and racing against the recovery completion.
+                entry.Registration.Dispose();
+                entry.Tcs.TrySetResult();
+            }
+        }
     }
 
     private static void RegisterGauge()
@@ -304,6 +413,7 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
     internal void ResetForTesting()
     {
         _states.Clear();
+        _partitionStates.Clear();
         List<WaiterEntry> toCancel;
         lock (_waitGate)
         {

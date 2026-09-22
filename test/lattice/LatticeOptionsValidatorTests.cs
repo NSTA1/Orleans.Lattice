@@ -1033,6 +1033,49 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void WalAdmissionSaturationCallBudget_default_is_infinite()
+    {
+        // (#3348) Deliberately disabled by default so enabling the per-call
+        // bound is opt-in on the released 9.x line. A finite default would
+        // change when LatticeSaturatedException surfaces for an existing
+        // consumer, which is a breaking behavioural change; #3390 tracks
+        // flipping it in the next major.
+        Assert.That(new LatticeOptions().WalAdmissionSaturationCallBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
+        Assert.That(LatticeOptions.DefaultWalAdmissionSaturationCallBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
+    }
+
+    [Test]
+    public void WalAdmissionSaturationCallBudget_positive_passes()
+    {
+        var result = Validate(o => o.WalAdmissionSaturationCallBudget = TimeSpan.FromSeconds(15));
+        Assert.That(result.Failed, Is.False);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationCallBudget_zero_passes()
+    {
+        // Zero means "never wait at the gate within a call", which is a
+        // coherent fail-fast posture rather than a misconfiguration.
+        var result = Validate(o => o.WalAdmissionSaturationCallBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.False);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationCallBudget_infinite_passes()
+    {
+        var result = Validate(o => o.WalAdmissionSaturationCallBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Failed, Is.False);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationCallBudget_negative_fails()
+    {
+        var result = Validate(o => o.WalAdmissionSaturationCallBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAdmissionSaturationCallBudget)));
+    }
+
+    [Test]
     public void SetManyFanOutBudget_default_is_infinite()
     {
         Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));

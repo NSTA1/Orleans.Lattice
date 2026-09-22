@@ -219,6 +219,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes |
 | [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
 | [`SetManyFanOutBudget`](#setmanyfanoutbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
+| [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
@@ -1488,6 +1489,26 @@ Without this budget the wait is unbounded, which means the fan-out queues load i
 Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **not** a disable sentinel and is rejected by the validator: a zero budget would refuse every batch immediately, which is never a useful configuration and is far more likely to be a mistake than an intention. `Timeout.InfiniteTimeSpan` is the default and awaits every branch however long it takes. The validator rejects every other non-positive value.
 
 This option can be changed freely at any time. The new value takes effect on the next `SetManyAsync` call that fans out across more than one shard; single-shard batches never consult it, because there is no slowest branch to bound.
+
+### `WalAdmissionSaturationCallBudget`
+
+Wall-clock budget **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append that call makes and every retry layer it passes through (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
+
+`WalAdmissionSaturationWaitBudget` bounds **one** wait. It does not bound a call, because the write path holds three nested retry layers - `LatticeGrain.RetryOnStaleRoutingAsync`, `ShardActivationRetry.RunAsync`, and `ShardRootGrain.DispatchLeafBatchWithRetryAsync` - and each re-dispatch opens a fresh per-append budget. A call can therefore accumulate a multiple of the configured budget while every individual wait is correctly bounded, which is why a per-append assertion never caught it. The Layer 3 cohort logs for [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) record the consequence directly: `flush of 4096 failed after 5 retry attempts against LatticeSaturatedException; 10488ms of that was saturation back-off`, against a 5-second per-append budget. This option is the issue's own remedy 3 ("cap the total gate wait per top-level call"), and it subsumes remedy 4 ("reconsider whether all three retry layers may wait at the gate") by making the answer *yes, but out of one shared allowance*.
+
+**How the call is identified.** Every public write entry point calls `LatticeTransactionContext.EnsureCurrent()`, which now also stamps a call-start instant into `RequestContext` if one is not already present. Nested entry points inherit the outermost stamp rather than re-stamping, so the budget measures the whole call and not each layer of it. The instant is stored as `DateTimeOffset.UtcNow.UtcTicks` rather than a `Stopwatch` timestamp because `RequestContext` values cross silos, where monotonic tick origins are not comparable; NTP skew is small against a multi-second budget, and this bounds back-pressure rather than enforcing a correctness invariant, so the wall-clock reading is sufficient.
+
+**What happens when it is spent.** The gate takes the *smaller* of the remaining call allowance and `WalAdmissionSaturationWaitBudget`, so a call never waits past its allowance and a single append never waits past the per-append bound. Once the allowance is exhausted the gate refuses immediately without opening another wait, throwing [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) with `LatticeSaturationSource.WalAdmission` and a message naming `WalAdmissionSaturationCallBudget`, so an operator can tell a per-call refusal from a per-append one.
+
+**Writes with no ambient call.** Convergence-only and background writes never pass through a public entry point, so they carry no call-start stamp. They keep the per-append bound unchanged rather than being refused instantly against an epoch they never set.
+
+**Sizing.** Set it to a small multiple of `WalAdmissionSaturationWaitBudget` - 15 seconds (3x the 5-second per-append default) is the recommended starting point. Below 1x it would pre-empt the per-append budget and make that option unreachable; far above 3x it stops discriminating, because the multiplication observed in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) was roughly 2x the per-append budget in the worst logged case. Keep it below `SetManyFanOutBudget`, so a batch whose branches are stuck at the gate surfaces as a WAL-admission refusal naming the real seam rather than as a fan-out expiry naming the symptom.
+
+`TimeSpan.Zero` is accepted and means "never wait at the gate within a call" - a coherent fail-fast posture, unlike `SetManyFanOutBudget` where zero would refuse every batch outright. `Timeout.InfiniteTimeSpan` is the default and leaves only the per-append bound in force. The validator rejects every other negative value.
+
+**The default is unbounded, so this option is opt-in on the 9.x line**, for the same reason as `SetManyFanOutBudget`: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller on a released package, which is a breaking behavioural change. The flip to a finite default is deferred to the next major ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)).
+
+This option can be changed freely at any time. The new value takes effect at the next admission gate check.
 
 ### `WalThrottledAdmissionPace`
 
