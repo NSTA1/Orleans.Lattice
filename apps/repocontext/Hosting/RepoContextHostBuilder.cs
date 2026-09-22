@@ -374,6 +374,17 @@ public static class RepoContextHostBuilder
             // RepoContextPinShedCeiling.
             silo.ConfigureRepoContextPinShedCeiling(builder.Configuration);
 
+            // Bound the per-shard fan-out of a batch write. The library ships this
+            // unbounded so no existing caller regresses on upgrade (#3386), which is
+            // right for a library and wrong here: this deployment issues wide batch
+            // writes against demonstrably saturated trees, and an unbounded fan-out
+            // turns that saturation into an indefinitely-held call rather than a
+            // refusal the caller can see. The refusal rolls nothing back - a batch
+            // write is not atomic across shards, so committed branches stay
+            // committed and the durable outcome is identical; only WHEN the caller
+            // learns changes. See RepoContextFanOutBudget.
+            silo.ConfigureRepoContextFanOutBudget(builder.Configuration);
+
             // Let a constrained deployment pin the per-silo concurrent leaf WAL
             // replay ceiling instead of inheriting Environment.ProcessorCount,
             // which reports whatever DOTNET_PROCESSOR_COUNT says rather than the
