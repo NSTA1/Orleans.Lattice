@@ -225,6 +225,9 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     var clusteringConn = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_CONNECTION_STRING");
     var clusteringTableServiceUri = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE_SERVICE_URI");
     var clusteringTable = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE") ?? "OrleansSiloInstances";
+    // Must match the silo's BENCH_CLUSTER_ID for this cohort, or the client joins an
+    // empty membership partition and never finds a gateway. See Silo/Program.cs.
+    var clusterId = Environment.GetEnvironmentVariable("BENCH_CLUSTER_ID") ?? "azure-throughput";
 
     if (string.IsNullOrWhiteSpace(clusteringConn) && string.IsNullOrWhiteSpace(clusteringTableServiceUri))
     {
@@ -266,7 +269,8 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         int responseTimeoutSec,
         string? clusteringConn,
         string? clusteringTableServiceUri,
-        string clusteringTable)
+        string clusteringTable,
+        string clusterId)
     {
         var builder = Host.CreateApplicationBuilder(hostArgs);
         builder.Logging.ClearProviders();
@@ -277,7 +281,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         {
             client.Configure<ClusterOptions>(o =>
             {
-                o.ClusterId = "azure-throughput";
+                o.ClusterId = clusterId;
                 o.ServiceId = "azure-throughput";
             });
             client.Configure<ClientMessagingOptions>(o =>
@@ -299,7 +303,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     var hosts = new List<IHost>(clientCount);
     for (var i = 0; i < clientCount; i++)
     {
-        hosts.Add(BuildClientHost(args, responseTimeoutSec, clusteringConn, clusteringTableServiceUri, clusteringTable));
+        hosts.Add(BuildClientHost(args, responseTimeoutSec, clusteringConn, clusteringTableServiceUri, clusteringTable, clusterId));
     }
 
     try
