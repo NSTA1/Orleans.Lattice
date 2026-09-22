@@ -62,6 +62,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## Released
 
+## [2026-09-23]
+
+Patch release: `Orleans.Lattice.Storage.File` advances to `9.7.1`. No other package changes in this wave.
+
+### Fixed
+
+- **WAL - Offset allocation regressed beneath the trim floor.** `FileWalShard` took the next offset from live entries, so a fully trimmed shard restarted at `0` beneath its own watermark and the next recovery silently discarded every write made since. Azure Table was never affected. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice.Storage.File` 9.7.1)
+
 ## [2026-09-21]
 
 Coordinated lockstep release: 40 packages advance to `9.7.0` - `Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Auth.Grpc`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Data`, `Orleans.Lattice.Api.Data.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Api.Replication`, `Orleans.Lattice.Api.Replication.Grpc`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.State.Grpc`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Telemetry.Grpc`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.TenantAdmin.Grpc`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Backup.AzureBlob`, `Orleans.Lattice.Caching.AzureBlob`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.GrainIndex`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Membership.Entra`, `Orleans.Lattice.Membership.Entra.Graph`, `Orleans.Lattice.Membership.Oidc`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Scaling`, `Orleans.Lattice.Schema`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Tenancy`. The Explorer family stays held at `9.4.x`, and `Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext` and `Orleans.Lattice.Api.Mcp.RepoContext.Replication` remain unpublished to NuGet and are built from source; entries naming only those packages stay under `## Unreleased` until they ship. A package tag shown without a version shipped no NuGet package in this wave.

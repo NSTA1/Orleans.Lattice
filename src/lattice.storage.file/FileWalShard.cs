@@ -413,14 +413,30 @@ internal sealed class FileWalShard : IDisposable
         return take;
     }
 
-    /// <summary>Returns the highest live offset, or <c>-1</c> when empty.</summary>
+    /// <summary>
+    /// Returns the highest offset ever assigned to this shard, or <c>-1</c>
+    /// when it has never accepted an entry.
+    /// <para>
+    /// The trim watermark is folded in deliberately (issue #3366).
+    /// <c>_entries</c> holds only LIVE entries - <see cref="RecoverFromDisk"/>
+    /// drops everything at or below the watermark - so answering from it alone
+    /// returns <c>-1</c> for a fully-trimmed shard. The WAL grain sets
+    /// <c>_nextOffset = answer + 1</c>, so that regression restarts allocation
+    /// at offset <c>0</c> beneath a durable watermark that survives both
+    /// recovery and compaction. Entries appended there commit, acknowledge, and
+    /// read back normally, then vanish on the next recovery as already-trimmed.
+    /// Returning the watermark keeps allocation strictly above it.
+    /// </para>
+    /// </summary>
     internal async Task<long> GetHighestOffsetAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureLoaded();
-            return _entries.Count == 0 ? -1L : _entries[^1].Offset;
+            return _entries.Count == 0
+                ? _trimWatermark
+                : Math.Max(_entries[^1].Offset, _trimWatermark);
         }
         finally
         {

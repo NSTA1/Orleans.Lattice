@@ -79,6 +79,7 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                         shard.Entries.Add(entries[i]);
                         shard.RetainedBytes += EntryBytes(entries[i]);
                     }
+                    shard.HighestAssignedOffset = Math.Max(shard.HighestAssignedOffset, last);
                     return Task.CompletedTask;
                 }
 
@@ -97,6 +98,7 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                 {
                     shard.RetainedBytes += EntryBytes(entries[i]);
                 }
+                shard.HighestAssignedOffset = Math.Max(shard.HighestAssignedOffset, last);
                 return Task.CompletedTask;
             }
 
@@ -105,6 +107,8 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                 shard.Entries.Add(entries[i]);
                 shard.RetainedBytes += EntryBytes(entries[i]);
             }
+
+            shard.HighestAssignedOffset = Math.Max(shard.HighestAssignedOffset, last);
         }
 
         return Task.CompletedTask;
@@ -261,7 +265,9 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
 
         lock (shard.Gate)
         {
-            return Task.FromResult(shard.Entries.Count == 0 ? -1L : shard.Entries[^1].Offset);
+            return Task.FromResult(shard.Entries.Count == 0
+                ? shard.HighestAssignedOffset
+                : Math.Max(shard.Entries[^1].Offset, shard.HighestAssignedOffset));
         }
     }
 
@@ -361,5 +367,16 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         /// the log. Guarded by <see cref="Gate"/>.
         /// </summary>
         public long RetainedBytes { get; set; }
+
+        /// <summary>
+        /// Highest offset ever appended to this shard, independent of which
+        /// entries are still live. Maintained at append time and deliberately
+        /// never lowered by <see cref="TrimAsync"/>, so
+        /// <see cref="GetHighestOffsetAsync"/> cannot regress once a trim
+        /// empties the log (issue #3366). Without it a reactivated WAL grain
+        /// restarts allocation at offset <c>0</c> and reuses offsets that have
+        /// already been consumed by shipping and materialisation cursors.
+        /// </summary>
+        public long HighestAssignedOffset { get; set; } = -1L;
     }
 }

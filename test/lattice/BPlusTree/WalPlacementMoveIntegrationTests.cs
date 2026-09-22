@@ -128,8 +128,20 @@ public sealed class WalPlacementMoveIntegrationTests
         // Explicit reclaim discards the orphaned source tail.
         var reclaim = await Admin.ReclaimMovedWalSourceAsync(treeId, 0, IWalStorageProviderCatalog.DefaultProviderKey);
         Assert.That(reclaim.Outcome, Is.EqualTo(WalMoveOutcome.SourceReclaimed));
+
+        // "Trimmed" means no LIVE entries remain, which is what the lowest live
+        // offset reports. The highest offset is deliberately NOT the instrument
+        // here: it is a monotonic high-water mark that a trim must never lower
+        // (issue #3366), because the WAL grain allocates its next offset from
+        // it and would otherwise reuse offsets after a full trim.
+        var srcLowestAfterReclaim = await WalMoveProviders.Baseline.GetLowestOffsetAsync(physical, 0, CancellationToken.None);
+        Assert.That(srcLowestAfterReclaim, Is.EqualTo(-1), "reclaim must trim the orphaned source");
         var srcAfterReclaim = await WalMoveProviders.Baseline.GetHighestOffsetAsync(physical, 0, CancellationToken.None);
-        Assert.That(srcAfterReclaim, Is.EqualTo(-1), "reclaim must trim the orphaned source");
+        Assert.That(
+            srcAfterReclaim,
+            Is.EqualTo(srcHighestBefore),
+            "the trimmed source must retain its high-water mark so any later "
+            + "activation allocates above the reclaimed range");
     }
 
     [Test]
