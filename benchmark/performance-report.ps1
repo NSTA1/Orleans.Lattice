@@ -179,6 +179,7 @@ param(
 	# changes. Ascending order matters - the sweep checkpoints its state after
 	# every cell, so an abandoned run still yields a usable prefix of the
 	# curve rather than a scatter of disconnected points.
+	[ValidateRange(1, 30)]
 	[int[]] $SiloCounts = @(1, 2, 4, 6, 8),
 
 	# Layer 3 only: reuse an already-provisioned ACA rig (see deploy-aca.ps1)
@@ -2362,7 +2363,7 @@ function Update-MultiSiloDocMarkers {
 	$rowsAgg = if ($State.ContainsKey('layer3')) { $State.layer3.rows } else { @{} }
 	if ($rowsAgg.Count -eq 0) {
 		Write-Warning "[layer3] no aggregated cells; leaving $DocPath unchanged. A scaling curve must not blend cells from different sweeps."
-		return
+		return $false
 	}
 
 	$existingMeta = Get-ExistingMetaHeader -Content $content -Layer 'layer3'
@@ -2397,9 +2398,10 @@ function Update-MultiSiloDocMarkers {
 	if ($WhatIf) {
 		Write-Host '--- planned multi-silo doc (markers only) ---' -ForegroundColor Cyan
 		foreach ($m in @([regex]::Matches($content, $chartPattern)) + @([regex]::Matches($content, $pattern))) { Write-Host $m.Value }
-		return
+		return $true
 	}
 	[System.IO.File]::WriteAllText($DocPath, $content)
+	return $true
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2439,9 +2441,13 @@ function Main {
 			if ($state.layer3.ContainsKey('cohorts') -and $state.layer3.cohorts -is [System.Collections.IDictionary] -and $state.layer3.cohorts.Count -gt 0) {
 				$state.layer3.rows = Aggregate-Layer3Cells -Cells $state.layer3.cohorts
 			}
-			Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $state -WhatIf:$Diff
+			$l3Replayed = Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $state -WhatIf:$Diff
 			if (-not $Diff -and -not $SkipDocUpdate) {
-				Write-Host "[dry-run] multi-silo doc rewritten from state.json" -ForegroundColor Green
+				if ($l3Replayed) {
+					Write-Host "[dry-run] multi-silo doc rewritten from state.json" -ForegroundColor Green
+				} else {
+					Write-Host "[dry-run] multi-silo doc left unchanged (no aggregated cells in $stateFile)" -ForegroundColor Yellow
+				}
 			}
 			return
 		}
@@ -2600,8 +2606,16 @@ function Main {
 			Write-Host "[main] state.json: $l3StateFile" -ForegroundColor Green
 
 			if (-not $SkipDocUpdate) {
-				Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $l3State -WhatIf:$Diff
-				Write-Host "[main] doc updated: $multiSiloDocPath" -ForegroundColor Green
+				$l3Written = Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $l3State -WhatIf:$Diff
+				if ($l3Written) {
+					Write-Host "[main] doc updated: $multiSiloDocPath" -ForegroundColor Green
+				} else {
+					# Reporting "doc updated" after the renderer declined to
+					# write is how an unattended sweep that produced no usable
+					# cell gets mistaken for a successful one. Fail loudly
+					# instead: an empty sweep is never the intended outcome.
+					throw "[main] Layer 3 sweep produced no aggregated cells; $multiSiloDocPath was left unchanged. Check the per-cohort warnings above."
+				}
 			} else {
 				Write-Host "[main] -SkipDocUpdate: not rewriting $multiSiloDocPath" -ForegroundColor Yellow
 			}
