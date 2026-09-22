@@ -1106,9 +1106,38 @@ See [WAL Saturation Signal](wal-saturation-signal.md) for the full design includ
 
 In addition to application callers, the `Orleans.Lattice.Replication` package consumes this signal automatically: a receiver's `WalSaturationReceiverFlowControlPolicy` (registered by `AddLatticeReplication` by default) reads `IWalSaturationSignal.GetCurrentState(treeId)` after each applied push and translates the regime into the backoff hints carried on the `ReplicationAck`, so a saturated receiver asks the sender to ship smaller batches and pause before its local admission gate faults the apply. See [Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
 
+## Domain faults - `ILatticeDomainFault`
+
+Marker interface implemented by every public Lattice exception that derives from a BCL exception subclass (`InvalidOperationException`, `TimeoutException`, `UnauthorizedAccessException`) rather than directly from `Exception`. It declares no members and adds no state.
+
+Those base types were chosen for backwards compatibility, but the inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` written for some unrelated condition silently absorbs a Lattice domain fault and applies remediation calibrated for a different problem. `ILatticeDomainFault` gives such a handler a way to decline it:
+
+```csharp verify
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new("k1", new byte[] { 0x01 }),
+};
+
+try
+{
+    await lattice.SetManyAsync(entries);
+}
+catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
+{
+    // Genuine API misuse. A Lattice domain fault (saturation, quota,
+    // shutdown, fencing, ...) is declined here and falls through to a
+    // handler that understands it, instead of being absorbed.
+    Console.WriteLine(ex.Message);
+}
+```
+
+The marker does **not** mean "never handle this". Catching a domain fault *by its own type* remains the correct way to handle it and is unaffected - `catch (LatticeSaturatedException)` behaves exactly as documented below, and an internal retry loop that catches `ShardActivationTimeoutException` by name still absorbs and retries it. The marker constrains only a broad catch of the **base** type.
+
+A reflection gate in the core test suite enumerates the assembly at run time and fails if a public exception with a foreign base does not implement the marker, so the set cannot drift as exceptions are added.
+
 ## Shutdown back-pressure - `LatticeShuttingDownException`
 
-Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure).
+Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. The typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure). It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` absorbs the refusal and typically retries, which cannot succeed because the writer drain is a one-way transition. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name remains correct.
 
 Surfaces from three distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
 
@@ -1147,7 +1176,7 @@ During the host deactivation window the Orleans runtime emits a `Warning` per in
 
 ## Saturation back-pressure - `LatticeSaturatedException`
 
-Public typed exception thrown by the WAL writer admission gate and the atomic-write saga coordinator when an operation cannot complete because the per-tree `IWalSaturationSignal` reported `WalSaturationState.Saturated` for longer than the caller's configured wait budget. Distinct from [`LatticeShuttingDownException`](#shutdown-back-pressure---latticeshuttingdownexception): saturation is a *recoverable* steady-state regime (offered load is exceeding the storage layer's sustained drain rate), not a one-way silo shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the saturation regime explicitly distinguish it from genuine `InvalidOperationException` failures.
+Public typed exception thrown by the WAL writer admission gate and the atomic-write saga coordinator when an operation cannot complete because the per-tree `IWalSaturationSignal` reported `WalSaturationState.Saturated` for longer than the caller's configured wait budget. Distinct from [`LatticeShuttingDownException`](#shutdown-back-pressure---latticeshuttingdownexception): saturation is a *recoverable* steady-state regime (offered load is exceeding the storage layer's sustained drain rate), not a one-way silo shutdown. The typed slot lets callers that care about the saturation regime explicitly distinguish it from genuine `InvalidOperationException` failures. It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience, and this exception is the worked example: a broad `catch (InvalidOperationException)` elsewhere in the routing layer once absorbed this back-pressure signal, discarded the whole routing cache and re-fanned-out every shard, amplifying load on a tree that was already saturated in proportion to the shard count. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name and backing off remains the correct handling.
 
 Surfaces from two distinct saturation failure shapes that share the same operational meaning ("this tree's storage layer is back-pressured; the operation was refused"):
 
@@ -1187,7 +1216,7 @@ The writer-side admission refusal is also recorded on the `orleans.lattice.wal.w
 
 Public typed exception thrown by the `ILattice` write surface when a locally-authored write is refused because the target tree has reached a configured per-tree admission-control cap - either [`LatticeOptions.MaxLiveKeys`](configuration.md#maxlivekeys) (the `Dimension` property is `keys`) or [`LatticeOptions.MaxEstimatedBytes`](configuration.md#maxestimatedbytes) (the `Dimension` is `bytes`). Admission control is strictly **opt-in**: both caps default to `null` (unbounded), so a tree that has not configured a cap never sees this exception. Distinct from [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception): saturation is a transient storage-drain regime, whereas a quota breach persists until the tree's live footprint drops back under its cap.
 
-Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot carries `TreeId`, `Dimension`, `Current` (the observed value), and `Limit` (the configured cap) for caller-side attribution without parsing the message. The core per-tree caps report `keys` or `bytes`. With the optional [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) add-on registered the same exception also surfaces from this write surface for a per-tenant aggregate breach, adding the `memory`, `trees`, and `ops-per-second` dimensions; `ops-per-second` is a **transient** back-off signal (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds) rather than a condition that persists until a footprint drops.
+The typed slot carries `TreeId`, `Dimension`, `Current` (the observed value), and `Limit` (the configured cap) for caller-side attribution without parsing the message. It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` absorbs the refusal and retries, which cannot succeed until the tree falls back under its cap. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name remains correct. The core per-tree caps report `keys` or `bytes`. With the optional [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) add-on registered the same exception also surfaces from this write surface for a per-tenant aggregate breach, adding the `memory`, `trees`, and `ops-per-second` dimensions; `ops-per-second` is a **transient** back-off signal (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds) rather than a condition that persists until a footprint drops.
 
 Caller contract: treat as back-pressure. Either reduce the tree's live footprint (delete keys, let TTLs expire and compaction reap tombstones) or, if the ceiling is genuinely too low, raise the cap. The cap is evaluated against a cached, eventually-consistent per-tree aggregate, so it is **best-effort / approximate**: concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and enforcement **fails open** until the tree's first sample lands after activation. Replication and atomic-write-saga apply paths bypass admission control, so an incoming replicated write is never refused. Every rejection also increments the `orleans.lattice.admission.rejected` counter (tagged `tree`, `dimension`); see [Metrics - admission control](metrics.md#per-tree-admission-control) for the advisory-first-then-enforce adoption workflow.
 

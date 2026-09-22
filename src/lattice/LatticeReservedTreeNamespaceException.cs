@@ -26,7 +26,7 @@ namespace Orleans.Lattice;
 /// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeReservedTreeNamespace)]
-public sealed class LatticeReservedTreeNamespaceException : InvalidOperationException
+public sealed class LatticeReservedTreeNamespaceException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The reserved tree id that was rejected. Empty on the parameterless

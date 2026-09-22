@@ -29,17 +29,25 @@ namespace Orleans.Lattice;
 /// incoming replicated write is never refused with this exception.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// catch handlers that match on <see cref="System.InvalidOperationException"/>
-/// continue to absorb it, while callers that care about admission back-pressure
-/// can catch the typed slot and read <see cref="TreeId"/>,
-/// <see cref="Dimension"/>, <see cref="Current"/>, and <see cref="Limit"/>
-/// without parsing the exception message.
+/// Callers that care about admission back-pressure can catch the typed slot and
+/// read <see cref="TreeId"/>, <see cref="Dimension"/>, <see cref="Current"/>,
+/// and <see cref="Limit"/> without parsing the exception message.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> absorbs this quota refusal and
+/// applies remediation that cannot resolve it, because an immediate retry is
+/// refused identically until the tree falls back under its limit. This type
+/// therefore implements <see cref="ILatticeDomainFault"/>, so a broad handler
+/// declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeQuotaExceeded)]
-public sealed class LatticeQuotaExceededException : InvalidOperationException
+public sealed class LatticeQuotaExceededException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>The <see cref="Dimension"/> value for a live-key cap breach.</summary>
     public const string KeysDimension = "keys";

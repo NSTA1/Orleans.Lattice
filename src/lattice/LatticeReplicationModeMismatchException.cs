@@ -31,15 +31,24 @@ namespace Orleans.Lattice;
 /// modes</see> for the full invariant.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// catch handlers that match on <see cref="System.InvalidOperationException"/>
-/// continue to absorb it; the typed slot lets callers that care about the
-/// configuration mismatch distinguish it explicitly.
+/// The typed slot lets callers that care about the configuration mismatch
+/// distinguish it explicitly.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> absorbs this configuration
+/// mismatch and applies remediation that cannot resolve it, because only
+/// correcting the declared replication mode clears the condition. This type
+/// therefore implements <see cref="ILatticeDomainFault"/>, so a broad handler
+/// declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeReplicationModeMismatch)]
-public sealed class LatticeReplicationModeMismatchException : InvalidOperationException
+public sealed class LatticeReplicationModeMismatchException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Logical tree id whose declared replication mode the write violated.

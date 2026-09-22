@@ -23,17 +23,25 @@ namespace Orleans.Lattice;
 /// covers a re-submit that presents a different set of participating trees.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing catch
-/// handlers that match on <see cref="System.InvalidOperationException"/>
-/// continue to absorb it; the typed slot lets the API bindings map this specific
-/// misuse to a client-error status (for example gRPC
-/// <c>FailedPrecondition</c>) rather than collapsing it into an opaque
-/// server-side fault.
+/// The typed slot lets the API bindings map this specific misuse to a
+/// client-error status (for example gRPC <c>FailedPrecondition</c>) rather than
+/// collapsing it into an opaque server-side fault.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> absorbs this idempotency
+/// violation and applies remediation that cannot resolve it, because re-issuing
+/// the same key against a different key set fails identically every time. This
+/// type therefore implements <see cref="ILatticeDomainFault"/>, so a broad
+/// handler declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeIdempotencyKeyMismatch)]
-public sealed class LatticeIdempotencyKeyMismatchException : InvalidOperationException
+public sealed class LatticeIdempotencyKeyMismatchException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The caller-supplied idempotency key whose reuse with a different key (or

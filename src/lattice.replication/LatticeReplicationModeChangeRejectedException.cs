@@ -20,14 +20,21 @@ namespace Orleans.Lattice.Replication;
 /// <i>same</i> unambiguous mode is idempotent and does <b>not</b> throw.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// handlers that match it continue to absorb the rejection; the typed slot lets
-/// the API facade surface the mode-change rejection explicitly.
+/// It derives from <see cref="System.InvalidOperationException"/> for
+/// backwards compatibility, but that inheritance is a hazard rather than a
+/// convenience: a broad <c>catch (InvalidOperationException)</c> absorbs the
+/// rejection and typically retries, which cannot succeed because the tree's
+/// mode is not changed by re-issuing the same request - an ambiguous mode must
+/// be cleared by a disable-then-re-enable first. This type therefore implements
+/// <see cref="ILatticeDomainFault"/>, so a broad handler declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// The typed slot lets the API facade surface the mode-change rejection
+/// explicitly, and catching this type by name remains correct.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(ReplicationTypeAliases.LatticeReplicationModeChangeRejectedException)]
-public sealed class LatticeReplicationModeChangeRejectedException : InvalidOperationException
+public sealed class LatticeReplicationModeChangeRejectedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The target tree id whose in-place mode change was rejected. Empty on the

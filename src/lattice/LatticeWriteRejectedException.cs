@@ -26,7 +26,7 @@ namespace Orleans.Lattice;
 /// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeWriteRejected)]
-public sealed class LatticeWriteRejectedException : InvalidOperationException
+public sealed class LatticeWriteRejectedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The logical tree id the rejected write targeted. Empty on the

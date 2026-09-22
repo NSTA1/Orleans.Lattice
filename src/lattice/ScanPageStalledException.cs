@@ -40,15 +40,24 @@ namespace Orleans.Lattice;
 /// longer is.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.TimeoutException"/> so existing catch
-/// handlers that match on <see cref="System.TimeoutException"/> continue to
-/// work; the typed slots carry the per-occurrence attribution that makes the
+/// The typed slots carry the per-occurrence attribution that makes the
 /// next occurrence self-diagnosing rather than a bare duration.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.TimeoutException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (TimeoutException)</c> that simply retries reproduces exactly
+/// the livelock described above, because it discards the banked continuation
+/// and re-walks the same leaves. This type therefore implements
+/// <see cref="ILatticeDomainFault"/>, so a broad handler declines it with
+/// <c>catch (TimeoutException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name, and resuming from the banked continuation,
+/// remains the correct handling and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.ScanPageStalled)]
-public sealed class ScanPageStalledException : TimeoutException
+public sealed class ScanPageStalledException : TimeoutException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic context. Provided to

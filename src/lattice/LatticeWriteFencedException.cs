@@ -17,13 +17,23 @@ namespace Orleans.Lattice;
 /// against the same silo activation succeed once the fence lifts.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// catch handlers that match on <see cref="System.InvalidOperationException"/>
-/// continue to absorb it; the typed slot lets retry-aware callers distinguish
+/// The typed slot lets retry-aware callers distinguish
 /// the fence regime from genuine failures. Mirrors the retryable-back-pressure
 /// family (<see cref="LatticeSaturatedException"/>,
 /// <see cref="LatticeWalQuiescingException"/>) rather than inventing a separate
 /// client-facing contract.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> absorbs this fence and applies
+/// remediation calibrated for a genuine failure, when the correct response is
+/// simply to wait out the bounded fence and retry. This type therefore
+/// implements <see cref="ILatticeDomainFault"/>, so a broad handler declines it
+/// with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name, and retrying after a short delay, remains the
+/// correct handling and is unaffected.
 /// </para>
 /// <para>
 /// Carries the fenced <see cref="TreeId"/> and the engaging <see cref="SagaId"/>
@@ -33,7 +43,7 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeWriteFenced)]
-public sealed class LatticeWriteFencedException : InvalidOperationException
+public sealed class LatticeWriteFencedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Logical tree id whose write fence caused the refusal. Empty on the
