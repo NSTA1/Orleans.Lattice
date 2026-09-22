@@ -30,6 +30,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Runtime-configurable retention ceiling.** A tree's `WalMaxRetainedBytes` ceiling can be raised or lowered at runtime through the tree-admin facade, taking effect without a host restart or redeploy; a tree with no override keeps its configured value. ([#3333](https://github.com/NSTA1/Orleans.Lattice/issues/3333)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
 
+- **TreeAdmin - Orphan key census.** An orphaned-leaf audit stopped at the first unverified key, so its verified prefix read as the extent of the damage. An opt-in survey now enumerates every key in the leaf and counts verified, missing and routing-contradiction outcomes separately. ([#3293](https://github.com/NSTA1/Orleans.Lattice/issues/3293)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`)
+
+- **Gates - Bucket closing list.** A bucket pull request into the default branch is now checked to carry a closing reference for every issue its merged members claim, because a closing keyword on a member targeting a non-default base is silently inert. ([#3320](https://github.com/NSTA1/Orleans.Lattice/issues/3320)) (`repository-wide`)
+
+- **WAL - Recovery discard telemetry.** Activation-time recovery truncated unsealed tail bytes and dropped uncommitted records in silence, leaving a restart that discarded data with no attributable trace. Recovery now counts discarded bytes and records separately, primed at zero per shard. ([#3378](https://github.com/NSTA1/Orleans.Lattice/pull/3378)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Dashboards`)
+
 ### Changed
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -38,13 +44,21 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Purged tree resurrection.** A WAL shard activating after its tree was purged resolved options through the lazy seeding path, re-creating the registry row and resurrecting the tree. The activation now uses the pure fast path, which never mutates the registry. ([#3343](https://github.com/NSTA1/Orleans.Lattice/issues/3343)) (`Orleans.Lattice`)
 
+- **Leaf - Checkpoint hints and suppression accounting.** A non-advancing projection-checkpoint hint was published at the leaf seam, and chain-regression suppressions were neither counted nor bounded, so a persistent regression flooded the log unmeasured. Both are now counted and bounded. ([#3360](https://github.com/NSTA1/Orleans.Lattice/issues/3360), [#3341](https://github.com/NSTA1/Orleans.Lattice/issues/3341)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Config - Per-tree retention ceiling.** The storage-pressure collector read `WalMaxRetainedBytes` from the unnamed default options instance, so a silo configuring ceilings only per tree resolved a zero threshold and never fired its capacity signal. It now resolves per tree. ([#3336](https://github.com/NSTA1/Orleans.Lattice/issues/3336)) (`Orleans.Lattice`, `Orleans.Lattice.Scaling`)
+
+- **Errors - Domain faults absorbed by broad catches.** Broad BCL catch clauses swallowed domain exceptions their callers were expected to handle, so a domain fault surfaced as a generic failure or was lost entirely. The narrowed clauses now let domain faults propagate. ([#3361](https://github.com/NSTA1/Orleans.Lattice/issues/3361)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Tests - Gates that measured the wrong population.** Three gates sampled too narrow a set to detect the defect they existed for: a chaos partition was never three-way, dashboard enrolment keyed on meter identity, and incidental key collectors used non-recovering scans. ([#3125](https://github.com/NSTA1/Orleans.Lattice/issues/3125), [#2811](https://github.com/NSTA1/Orleans.Lattice/issues/2811), [#3355](https://github.com/NSTA1/Orleans.Lattice/issues/3355)) (`repository-wide`)
+
 - **Replay - Latched admission gate.** A cold-replay storm drove the process-wide smoothed permit queue wait above the refusal bound, and refused arrivals never sample, so nothing could fold it back: the gate shed activations for the rest of the process lifetime. A stale mean is now discarded. ([#3306](https://github.com/NSTA1/Orleans.Lattice/issues/3306)) (`Orleans.Lattice`)
 
 - **Atomic - Conditional multi-key completeness.** `ConditionalSetManyAsync` silently dropped keys whose row a split had moved to a sibling leaf, because the guard read a cache miss as non-matching. Declared-span admission now runs before the guard, so a key is evaluated on the leaf that declares it. ([#2663](https://github.com/NSTA1/Orleans.Lattice/issues/2663)) (`Orleans.Lattice`)
 
 - **CRDT - Full-state merge read form.** A replication full-state merge read local state through the client read path, which strips the schema envelope and upcasts, then folded and wrote that decoded value back. The merge now reads the stored form through the replication-apply seam. ([#2813](https://github.com/NSTA1/Orleans.Lattice/issues/2813)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
-- **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. A pass that reaches the verdict now classifies it explicitly and counts it, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+- **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. A pass that reaches the verdict now classifies it explicitly and counts it, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340), [#3354](https://github.com/NSTA1/Orleans.Lattice/issues/3354)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Tests - Guards that could not fail.** Two gates could not detect the defect they existed for: a sweep-count guard passed on its own failure mode, and the leaf cursor reporter was never pinned to the WAL garbage-collection floor advance. Both now fail when the behaviour is removed. ([#2656](https://github.com/NSTA1/Orleans.Lattice/issues/2656), [#3310](https://github.com/NSTA1/Orleans.Lattice/issues/3310)) (`repository-wide`)
 
