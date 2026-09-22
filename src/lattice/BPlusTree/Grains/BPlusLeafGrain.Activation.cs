@@ -229,6 +229,43 @@ internal sealed partial class BPlusLeafGrain
     private static long _replayPermitWaitEwmaTicks;
 
     /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> reading of the most recent sample
+    /// folded into <see cref="_replayPermitWaitEwmaTicks"/>, or <c>0</c> before
+    /// any. It is what makes that mean <b>expire</b>, and issue #3306 is what
+    /// happens when it does not.
+    /// <para>
+    /// The mean is updated only as waits <b>terminate</b>, so it has no clock of
+    /// its own and no way to grow stale. Left unbounded it therefore answers a
+    /// question nobody asked - "how long were the last few waits this process
+    /// ever completed" - and
+    /// <see cref="IsReplayPermitQueueNotDraining(TimeSpan)"/> reads that answer
+    /// as though it described the present. A process that survives one cold
+    /// replay storm carries the storm's mean for the rest of its life: issue
+    /// #3306 measured 300,044 ms against a
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/> of 5,000 ms, on
+    /// a gate that was by then idle.
+    /// </para>
+    /// <para>
+    /// <b>That is a latch, not merely a stale reading</b>, which is why it
+    /// persists rather than decaying away. A refusal records no sample - the
+    /// wait never happened - so the only thing that can move the mean back down
+    /// is the admission the mean itself is suppressing. The 1/8 smoothing needs
+    /// roughly thirty-one samples to bring a sixty-fold overshoot back under the
+    /// bound, and the mechanism denies itself those samples. Process B of that
+    /// issue shed 434 activations across an eleven-minute lifetime while process
+    /// C, identical but never having seen a storm, shed none under a sustained
+    /// 65 records/s.
+    /// </para>
+    /// <para>
+    /// This is the same defect issue #3290 fixed on the other arm, on the other
+    /// field: a timestamp made stale by quietness, then read as evidence of
+    /// harm. It was fixed there and missed here, and because the two arms are
+    /// disjoined, an unguarded mean defeats a guarded stall arm outright.
+    /// </para>
+    /// </summary>
+    private static long _replayPermitWaitSample;
+
+    /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> reading of the most recent
     /// <b>progress</b> on <see cref="_replayConcurrencyGate"/>, or <c>0</c>
     /// before any. Distinguishes a deep queue that is draining from one that is
@@ -504,6 +541,7 @@ internal sealed partial class BPlusLeafGrain
             Volatile.Write(ref _withheldReplayPermits, 0);
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
+            Volatile.Write(ref _replayPermitWaitSample, 0);
             Volatile.Write(ref _lastReplayPermitProgress, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
@@ -1109,6 +1147,11 @@ internal sealed partial class BPlusLeafGrain
         var previous = Volatile.Read(ref _replayPermitWaitEwmaTicks);
         Volatile.Write(ref _replayPermitWaitEwmaTicks, previous + ((ticks - previous) / 8));
 
+        // Stamp the sample, not the fold. The mean has no clock of its own, so
+        // without this it cannot be told apart from one measured ten minutes ago
+        // - see _replayPermitWaitSample and issue #3306.
+        Volatile.Write(ref _replayPermitWaitSample, Stopwatch.GetTimestamp());
+
         if (acquired)
             Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
     }
@@ -1186,11 +1229,32 @@ internal sealed partial class BPlusLeafGrain
     /// alone would refuse a burst that merely followed a quiet period, because
     /// an idle gate and a wedged one both go a long time without acquiring.
     /// </para>
+    /// <para>
+    /// <b>The mean expires; the stall arm does not.</b> The mean is refreshed
+    /// only as waits terminate, so quietness alone makes it describe a regime
+    /// that has ended - and a refusal records no sample, so a mean driven high
+    /// by a storm cannot be brought back down by the admissions it is itself
+    /// suppressing (issue #3306). It is therefore consulted only when a wait has
+    /// terminated within <paramref name="maxQueueWait"/>, and discarded
+    /// outright when none has. No detection power is lost, because the state a
+    /// stale mean would be guessing about - "nothing is completing" - is exactly
+    /// what the stall arm below measures directly, and measures on a stamp that
+    /// quietness cannot fake since issue #3290.
+    /// </para>
+    /// <para>
+    /// Discarding rather than merely skipping is the load-bearing half. A
+    /// skipped fossil is still there to be folded into, and at 1/8 smoothing a
+    /// sixty-fold overshoot survives some thirty-one further samples - so the
+    /// first wait to terminate after a quiet period would re-arm the arm on
+    /// evidence that had already been judged inadmissible.
+    /// </para>
     /// </remarks>
     internal static bool IsReplayPermitQueueNotDraining(TimeSpan maxQueueWait)
     {
         if (maxQueueWait <= TimeSpan.Zero)
             return false;
+
+        ExpireStaleReplayPermitWaitMean(maxQueueWait);
 
         if (Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
             return true;
@@ -1200,10 +1264,48 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Discards <see cref="_replayPermitWaitEwmaTicks"/> when the most recent
+    /// sample folded into it is older than <paramref name="horizon"/>, so a mean
+    /// left over from a regime that has ended cannot refuse work in the present
+    /// (issue #3306).
+    /// </summary>
+    /// <param name="horizon">How recently a wait must have terminated for the
+    /// mean to still describe the present. Always
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/>: the mean's
+    /// whole claim is that waits are exceeding it, and a claim no wait has
+    /// tested for longer than the bound itself is not evidence about now.</param>
+    private static void ExpireStaleReplayPermitWaitMean(TimeSpan horizon)
+    {
+        var sample = Volatile.Read(ref _replayPermitWaitSample);
+        if (sample != 0 && Stopwatch.GetElapsedTime(sample) < horizon)
+            return;
+
+        if (Volatile.Read(ref _replayPermitWaitEwmaTicks) == 0)
+            return;
+
+        Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
+        Volatile.Write(ref _replayPermitWaitSample, 0);
+    }
+
+    /// <summary>
     /// Test-only view of <see cref="_replayPermitWaitEwmaTicks"/>.
     /// </summary>
     internal static TimeSpan ReplayPermitWaitMeanForTest
         => TimeSpan.FromTicks(Volatile.Read(ref _replayPermitWaitEwmaTicks));
+
+    /// <summary>
+    /// Test-only view of how long ago the sample behind
+    /// <see cref="_replayPermitWaitEwmaTicks"/> was taken, or
+    /// <see langword="null"/> when no sample stands behind it.
+    /// </summary>
+    internal static TimeSpan? ReplayPermitWaitSampleAgeForTest
+    {
+        get
+        {
+            var sample = Volatile.Read(ref _replayPermitWaitSample);
+            return sample == 0 ? null : Stopwatch.GetElapsedTime(sample);
+        }
+    }
 
     /// <summary>
     /// Test-only seam that drives <see cref="IsReplayPermitQueueNotDraining"/>
@@ -1214,9 +1316,19 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="sinceLastProgress">Time to backdate the last progress
     /// reading by, or <see langword="null"/> to report that no progress has ever
     /// been made.</param>
-    internal static void SeedReplayPermitWaitStateForTest(TimeSpan mean, TimeSpan? sinceLastProgress)
+    /// <param name="sinceLastSample">Time to backdate the sample standing behind
+    /// <paramref name="mean"/> by, or <see langword="null"/> - the default - to
+    /// stamp it <b>now</b>. Defaulting to fresh is what lets a fixture that says
+    /// nothing about freshness keep proving exactly what it proved before issue
+    /// #3306 gave the mean an expiry at all.</param>
+    internal static void SeedReplayPermitWaitStateForTest(
+        TimeSpan mean, TimeSpan? sinceLastProgress, TimeSpan? sinceLastSample = null)
     {
         Volatile.Write(ref _replayPermitWaitEwmaTicks, mean.Ticks);
+        Volatile.Write(
+            ref _replayPermitWaitSample,
+            Stopwatch.GetTimestamp()
+                - (long)((sinceLastSample ?? TimeSpan.Zero).TotalSeconds * Stopwatch.Frequency));
         Volatile.Write(
             ref _lastReplayPermitProgress,
             sinceLastProgress is null
