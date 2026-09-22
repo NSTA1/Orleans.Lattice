@@ -22,6 +22,18 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// identical durable grain-state slot, so the floor still advances to the final
 /// frontier during teardown. A genuine (non-shutdown) transient fault must keep
 /// the prior swallow-and-log behaviour (no direct-store write).
+/// <para>
+/// Extended for issue #3382: teardown has a <b>second</b> shape the original
+/// predicate did not match. Once the grain type is withdrawn from the cluster
+/// catalog, placement fails before any activation is attempted and Orleans
+/// reports a plain <c>OrleansException</c> ("No active nodes are compatible with
+/// grain ... Known nodes with grain type: none") that shares no type name or
+/// message fragment with the activation-collection rejection above. The #1471
+/// fallback was therefore silently skipped, the durable floor stayed behind the
+/// true frontier, and WAL GC's trim scan stopped on <c>offset_floor</c> as its
+/// only non-zero reason - retaining 4.56 GiB of WAL for 7.1 MiB of live data.
+/// Both shapes must reach the fallback; the transient fault must still not.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class LeafCursorReporterTeardownFallbackTests
@@ -158,6 +170,36 @@ public sealed class LeafCursorReporterTeardownFallbackTests
     }
 
     [Test]
+    public async Task Flush_on_catalog_withdrawn_teardown_falls_back_to_direct_store()
+    {
+        var (reporter, storage) = Create(new CatalogWithdrawnPinGrain());
+
+        await reporter.FlushDurableMaterialiserFrontierAsync(
+            Tree, Reports((ConsumerA, Hlc(100))), CancellationToken.None);
+
+        Assert.That(storage.TryReadPin(Tree, ConsumerA, out var pinned), Is.True,
+            "Teardown that withdraws the pin grain type from the cluster catalog must also reach " +
+            "the direct-store fallback: it is the same lost-floor outcome as the activation-collection " +
+            "rejection, reported by Orleans through a different exception type and message (#3382).");
+        Assert.That(pinned, Is.EqualTo(Hlc(100)));
+    }
+
+    [Test]
+    public async Task Seed_on_catalog_withdrawn_teardown_falls_back_to_direct_store()
+    {
+        var (reporter, storage) = Create(new CatalogWithdrawnPinGrain());
+
+        await reporter.SeedDurableMaterialiserBlockManyAsync(
+            Tree, Reports((ConsumerA, HybridLogicalClock.Zero)), CancellationToken.None);
+
+        Assert.That(storage.TryReadPin(Tree, ConsumerA, out var pinned), Is.True,
+            "The birth seed's write-through barrier must survive catalog-withdrawal teardown too; " +
+            "a leaf whose first real-frontier checkpoint lands at deactivation otherwise ends with " +
+            "no durable floor at all.");
+        Assert.That(pinned, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
     public void Flush_without_pin_storage_swallows_rejection()
     {
         var registry = Substitute.For<IWalCursorRegistry>();
@@ -191,6 +233,30 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         private static Task Reject() =>
             throw new InvalidOperationException(
                 "Unable to create local activation for grain wal-materialiser-pin. Rejecting now.");
+    }
+
+    /// <summary>
+    /// Pin grain that fails both pin-store entry points with the <em>second</em>
+    /// teardown shape (issue #3382): the grain type has already been withdrawn
+    /// from the cluster catalog, so Orleans fails placement outright with a plain
+    /// <c>OrleansException</c> before any activation is attempted. The message is
+    /// reproduced verbatim from a RepoContext container shutdown, which logged
+    /// 85,878 of these for <c>walmaterialiserpin</c> in a single window while the
+    /// reporter swallowed every one. It shares no marker with the
+    /// activation-collection shape <see cref="RejectingPinGrain"/> models - which
+    /// is exactly why a predicate written only against that shape stopped firing.
+    /// </summary>
+    private sealed class CatalogWithdrawnPinGrain : PinGrainStub
+    {
+        public override Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Withdraw();
+
+        public override Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Withdraw();
+
+        private static Task Withdraw() =>
+            throw new InvalidOperationException(
+                "No active nodes are compatible with grain walmaterialiserpin and interface " +
+                "ol.wpi version 0. Known nodes with grain type: none. All known nodes compatible " +
+                "with interface version: none");
     }
 
     /// <summary>
