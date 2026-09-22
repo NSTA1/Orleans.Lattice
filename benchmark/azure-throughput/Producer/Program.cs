@@ -219,6 +219,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     var reportSec = ReadInt("BENCH_REPORT_SEC", 1);
     var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
     var workloadMode = BenchWorkloadMetadata.ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
+    var clientCount = Math.Clamp(ReadInt("BENCH_CLIENT_COUNT", 1), 1, 64);
     var atomicBatchSize = ReadInt("BENCH_ATOMIC_BATCH_SIZE", 64);
     var preseedKeyCount = ReadIntAllowZero("BENCH_VEHICLE_COUNT", 0);
     var clusteringConn = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_CONNECTION_STRING");
@@ -249,48 +250,112 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         walAccounts,
         "orleans-client");
 
-    Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s");
+    Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s clients={clientCount}");
     Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
 
-    var builder = Host.CreateApplicationBuilder(args);
-    builder.Logging.ClearProviders();
-    builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
-    builder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-    builder.UseOrleansClient(client =>
+    // One IClusterClient reaches exactly one silo for this workload. Orleans
+    // buckets client-to-grain traffic by TargetGrain hash to preserve per-grain
+    // ordering, and a single-tree benchmark has a single grain id - so one
+    // client pins to one gateway, and [StatelessWorker] LatticeGrain then
+    // activates on that gateway's silo. Building several independent clients
+    // is what spreads the front door: each has its own gateway bucket array
+    // fed by a randomly-offset round-robin cursor. See BenchIngestEngine's
+    // multi-handle DrainAsync for the full rationale.
+    static IHost BuildClientHost(
+        string[] hostArgs,
+        int responseTimeoutSec,
+        string? clusteringConn,
+        string? clusteringTableServiceUri,
+        string clusteringTable)
     {
-        client.Configure<ClusterOptions>(o =>
-        {
-            o.ClusterId = "azure-throughput";
-            o.ServiceId = "azure-throughput";
-        });
-        client.Configure<ClientMessagingOptions>(o =>
-        {
-            o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
-        });
-        client.UseAzureStorageClustering(o =>
-        {
-            o.TableName = clusteringTable;
-            o.TableServiceClient = !string.IsNullOrWhiteSpace(clusteringConn)
-                ? new TableServiceClient(clusteringConn)
-                : new TableServiceClient(new Uri(clusteringTableServiceUri!), new DefaultAzureCredential());
-        });
-    });
+        var builder = Host.CreateApplicationBuilder(hostArgs);
+        builder.Logging.ClearProviders();
+        builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-    using var host = builder.Build();
-    await host.StartAsync().ConfigureAwait(false);
+        builder.UseOrleansClient(client =>
+        {
+            client.Configure<ClusterOptions>(o =>
+            {
+                o.ClusterId = "azure-throughput";
+                o.ServiceId = "azure-throughput";
+            });
+            client.Configure<ClientMessagingOptions>(o =>
+            {
+                o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
+            });
+            client.UseAzureStorageClustering(o =>
+            {
+                o.TableName = clusteringTable;
+                o.TableServiceClient = !string.IsNullOrWhiteSpace(clusteringConn)
+                    ? new TableServiceClient(clusteringConn)
+                    : new TableServiceClient(new Uri(clusteringTableServiceUri!), new DefaultAzureCredential());
+            });
+        });
+
+        return builder.Build();
+    }
+
+    var hosts = new List<IHost>(clientCount);
+    for (var i = 0; i < clientCount; i++)
+    {
+        hosts.Add(BuildClientHost(args, responseTimeoutSec, clusteringConn, clusteringTableServiceUri, clusteringTable));
+    }
+
     try
     {
+        await Task.WhenAll(hosts.Select(h => h.StartAsync())).ConfigureAwait(false);
+
+        var host = hosts[0];
         var clusterClient = host.Services.GetRequiredService<IClusterClient>();
         var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("producer-engine");
-        var lattice = clusterClient.GetGrain<ILattice>(settings.TreeId);
+        var lattices = hosts
+            .Select(h => h.Services.GetRequiredService<IClusterClient>().GetGrain<ILattice>(settings.TreeId))
+            .ToArray();
+        var lattice = lattices[0];
         var ct = lifetime.ApplicationStopping;
 
         if (settings.ShardCountOverride > 0)
         {
             await SubmitAndWaitForReshardAsync(lattice, settings.TreeId, settings.ShardCountOverride, ct).ConfigureAwait(false);
         }
+
+        // Warm the tree before the measured window opens. This is not an
+        // optimisation - without it the Layer 3 cohort is bimodal, and the
+        // failing mode produces no data at all.
+        //
+        // On the single-VM path the silo host calls lattice.WarmUpAsync during
+        // startup for EVERY workload mode (see Silo/Program.cs: only the
+        // read-mode content pre-seed is gated on the mode; shard-root
+        // activation is unconditional). The Layer 3 silo returns early in
+        // cluster mode and never reaches that call, so nothing warmed the tree
+        // and the producer became the first caller to touch it.
+        //
+        // The engine then opens with FlushConcurrency concurrent SetManyAsync
+        // calls of BatchSize keys each, every one of which fans out across all
+        // 64 shard roots. Cold, those roots must activate, read their state,
+        // and materialise leaves before any of them can answer. At N=1 that
+        // fanout is in-process and absorbs the first wave; at N>=2 roughly half
+        // of it becomes cross-silo RPC and the first wave can exceed the 180s
+        // response timeout. Every in-flight flush then times out together,
+        // nothing retires, and the cohort reports ops=0 for its whole run -
+        // measured here as exactly that, with all 16 flushes parked in
+        // set_many phase=fanout at p50 180,243 ms.
+        //
+        // That failure is bimodal rather than gradual (a cohort either flows at
+        // full rate or returns literally nothing), which is why it presented as
+        // flakiness: two N=2 cohorts wedged and one succeeded on identical
+        // configuration and an identical image.
+        //
+        // Warming here also restores parity with Layer 2 rather than merely
+        // avoiding a stall: Layer 2 measures a warm tree, so a Layer 3 number
+        // that included cold-start activation would not be comparable with the
+        // baseline the whole tier is anchored against.
+        var warmSw = Stopwatch.StartNew();
+        await WarmUpWithRetryAsync(lattice, settings.TreeId, ct).ConfigureAwait(false);
+        warmSw.Stop();
+        Console.WriteLine($"[producer] warmup treeId={settings.TreeId} complete elapsedMs={warmSw.Elapsed.TotalMilliseconds:F0}");
 
         var channel = Channel.CreateBounded<KeyValuePair<string, byte[]>>(new BoundedChannelOptions(capacity: 1 << 16)
         {
@@ -305,7 +370,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
             lifetime,
             new NoOpBenchSaturationGate(),
             logger);
-        var drainTask = Task.Run(() => engine.DrainAsync(lattice, channel.Reader, ct), CancellationToken.None);
+        var drainTask = Task.Run(() => engine.DrainAsync(lattices, channel.Reader, ct), CancellationToken.None);
 
         await RunChannelGeneratorAsync(vehicleCount, tickHz, duration, channel.Writer, ct).ConfigureAwait(false);
         channel.Writer.TryComplete();
@@ -313,7 +378,11 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     }
     finally
     {
-        await host.StopAsync().ConfigureAwait(false);
+        foreach (var h in hosts)
+        {
+            try { await h.StopAsync().ConfigureAwait(false); } catch (Exception ex) { Console.Error.WriteLine($"[producer] client stop failed: {ex.Message}"); }
+            h.Dispose();
+        }
     }
 }
 
@@ -421,10 +490,62 @@ static Guid[] CreateVehicleIds(int vehicleCount)
     return vehicles;
 }
 
+static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, CancellationToken ct)
+{
+    // Mirrors the silo-side warm-up retry loop, including its classification of
+    // what counts as transient. A cold multi-silo cluster is exactly where
+    // placement has not yet converged and an activation can be cancelled out
+    // from under the caller, so a single-shot warm-up would fail for reasons
+    // that resolve on their own a moment later. Saturation is retryable here
+    // too: warming 64 shard roots at once is itself a burst.
+    const int MaxWarmUpAttempts = 12;
+    const int MaxWarmUpBackoffMs = 6000;
+    const int MaxWarmUpSaturationBackoffMs = 20000;
+    var attempt = 0;
+    Exception? lastException = null;
+    while (attempt < MaxWarmUpAttempts && !ct.IsCancellationRequested)
+    {
+        attempt++;
+        try
+        {
+            Console.WriteLine($"[producer] warmup treeId={treeId} (attempt={attempt}/{MaxWarmUpAttempts})");
+            await lattice.WarmUpAsync(ct).ConfigureAwait(false);
+            return;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (!ct.IsCancellationRequested
+            && (IsOrleansMessageRejection(ex)
+                || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
+                || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+                || WarmUpRetryClassifier.IsTransientSaturation(ex)))
+        {
+            lastException = ex;
+            var isSaturation = WarmUpRetryClassifier.IsTransientSaturation(ex);
+            var backoffMs = isSaturation
+                ? Math.Min(2000 * attempt, MaxWarmUpSaturationBackoffMs)
+                : Math.Min(100 * (1 << (attempt - 1)), MaxWarmUpBackoffMs);
+            Console.WriteLine($"[producer] warmup treeId={treeId} transient{(isSaturation ? " SATURATED" : string.Empty)} ({ex.GetType().Name}); retrying in {backoffMs}ms");
+            await Task.Delay(backoffMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    // Fail loud. A cohort that proceeds on an unwarmed tree does not merely run
+    // slower - it wedges and reports ops=0, which is far more expensive to
+    // diagnose after the fact than an explicit warm-up failure here.
+    throw new InvalidOperationException(
+        $"warm-up of tree '{treeId}' did not complete after {MaxWarmUpAttempts} attempts",
+        lastException);
+}
+
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {
     const int MaxReshardAttempts = 12;
     const int MaxReshardBackoffMs = 6000;
+    // Saturation drains on a seconds timescale, so its ceiling is higher than
+    // the placement-race one. 12 attempts x up to 20s is a ~2 minute budget,
+    // which comfortably outlasts an observed cold-reshard queue drain while
+    // still failing loudly rather than hanging.
+    const int MaxReshardSaturationBackoffMs = 20000;
     var attempt = 0;
     var reshardSubmitted = false;
     Exception? lastReshardException = null;
@@ -445,11 +566,25 @@ static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, 
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (IsOrleansMessageRejection(ex)
-            || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex))
+            || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+            || WarmUpRetryClassifier.IsTransientSaturation(ex))
         {
             lastReshardException = ex;
-            var backoffMs = Math.Min(100 * (1 << (attempt - 1)), MaxReshardBackoffMs);
-            var kind = IsOrleansMessageRejection(ex) ? "REJECTED" : "PLACEMENT-CONVERGING";
+            // Saturation needs a materially longer backoff than a placement
+            // race. A cold reshard to S shards asks the cluster to admit S
+            // shard-root activations at once, each needing a WAL replay
+            // permit; the queue refuses above its ceiling and then drains
+            // over seconds, not milliseconds. The exponential schedule below
+            // starts at 100ms, which retries straight back into a queue that
+            // has not moved and burns the whole 12-attempt budget in under a
+            // second. Saturation therefore gets its own floor.
+            var isSaturation = WarmUpRetryClassifier.IsTransientSaturation(ex);
+            var backoffMs = isSaturation
+                ? Math.Min(2000 * attempt, MaxReshardSaturationBackoffMs)
+                : Math.Min(100 * (1 << (attempt - 1)), MaxReshardBackoffMs);
+            var kind = isSaturation
+                ? "SATURATED"
+                : IsOrleansMessageRejection(ex) ? "REJECTED" : "PLACEMENT-CONVERGING";
             Console.WriteLine($"[producer] reshard treeId={treeId} attempt={attempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
             await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), ct).ConfigureAwait(false);
         }

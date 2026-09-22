@@ -96,4 +96,46 @@ public static class WarmUpRetryClassifier
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// Lattice's typed WAL back-pressure refusal.
+    /// <para>
+    /// <c>LatticeSaturatedException</c> means the tree's per-silo WAL replay
+    /// permit queue refused admission rather than queueing behind work the
+    /// caller could not outlast. It is explicitly a <em>retry-after-backoff</em>
+    /// condition - the exception's own message says so - not a terminal error,
+    /// and it is exactly what a cold multi-silo reshard provokes: pinning a
+    /// fresh tree to S shards asks the cluster to activate S shard roots at
+    /// once, each of which needs a replay permit, so a large S transiently
+    /// overruns a ceiling that drains within seconds.
+    /// </para>
+    /// <para>
+    /// Matching is by type NAME, not by a typed <c>catch</c>. The benchmark
+    /// Engine assembly deliberately does not reference the core Lattice
+    /// package's exception types beyond <c>ILattice</c>, and the exception
+    /// arrives here wrapped in Orleans' serialization envelope, so a name
+    /// match is both sufficient and robust to the wrapping. The blast radius
+    /// of a false positive is one extra bounded retry.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientSaturation(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (string.Equals(cur.GetType().Name, "LatticeSaturatedException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var message = cur.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("LatticeSaturatedException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

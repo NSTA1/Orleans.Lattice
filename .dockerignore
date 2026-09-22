@@ -1,30 +1,106 @@
 # Docker build-context exclusions for the benchmark stack (which uses the lattice repo
 # root as build context for the simulator's silo and api images). Exclude bin/obj/test
 # artefacts so docker build doesn't ship gigabytes of compile output into the daemon.
-**/bin/
-**/obj/
-**/.vs/
-**/.vscode/
-**/.idea/
-**/.azurite/
+#
+# PATTERN STYLE IS LOAD-BEARING - read this before editing.
+#
+# These rules are consumed by two different engines with different dialects, and
+# only the intersection of the two is safe:
+#
+#   * The docker CLI implements the full dockerignore spec, where a trailing
+#     slash (`obj/`) and a bare name (`obj`) both match a directory and prune it.
+#   * `az acr build` reimplements dockerignore with its own translator, and it
+#     converts a rule verbatim into an anchored regex. A trailing slash becomes a
+#     trailing `/$`, i.e. `obj/` compiles to `^obj/$` - and because the packer
+#     tests paths WITHOUT a trailing slash, that pattern can never match anything.
+#     Every trailing-slash rule is silently inert there.
+#
+# A whole file written in the trailing-slash style therefore looks correct,
+# passes review, works locally under `docker build`, and excludes NOTHING during
+# a remote ACR build. That is not hypothetical: it let a repo-root-context
+# `az acr build` begin packing an 8+ GB upload from a working clone before it was
+# caught.
+#
+# The second half of the quirk: `az acr build` translates a leading `**/` to a
+# literal `.*/`, which REQUIRES at least one parent segment. So `**/obj` compiles
+# to `^.*/obj$` and does not match a top-level `obj`, where docker's `**/obj`
+# would. A directory that can appear at any depth consequently needs all four
+# forms below, and dropping any one of them reintroduces a silent gap.
+#
+# So: no trailing slashes, and for an any-depth directory write
+#   name
+#   name/**
+#   **/name
+#   **/name/**
+# Verify a change by packing with the same code path az uses, not by reading it:
+#   az acr build ... (watch the archive size) - or call
+#   azure.cli.command_modules.acr._archive_utils._pack_source_code directly.
+
+# Build output, at any depth.
+bin
+bin/**
+**/bin
+**/bin/**
+obj
+obj/**
+**/obj
+**/obj/**
+
+# Editor and tool state, at any depth.
+.vs
+.vs/**
+**/.vs
+**/.vs/**
+.vscode
+.vscode/**
+**/.vscode
+**/.vscode/**
+.idea
+.idea/**
+**/.idea
+**/.idea/**
+.azurite
+.azurite/**
+**/.azurite
+**/.azurite/**
 **/*.user
-.git/
-.github/
-**/TestResults/
-**/coverage*/
+
+# Repository metadata - never needed by a build.
+.git
+.git/**
+.github
+.github/**
+
+# Test and coverage output, at any depth.
+TestResults
+TestResults/**
+**/TestResults
+**/TestResults/**
+coverage
+coverage/**
+**/coverage*
+**/coverage*/**
 **/results-*.json
-benchmark/grafana/dashboards/
-benchmark/.run/
+benchmark/grafana/dashboards
+benchmark/grafana/dashboards/**
 
 # Source-only build contexts: no Dockerfile in this repo needs these trees, and
 # packing them is what makes `az acr build` / `docker build` uploads slow.
-.scratch/
-.tmp/
-logs/
-artifacts/
-BenchmarkDotNet.Artifacts/
-docs/
-test/
+.scratch
+.scratch/**
+.tmp
+.tmp/**
+logs
+logs/**
+artifacts
+artifacts/**
+BenchmarkDotNet.Artifacts
+BenchmarkDotNet.Artifacts/**
+docs
+docs/**
+test
+test/**
+*.log
 **/*.log
 
 # Local-only artefact trees. These are gitignored, so they are invisible to a
@@ -32,6 +108,15 @@ test/
 # working clone `.deploy/` alone reached ~19 GB of volume and image tarballs,
 # which a repo-root-context build would upload in full before running a single
 # instruction. `.run/` holds per-run benchmark state written while a rig is up.
-.deploy/
-**/node_modules/
-**/.run/
+.deploy
+.deploy/**
+**/.deploy
+**/.deploy/**
+node_modules
+node_modules/**
+**/node_modules
+**/node_modules/**
+.run
+.run/**
+**/.run
+**/.run/**

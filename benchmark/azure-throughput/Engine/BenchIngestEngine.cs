@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -64,7 +65,54 @@ internal sealed class BenchIngestEngine(
     ILogger logger)
 {
     public async Task DrainAsync(ILattice lattice, ChannelReader<KeyValuePair<string, byte[]>> reader, CancellationToken ct)
+        => await DrainAsync(new[] { lattice }, reader, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Drain the channel, spreading each flush across <paramref name="lattices"/>
+    /// in round-robin order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The silo host passes a single handle and is therefore behaviourally
+    /// identical to the original single-handle shape. The multi-handle form
+    /// exists for the Orleans-client producer, where one handle is not enough
+    /// to reach more than one silo.
+    /// </para>
+    /// <para>
+    /// Orleans' <c>ClientMessageCenter</c> selects a gateway by bucketing on
+    /// <c>TargetGrain.GetUniformHashCode()</c>, so that calls to one grain keep
+    /// their order. A benchmark that drives a single tree therefore has a
+    /// single grain id, lands in a single bucket, and pins every call to one
+    /// gateway. <c>LatticeGrain</c> is <c>[StatelessWorker]</c>, so it then
+    /// activates on that gateway's silo and every client-facing call is served
+    /// by one host no matter how many are in the cluster. The shard, leaf and
+    /// WAL grains still spread, so throughput does not collapse - but the
+    /// front door becomes a fixed-size funnel, and a scaling sweep would
+    /// measure the funnel and report its saturation as the cluster's knee.
+    /// </para>
+    /// <para>
+    /// Each <c>IClusterClient</c> has its own bucket array, populated from
+    /// <c>GatewayManager.GetLiveGateway()</c>, whose round-robin cursor starts
+    /// at a random offset per client. Independent clients therefore settle on
+    /// different gateways, and rotating flushes across them spreads the front
+    /// door over the cluster. This is the only reason the producer builds more
+    /// than one client.
+    /// </para>
+    /// </remarks>
+    public async Task DrainAsync(IReadOnlyList<ILattice> lattices, ChannelReader<KeyValuePair<string, byte[]>> reader, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(lattices);
+        if (lattices.Count == 0)
+        {
+            throw new ArgumentException("At least one ILattice handle is required.", nameof(lattices));
+        }
+
+        var lattice = lattices[0];
+        var latticeCursor = -1;
+        ILattice NextLattice() => lattices.Count == 1
+            ? lattice
+            : lattices[(int)((uint)Interlocked.Increment(ref latticeCursor) % (uint)lattices.Count)];
+
         // Concurrent flush model: the drain loop fills a working batch
         // and, when the batch is full or the flush deadline elapses,
         // hands the batch off to a background flush task and starts a
@@ -164,7 +212,7 @@ internal sealed class BenchIngestEngine(
             {
                 try
                 {
-                    var committed = await FlushAsync(lattice, batchToFlush, ct).ConfigureAwait(false);
+                    var committed = await FlushAsync(NextLattice(), batchToFlush, ct).ConfigureAwait(false);
                     if (committed == ShutdownDiscarded)
                     {
                         // Neither accepted nor failed - shutdown back-pressure.
@@ -590,7 +638,34 @@ internal sealed class BenchIngestEngine(
     // as failed=N; FINAL is emitted immediately so the cohort is reported
     // as HEALTHY-with-failures rather than wedged. Sized together with
     // InFlightTailQuiesceBudget to leave margin below TimeoutStopSec=30s.
-    private static readonly TimeSpan InFlightTailWhenAllBudget = TimeSpan.FromSeconds(12);
+    //
+    // Overridable because that 30s stop window is a property of the Layer 2
+    // host, not of the engine. Layer 2 runs the engine as a systemd unit
+    // (TimeoutStopSec=30), so 12s is the right ceiling there and stays the
+    // default, leaving the single-VM path byte-identical. Layer 3 runs the
+    // engine inside a Container Apps *job*, which is bounded by its own
+    // replicaTimeout and has no systemd stop window at all, so it can
+    // afford to let the tail actually finish. That matters because the
+    // budget is what decides whether trailing work lands in `ops` or in
+    // `failed`: an N=2 cohort measured here drained 16 concurrent flushes
+    // whose p50 was 5.7s and p99 11.2s, overran the 12s ceiling, and
+    // reported failed=65,536 - exactly FlushConcurrency x BatchSize, i.e.
+    // the whole in-flight budget abandoned at the deadline rather than any
+    // sustained failure. Since FlushConcurrency scales with silo count,
+    // that artefact grows with N and would read as "scaling gets less
+    // reliable" on precisely the curve this benchmark exists to publish.
+    private static readonly TimeSpan InFlightTailWhenAllBudget =
+        TimeSpan.FromSeconds(ReadTailBudgetSeconds());
+
+    private static double ReadTailBudgetSeconds()
+    {
+        const double DefaultSeconds = 12;
+        var raw = Environment.GetEnvironmentVariable("BENCH_INFLIGHT_TAIL_BUDGET_SEC");
+        if (string.IsNullOrWhiteSpace(raw)) { return DefaultSeconds; }
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : DefaultSeconds;
+    }
 
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {

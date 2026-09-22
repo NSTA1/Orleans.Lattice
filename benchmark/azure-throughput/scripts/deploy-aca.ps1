@@ -175,31 +175,77 @@ if (-not $SkipImageBuild) {
 	# own build service, so this works from any machine with the CLI and no
 	# Docker daemon. The context is the REPO ROOT because both Dockerfiles
 	# reference src/ and samples/ as well as benchmark/.
-	Write-Host "[aca] building silo image (remote, context=$repoRoot)" -ForegroundColor Cyan
-	Invoke-Az @(
-		'acr', 'build',
-		'--registry', $names.Acr,
-		'--image', "lattice-bench-silo:$NamePrefix",
-		'--file', 'benchmark/azure-throughput/Silo/Dockerfile',
-		$repoRoot
-	) -PassthruOutput
+	#
+	# Push-Location matters: --file is resolved against the CURRENT DIRECTORY
+	# rather than against the context argument, so a repo-relative path fails
+	# with "Unable to find ..." when this script is invoked from its own
+	# scripts/ directory. Running the builds from the repo root makes the two
+	# agree.
+	Push-Location $repoRoot
+	try {
+		Write-Host "[aca] building silo image (remote, context=$repoRoot)" -ForegroundColor Cyan
+		Invoke-Az @(
+			'acr', 'build',
+			'--registry', $names.Acr,
+			'--image', "lattice-bench-silo:$NamePrefix",
+			'--file', 'benchmark/azure-throughput/Silo/Dockerfile',
+			'.'
+		) -PassthruOutput
 
-	Write-Host "[aca] building producer image (remote)" -ForegroundColor Cyan
-	Invoke-Az @(
-		'acr', 'build',
-		'--registry', $names.Acr,
-		'--image', "lattice-bench-producer:$NamePrefix",
-		'--file', 'benchmark/azure-throughput/Producer/Dockerfile',
-		$repoRoot
-	) -PassthruOutput
+		Write-Host '[aca] building producer image (remote)' -ForegroundColor Cyan
+		Invoke-Az @(
+			'acr', 'build',
+			'--registry', $names.Acr,
+			'--image', "lattice-bench-producer:$NamePrefix",
+			'--file', 'benchmark/azure-throughput/Producer/Dockerfile',
+			'.'
+		) -PassthruOutput
+	}
+	finally { Pop-Location }
 } else {
 	Write-Host "[aca] -SkipImageBuild: reusing $siloImage" -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
-# 4. Container Apps environment.
+# 4. Log Analytics workspace, then the Container Apps environment.
+#
+# The workspace is created explicitly rather than left to `containerapp env
+# create`: the CLI has no `--logs-workspace-name`, only `--logs-workspace-id`
+# (the customer GUID) and `--logs-workspace-key`, so the workspace has to exist
+# before the environment can be pointed at it. Creating it here also means the
+# same workspace survives a `-ReuseRg` redeploy, so logs from earlier cohorts
+# stay queryable.
 # ---------------------------------------------------------------------------
+if (-not (Test-AzResourceExists -Kind 'workspace' -Name $names.Workspace -ResourceGroup $names.Rg)) {
+	Write-Host "[aca] creating Log Analytics workspace $($names.Workspace)" -ForegroundColor Cyan
+	Invoke-Az @(
+		'monitor', 'log-analytics', 'workspace', 'create',
+		'--workspace-name', $names.Workspace,
+		'--resource-group', $names.Rg,
+		'--location', $Location,
+		'-o', 'none'
+	) | Out-Null
+}
+
+# The workspace GUID, not the ARM id: cohort log harvest queries Log Analytics
+# rather than holding a live log stream open for the length of a cohort. A
+# stream is fresher but it is a single connection that must survive minutes of
+# a saturated cluster, and if it drops mid-cohort the measurement is lost with
+# no way to recover it. The workspace already has every line, so a query can be
+# retried until the run's terminal marker appears.
+$workspaceId = (Invoke-Az @(
+	'monitor', 'log-analytics', 'workspace', 'show',
+	'--workspace-name', $names.Workspace, '--resource-group', $names.Rg,
+	'--query', 'customerId', '-o', 'tsv'
+)).Trim()
+
 if (-not (Test-AzResourceExists -Kind 'acaenv' -Name $names.Env -ResourceGroup $names.Rg)) {
+	$workspaceKey = (Invoke-Az @(
+		'monitor', 'log-analytics', 'workspace', 'get-shared-keys',
+		'--workspace-name', $names.Workspace, '--resource-group', $names.Rg,
+		'--query', 'primarySharedKey', '-o', 'tsv'
+	)).Trim()
+
 	Write-Host "[aca] creating Container Apps environment $($names.Env)" -ForegroundColor Cyan
 	# No --internal-only and no VNet arguments: see the header note on why the
 	# default Consumption environment is the proven shape.
@@ -209,7 +255,9 @@ if (-not (Test-AzResourceExists -Kind 'acaenv' -Name $names.Env -ResourceGroup $
 		'--resource-group', $names.Rg,
 		'--location', $Location,
 		'--logs-destination', 'log-analytics',
-		'--logs-workspace-name', $names.Workspace
+		'--logs-workspace-id', $workspaceId,
+		'--logs-workspace-key', $workspaceKey,
+		'-o', 'none'
 	) | Out-Null
 }
 
@@ -221,6 +269,88 @@ $envId = (Invoke-Az @(
 
 $acrUser = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'username', '-o', 'tsv')).Trim()
 $acrPass = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'passwords[0].value', '-o', 'tsv')).Trim()
+
+# ---------------------------------------------------------------------------
+# 5. The silo app and the producer job.
+#
+# Created here with a baseline environment and left RESTING AT ZERO REPLICAS.
+# Creating a container app is slow; updating one is not, and a sweep changes
+# only a handful of env vars per cell. So the shape is created once and the
+# cohort runner mutates and scales it, rather than building and destroying an
+# app per measurement.
+#
+# Starting at zero replicas is deliberate and is the whole basis of the "no
+# containers left running longer than needed" guarantee: between provisioning
+# and the first cohort there is nothing to bill, and a sweep that dies
+# half-way leaves the app at whatever count it was last set to rather than at
+# a default of 1 that nobody remembers to clear.
+# ---------------------------------------------------------------------------
+if (-not (Test-AzResourceExists -Kind 'acaapp' -Name $names.SiloApp -ResourceGroup $names.Rg)) {
+	Write-Host "[aca] creating silo app $($names.SiloApp) (resting at 0 replicas)" -ForegroundColor Cyan
+	# No --ingress: Orleans peers and clients reach a silo on the endpoint it
+	# publishes to the clustering table, not through the environment's HTTP
+	# front door. The reachability spike confirmed an app with no ingress
+	# block is still addressable on its replica pod IPs.
+	Invoke-Az @(
+		'containerapp', 'create',
+		'--name', $names.SiloApp,
+		'--resource-group', $names.Rg,
+		'--environment', $names.Env,
+		'--image', $siloImage,
+		'--registry-server', $acrServer,
+		'--registry-username', $acrUser,
+		'--registry-password', $acrPass,
+		'--cpu', "$SiloCpu",
+		'--memory', "${SiloMemoryGi}Gi",
+		'--min-replicas', '0',
+		'--max-replicas', '30',
+		'--secrets', "storageconn=$storageConn",
+		'--env-vars',
+			'BENCH_CLUSTERING=azuretable',
+			'BENCH_INGEST_MODE=cluster',
+			'BENCH_SHARD_COUNT=0',
+			'BENCH_CLUSTERING_CONNECTION_STRING=secretref:storageconn',
+			'BENCH_STORAGE_CONN=secretref:storageconn',
+			'BENCH_LEAF_STORAGE_KIND=azure',
+			'BENCH_TOTAL_DURATION_SEC=0',
+		'-o', 'none'
+	) | Out-Null
+} else {
+	Write-Host "[aca] silo app $($names.SiloApp) already exists" -ForegroundColor Yellow
+}
+
+if (-not (Test-AzResourceExists -Kind 'acajob' -Name $names.ProducerJob -ResourceGroup $names.Rg)) {
+	Write-Host "[aca] creating producer job $($names.ProducerJob)" -ForegroundColor Cyan
+	# A Job rather than an app: the producer runs a fixed-duration workload
+	# and must then stop. A Job models run-to-completion directly, so the
+	# runner starts an execution and waits for it to finish, instead of
+	# scaling an app 1 -> 0 and forcing a new revision for every cohort.
+	Invoke-Az @(
+		'containerapp', 'job', 'create',
+		'--name', $names.ProducerJob,
+		'--resource-group', $names.Rg,
+		'--environment', $names.Env,
+		'--image', $prodImage,
+		'--registry-server', $acrServer,
+		'--registry-username', $acrUser,
+		'--registry-password', $acrPass,
+		'--trigger-type', 'Manual',
+		'--replica-timeout', '3600',
+		'--replica-retry-limit', '0',
+		'--parallelism', '1',
+		'--replica-completion-count', '1',
+		'--cpu', "$SiloCpu",
+		'--memory', "${SiloMemoryGi}Gi",
+		'--secrets', "storageconn=$storageConn",
+		'--env-vars',
+			'BENCH_PRODUCER_MODE=orleans-client',
+			'BENCH_CLUSTERING_CONNECTION_STRING=secretref:storageconn',
+			'BENCH_STORAGE_CONN=secretref:storageconn',
+		'-o', 'none'
+	) | Out-Null
+} else {
+	Write-Host "[aca] producer job $($names.ProducerJob) already exists" -ForegroundColor Yellow
+}
 
 Write-Host '[aca] provisioning complete' -ForegroundColor Green
 
@@ -237,6 +367,7 @@ $ctx = [ordered]@{
 	storage      = $names.Storage
 	storageConn  = $storageConn
 	workspace    = $names.Workspace
+	workspaceId  = $workspaceId
 	envName      = $names.Env
 	envId        = $envId
 	siloApp      = $names.SiloApp
