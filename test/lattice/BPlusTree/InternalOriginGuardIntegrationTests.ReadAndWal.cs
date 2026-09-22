@@ -390,7 +390,7 @@ public sealed partial class InternalOriginGuardIntegrationTests
         var exists = await tree.ExistsAsync("b");
         var count = await tree.CountAsync();
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
         {
             keys.Add(k);
         }

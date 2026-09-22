@@ -64,7 +64,7 @@ public class TreeResizeIntegrationTests
 
         // Verify key scan returns all keys in order.
         var keys = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
             keys.Add(key);
 
         Assert.That(keys, Has.Count.EqualTo(expected.Count));
@@ -146,7 +146,7 @@ public class TreeResizeIntegrationTests
         Assert.That(await tree.GetAsync("key-0003"), Is.Not.Null);
 
         var keys = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
             keys.Add(key);
         Assert.That(keys, Has.Count.EqualTo(7));
     }
@@ -190,7 +190,7 @@ public class TreeResizeIntegrationTests
             await tree.SetAsync($"after-{i:D4}", Encoding.UTF8.GetBytes($"new-v{i}"));
 
         var keys = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
             keys.Add(key);
 
         Assert.That(keys, Has.Count.EqualTo(16));

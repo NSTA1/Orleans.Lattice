@@ -21,6 +21,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 [TestFixture]
 public class LatticeCursorGrainResilienceTests
 {
+    // Raw stream stubs deliberately verify the cursor's own checkpoint and resume behaviour.
     private const string TreeId = "cursor-tree";
     private const string CursorId = "cur-res";
 

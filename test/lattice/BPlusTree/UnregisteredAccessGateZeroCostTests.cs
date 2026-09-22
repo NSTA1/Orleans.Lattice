@@ -72,7 +72,7 @@ public sealed class UnregisteredAccessGateZeroCostTests
             "GetMany returns every key with no gate to prune it");
 
         var scanned = new List<string>();
-        await foreach (var key in lattice.KeysAsync())
+        await foreach (var key in lattice.ScanKeysAsync())
         {
             scanned.Add(key);
         }

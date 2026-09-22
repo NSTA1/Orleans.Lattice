@@ -192,7 +192,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         }
 
         var scanned = new List<string>();
-        await foreach (var key in router.KeysAsync())
+        await foreach (var key in router.ScanKeysAsync())
             scanned.Add(key);
 
         Assert.That(scanned.Count, Is.EqualTo(60), "every row must remain visible to a chain walk");

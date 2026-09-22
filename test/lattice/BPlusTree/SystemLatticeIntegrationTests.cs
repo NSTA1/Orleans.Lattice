@@ -63,6 +63,7 @@ public class SystemLatticeIntegrationTests
     [Test]
     public async Task Internal_ISystemLattice_keys_enumeration_works()
     {
+        // Deliberately exercises the internal raw-stream contract, not an incidental collector.
         var tree = _cluster.GrainFactory.GetGrain<ISystemLattice>("_lattice_replog_keys");
         for (int i = 0; i < 5; i++)
         {
@@ -141,7 +142,7 @@ public class SystemLatticeIntegrationTests
         Assert.That(await tree.GetAsync("missing"), Is.Null);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys, Is.Empty);
     }

@@ -108,7 +108,7 @@ public class TreeSnapshotIntegrationTests
 
         var dest = _cluster.GrainFactory.GetGrain<ILattice>(destTree);
         var keys = new List<string>();
-        await foreach (var key in dest.KeysAsync())
+        await foreach (var key in dest.ScanKeysAsync())
             keys.Add(key);
 
         Assert.That(keys, Is.Empty);
@@ -164,7 +164,7 @@ public class TreeSnapshotIntegrationTests
         Assert.That(await dest.GetAsync("key-0003"), Is.Not.Null);
 
         var keys = new List<string>();
-        await foreach (var key in dest.KeysAsync())
+        await foreach (var key in dest.ScanKeysAsync())
             keys.Add(key);
         Assert.That(keys, Has.Count.EqualTo(6));
     }
