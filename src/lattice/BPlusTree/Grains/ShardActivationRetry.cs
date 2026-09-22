@@ -48,6 +48,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// refusal has no other retry anywhere: it aborts an activation, and an
 /// activation that fails has no queue to park on and no policy of its own, so
 /// without this arm the bound does not shed the request, it fails it.
+/// </para>
 /// <para>
 /// It is deliberately the <b>only</b> saturation source retried here, and the
 /// filter is on <see cref="LatticeSaturatedException.SaturationSource"/> rather than on
@@ -68,14 +69,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// unjittered retry re-converges them into the thundering herd that the
 /// admission bound of issue #3284 exists to remove.
 /// </para>
-/// </para>
 /// <para>
-/// <b>Scoping for the wider audit.</b> This helper is presently consumed by
-/// <see cref="LatticeGrain.ReshardAsync"/> only - the observably-broken path
-/// under the bench-startup pattern that motivated the fix. The wider audit
-/// of operator entry points that should adopt the same envelope is tracked
-/// separately on the issue tracker; this helper is the seam that audit work
-/// will reuse rather than reinventing per-call-site.
+/// <b>Scoping.</b> This helper is consumed throughout the
+/// <see cref="LatticeGrain"/> partials - bulk load, cursors, digests, entry
+/// and key enumeration, orphan repair, projection administration, warm-up,
+/// resharding, and the <c>SetManyAsync</c> write fan-out - rather than by a
+/// single entry point. Because <see cref="RunAsync"/> is the one envelope
+/// they all share, every arm described above applies to all of them,
+/// including the replay-permit arm added for issue #3294. That breadth is
+/// wanted here: the refusal is raised by the per-silo permit gate while a
+/// leaf activation is being admitted, so it is reachable from any call that
+/// must activate a leaf, and an arm confined to one call site would leave
+/// the rest of that surface failing load it could have shed.
 /// </para>
 /// </summary>
 internal static class ShardActivationRetry
