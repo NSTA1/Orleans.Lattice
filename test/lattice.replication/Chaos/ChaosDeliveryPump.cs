@@ -127,6 +127,15 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
         }
     }
 
+    /// <summary>Returns the directed edge's delivery gate, also checked before each apply.</summary>
+    public bool IsPartitioned(int senderIdx, int receiverIdx)
+    {
+        lock (_gate)
+        {
+            return _partitioned[senderIdx, receiverIdx];
+        }
+    }
+
     /// <summary>Re-enables every edge involving site <paramref name="site"/>.</summary>
     public void HealSite(int site)
     {
@@ -327,13 +336,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     // Re-check the partition gate per entry so a partition that
                     // opens mid-stream truncates the in-flight delivery rather
                     // than blocking until the next poll cycle.
-                    bool partitionedNow;
-                    lock (_gate)
-                    {
-                        partitionedNow = _partitioned[senderIdx, receiverIdx];
-                    }
-
-                    if (partitionedNow)
+                    if (IsPartitioned(senderIdx, receiverIdx))
                     {
                         truncatedByPartition = true;
                         break;

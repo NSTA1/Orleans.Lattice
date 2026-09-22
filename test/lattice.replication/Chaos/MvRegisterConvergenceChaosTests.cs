@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// <summary>
 /// Convergence chaos test for the <see cref="LatticeMergeMode.MvRegister"/>
 /// dispatch path. Three sites issue concurrent writes against a single
-/// key while a partition isolates one site mid-workload; after the
+/// key while partitions separate the concurrent writers; after the
 /// partition heals and the delivery pump drains, every site must
 /// observe exactly the multi-value frontier - the set of values whose
 /// dots are not strictly dominated by any other authored dot.
@@ -52,12 +52,14 @@ public class MvRegisterConvergenceChaosTests
         var fixture = runner.Fixture;
         var pump = runner.Pump;
 
-        // Phase 1: isolate site 2, then have every site author its own
-        // value concurrently. Sites 0/1 see each other through the pump;
-        // site 2 writes behind the partition. After the heal, every
-        // site's authored value must survive because none was observed
-        // by any other replica before being written.
-        pump.IsolateSite(2);
+        // Set every delivery gate before starting the pump, so no in-flight
+        // delivery can make one writer observe another writer's dot.
+        for (var i = 0; i < SiteCount; i++)
+        {
+            pump.IsolateSite(i);
+        }
+        AssertConnectivity(pump, partitioned: true);
+        pump.Start();
 
         var perSiteValue = new string[SiteCount];
         for (var i = 0; i < SiteCount; i++)
@@ -77,7 +79,16 @@ public class MvRegisterConvergenceChaosTests
         }
 
         await Task.WhenAll(writeTasks);
+        AssertConnectivity(pump, partitioned: true);
+        for (var i = 0; i < SiteCount; i++)
+        {
+            var values = await fixture.ClientOf(i).GetGrain<ILattice>(TreeName).MvRegister<string>(Key).ValuesAsync();
+            Assert.That(values, Is.EqualTo(new[] { perSiteValue[i] }),
+                $"Site {i} observed a foreign write before the partition healed.");
+        }
+
         await pump.HealAllAndDrainAsync(DrainTimeout);
+        AssertConnectivity(pump, partitioned: false);
 
         var expected = new HashSet<string>(perSiteValue, StringComparer.Ordinal);
 
@@ -98,6 +109,7 @@ public class MvRegisterConvergenceChaosTests
         await runner.InitializeAsync();
         var fixture = runner.Fixture;
         var pump = runner.Pump;
+        pump.Start();
 
         // Phase 1: site 0 authors two sequential writes under no
         // partition. The second write strictly supersedes the first on
@@ -117,6 +129,10 @@ public class MvRegisterConvergenceChaosTests
         // gets isolated; its write "site-2-v1" is concurrent with
         // site 1's because the pump cannot deliver between them.
         pump.IsolateSite(2);
+        Assert.That(pump.IsPartitioned(1, 2), Is.True);
+        Assert.That(pump.IsPartitioned(2, 1), Is.True);
+        Assert.That(pump.IsPartitioned(0, 1), Is.False);
+        Assert.That(pump.IsPartitioned(1, 0), Is.False);
 
         var write1 = Task.Run(() => SetWithRetryAsync(fixture.ClientOf(1).GetGrain<ILattice>(TreeName), MultiSiteClusterFixture.ClusterIdFor(1), "site-1-v1"));
         var write2 = Task.Run(() => SetWithRetryAsync(fixture.ClientOf(2).GetGrain<ILattice>(TreeName), MultiSiteClusterFixture.ClusterIdFor(2), "site-2-v1"));
@@ -137,6 +153,23 @@ public class MvRegisterConvergenceChaosTests
 
             Assert.That(actual, Is.EquivalentTo(expected),
                 $"Site {i} did not converge to the frontier after supersession.");
+        }
+    }
+
+    private static void AssertConnectivity(ChaosDeliveryPump pump, bool partitioned)
+    {
+        for (var sender = 0; sender < SiteCount; sender++)
+        {
+            for (var receiver = 0; receiver < SiteCount; receiver++)
+            {
+                if (sender == receiver)
+                {
+                    continue;
+                }
+
+                Assert.That(pump.IsPartitioned(sender, receiver), Is.EqualTo(partitioned),
+                    $"Delivery edge {sender}->{receiver} must be {(partitioned ? "partitioned" : "healed")}.");
+            }
         }
     }
 
@@ -175,7 +208,6 @@ public class MvRegisterConvergenceChaosTests
         {
             await Fixture.InitializeAsync();
             Pump = new ChaosDeliveryPump(Fixture, TreeName);
-            Pump.Start();
         }
 
         public async ValueTask DisposeAsync()
