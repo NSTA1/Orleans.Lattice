@@ -2391,19 +2391,17 @@ internal sealed partial class BPlusLeafGrain(
         // on partition 0 (issue #2699). Carrying the partition in the argument
         // is what makes the scoping something the caller cannot fail to supply.
         //
-        // Routes through the ILeafProjection seam so the unresolved-prepare
-        // clamp is honoured. For a freshly-created sibling at birth there are
-        // no unresolved prepares so the clamp is a no-op; the seam's
-        // monotonic-non-decrease guard makes a re-call with a smaller offset a
-        // silent no-op.
+        // Routes through ApplyCheckpointHintAsync, the shared hint seam, so the
+        // unresolved-prepare clamp is honoured AND a hint that no longer moves
+        // this leaf forward is dropped before it reaches
+        // ILeafProjection.SetCheckpointOffsetAsync. That seam REJECTS a
+        // backward move by throwing rather than absorbing it, and this callee
+        // is not always fresh: a split retry re-sends the heads captured at the
+        // original split to a sibling that has since applied past them (issue
+        // #3360).
         for (var p = 0; p < offsetsByPartition.Length; p++)
         {
-            var offset = offsetsByPartition[p];
-            if (offset <= 0) continue;
-            using (LatticeApplyOffsetContext.BeginScope(p, offset))
-            {
-                await ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
-            }
+            await ApplyCheckpointHintAsync(p, offsetsByPartition[p]);
         }
     }
 

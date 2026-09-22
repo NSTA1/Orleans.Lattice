@@ -117,6 +117,54 @@ internal sealed partial class BPlusLeafGrain
         return persisted;
     }
 
+    /// <summary>
+    /// The single seam through which a <em>hinted</em> projection checkpoint is
+    /// stamped: advances partition <paramref name="partition"/> to
+    /// <paramref name="offset"/> only when that would move the checkpoint
+    /// forward, and does nothing otherwise.
+    /// <para>
+    /// A hint is a WAL head captured at some earlier moment, so by the time it
+    /// is stamped the target may already have applied past it - a split retry
+    /// replays the heads captured at the original split, and both the donor and
+    /// the sibling keep applying while the split is in flight.
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> <em>rejects</em> a
+    /// backward move by throwing <see cref="ArgumentOutOfRangeException"/>
+    /// (which is load-bearing for its non-hint callers), so a stale hint that
+    /// reached the seam would fault the enclosing batch. Every hint is
+    /// therefore filtered here rather than at each call site: guarding one of
+    /// two call sites and leaving the other is exactly how issue 905's fix left
+    /// issue #3360 behind.
+    /// </para>
+    /// <para>
+    /// The scope is opened inside this method, so a caller cannot stamp a hint
+    /// against the wrong offset space, and the skip path opens no scope and
+    /// starts no state machine - the split path is hot.
+    /// </para>
+    /// </summary>
+    /// <param name="partition">The WAL partition ordinal the hint targets.</param>
+    /// <param name="offset">The hinted WAL head offset. Non-positive offsets are ignored.</param>
+    private ValueTask ApplyCheckpointHintAsync(int partition, long offset)
+    {
+        if (offset <= 0 || GetCurrentCheckpointForPartition(partition) >= offset)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return new ValueTask(StampCheckpointHintAsync(partition, offset));
+    }
+
+    /// <summary>
+    /// The slow half of <see cref="ApplyCheckpointHintAsync"/>: opens the
+    /// partition's apply-offset scope and drives the projection seam.
+    /// </summary>
+    private async Task StampCheckpointHintAsync(int partition, long offset)
+    {
+        using (LatticeApplyOffsetContext.BeginScope(partition, offset))
+        {
+            await ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
+        }
+    }
+
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)

@@ -612,8 +612,19 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Routes through <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
     /// existing unresolved-prepare clamp is honoured; for a sibling at birth
     /// there are no unresolved prepares so the clamp is a no-op. Idempotent:
-    /// a re-call with a smaller offset is a no-op (the underlying seam
-    /// enforces monotonic non-decrease).
+    /// a hint that is not strictly ahead of this leaf's current checkpoint for
+    /// its partition is <em>ignored by this callee</em>, so a re-call with a
+    /// smaller offset is a no-op.
+    /// </para>
+    /// <para>
+    /// <b>The callee performs that drop; the projection seam does not.</b>
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> <em>enforces</em>
+    /// monotonic non-decrease by <em>rejecting</em> a backward move with an
+    /// <see cref="ArgumentOutOfRangeException"/>, not by absorbing it - and
+    /// that rejection is load-bearing for its non-hint callers, so it is not
+    /// softened. A caller must not assume a stale hint is harmless because
+    /// "the seam enforces non-decrease": it is harmless only because this
+    /// method drops it first (issue #3360).
     /// </para>
     /// </summary>
     /// <param name="offsetsByPartition">Per-partition WAL head offsets, indexed by partition ordinal. Must not be <see langword="null"/>.</param>
