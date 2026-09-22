@@ -44,6 +44,15 @@
 //                           Timeout.InfiniteTimeSpan: an unbounded fan-out is the
 //                           #3348 collapse itself, so the rig opts in to the finite
 //                           budget to exercise the seam. Set 0 for infinite.
+//   BENCH_WAL_ADMISSION_CALL_BUDGET_SEC
+//                           Seconds one top-level call may spend waiting at the WAL
+//                           admission saturation gate, summed across every append and
+//                           every retry layer (WalAdmissionSaturationCallBudget).
+//                           Defaults to 15, which likewise does NOT track the library
+//                           default of Timeout.InfiniteTimeSpan: left infinite the
+//                           three nested retry layers each open a fresh per-append
+//                           budget, which is the #3348 multiplication. Set 0 for
+//                           infinite.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -255,8 +264,10 @@ var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.Defa
 // raises it, and the multi-silo document records that it does.
 var walReplayQueueDepth = ReadIntAllowZero(
     "BENCH_WAL_REPLAY_QUEUE_DEPTH", LatticeOptions.DefaultWalReplayPermitQueueDepthPerPermit);
-// BENCH_SET_MANY_FANOUT_BUDGET_SEC: the only knob here that deliberately does
-// NOT inherit the library default, and the deviation is the whole point. The
+// BENCH_SET_MANY_FANOUT_BUDGET_SEC: one of two knobs here that deliberately do
+// NOT inherit the library default (the other is
+// BENCH_WAL_ADMISSION_CALL_BUDGET_SEC below), and the deviation is the whole
+// point. The
 // library defaults LatticeOptions.SetManyFanOutBudget to
 // Timeout.InfiniteTimeSpan so that enabling the bound is opt-in on the released
 // 9.x line (see #3386). An infinite budget makes the seam this rig exists to
@@ -269,6 +280,22 @@ var setManyFanOutBudgetSec = ReadIntAllowZero("BENCH_SET_MANY_FANOUT_BUDGET_SEC"
 var setManyFanOutBudget = setManyFanOutBudgetSec <= 0
     ? Timeout.InfiniteTimeSpan
     : TimeSpan.FromSeconds(setManyFanOutBudgetSec);
+// BENCH_WAL_ADMISSION_CALL_BUDGET_SEC: the second knob that deliberately does
+// not inherit its library default, for exactly the reason above.
+// LatticeOptions.WalAdmissionSaturationCallBudget defaults to
+// Timeout.InfiniteTimeSpan so that bounding a call's total saturation back-off
+// is opt-in on the released 9.x line (see #3390). Left infinite, only the
+// per-append WalAdmissionSaturationWaitBudget applies, and the three nested
+// retry layers each buy a fresh one - which is the multiplication #3348's own
+// remedy 3 names, and which the previous cohort logs recorded directly
+// ("10488ms of that was saturation back-off" against a 5s per-append budget).
+// The rig therefore opts in to the recommended 3x-per-append value so the seam
+// is actually exercised. Set the env-var to 0 to restore the library default
+// (infinite) and reproduce the unbounded shape.
+var walAdmissionCallBudgetSec = ReadIntAllowZero("BENCH_WAL_ADMISSION_CALL_BUDGET_SEC", 15);
+var walAdmissionCallBudget = walAdmissionCallBudgetSec <= 0
+    ? Timeout.InfiniteTimeSpan
+    : TimeSpan.FromSeconds(walAdmissionCallBudgetSec);
 // Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
 // a ';'-delimited list of additional storage-account table endpoints wired in
 // by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
@@ -474,7 +501,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -666,6 +693,10 @@ builder.UseOrleans(silo =>
         // is Timeout.InfiniteTimeSpan; the rig opts in to the finite budget so
         // the #3348 fan-out seam is actually exercised.
         o.SetManyFanOutBudget = setManyFanOutBudget;
+        // See the BENCH_WAL_ADMISSION_CALL_BUDGET_SEC block above. Also
+        // deliberately off the library default (Timeout.InfiniteTimeSpan) so
+        // the per-call saturation bound from #3348 remedy 3 is exercised.
+        o.WalAdmissionSaturationCallBudget = walAdmissionCallBudget;
     });
 
     // Storage-usage poller cadence is left at the library default (15s).

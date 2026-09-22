@@ -190,6 +190,21 @@ param(
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
 	[switch] $KeepAca,
 
+	# (#3348) Layer 3 only. The two saturation budgets the rig sets rather than
+	# inheriting from the library, in seconds; 0 means infinite, i.e. run at
+	# the SHIPPED default.
+	#
+	# The defaults here are the recommended finite values, so an ordinary sweep
+	# measures the configuration the docs tell an operator to set. Pass 0 for
+	# both to measure the out-of-the-box configuration instead. That second arm
+	# is not optional when validating #3348: the per-partition WAL gate fix is
+	# unconditional and default-on, whereas these two bounds are opt-in, so only
+	# a zeroed arm can establish whether a deployment that configures nothing is
+	# actually fixed. Running a single arm with both finite would leave any
+	# recovery unattributable across three simultaneous changes.
+	[int] $SetManyFanOutBudgetSec = 30,
+	[int] $WalAdmissionCallBudgetSec = 15,
+
 	[string] $NamePrefix,
 	[string] $ParametersFile
 )
@@ -1219,6 +1234,14 @@ function Invoke-Layer3Cohorts {
 		# declared here only so the metadata has a single source for it. If
 		# the producer default ever moves, this must move with it.
 		[int] $WalMaxPendingBatches = 16,
+		# (#3348) The rig's two deliberately-set saturation budgets. 0 means
+		# infinite, i.e. inherit the shipped library default. See the matching
+		# block in run-cohort-aca.ps1 for why these are parameters: the sweep
+		# has to be runnable both at the shipped defaults and at the
+		# recommended values, because only the former answers whether a
+		# deployment that configures nothing is fixed.
+		[int] $SetManyFanOutBudgetSec = 30,
+		[int] $WalAdmissionCallBudgetSec = 15,
 		[scriptblock] $OnCellComplete
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
@@ -1276,6 +1299,8 @@ function Invoke-Layer3Cohorts {
 						-BatchSize        $BatchSize `
 						-ShardCount       $ShardCount `
 						-WalPartitions    $WalPartitions `
+						-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
+						-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 						-CohortTag        $cohortTag | Out-Host
 				} catch {
 					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -2644,6 +2669,8 @@ function Main {
 				-ShardCount           $l3ShardCount `
 				-WalPartitions        $l3WalPartitions `
 				-WalMaxPendingBatches $l3WalMaxPendingBatches `
+				-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
+				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-OnCellComplete $checkpoint
 
 			$l3State.layer3.cohorts = $l3Cells

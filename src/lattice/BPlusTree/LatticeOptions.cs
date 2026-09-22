@@ -3850,6 +3850,58 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// (#3348) The total time one <em>top-level call</em> may spend waiting at
+    /// the WAL admission saturation gate, across every append it makes and
+    /// every retry layer it passes through.
+    /// <para>
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> bounds a <em>single</em>
+    /// wait. It does not bound a call, because the write path holds three
+    /// nested retry layers - <c>LatticeGrain.RetryOnStaleRoutingAsync</c>,
+    /// <c>ShardActivationRetry.RunAsync</c> and
+    /// <c>ShardRootGrain.DispatchLeafBatchWithRetryAsync</c> - and each
+    /// re-dispatch opened a fresh wait. A 5-second budget therefore multiplied
+    /// into observed 90-second branches, and because
+    /// <c>LatticeGrain.SetManyAsync</c> awaits every shard, one such branch was
+    /// paid by the whole batch.
+    /// </para>
+    /// <para>
+    /// When this budget is finite the gate charges each wait against the
+    /// enclosing call's remaining share and refuses immediately once it is
+    /// spent, so the nested layers share one budget instead of each buying
+    /// their own. The per-append
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> still applies to each
+    /// individual wait; the effective bound is the lesser of the two.
+    /// </para>
+    /// <para>
+    /// <b>Default is <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>,
+    /// which disables the per-call bound and preserves the historical
+    /// behaviour exactly.</b> A finite value changes when a caller observes
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> - a call held
+    /// under sustained saturation now surfaces it sooner rather than
+    /// accumulating multi-minute latency - so enabling it by default would be a
+    /// behavioural break on a released package. Hosts that want the bound
+    /// should set it explicitly; a small multiple of
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> (three times it, so
+    /// 15 seconds against the 5-second default) removes the pathology while
+    /// leaving ordinary nested retries untouched.
+    /// </para>
+    /// <para>
+    /// Set to <see cref="System.TimeSpan.Zero"/> to refuse at the gate without
+    /// waiting at all. The registered options validator rejects any negative
+    /// value other than
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalAdmissionSaturationCallBudget { get; set; } = DefaultWalAdmissionSaturationCallBudget;
+
+    /// <summary>
+    /// Default value for <see cref="WalAdmissionSaturationCallBudget"/>
+    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the per-call
+    /// bound is off, preserving pre-#3348 behaviour).
+    /// </summary>
+    public static readonly TimeSpan DefaultWalAdmissionSaturationCallBudget = Timeout.InfiniteTimeSpan;
+
+    /// <summary>
     /// How long a batch write's per-shard fan-out may run before the call is
     /// refused with a <see cref="LatticeSaturatedException"/> carrying
     /// <see cref="LatticeSaturationSource.SetManyFanOut"/>.

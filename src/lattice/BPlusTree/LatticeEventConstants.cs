@@ -57,6 +57,31 @@ public static class LatticeEventConstants
     internal const string TransactionIdRequestContextKey = "ol.txid";
 
     /// <summary>
+    /// (#3348) Orleans <c>RequestContext</c> key carrying the UTC tick count at
+    /// which the current top-level logical call began, stamped once by
+    /// <see cref="LatticeTransactionContext.EnsureCurrent"/> and inherited
+    /// unchanged by every nested grain call.
+    /// <para>
+    /// It exists so the WAL admission gate can bound its cumulative wait per
+    /// <em>call</em> rather than per <em>append</em>. The call path holds three
+    /// nested retry layers, each of which could previously open a fresh
+    /// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/> wait, so a
+    /// 5 s budget multiplied into a 90 s branch. Carrying the call's start
+    /// instant lets the gate compute the remaining share of
+    /// <see cref="LatticeOptions.WalAdmissionSaturationCallBudget"/> instead.
+    /// </para>
+    /// <para>
+    /// Stored as <see cref="System.DateTimeOffset.UtcTicks"/> rather than a
+    /// <see cref="System.Diagnostics.Stopwatch"/> timestamp because the value
+    /// crosses silos, where monotonic tick origins are not comparable. Wall
+    /// clocks are, to within cluster NTP skew, which is small next to a
+    /// multi-second budget - and this bounds back-pressure, so it is a
+    /// heuristic, not a correctness invariant.
+    /// </para>
+    /// </summary>
+    internal const string CallStartTicksRequestContextKey = "ol.cstart";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to flag the current logical
     /// call as a library-internal maintenance write (resize / rebalance /
     /// compaction / internal rewrite). When the key is present and set to

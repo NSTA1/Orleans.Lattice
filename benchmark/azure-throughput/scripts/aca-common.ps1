@@ -327,26 +327,47 @@ function Set-AcaSiloCount {
 	# back to exactly $Count. Deactivation is best-effort per revision (one
 	# already-deactivating revision must not abort a sweep), but the
 	# subsequent wait is authoritative.
+	#
+	# "Newest" is decided by properties.createdTime, NOT by sorting the
+	# revision names. A revision name is `<app>--<suffix>`, and ACA mints
+	# the suffix two different ways in the same app: a zero-padded ordinal
+	# (`--0000001`) when it names the revision itself, and a random string
+	# (`--aux0gii`) otherwise. Those do not share an ordering, so an
+	# alphabetical sort is not a recency order and can rank an older
+	# revision last. That is not hypothetical - it stalled a sweep here:
+	# `--aux0gii` (19:56:38) sorted above the newer `--0000001` (19:57:18),
+	# so the live revision was retired and the stale one kept, the app was
+	# left with zero active revisions, and the wait below polled for a
+	# replica count that could never arrive.
 	$activeTsv = Invoke-Az @(
 		'containerapp', 'revision', 'list',
 		'--name', $Context.siloApp,
 		'--resource-group', $Context.resourceGroup,
 		'--all',
-		'--query', "[?properties.active].name",
+		'--query', "[?properties.active].[name,properties.createdTime]",
 		'-o', 'tsv'
 	) -AllowFailure
 	if ($LASTEXITCODE -eq 0 -and $activeTsv) {
-		$active = @(($activeTsv -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object)
+		$active = @(($activeTsv -split "`r?`n") |
+			ForEach-Object { $_.Trim() } |
+			Where-Object { $_ } |
+			ForEach-Object {
+				$parts = $_ -split "`t"
+				$created = [datetime]::MinValue
+				if ($parts.Count -gt 1) { [void][datetime]::TryParse($parts[1], [ref]$created) }
+				[pscustomobject]@{ Name = $parts[0].Trim(); Created = $created }
+			} |
+			Sort-Object Created)
 		if ($active.Count -gt 1) {
-			$keep = $active[-1]
+			$keep = $active[-1].Name
 			foreach ($rev in $active) {
-				if ($rev -eq $keep) { continue }
-				Write-Host "[aca]   retiring superseded revision $rev" -ForegroundColor DarkGray
+				if ($rev.Name -eq $keep) { continue }
+				Write-Host "[aca]   retiring superseded revision $($rev.Name)" -ForegroundColor DarkGray
 				Invoke-Az @(
 					'containerapp', 'revision', 'deactivate',
 					'--name', $Context.siloApp,
 					'--resource-group', $Context.resourceGroup,
-					'--revision', $rev,
+					'--revision', $rev.Name,
 					'-o', 'none'
 				) -AllowFailure | Out-Null
 			}
