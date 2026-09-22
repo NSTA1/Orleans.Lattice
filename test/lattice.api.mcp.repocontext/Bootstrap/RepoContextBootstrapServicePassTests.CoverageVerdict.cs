@@ -1,3 +1,5 @@
+using NSubstitute;
+
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
 
 /// <summary>
@@ -205,5 +207,176 @@ public sealed partial class RepoContextBootstrapServicePassTests
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
 
         Assert.That(harness.CoverageVerdictReporter.Snapshot().Total, Is.EqualTo(afterColdPass));
+    }
+
+    /// <summary>
+    /// Faults the symbol embedding arm, which runs BELOW the site that used to
+    /// classify the pass. The harness leaves <c>IngestSymbolsAsync</c> unstubbed
+    /// (NSubstitute answers it with a completed zero), so this is the only way to
+    /// drive the live failure mode: on a saturated store the symbol arm rethrows
+    /// whenever it embedded nothing and saw a probe failure, which is every pass.
+    /// </summary>
+    private static void FaultTheSymbolArm(BootstrapHarness harness, Exception fault) =>
+        harness.VectorIngestor.IngestSymbolsAsync(
+            Arg.Any<string>(),
+            Arg.Any<IReadOnlyCollection<string>>(),
+            Arg.Any<IReadOnlyCollection<string>>(),
+            Arg.Any<CancellationToken>(),
+            Arg.Any<Func<int, CancellationToken, ValueTask>?>())
+            .Returns(_ => Task.FromException<int>(fault));
+
+    [Test]
+    public void A_symbol_arm_fault_records_the_arm_failure_verdict()
+    {
+        // The first half of the regression test for issue #3354. The pass was
+        // classified above the symbol and memory fault sites, so an arm that threw
+        // BELOW that line could not be seen: the symbol arm faulted and the pass was
+        // still charged `converged`. The one instrument whose job is to say "an arm
+        // failed, this measurement is not admissible" was blind to the two arms that
+        // fail most often, so the #3340 stand-down read as healthy on exactly the
+        // saturated store where it was standing down on a failed probe.
+        using var harness = new BootstrapHarness(options: BackOffOptions());
+        harness.WriteFile("src/a.cs", "class A { }");
+        FaultTheSymbolArm(harness, new InvalidOperationException("symbol embedder down"));
+
+        Assert.That(
+            async () => await harness.Service.RunAsync(GapScanRequest(harness), progress: null),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        var snapshot = harness.CoverageVerdictReporter.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                snapshot.Count(RepoContextCoverageVerdict.ArmFailure),
+                Is.EqualTo(1),
+                "an arm that threw makes this pass's coverage facts inadmissible, wherever in the pass it threw");
+            Assert.That(
+                snapshot.Count(RepoContextCoverageVerdict.Converged),
+                Is.Zero,
+                "a pass whose symbol arm threw has not proven its corpus covered");
+            Assert.That(
+                snapshot.Total,
+                Is.EqualTo(1),
+                "a pass charges the instrument exactly once, so the two classification sites cannot both spend");
+        });
+    }
+
+    [Test]
+    public void A_memory_arm_fault_records_the_arm_failure_verdict()
+    {
+        // The memory arm is the LAST arm, so it is the furthest below the old
+        // classification site and the strictest statement of the invariant the fix
+        // establishes: the site charged to the instrument sits below every fault
+        // site it claims to classify.
+        using var harness = new BootstrapHarness(options: BackOffOptions());
+        harness.WriteFile("src/a.cs", "class A { }");
+        harness.MemoryIngestFault = new InvalidOperationException("memory embedder down");
+
+        Assert.That(
+            async () => await harness.Service.RunAsync(GapScanRequest(harness), progress: null),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        var snapshot = harness.CoverageVerdictReporter.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.Count(RepoContextCoverageVerdict.ArmFailure), Is.EqualTo(1));
+            Assert.That(
+                snapshot.Count(RepoContextCoverageVerdict.Converged),
+                Is.Zero,
+                "a pass whose memory arm threw has not proven its corpus covered");
+            Assert.That(snapshot.Total, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task A_late_arm_fault_still_banks_the_coverage_verdict_the_file_arm_measured()
+    {
+        // The second half of the regression test for issue #3354. A pass that threw
+        // discarded its WHOLE snapshot, coverage verdict included, to protect the
+        // pruning baseline. But the coverage verdict is a measurement the file arm
+        // already completed, and a fault in a LATER arm cannot retract it. On a
+        // repository whose symbol arm faults every pass - the live shape, because
+        // the arm rethrows whenever it embedded nothing and saw a probe failure -
+        // the verdict could therefore never be banked on ANY pass, so the #3340
+        // stand-down could not engage on the one repository it was built for.
+        var options = BackOffOptions();
+        Assert.That(
+            options.PassesPerEmbeddingGapScan,
+            Is.GreaterThan(3),
+            "precondition: the periodic cadence must not come due within this test's three passes, "
+            + "or the final pass would re-arm for a reason this test is not about");
+
+        // Pass 1 measures a gap, so the carried state is an explicit "not converged,
+        // not unmeasurable" and pass 2 is guaranteed to arm the scan.
+        using var harness = await ConvergedHarnessAsync(options, new RepoFileVectorIngestOutcome(0, 1, true));
+        Assert.That(
+            harness.CoverageVerdictReporter.Snapshot().Count(RepoContextCoverageVerdict.GapFound),
+            Is.EqualTo(1),
+            "precondition: the cold pass must have measured a gap, so the state it carries arms pass 2");
+
+        // Pass 2: the file arm measures the verdict that backs the scan off, and a
+        // LATER arm then faults.
+        harness.IngestOutcome = Unmeasurable;
+        FaultTheSymbolArm(harness, new InvalidOperationException("symbol embedder down"));
+        Assert.That(
+            async () => await harness.Service.RunAsync(GapScanRequest(harness), progress: null),
+            Throws.InstanceOf<InvalidOperationException>());
+        Assert.That(
+            harness.UnchangedOfferedToIngestor,
+            Is.Not.Empty,
+            "precondition: pass 2 must itself have scanned, or pass 3 has nothing to stand down from");
+
+        // Pass 3 is clean and reads whatever pass 2 banked.
+        harness.VectorIngestor.IngestSymbolsAsync(
+            Arg.Any<string>(),
+            Arg.Any<IReadOnlyCollection<string>>(),
+            Arg.Any<IReadOnlyCollection<string>>(),
+            Arg.Any<CancellationToken>(),
+            Arg.Any<Func<int, CancellationToken, ValueTask>?>())
+            .Returns(_ => Task.FromResult(0));
+
+        await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+
+        Assert.That(
+            harness.UnchangedOfferedToIngestor,
+            Is.Empty,
+            "the unmeasurable verdict the file arm measured on pass 2 must survive the later arm's fault, "
+            + "or the scan re-arms forever on exactly the repository the back-off exists for");
+    }
+
+    [Test]
+    public async Task An_arm_failure_banks_the_withdrawn_convergence_so_the_next_pass_re_arms()
+    {
+        // The same publish, driven the other way, so the banked slice is pinned as
+        // an honest measurement rather than as "whatever keeps the scan quiet". A
+        // file-arm fault classifies the pass inadmissible, which WITHDRAWS an
+        // earlier convergence - and that withdrawal has to be banked too, or a
+        // converged repository whose file arm faults stands down on a verdict no
+        // pass has been able to confirm since.
+        var options = BackOffOptions();
+        Assert.That(
+            options.PassesPerEmbeddingGapScan,
+            Is.GreaterThan(3),
+            "precondition: the periodic cadence must not come due within this test's three passes, "
+            + "or the final pass would re-arm for a reason this test is not about");
+
+        using var harness = await ConvergedHarnessAsync(options);
+
+        // Pass 2 is forced to scan so it reaches a verdict at all, and its file arm
+        // throws, so the verdict is ArmFailure and convergence is withdrawn.
+        harness.OnIngest = (_, _) => throw new InvalidOperationException("embedder down");
+        Assert.That(
+            async () => await harness.Service.RunAsync(
+                GapScanRequest(harness, force: true), progress: null),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        // Pass 3 is clean and unforced, so it scans only if pass 2's withdrawal stuck.
+        harness.OnIngest = null;
+        await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+
+        Assert.That(
+            harness.UnchangedOfferedToIngestor,
+            Is.Not.Empty,
+            "an arm failure withdraws convergence, and the withdrawal must be banked for the next pass to act on");
     }
 }

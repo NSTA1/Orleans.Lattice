@@ -916,17 +916,23 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // the refusal - it is to stop spending an unknown as a finding.
             if (gapScanDue)
             {
-                var verdict = RepoContextCoverageVerdictReporter.Classify(armFailure is not null, fileIngest);
+                // This site decides the CARRIED STATE and the cadence log line. It no
+                // longer charges the coverage_verdict instrument - that charge moved
+                // below the last arm, because this site sits ABOVE the symbol and
+                // memory fault sites and so could never see them (issue #3354).
+                //
+                // Classified here from the arm failures banked SO FAR, and that is
+                // deliberate rather than an oversight repeated: the file arm is the one
+                // that measures embedding coverage, and it - with the retirement arm
+                // above it - has already had its turn by this line. A symbol- or
+                // memory-arm fault below says nothing about whether the file corpus is
+                // embedded, so spending it as a withdrawal of a measurement the file arm
+                // genuinely made would re-arm the every-pass sweep on exactly the
+                // saturated store issue #3340 stood it down for.
+                var measurement = RepoContextCoverageVerdictReporter.Classify(armFailure is not null, fileIngest);
 
-                // Publish the verdict on every measured pass. The fix makes an
-                // unmeasurable pass quiet, and a quiet pass is indistinguishable from a
-                // converged one unless the reason is recorded; leaving it unrecorded
-                // would trade issue #3340's loud pathology for a silent latch, which is
-                // the defect class of issues #3320 and #2656.
-                _coverageVerdictReporter?.Record(verdict);
-
-                var converged = verdict == RepoContextCoverageVerdict.Converged;
-                var unmeasurable = verdict == RepoContextCoverageVerdict.ProbeUnmeasurable;
+                var converged = measurement == RepoContextCoverageVerdict.Converged;
+                var unmeasurable = measurement == RepoContextCoverageVerdict.ProbeUnmeasurable;
                 updatedSnapshot = unmeasurable
                     ? updatedSnapshot with { CoverageUnmeasurable = true }
                     : updatedSnapshot with { CoverageConverged = converged, CoverageUnmeasurable = false };
@@ -1111,11 +1117,39 @@ internal sealed class RepoContextBootstrapService : IDisposable
                     repoId);
             }
 
-            // Every arm has had its turn. If any failed, surface the first failure
-            // so the run is reported as failed and re-driven; the arms that did
-            // succeed keep their work either way.
+            // Every arm has had its turn, so this is the first line at which the pass's
+            // outcome is fully known - and therefore the only line at which it can be
+            // honestly classified. The charge used to be made in the gap-scan block
+            // above, which sits ABOVE the symbol and memory fault sites, so a pass whose
+            // symbol arm threw was charged `converged` or `probe_unmeasurable`: the one
+            // instrument that exists to say "an arm failed, this measurement is not
+            // admissible" could not see the two arms that fail most often, and the
+            // #3340 stand-down looked healthy while it was standing down on a failed
+            // probe (issue #3354).
+            //
+            // Charged only on a pass that actually ran the gap scan, preserving the
+            // established "a verdict is published only by a pass that looked" contract,
+            // and charged exactly once per pass - the block above deliberately no longer
+            // records, so the two sites cannot both spend.
+            if (gapScanDue)
+            {
+                _coverageVerdictReporter?.Record(
+                    RepoContextCoverageVerdictReporter.Classify(armFailure is not null, fileIngest));
+            }
+
+            // If any arm failed, surface the first failure so the run is reported as
+            // failed and re-driven; the arms that did succeed keep their work either way.
             if (armFailure is not null)
             {
+                // The coverage slice is banked even though the pass failed, because it
+                // is the measurement of a DIFFERENT arm that did complete. Discarding it
+                // wholesale - the behaviour before #3354 - meant a repository whose
+                // symbol arm faults on every pass could never bank the verdict the file
+                // arm measured on any pass, so the gap scan re-armed forever on exactly
+                // the saturated store the #3340 stand-down was built for. Only the
+                // coverage slice moves; see PublishCoverageSlice for why the pruning
+                // baseline stays withheld.
+                PublishCoverageSlice(repoId, updatedSnapshot);
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(armFailure).Throw();
             }
 
@@ -1123,7 +1157,10 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // snapshot as the pruning baseline for the next run. Deferring the publish to
             // the success path means a run that fails during apply leaves the previous
             // baseline intact, so the next run does not wrongly prune a directory whose
-            // changes were never committed.
+            // changes were never committed. Only the BASELINE is withheld on the failure
+            // path - the coverage slice is banked by PublishCoverageSlice above, because
+            // it is a measurement a different arm completed rather than a promise this
+            // pass applied everything it saw.
             _pruneCache[repoId] = updatedSnapshot;
 
             _logger.LogInformation(
@@ -1229,6 +1266,52 @@ internal sealed class RepoContextBootstrapService : IDisposable
         int PassesSinceGapScan,
         bool CoverageConverged,
         bool CoverageUnmeasurable = false);
+
+    /// <summary>
+    /// Banks the coverage slice of a faulting pass's snapshot - the embedding-coverage
+    /// verdict and the gap-scan pacing counter - while leaving the pruning baseline
+    /// exactly as the last cleanly-applied pass left it.
+    /// </summary>
+    /// <remarks>
+    /// The split exists because the two halves of <see cref="PruneCacheEntry"/> are
+    /// earned by different arms. The pruning baseline
+    /// (<c>DirectoryMtimes</c>, <c>LastFullSweepTicks</c>, <c>PassesSinceFullSweep</c>)
+    /// is a promise that everything the walk saw was applied, so a pass that threw may
+    /// never advance it - publishing it would let the next run skip a directory whose
+    /// changes were never committed. The coverage slice is a measurement the file
+    /// embedding arm already completed, and a fault in a LATER arm cannot retract it.
+    /// Discarding the whole entry on any fault (the behaviour before issue #3354) threw
+    /// the second away to protect the first.
+    /// <para>
+    /// <c>PassesSinceGapScan</c> travels with the slice deliberately: without it a
+    /// repository that faults every pass never advances the pacing counter, so the
+    /// periodic re-scan a converged or unmeasurable verdict backs off to would never
+    /// come due and the back-off would latch.
+    /// </para>
+    /// <para>
+    /// When no prior entry exists the empty directory map reproduces the exact
+    /// no-entry defaults, so the next pass still forces a full sweep.
+    /// </para>
+    /// </remarks>
+    /// <param name="repoId">The repository whose coverage slice to bank.</param>
+    /// <param name="measured">This pass's snapshot, whose coverage slice is published.</param>
+    private void PublishCoverageSlice(string repoId, PruneCacheEntry measured) =>
+        _pruneCache.AddOrUpdate(
+            repoId,
+            static (_, slice) => new PruneCacheEntry(
+                System.Collections.ObjectModel.ReadOnlyDictionary<string, long>.Empty,
+                0,
+                0,
+                slice.PassesSinceGapScan,
+                slice.CoverageConverged,
+                slice.CoverageUnmeasurable),
+            static (_, existing, slice) => existing with
+            {
+                PassesSinceGapScan = slice.PassesSinceGapScan,
+                CoverageConverged = slice.CoverageConverged,
+                CoverageUnmeasurable = slice.CoverageUnmeasurable,
+            },
+            measured);
 
     /// <summary>
     /// Selects the symbol back-fill candidates from the content-unchanged set: files
