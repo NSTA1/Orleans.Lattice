@@ -41,6 +41,12 @@ internal sealed class FileWalShard : IDisposable
     private long _deadEntries;
     private long _trimWatermark = -1;
 
+    // Captured by RecoverFromDisk before it truncates, and published once by
+    // RecordRecoveryOutcome. Recovery destroys the bytes these describe, so
+    // they cannot be recomputed after the load completes (issue #3366).
+    private long _recoveryTornTailBytes;
+    private long _recoveryTornTailRecords;
+
     // Built once per shard rather than per emission. The priming pass and the
     // compaction record site are both on paths that must not allocate to
     // report, so the three tags every compaction measurement carries are
@@ -650,6 +656,48 @@ internal sealed class FileWalShard : IDisposable
         RecoverFromDisk();
         _loaded = true;
         PrimeCompactionCounters();
+        RecordRecoveryOutcome();
+    }
+
+    /// <summary>
+    /// Publishes what activation-time recovery discarded, once per load.
+    /// <para>
+    /// Both arms are zero-primed before the measurement is added, for the
+    /// reason given on <see cref="PrimeCompactionCounters"/>: a shard that
+    /// recovered cleanly must be distinguishable from a shard that is not
+    /// reporting, and an absent series cannot carry that distinction. Priming
+    /// unconditionally and then adding only a non-zero measurement keeps the
+    /// clean case at an explicit zero rather than an absence.
+    /// </para>
+    /// <para>
+    /// This is the only opportunity to report the quantity at all.
+    /// <see cref="RecoverFromDisk"/> truncates the bytes it describes, so once
+    /// the load completes the evidence is gone from the log, and nothing
+    /// downstream - not the shard, not a snapshot, not a later scrape - can
+    /// reconstruct it (issue #3366).
+    /// </para>
+    /// </summary>
+    private void RecordRecoveryOutcome()
+    {
+        if (_treeId.Length == 0)
+        {
+            // A bare shard constructed directly by a test has no tree
+            // identity to attribute a measurement to.
+            return;
+        }
+
+        LatticeMetrics.WalRecoveryTornTailBytes.Add(0, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalRecoveryTornTailRecords.Add(0, _treeTag, _shardTag, _tenantTag);
+
+        if (_recoveryTornTailBytes > 0)
+        {
+            LatticeMetrics.WalRecoveryTornTailBytes.Add(_recoveryTornTailBytes, _treeTag, _shardTag, _tenantTag);
+        }
+
+        if (_recoveryTornTailRecords > 0)
+        {
+            LatticeMetrics.WalRecoveryTornTailRecords.Add(_recoveryTornTailRecords, _treeTag, _shardTag, _tenantTag);
+        }
     }
 
     /// <summary>
@@ -701,6 +749,8 @@ internal sealed class FileWalShard : IDisposable
         _deadBytes = 0;
         _deadEntries = 0;
         _trimWatermark = -1;
+        _recoveryTornTailBytes = 0;
+        _recoveryTornTailRecords = 0;
 
         var committed = new List<IndexEntry>();
         var pending = new List<IndexEntry>();
@@ -747,6 +797,17 @@ internal sealed class FileWalShard : IDisposable
         // Roll back any data records that were not sealed by a commit, plus
         // any torn trailing bytes, by truncating to the last durable
         // boundary.
+        //
+        // Measure before truncating. The truncation destroys the only record
+        // that this happened, so a shard that discarded a tail was previously
+        // indistinguishable on every surface from one that had nothing to
+        // discard (issue #3366). `pending` holds the complete-but-unsealed
+        // records; the byte delta additionally covers the torn trailing bytes
+        // of a partially-written record, which is why the two are reported
+        // separately rather than derived from one another.
+        _recoveryTornTailBytes = fileLength > lastGoodEnd ? fileLength - lastGoodEnd : 0;
+        _recoveryTornTailRecords = pending.Count;
+
         if (fileLength > lastGoodEnd)
         {
             stream.SetLength(lastGoodEnd);
