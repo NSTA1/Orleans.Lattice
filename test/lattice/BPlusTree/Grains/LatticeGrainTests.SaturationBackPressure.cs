@@ -1,0 +1,191 @@
+using NSubstitute;
+using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+
+namespace Orleans.Lattice.Tests.BPlusTree.Grains;
+
+/// <summary>
+/// Regression coverage for #3348: a <see cref="LatticeSaturatedException"/>
+/// raised by the WAL admission gate must surface from the public
+/// <see cref="ILattice"/> write surface untouched, rather than being absorbed
+/// by the stale-routing retry.
+/// <para>
+/// The defect was a type-hierarchy accident with an outsized blast radius.
+/// <see cref="LatticeSaturatedException"/> derives from
+/// <see cref="InvalidOperationException"/> deliberately, so that a generic
+/// handler absorbs it instead of crashing a caller that never anticipated it.
+/// The write-path catch in <c>LatticeGrain</c> is typed on exactly that base,
+/// and it does not merely absorb: it invalidates every routing cache and
+/// re-issues the whole operation. A single refused branch therefore re-fanned
+/// the entire batch across every shard into a tree that had just reported it
+/// was full, roughly doubling offered write volume at the precise moment the
+/// gate asked for less.
+/// </para>
+/// <para>
+/// The tests below pin both halves of the fix, and the second half matters as
+/// much as the first: the catch had to be <em>narrowed</em>, not removed. The
+/// control tests assert that a plain <see cref="InvalidOperationException"/>
+/// still gets its single cache-invalidating retry, so a future change that
+/// deletes the catch outright fails here rather than silently regressing the
+/// deleted-tree and stale-alias paths the retry exists to serve.
+/// </para>
+/// </summary>
+public partial class LatticeGrainTests
+{
+    /// <summary>
+    /// Finds a key whose virtual slot under a map of
+    /// <paramref name="virtualShardCount"/> slots is
+    /// <paramref name="slot"/>. The routing hash is not something a test
+    /// should hard-code keys against, so the keys are discovered with the
+    /// same function the grain routes with. Deterministic at runtime and
+    /// immune to a future change of hash.
+    /// </summary>
+    private static string FindKeyForSlot(int slot, int virtualShardCount)
+    {
+        for (var i = 0; i < 10_000; i++)
+        {
+            var key = $"sat-{i}";
+            if (LatticeGrain.GetShardIndex(key, virtualShardCount) == slot)
+                return key;
+        }
+
+        throw new InvalidOperationException(
+            $"No key routed to slot {slot} of {virtualShardCount} within the search bound.");
+    }
+
+    [Test]
+    public async Task SetManyAsync_surfaces_LatticeSaturatedException_without_refanning_the_batch()
+    {
+        // Two physical shards, one virtual slot each, one entry bound for
+        // each. Shard 0 refuses with back-pressure; shard 1 would accept.
+        const string treeId = "saturation-setmany-no-refanout";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns<Task>(_ => throw new LatticeSaturatedException(
+                "WAL admission gate refused the append.", treeId));
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var thrown = Assert.ThrowsAsync<LatticeSaturatedException>(
+            async () => await grain.SetManyAsync(batch));
+
+        // The typed exception must reach the caller intact, carrying its
+        // attribution, because honouring the documented back-off contract is
+        // something only the caller can do.
+        Assert.That(thrown!.TreeId, Is.EqualTo(treeId));
+
+        // The refusing shard is asked exactly once. Before the fix the catch
+        // re-issued the whole operation, so this was 2.
+        await shard0.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+
+        // This is the amplification assertion, and the one that actually
+        // encodes #3348. Shard 1 never refused anything; it is collateral of
+        // the re-fanout. Before the fix a single refusal anywhere in the
+        // fan-out doubled the write volume offered to every other branch of a
+        // tree that had just said it was full.
+        await shard1.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task SetManyAsync_still_retries_a_plain_InvalidOperationException_once()
+    {
+        // Control for the test above: the catch was narrowed, not deleted.
+        // A plain InvalidOperationException (the stale-alias and deleted-tree
+        // signal the retry exists to serve) must still earn its single
+        // cache-invalidating retry.
+        const string treeId = "saturation-setmany-control";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 1, virtualShardCount: 1);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+
+        var calls = 0;
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns<Task>(_ =>
+            {
+                calls++;
+                if (calls == 1)
+                    throw new InvalidOperationException("stale alias");
+                return Task.CompletedTask;
+            });
+
+        await grain.SetManyAsync([new("k1", [1])]);
+
+        Assert.That(calls, Is.EqualTo(2),
+            "A plain InvalidOperationException must still earn exactly one retry; "
+            + "narrowing the catch must not disable the stale-alias path.");
+    }
+
+    [Test]
+    public void SetAsync_surfaces_LatticeSaturatedException_without_retrying()
+    {
+        // The single-key write path inlines its own copy of the retry loop to
+        // elide a per-call allocation, so it carries the defect independently
+        // of the shared helper and needs its own regression pin.
+        const string treeId = "saturation-set-no-retry";
+        var (grain, factory) = CreateGrain(treeId, shardCount: 1);
+        SetupCompactionGrain(factory, treeId);
+        var shardRoot = SetupShardRoot(factory);
+
+        shardRoot.SetAsync("k1", Arg.Any<byte[]>())
+            .Returns<Task>(_ => throw new LatticeSaturatedException(
+                "WAL admission gate refused the append.", treeId));
+
+        var thrown = Assert.ThrowsAsync<LatticeSaturatedException>(
+            async () => await grain.SetAsync("k1", [1]));
+
+        Assert.That(thrown!.TreeId, Is.EqualTo(treeId));
+        Assert.That(
+            shardRoot.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IShardRootGrain.SetAsync)),
+            Is.EqualTo(1),
+            "A saturation refusal must not be retried on the point-write path either.");
+    }
+
+    [Test]
+    public async Task SetAsync_still_retries_a_plain_InvalidOperationException_once()
+    {
+        // Control for the point-write path, mirroring the batch control above.
+        const string treeId = "saturation-set-control";
+        var (grain, factory) = CreateGrain(treeId, shardCount: 1);
+        SetupCompactionGrain(factory, treeId);
+        var shardRoot = SetupShardRoot(factory);
+
+        var calls = 0;
+        shardRoot.SetAsync("k1", Arg.Any<byte[]>())
+            .Returns<Task>(_ =>
+            {
+                calls++;
+                if (calls == 1)
+                    throw new InvalidOperationException("stale alias");
+                return Task.CompletedTask;
+            });
+
+        await grain.SetAsync("k1", [1]);
+
+        Assert.That(calls, Is.EqualTo(2),
+            "A plain InvalidOperationException must still earn exactly one retry on the point-write path.");
+    }
+}
