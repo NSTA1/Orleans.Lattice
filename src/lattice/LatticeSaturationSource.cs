@@ -41,7 +41,7 @@ public enum LatticeSaturationSource
     /// take no source - including the framework-contract parameterless
     /// overload - and by any exception deserialised from a host that predates
     /// source attribution. Treat as <b>not</b> automatically retryable: it is
-    /// the conservative reading, because three of the four known seams are
+    /// the conservative reading, because four of the five known seams are
     /// amplifying to retry and an unattributed refusal could be any of them.
     /// </summary>
     Unspecified = 0,
@@ -113,4 +113,38 @@ public enum LatticeSaturationSource
     /// </para>
     /// </summary>
     ReplayPermitAdmission = 4,
+
+    /// <summary>
+    /// The scatter-gather fan-out refusal from
+    /// <c>LatticeGrain.SetManyAsyncCore</c>, raised when a batch write's
+    /// per-shard fan-out has not settled within
+    /// <see cref="LatticeOptions.SetManyFanOutBudget"/>.
+    /// <para>
+    /// This seam exists because a fan-out that awaits every branch pays the
+    /// slowest branch rather than the typical one, so its duration tracks the
+    /// branch p(1 - 1/N) quantile rather than the branch median. Issue #3348
+    /// measured exactly that: at eight silos the leaf-RPC median <em>improved</em>
+    /// to 386 ms while the 99th percentile degraded to 94 s, and the fan-out
+    /// duration tracked the tail, not the median. Every other seam in this
+    /// enumeration refuses a caller that a gate declined; this one refuses a
+    /// caller that nothing declined and that would simply have waited.
+    /// </para>
+    /// <para>
+    /// <b>Not automatically retryable.</b> The budget has already been spent
+    /// against a tree whose branches are not settling, so an immediate retry
+    /// re-fans the whole batch into that same regime - the amplification
+    /// <see cref="WalAdmission"/> documents, reached by a different route. The
+    /// caller honours the documented contract instead: back off, then retry.
+    /// </para>
+    /// <para>
+    /// <b>The refusal does not roll anything back</b>, because
+    /// <c>SetManyAsync</c> is not atomic across shards. Branches that had
+    /// already committed stay committed and branches still in flight are left
+    /// to run to completion, so the durable outcome is exactly the one the
+    /// unbounded wait would have produced. What the budget changes is when the
+    /// caller is told, not what is written - the same property that makes the
+    /// sibling fail-fast path safe.
+    /// </para>
+    /// </summary>
+    SetManyFanOut = 5,
 }

@@ -2384,7 +2384,66 @@ internal sealed partial class LatticeGrain(
                 }
 
                 var all = Task.WhenAll(tasks);
-                if (await Task.WhenAny(all, firstFault.Task) != all)
+
+                // (#3348) The fan-out is also time-bounded. The fail-fast race
+                // above covers a branch that FAULTS; this covers one that is
+                // merely slow, which is the case #3348 actually measured. There
+                // the distribution split rather than shifted - going from four
+                // silos to eight the per-branch median IMPROVED 7.7x to 386 ms
+                // while the p99 degraded 11x to 94 s - and because this fan-out
+                // awaited every branch, its duration tracked the p99 rather
+                // than the median. Nothing downstream had got slower; the only
+                // limit on a batch write was its slowest branch, and that is
+                // unbounded. Bounding it is what stops a rare 94 s branch
+                // becoming the cost of every batch.
+                var budget = Options.SetManyFanOutBudget;
+                var race = Task.WhenAny(all, firstFault.Task);
+
+                Task settled;
+                if (budget == Timeout.InfiniteTimeSpan)
+                {
+                    settled = await race;
+                }
+                else
+                {
+                    try
+                    {
+                        // Task.WhenAny never faults, so WaitAsync here can only
+                        // ever surface the budget expiring.
+                        settled = await race.WaitAsync(budget);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Identical abandonment contract to the fault path
+                        // below: the in-flight siblings are deliberately NOT
+                        // cancelled, so every branch that would have committed
+                        // still commits and the durable outcome is byte-for-byte
+                        // the one the unbounded wait produced. Only the caller's
+                        // wait is shortened. Their faults are observed so an
+                        // abandoned branch cannot resurface as an unobserved
+                        // task exception and tear down the silo.
+                        ObserveInBackground(all);
+                        ObserveInBackground(firstFault.Task);
+
+                        // LatticeSaturatedException, not TimeoutException: this
+                        // is back-pressure and carries that contract (back off,
+                        // then retry). The source discriminator marks it as one
+                        // of the seams an automatic retry would amplify, so the
+                        // write-path retry filter leaves it alone rather than
+                        // re-fanning the whole batch into a tree that is already
+                        // failing to settle.
+                        throw new LatticeSaturatedException(
+                            $"Batch write to tree '{TreeId}' refused: the per-shard fan-out across "
+                            + $"{shardBuckets.Count} shards did not settle within the configured "
+                            + $"LatticeOptions.SetManyFanOutBudget ({budget}); at least one branch is "
+                            + "still outstanding. Already-committed shards are retained (a batch write "
+                            + "is not atomic across shards). Retry after a backoff.",
+                            TreeId,
+                            LatticeSaturationSource.SetManyFanOut);
+                    }
+                }
+
+                if (settled != all)
                 {
                     // Deliberately NOT cancelling the in-flight siblings. They
                     // would have committed had we waited, so letting them run
