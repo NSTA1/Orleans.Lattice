@@ -1166,6 +1166,24 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} faulted/s" }
       ]
+    },
+    {
+      "id": 164,
+      "title": "Leaf checkpoint-flush TAIL failures by step - issue #3393 (a post-flush notification threw and was contained)",
+      "description": "Notification steps that threw AFTER the checkpoint flush itself succeeded (orleans.lattice.leaf.checkpoint.flush.tail.failures), split by which step faulted - issue #3393. READ THIS PANEL BESIDE PANEL 163, NOT INSTEAD OF IT, because the two measure different halves of one named thing. The checkpoint_flush barrier on 163 covers the BODY - the durable write - and stands down once that write lands. The tail runs three notifications after it (cursor_report, inline_digest_publish, snapshot_recheck), each contained separately and deliberately so, because under issue #2220 a failed notification tearing down the activation produced a replay loop. That containment is correct and this instrument does not change it; what it changes is that the fault is now countable. THE CONSEQUENCE FOR READING 163 IS THE WHOLE POINT: a checkpoint_flush count of ZERO on 163 does NOT establish that the checkpoint path is healthy. On the drain captured under #3393 the barrier counter read zero for checkpoint_flush while 1,699 dirty digests died inside this tail, so the barrier counts are a FLOOR on the damage, not a total. inline_digest_publish is the arm that fired in production and means a leaf's parent was never told its digest changed, so the tree's upward digest chain is stale until the next mutation re-drives it - which on a quiescing tree may be never. snapshot_recheck means the post-flush re-evaluation of snapshot need did not run, so a block pin can retain the tree's shared WAL and is a candidate contributor to unbounded WAL growth (issue #3094). cursor_report DESERVES A SPECIFIC WARNING: the reporter call is ALSO wrapped in its own per-partition try/catch inside ReportCursorIfActiveAsync, so only the option lookup and consumer-id construction around it can reach this counter. A ZERO ON cursor_report IS THEREFORE NOT EVIDENCE THAT CURSOR REPORTING IS HEALTHY; it is double-contained and its ordinary failures are invisible here by construction. ABSENT IS NOT A MEASURED ZERO. This instrument is not zero-primed, matching its barrier sibling on 163, so a series appears only on the first fault and a missing line is consistent BOTH with a build that lacks the instrument AND with a build that carries it and has drained cleanly. Confirm deployment from the image digest, never from the presence of this series. A HEALTHY ESTATE IS FLAT AT ABSENT, so any line at all here is worth reading.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 391 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_checkpoint_flush_tail_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} faulted/s" }
+      ]
     }
   ]
 }

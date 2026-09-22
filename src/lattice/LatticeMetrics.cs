@@ -5251,6 +5251,80 @@ public static class LatticeMetrics
         new(TagReason, "frontier_pin");
 
     /// <summary>
+    /// Counter of checkpoint-flush TAIL steps that faulted, tagged with
+    /// <see cref="TagTree"/>, <see cref="TagReason"/> (the step) and the tenant
+    /// label.
+    /// <para>
+    /// <b>Why this exists (issue #3393).</b> The checkpoint flush is two
+    /// distinct things wearing one name. Its BODY performs the durable write;
+    /// its TAIL (<c>CompleteCheckpointFlushTailAsync</c>) runs three follow-up
+    /// notifications - the cursor report, the inline upward digest publish and
+    /// the periodic snapshot recheck. Each tail step is contained independently
+    /// and deliberately (issue #2220): the durable write has already committed,
+    /// the steps are notifications rather than part of the durability contract,
+    /// and letting one tear the activation down produced a replay loop. That
+    /// containment is correct and this counter does not change it.
+    /// </para>
+    /// <para>
+    /// What the containment cost was OBSERVABILITY. A tail fault was written to
+    /// the log and nowhere else, while the enclosing
+    /// <c>checkpoint_flush</c> barrier still reported SUCCESS - so
+    /// <see cref="LeafDeactivationBarrierFailures"/> read zero for that barrier
+    /// even as its tail faulted on every leaf in the silo. A production drain
+    /// recorded 1,699 inline-digest-publish faults against a barrier counter of
+    /// zero. An operation that could not complete was reporting the outcome of
+    /// the part that did.
+    /// </para>
+    /// <para>
+    /// Read a non-zero value as "the checkpoint IS durable, but a post-write
+    /// notification did not land". That is materially different from a
+    /// <c>checkpoint_flush</c> barrier fault, which means the write itself did
+    /// not happen - hence a separate instrument rather than another arm of the
+    /// barrier counter, which would have conflated a durability failure with a
+    /// notification failure.
+    /// </para>
+    /// <para>
+    /// NOT zero-primed, matching the rest of this family: a series appears on
+    /// first fault. Absence therefore does not establish that the build carries
+    /// the instrument, only that no fault was recorded.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafCheckpointFlushTailFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.checkpoint.flush.tail.failures", unit: "{failure}",
+            description: "Post-write checkpoint-flush tail steps that faulted, tagged by tree and step (cursor_report, inline_digest_publish, snapshot_recheck). The checkpoint itself is durable when these fire; only a follow-up notification failed.");
+
+    /// <summary>Canonical name of <see cref="LeafCheckpointFlushTailFailures"/>.</summary>
+    public const string LeafCheckpointFlushTailFailuresName = "orleans.lattice.leaf.checkpoint.flush.tail.failures";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the checkpoint-flush tail's cursor
+    /// report. Benign in isolation - the report re-drives on the next flush.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CheckpointFlushTailCursorReport =
+        new(TagReason, "cursor_report");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the checkpoint-flush tail's INLINE
+    /// upward digest publish. Distinct from
+    /// <see cref="DeactivationBarrierDigestPublish"/>, which names the
+    /// coalesced drain run as a deactivation barrier; this one is the
+    /// synchronous parent-chain publish run after every durable flush. The
+    /// digest stays dirty on failure, so the coalescing timer or the next
+    /// mutation re-drives it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CheckpointFlushTailInlineDigestPublish =
+        new(TagReason, "inline_digest_publish");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for the checkpoint-flush tail's periodic
+    /// snapshot recheck (and the coverage-lag timer arming that precedes it).
+    /// Above zero a leaf may not be arming the coverage bound, so its Zero
+    /// block pin can retain the tree's shared WAL.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> CheckpointFlushTailSnapshotRecheck =
+        new(TagReason, "snapshot_recheck");
+
+    /// <summary>
     /// Counter of zero-coverage leaf snapshot repair EVALUATIONS (issues #2692,
     /// #2940), tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
     /// Six arms partition every invocation of
