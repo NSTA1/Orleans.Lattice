@@ -656,8 +656,21 @@ function Get-StateOr {
 		[Parameter(Mandatory)][string] $Key,
 		$Default = $null
 	)
-	if ($null -ne $State -and $State.ContainsKey($Key)) {
-		$v = $State[$Key]
+	if ($null -eq $State) { return $Default }
+	# run-cohort-aca.ps1 returns a [pscustomobject], not a hashtable, so the
+	# ContainsKey guard alone is not enough: a PSCustomObject has no such
+	# method and the call throws rather than missing. Probe the property set
+	# instead for that shape, and keep the ContainsKey path for every
+	# dictionary shape the doc-string enumerates.
+	$present = if ($State -is [System.Collections.IDictionary]) {
+		$State.ContainsKey($Key)
+	} elseif ($State -is [psobject]) {
+		$null -ne $State.PSObject.Properties[$Key]
+	} else {
+		$false
+	}
+	if ($present) {
+		$v = $State.$Key
 		if ($null -ne $v) { return $v }
 	}
 	return $Default
@@ -2458,6 +2471,10 @@ function Main {
 	if ($Layer -eq '3') {
 		$acaScript = Join-Path $azScriptsDir 'deploy-aca.ps1'
 		if (-not (Test-Path $acaScript)) { throw "Missing $acaScript" }
+		# Dot-sourced here as well as inside Invoke-Layer3Cohorts: a function
+		# that dot-sources gets the definitions in ITS scope only, so Main
+		# cannot see Get-AcaRunRoot unless it sources the module itself.
+		. (Join-Path $azScriptsDir 'aca-common.ps1')
 
 		$acaPrefix = if ($ReuseAca) { Get-CleanedPrefix -Prefix $ReuseAca } elseif ($NamePrefix) { Get-CleanedPrefix -Prefix $NamePrefix } else { New-RunPrefix }
 		Write-Host "[main] Layer 3 aca prefix=$acaPrefix silos=$($SiloCounts -join ',')" -ForegroundColor Cyan
@@ -2465,11 +2482,28 @@ function Main {
 		$l3Dir = Join-Path $runRoot $acaPrefix
 		if (-not (Test-Path $l3Dir)) { New-Item -ItemType Directory -Path $l3Dir -Force | Out-Null }
 		$l3StateFile = Join-Path $l3Dir 'state.json'
+		# The region has to come from the ACA context, not from the Layer 1/2
+		# -Region default: this layer's resources live wherever deploy-aca.ps1
+		# put them, and the meta-header's region key is provenance a reader
+		# uses to reproduce the run. On a fresh sweep the context does not
+		# exist yet, so fall back to deploy-aca.ps1's own default and correct
+		# it from the context once provisioning has written one (below).
+		$l3Region = 'westus3'
+		$l3ContextPath = Join-Path (Get-AcaRunRoot) "$acaPrefix.context.json"
+		if (Test-Path $l3ContextPath) {
+			try {
+				$ctxLoc = (Get-Content $l3ContextPath -Raw | ConvertFrom-Json).location
+				if ($ctxLoc) { $l3Region = [string]$ctxLoc }
+			} catch {
+				Write-Warning "[layer3] could not read region from $l3ContextPath; using $l3Region"
+			}
+		}
 		$l3State = if (Test-Path $l3StateFile) {
 			Read-StateFile -Path $l3StateFile
 		} else {
-			New-EmptyState -Prefix $acaPrefix -VmSize $VmSize -Region '' -Rung (Resolve-Rung -Spec $Rung) -BatchSize $BatchSize -BdnFidelity $Fidelity
+			New-EmptyState -Prefix $acaPrefix -VmSize $VmSize -Region $l3Region -Rung (Resolve-Rung -Spec $Rung) -BatchSize $BatchSize -BdnFidelity $Fidelity
 		}
+		$l3State['region'] = $l3Region
 		if (-not $l3State.ContainsKey('layer3')) {
 			$l3State['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = $null }
 		}
@@ -2489,6 +2523,17 @@ function Main {
 				$acaProvisioned = $true
 				& $acaScript -NamePrefix $acaPrefix | Out-Host
 				if ($LASTEXITCODE -ne 0) { throw "deploy-aca.ps1 exited $LASTEXITCODE" }
+				# Provisioning has now written the context, so the region the
+				# resources actually landed in is knowable. Correct the state
+				# rather than publishing the pre-provisioning guess.
+				if (Test-Path $l3ContextPath) {
+					try {
+						$ctxLoc = (Get-Content $l3ContextPath -Raw | ConvertFrom-Json).location
+						if ($ctxLoc) { $l3State['region'] = [string]$ctxLoc }
+					} catch {
+						Write-Warning "[layer3] could not read region from $l3ContextPath after provisioning"
+					}
+				}
 			} else {
 				Write-Host "[main] -ReuseAca ${ReuseAca}: skipping ACA provisioning" -ForegroundColor Yellow
 			}

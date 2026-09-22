@@ -122,6 +122,12 @@ param(
 	# 64 admits one shard root per shard against a 4-permit ceiling, which
 	# is the smallest value that cannot refuse this topology's cold start.
 	[int] $WalReplayQueueDepth = 64,
+	# Wall-clock ceiling on the producer's warm-up retry loop, in seconds.
+	# Bounds the pathological case where every warm-up attempt burns the full
+	# client response timeout; the attempt cap alone permits a half-hour hang
+	# per cohort, which an unattended silo-count sweep multiplies by every
+	# cell. A healthy warm-up on this topology completes in about a second.
+	[int] $WarmUpBudgetSec = 300,
 	[string] $TreeId,
 	# Disambiguates the cohort log when the same (silos, workload) cell is
 	# repeated N times. Without it every repeat overwrites the previous
@@ -228,7 +234,15 @@ try {
 		"BENCH_SHARD_COUNT=$ShardCount",
 		"BENCH_CLIENT_COUNT=$ClientCount",
 		"BENCH_INFLIGHT_TAIL_BUDGET_SEC=$InFlightTailBudgetSec",
-		"BENCH_RESPONSE_TIMEOUT_SEC=$ResponseTimeoutSec"
+		"BENCH_RESPONSE_TIMEOUT_SEC=$ResponseTimeoutSec",
+		# Wall-clock ceiling on the producer's warm-up retry loop. The attempt
+		# cap alone cannot bound it: a warm-up that keeps hitting the client
+		# response timeout costs attempts x ResponseTimeoutSec, which is over
+		# half an hour at the defaults, with billable replicas up the whole
+		# time and nothing in the job status to distinguish it from progress.
+		# A healthy warm-up here takes about a second, so this only ever fires
+		# on the pathological case.
+		"BENCH_WARMUP_BUDGET_SEC=$WarmUpBudgetSec"
 	)
 	Invoke-Az (@(
 		'containerapp', 'job', 'update',

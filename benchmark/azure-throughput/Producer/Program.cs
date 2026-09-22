@@ -501,19 +501,41 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
     const int MaxWarmUpAttempts = 12;
     const int MaxWarmUpBackoffMs = 6000;
     const int MaxWarmUpSaturationBackoffMs = 20000;
+
+    // An attempt cap alone is the wrong budget when a single attempt can cost
+    // the whole client response timeout. A warm-up that keeps timing out burns
+    // MaxWarmUpAttempts x ResponseTimeout - 36 minutes at the default 180 s -
+    // before it gives up, and an unattended silo-count sweep multiplies that by
+    // every cohort in the series. That is not a hang the operator can see: the
+    // job just sits in Running with billable replicas up.
+    //
+    // So the real budget is wall-clock, and it is enforced with a linked token
+    // rather than only as a loop condition. Checking it between attempts would
+    // still let an attempt that started just inside the deadline run the full
+    // response timeout past it; cancelling the call itself bounds the whole
+    // helper. A healthy warm-up completes in around a second, so any budget in
+    // the minutes is generous - it exists to cap the pathological case, not to
+    // discipline the normal one.
+    var budgetSec = Math.Clamp(ReadInt("BENCH_WARMUP_BUDGET_SEC", 480), 30, 3600);
+    using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSec));
+    var budgetToken = budgetCts.Token;
+    var budgetSw = System.Diagnostics.Stopwatch.StartNew();
+
     var attempt = 0;
     Exception? lastException = null;
-    while (attempt < MaxWarmUpAttempts && !ct.IsCancellationRequested)
+    while (attempt < MaxWarmUpAttempts && !budgetToken.IsCancellationRequested)
     {
         attempt++;
         try
         {
-            Console.WriteLine($"[producer] warmup treeId={treeId} (attempt={attempt}/{MaxWarmUpAttempts})");
-            await lattice.WarmUpAsync(ct).ConfigureAwait(false);
+            Console.WriteLine($"[producer] warmup treeId={treeId} (attempt={attempt}/{MaxWarmUpAttempts}, {budgetSw.Elapsed.TotalSeconds:F0}s/{budgetSec}s budget)");
+            await lattice.WarmUpAsync(budgetToken).ConfigureAwait(false);
             return;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) when (!ct.IsCancellationRequested
+        catch (OperationCanceledException) when (budgetToken.IsCancellationRequested) { break; }
+        catch (Exception ex) when (!budgetToken.IsCancellationRequested
             && (IsOrleansMessageRejection(ex)
                 || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
                 || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
@@ -534,15 +556,22 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
                     : Math.Min(100 * (1 << (attempt - 1)), MaxWarmUpBackoffMs);
             var kind = isSaturation ? " SATURATED" : isTimeout ? " TIMEOUT" : string.Empty;
             Console.WriteLine($"[producer] warmup treeId={treeId} transient{kind} ({ex.GetType().Name}); retrying in {backoffMs}ms");
-            await Task.Delay(backoffMs, ct).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(backoffMs, budgetToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (budgetToken.IsCancellationRequested) { break; }
         }
     }
+
+    if (ct.IsCancellationRequested) { ct.ThrowIfCancellationRequested(); }
 
     // Fail loud. A cohort that proceeds on an unwarmed tree does not merely run
     // slower - it wedges and reports ops=0, which is far more expensive to
     // diagnose after the fact than an explicit warm-up failure here.
+    var exhausted = budgetToken.IsCancellationRequested ? "budget" : "attempts";
     throw new InvalidOperationException(
-        $"warm-up of tree '{treeId}' did not complete after {MaxWarmUpAttempts} attempts",
+        $"warm-up of tree '{treeId}' did not complete after {attempt} attempt(s) / {budgetSw.Elapsed.TotalSeconds:F0}s (exhausted {exhausted}; budget {budgetSec}s)",
         lastException);
 }
 
