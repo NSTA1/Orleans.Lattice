@@ -966,6 +966,22 @@ internal sealed partial class LatticeGrain(
             return new VersionedValue();
         }
 
+        return await GetWithVersionCoreAsync(key, decode: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Shared versioned point-read body behind the public
+    /// <see cref="GetWithVersionAsync"/> surface and the internal
+    /// <see cref="ReadStoredWithVersionAsync"/> replication-apply read.
+    /// <paramref name="decode"/> selects whether the read-path value-decoder
+    /// boundary runs: <c>true</c> for the client-facing surface (strip the
+    /// per-value schema envelope on the way out), <c>false</c> for internal
+    /// system-origin callers, which must observe the stored (envelope) form
+    /// verbatim per the store-verbatim invariant documented on
+    /// <see cref="ILatticeValueDecoder"/>.
+    /// </summary>
+    private async Task<VersionedValue> GetWithVersionCoreAsync(string key, bool decode, CancellationToken cancellationToken)
+    {
         // Caller-visible per-call envelope. GetWithVersionDuration is the
         // single-observation envelope histogram; no per-stage decomposition
         // is published here today because the path is structurally identical
@@ -999,7 +1015,7 @@ internal sealed partial class LatticeGrain(
                     // envelope from the versioned read's value. Zero-cost when
                     // inactive (cached bool) - the versioned value is returned
                     // verbatim on the default null-decoder path.
-                    if (ValueDecoderActive && versioned.Value is not null)
+                    if (decode && ValueDecoderActive && versioned.Value is not null)
                     {
                         var decoded = await DecodeValueAsync(versioned.Value, cancellationToken);
                         return versioned with { Value = decoded };

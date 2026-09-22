@@ -189,11 +189,11 @@ public partial class ReplicationApplierTests
         // full state carries a different member. A state-based CRDT merge
         // must yield the union - neither the local add nor the snapshot add
         // may be clobbered (a blind LWW overwrite would lose one).
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var localMember = new byte[] { 0x01 };
         var remoteMember = new byte[] { 0x02 };
         var existing = EncodeOrSet(s => s.Add(localMember, "site-a", 1));
-        lattice.GetWithVersionAsync("k", Arg.Any<CancellationToken>())
+        apply.ReadStoredWithVersionAsync("k")
             .Returns(new VersionedValue { Value = existing, Version = Hlc(5) });
 
         byte[]? written = null;
@@ -229,11 +229,11 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_full_state_retries_on_cas_failure()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         // A non-empty receiver forces the merge-and-write loop (not the
         // verbatim install fast-path), so each CAS attempt re-reads and
         // re-writes; the first two lose the race.
-        lattice.GetWithVersionAsync("k", Arg.Any<CancellationToken>())
+        apply.ReadStoredWithVersionAsync("k")
             .Returns(new VersionedValue { Value = EncodeOrSet(s => s.Add(new byte[] { 0x01 }, "site-a", 1)), Version = Hlc(5) });
         lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(false, false, true);
