@@ -285,6 +285,24 @@ services:
       # only climbs is the latch) and ..._pin_shed_forced_total (every increment
       # is one deliberate override, and an alarm rather than routine).
       LATTICE_WAL_PIN_SHED_CEILING_SECONDS: "120"
+      # Bound how long a batch write's per-shard fan-out may run before it is
+      # refused with a LatticeSaturatedException. The library ships this
+      # UNBOUNDED so that upgrading cannot regress any existing caller (#3386),
+      # which is the right default for a library and the wrong setting here:
+      # this deployment issues wide batch writes against trees that are
+      # demonstrably saturated, and an unbounded fan-out converts that
+      # saturation into an indefinitely-held call instead of a refusal the
+      # caller can see, retry, or shed. The held call is the wedge; a refusal is
+      # a signal. 30s is the figure #3348's measurements support and matches
+      # LATTICE WAL append dispatch's own 30s outer bound, so a fan-out branch
+      # cannot outlive the single WAL dispatch it is waiting for.
+      # The refusal rolls NOTHING back: a batch write is not atomic across
+      # shards, so committed branches stay committed and in-flight branches are
+      # left running rather than cancelled. The durable outcome is identical to
+      # an unbounded wait; only WHEN the caller learns changes.
+      # Rollback is "0", which restores the unbounded library default exactly -
+      # a rollback to the wedge, not to data loss.
+      LATTICE_SETMANY_FANOUT_BUDGET_SECONDS: "30"
       # Advisory per-tree ceiling on the WAL bytes held on disk. The library ships
       # this DISABLED and is right to: the correct value depends both on the
       # volume the WAL lives on and on the largest tree's working set, neither of
