@@ -2359,19 +2359,47 @@ internal sealed partial class LatticeGrain(
             {
                 // Single-shard fast path: one write, no per-call List<Task> and
                 // no Task.WhenAll wrapper. Mirrors the bucketing skip above.
+                // There is no sibling branch to fail fast against, so this path
+                // takes the unwrapped call and allocates no fault signal.
                 var shard = GetShardGrainByIndex(physicalTreeId, singleShardIdx);
-                await WriteToShardAsync(shard, singleShardEntries);
+                await ShardActivationRetry.RunAsync(
+                    () => shard.SetManyAsync(singleShardEntries));
             }
             else
             {
+                // (#3348) Fail-fast fan-out. Task.WhenAll observes every branch
+                // before it surfaces anything, so a batch that a single branch
+                // had already doomed still paid the slowest branch - the
+                // scatter-gather tail this path is measured on. Once one branch
+                // faults the call can only fail, and SetManyAsync is not atomic,
+                // so the partially-applied outcome is identical whether the
+                // caller is told now or 90 seconds from now. Tell it now.
+                var firstFault = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 var tasks = new List<Task>(shardBuckets.Count);
                 foreach (var (shardIdx, bucket) in shardBuckets)
                 {
                     var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                    tasks.Add(WriteToShardAsync(shard, bucket));
+                    tasks.Add(WriteToShardAsync(shard, bucket, firstFault));
                 }
 
-                await Task.WhenAll(tasks);
+                var all = Task.WhenAll(tasks);
+                if (await Task.WhenAny(all, firstFault.Task) != all)
+                {
+                    // Deliberately NOT cancelling the in-flight siblings. They
+                    // would have committed had we waited, so letting them run
+                    // leaves the durable outcome byte-identical to the previous
+                    // behaviour and confines this change to when the caller
+                    // learns. Their faults are observed so an abandoned branch
+                    // never resurfaces as an unobserved task exception.
+                    ObserveInBackground(all);
+
+                    // Rethrows the first branch fault with its own type intact,
+                    // which the saturation back-pressure contract depends on.
+                    await firstFault.Task;
+                }
+
+                await all;
             }
         }
         finally
@@ -2384,13 +2412,44 @@ internal sealed partial class LatticeGrain(
 
         static async Task WriteToShardAsync(
             IShardRootGrain shard,
-            List<KeyValuePair<string, byte[]>> entries)
+            List<KeyValuePair<string, byte[]>> entries,
+            TaskCompletionSource firstFault)
         {
-            // Per-shard ShardActivationRetry wrap: a single shard's cold-start
-            // seed-timeout retries only that shard, not the whole fan-out.
-            await ShardActivationRetry.RunAsync(
-                () => shard.SetManyAsync(entries));
+            try
+            {
+                // Per-shard ShardActivationRetry wrap: a single shard's cold-start
+                // seed-timeout retries only that shard, not the whole fan-out.
+                await ShardActivationRetry.RunAsync(
+                    () => shard.SetManyAsync(entries));
+            }
+            catch (Exception ex)
+            {
+                // First fault wins; later ones are still observed through `all`.
+                firstFault.TrySetException(ex);
+                throw;
+            }
         }
+    }
+
+    /// <summary>
+    /// Observes a fan-out aggregate that the caller has stopped awaiting, so an
+    /// abandoned branch fault cannot surface later as an unobserved task
+    /// exception and tear down the process.
+    /// </summary>
+    private static void ObserveInBackground(Task all)
+    {
+        if (all.IsCompleted)
+        {
+            _ = all.Exception;
+            return;
+        }
+
+        _ = all.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted
+                | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public async Task<IReadOnlyList<string>> SetManyWherePredicateAsync(

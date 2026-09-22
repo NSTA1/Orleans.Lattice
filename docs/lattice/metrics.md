@@ -357,7 +357,7 @@ provider.
 | `orleans.lattice.set.duration` | `Histogram<double>` | `ms` | End-to-end caller-visible wall-clock duration of one `LatticeGrain.SetAsync` call. Tagged `tree`. |
 | `orleans.lattice.set.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock duration of one `LatticeGrain.SetAsync` call. Tagged `tree` and `stage=gate` (atomic-batch gate), `route` (shard routing), `shard` (the cross-grain `ShardRootGrain` RPC envelope - this is the dominant cell at the c2-iii operating point), or `publish` (event-stream dispatch). |
 | `orleans.lattice.set_many.duration` | `Histogram<double>` | `ms` | End-to-end caller-visible wall-clock duration of one `LatticeGrain.SetManyAsync` call. Tagged `tree`. |
-| `orleans.lattice.set_many.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock duration of one `LatticeGrain.SetManyAsync` call. Tagged `tree` and `stage=gate` (atomic-batch gate), `route` (per-entry routing), `bucket` (per-shard bucket build), `fanout` (the cross-shard `Task.WhenAll` - the dominant cell under saturated traffic), or `events` (event-stream dispatch). |
+| `orleans.lattice.set_many.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock duration of one `LatticeGrain.SetManyAsync` call. Tagged `tree` and `stage=gate` (atomic-batch gate), `route` (per-entry routing), `bucket` (per-shard bucket build), `fanout` (the cross-shard branch fan-out - the dominant cell under saturated traffic; it settles on the first faulted branch, so a failed call measures time-to-first-fault rather than the branch tail), or `events` (event-stream dispatch). |
 
 ### Foreground read envelopes (sourced from `LatticeGrain`)
 
@@ -387,6 +387,14 @@ that per-shard slice into the local-apply work, the online-resize
 shadow-forward path, and the per-leaf RPC fan-out. Together with
 `leaf.commit.duration` per step, this gives an end-to-end attribution from
 the lattice grain boundary down to the leaf commit pipeline.
+
+One caveat bounds that arithmetic on the failure path. The fan-out settles
+on the first faulted branch and does not cancel its siblings, so on a
+failed call the surviving shard slices run on past the close of the
+`stage=fanout` span and record into the instruments below afterwards.
+Their samples can therefore exceed the parent span they are nominally
+nested inside. Treat the containment relationship as holding on the
+success path only, and scope any attribution sum to calls that succeeded.
 
 | Name | Kind | Unit | Description |
 |---|---|---|---|
