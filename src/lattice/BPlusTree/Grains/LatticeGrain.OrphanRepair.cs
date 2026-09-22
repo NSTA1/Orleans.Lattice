@@ -49,10 +49,17 @@ internal sealed partial class LatticeGrain
         CancellationToken cancellationToken = default) =>
         DriveOrphanedLeafPassAsync(dryRun: false, resumeFrom, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<OrphanedLeafRepairReport> SurveyOrphanedLeavesAsync(
+        string? resumeFrom = null,
+        CancellationToken cancellationToken = default) =>
+        DriveOrphanedLeafPassAsync(dryRun: true, resumeFrom, cancellationToken, survey: true);
+
     private async Task<OrphanedLeafRepairReport> DriveOrphanedLeafPassAsync(
         bool dryRun,
         string? resumeFrom,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool survey = false)
     {
         // Start the clock before the authorization and routing prologue rather
         // than at the fan-out loop. Both are runs of grain calls, and on a cold
@@ -134,7 +141,9 @@ internal sealed partial class LatticeGrain
 
                 var currentCursor = shardCursor;
                 var page = await ShardActivationRetry.RunAsync(
-                    () => shard.RepairOrphanedLeavesAsync(currentCursor, dryRun, cancellationToken),
+                    () => survey
+                        ? shard.SurveyOrphanedLeavesAsync(currentCursor, cancellationToken)
+                        : shard.RepairOrphanedLeavesAsync(currentCursor, dryRun, cancellationToken),
                     cancellationToken);
 
                 leavesWalked += page.LeavesWalked;
@@ -168,6 +177,7 @@ internal sealed partial class LatticeGrain
         return new OrphanedLeafRepairReport
         {
             DryRun = dryRun,
+            Survey = survey,
             LeavesWalked = leavesWalked,
             Findings = findings,
             Gaps = gaps,

@@ -25,6 +25,22 @@ public sealed class GrpcLatticeTreeAdminLifecycleTests
     private static GrpcLatticeTreeAdmin Adapter(FakeCallInvoker invoker)
         => new(RemoteTestSupport.TreeAdminClient(invoker));
 
+    [Test]
+    public async Task SurveyOrphanedLeavesAsync_preserves_survey_opt_in_and_resume_position()
+    {
+        var expected = new TreeOrphanedLeafReport { TreeId = "orders", Survey = true };
+        var invoker = new FakeCallInvoker(_ => expected);
+        var result = await Adapter(invoker).SurveyOrphanedLeavesAsync("orders", "cursor");
+        var request = (TreeAdminOrphanedLeafRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.SameAs(expected));
+            Assert.That(request.Survey, Is.True);
+            Assert.That(request.TreeId, Is.EqualTo("orders"));
+            Assert.That(request.ResumeFrom, Is.EqualTo("cursor"));
+        });
+    }
+
     private static TreeDeletionStatus Status(string tree = "orders", bool deleted = true) => new()
     {
         TreeId = tree,

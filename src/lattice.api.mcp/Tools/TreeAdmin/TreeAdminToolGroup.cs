@@ -209,7 +209,15 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync, "lattice_treeadmin_orphaned_leaves_audit",
                 "Audit a tree for orphaned leaves",
-                "Audits a tree for orphaned leaves - leaves spliced into a shard's sibling chain but unreachable by "
+                "Set survey=true for a full key census (read-only, off by default, at most 100000 keys per orphan). "
+                + "VerifiedKeyCount ALWAYS means the verified prefix before the first failure; without survey, "
+                + "later keys are untested. Separate nullable survey counts report all verified, missing and "
+                + "routing-contradicting keys per leaf; null means not surveyed, not zero. OrphanedLeafCount, "
+                + "RepairableCount and RefusedCount count this batch's leaves; SurveyMissingKeyCount totals "
+                + "missing keys only when every reached region and orphan was surveyed. Findings give shard, "
+                + "leaf, range and first-failure key so repair candidates can be identified. Missing is not proof "
+                + "of data loss. Keep survey=true on every resumed batch. "
+                + "Audits a tree for orphaned leaves - leaves spliced into a shard's sibling chain but unreachable by "
                 + "descent from that shard's root - and reports what the repair verb would do about each, without "
                 + "changing anything. An orphan is left behind by a split interrupted after it linked the new sibling "
                 + "into the chain but before its parent learned about it, and it is not cosmetic: a leaf nothing "

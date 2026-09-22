@@ -62,13 +62,42 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     [Test]
     public void TreeAdminOrphanedLeafRequest_round_trips()
     {
-        var resuming = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders", ResumeFrom = "olp1:3:kb3JkZXJz" });
+        var resuming = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders", ResumeFrom = "olp1:3:kb3JkZXJz", Survey = true });
         var starting = RoundTrip(new TreeAdminOrphanedLeafRequest { TreeId = "orders" });
         Assert.Multiple(() =>
         {
             Assert.That(resuming.TreeId, Is.EqualTo("orders"));
             Assert.That(resuming.ResumeFrom, Is.EqualTo("olp1:3:kb3JkZXJz"));
             Assert.That(starting.ResumeFrom, Is.Null);
+            Assert.That(resuming.Survey, Is.True);
+            Assert.That(starting.Survey, Is.False);
+        });
+    }
+
+    [Test]
+    public void Survey_report_and_nullable_counts_round_trip()
+    {
+        var copy = RoundTrip(new TreeOrphanedLeafReport
+        {
+            TreeId = "orders", DryRun = true, Survey = true,
+            Findings = [new TreeOrphanedLeafFinding
+            {
+                LeafId = "orphan", VerifiedKeyCount = 1, KeyCount = 6,
+                SurveyVerifiedKeyCount = 2, SurveyMissingKeyCount = 3,
+                SurveyRoutingContradictionKeyCount = 1,
+            }],
+        });
+        var legacy = RoundTrip(new TreeOrphanedLeafFinding { LeafId = "legacy" });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Survey, Is.True);
+            Assert.That(copy.SurveyMissingKeyCount, Is.EqualTo(3));
+            Assert.That(copy.Findings[0].SurveyVerifiedKeyCount, Is.EqualTo(2));
+            Assert.That(copy.Findings[0].SurveyRoutingContradictionKeyCount, Is.EqualTo(1));
+            Assert.That(copy.Findings[0].VerifiedKeyCount, Is.EqualTo(1));
+            Assert.That(legacy.SurveyMissingKeyCount, Is.Null);
+            Assert.That(legacy.SurveyVerifiedKeyCount, Is.Null);
+            Assert.That(legacy.SurveyRoutingContradictionKeyCount, Is.Null);
         });
     }
 

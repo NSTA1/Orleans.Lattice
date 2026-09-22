@@ -1287,6 +1287,30 @@ the recommended monitoring shape for lag.
 
 ## Operator tooling: orphaned-leaf repair
 
+`VerifiedKeyCount` always means the verified **prefix length** before the first
+missing key or routing contradiction. The default audit and repair do not test
+later keys. Do not subtract this prefix from `KeyCount` to estimate damage.
+The opt-in `SurveyOrphanedLeavesAsync` preserves that field and the first failure
+in `UnverifiedKey`, and adds `SurveyVerifiedKeyCount`, `SurveyMissingKeyCount`
+and `SurveyRoutingContradictionKeyCount` on each finding. Together they account
+for every enumerated key; null means the leaf was not surveyed (for example,
+blocking state or the key limit), not zero. A missing routed copy is not proof
+of data loss. This is a live observation, not a consistent tree snapshot.
+
+Reports include `Survey`, `OrphanedLeafCount`, `RepairableCount` and the existing
+`RefusedCount`, with positions and dispositions in `Findings`. The nullable
+report `SurveyMissingKeyCount` totals this batch only, and is unknown if any
+reached region or orphan could not be surveyed. Collect every batch using the
+same survey verb and inspect `Gaps`; `IsComplete` alone does not make a complete
+census. Findings marked `Repairable` identify the repair's candidate scope;
+repair independently rechecks safety and still refuses every unverified leaf.
+
+The public `ILattice` and `ILatticeTreeAdmin` survey methods have default
+implementations for compatibility with older external implementations. Their
+default throws `NotSupportedException`: unsupported survey must not be mistaken
+for a zero-damage census. Lattice's grain and tree-admin facade implement the
+survey; older remote servers may not support it.
+
 An **orphaned leaf** is a leaf that is present in a shard's doubly
 linked sibling chain but is not reachable by descent from the shard
 root - no routing entry points at it. Such a leaf can only arise from
@@ -1302,14 +1326,15 @@ shadow copy of that range. The orphan's projection checkpoint then
 pins the WAL trim floor indefinitely, and because compaction is
 downstream of trim, the WAL grows without bound.
 
-Two `ILattice` methods provide the operator path.
+Three `ILattice` methods provide the operator path.
 
 | Method | Description |
 |--------|-------------|
 | `InspectOrphanedLeavesAsync(string?, CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
+| `SurveyOrphanedLeavesAsync(string?, CancellationToken)` | Opt-in read-only census of all key outcomes per orphan, bounded at 100,000 keys per leaf. Costs O(KeyCount) descents/owner reads rather than O(first miss). Requires `LatticeOperation.Read`. |
 | `RepairOrphanedLeavesAsync(string?, CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
 
-The leading `string?` on both is the **resume token** from the previous
+The leading `string?` on all three is the **resume token** from the previous
 call's report. Pass `null` (the default) to start a new pass; pass
 `report.ResumeFrom` back unaltered to continue one. See
 [Driving a pass to completion](#driving-a-pass-to-completion) below -
@@ -2403,5 +2428,4 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
   version. `DeleteAsync` rejects a startup-declared view (the declaration would
   re-create it); see
   [Materialised views](materialised-views.md#deleting-a-view).
-
 
