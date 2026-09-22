@@ -1033,6 +1033,52 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void SetManyFanOutBudget_default_is_thirty_seconds()
+    {
+        Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void SetManyFanOutBudget_positive_passes()
+    {
+        var result = Validate(o => o.SetManyFanOutBudget = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void SetManyFanOutBudget_infinite_passes()
+    {
+        // The documented escape hatch: restore the historical unbounded wait
+        // on the slowest fan-out branch.
+        var result = Validate(o => o.SetManyFanOutBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void SetManyFanOutBudget_zero_fails()
+    {
+        // Unlike WalAdmissionSaturationWaitBudget, zero is NOT a
+        // disable sentinel here. A zero budget would refuse every
+        // batch write immediately, which is never a useful
+        // configuration and is far more likely to be a mistake than
+        // an intention, so it is rejected rather than honoured.
+        var result = Validate(o => o.SetManyFanOutBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.SetManyFanOutBudget)));
+    }
+
+    [Test]
+    public void SetManyFanOutBudget_negative_fails()
+    {
+        // -1s is not the InfiniteTimeSpan sentinel (which is -1ms);
+        // it is a genuine negative TimeSpan and must be rejected.
+        var result = Validate(o => o.SetManyFanOutBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.SetManyFanOutBudget)));
+    }
+
+    [Test]
     public void WalThrottledAdmissionPace_default_is_twenty_five_milliseconds()
     {
         Assert.That(new LatticeOptions().WalThrottledAdmissionPace, Is.EqualTo(TimeSpan.FromMilliseconds(25)));

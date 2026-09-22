@@ -485,6 +485,16 @@ if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
         $"{nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the admission-gate budget the WAL writer waits on WaitForHealthyAsync under Saturated before refusing the dispatch with LatticeSaturatedException; zero disables the gate, infinite waits forever for recovery).");
 }
+if (options.SetManyFanOutBudget <= TimeSpan.Zero
+    && options.SetManyFanOutBudget != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.SetManyFanOutBudget)} must be greater than zero or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(how long a batch write's per-shard fan-out may run before it is refused with LatticeSaturatedException; "
+        + "infinite restores the historical unbounded wait on the slowest branch, while zero would refuse every "
+        + "fan-out immediately and is never a useful configuration).");
+}
+
 if (options.WalThrottledAdmissionPace < TimeSpan.Zero)
 {
     return ValidateOptionsResult.Fail(

@@ -112,7 +112,7 @@ public class LatticeSaturationSourceTests
     }
 
     /// <summary>
-    /// The four attributed seams must be distinct values, since the whole
+    /// The five attributed seams must be distinct values, since the whole
     /// point is to tell them apart when choosing a retry policy.
     /// </summary>
     [Test]
@@ -120,8 +120,43 @@ public class LatticeSaturationSourceTests
     {
         var values = Enum.GetValues<LatticeSaturationSource>();
         Assert.That(values, Is.Unique);
-        Assert.That(values, Has.Length.EqualTo(5),
-            "Unspecified plus the four admission seams; adding a fifth seam needs a retry-policy decision "
+        Assert.That(values, Has.Length.EqualTo(6),
+            "Unspecified plus the five refusal seams; adding a sixth seam needs a retry-policy decision "
             + "in ShardActivationRetry.IsRetryableSaturation, so this count is deliberately pinned.");
+    }
+
+    /// <summary>
+    /// The fan-out seam is raised above the routing layer, so retrying it
+    /// below that layer would re-fan the whole batch across every shard of
+    /// an already-saturated tree. It must therefore stay out of the
+    /// in-library retry set, exactly like <see cref="LatticeSaturationSource.WalAdmission"/>.
+    /// </summary>
+    [Test]
+    public void SetManyFanOut_is_a_distinct_declared_seam()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Enum.IsDefined(LatticeSaturationSource.SetManyFanOut), Is.True);
+            Assert.That(LatticeSaturationSource.SetManyFanOut, Is.Not.EqualTo(LatticeSaturationSource.Unspecified));
+            Assert.That(LatticeSaturationSource.SetManyFanOut, Is.Not.EqualTo(LatticeSaturationSource.WalAdmission));
+        });
+    }
+
+    /// <summary>
+    /// The fan-out refusal must round-trip its discriminator, because a
+    /// caller deciding whether to back off branches on the property and
+    /// not on the exception type.
+    /// </summary>
+    [Test]
+    public void SetManyFanOut_round_trips_through_the_exception()
+    {
+        var ex = new LatticeSaturatedException(
+            "fan-out budget elapsed", "tree-e", LatticeSaturationSource.SetManyFanOut);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.SaturationSource, Is.EqualTo(LatticeSaturationSource.SetManyFanOut));
+            Assert.That(ex.TreeId, Is.EqualTo("tree-e"));
+        });
     }
 }

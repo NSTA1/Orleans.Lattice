@@ -187,4 +187,33 @@ public class ShardActivationRetrySaturationTests
     [Test]
     public void IsRetryableSaturation_is_false_for_an_unrelated_exception()
         => Assert.That(ShardActivationRetry.IsRetryableSaturation(new TimeoutException()), Is.False);
+
+    /// <summary>
+    /// The batch fan-out seam refuses *above* the routing layer, after the
+    /// batch has already been split across shards. Retrying it down here
+    /// would re-fan the whole batch across every shard of a tree that just
+    /// told us it cannot keep up - precisely the amplification
+    /// <see href="https://github.com/NSTA1/Orleans.Lattice/issues/3348">#3348</see>
+    /// removed. The allow-list shape of <c>IsRetryableSaturation</c> excludes
+    /// it by construction; this pins that, so a future edit that widens the
+    /// predicate to a deny-list has to fail a test rather than silently
+    /// reintroduce the amplification.
+    /// </summary>
+    [Test]
+    public void IsRetryableSaturation_is_false_for_a_batch_fan_out_refusal()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ShardActivationRetry.IsRetryableSaturation(Refusal(LatticeSaturationSource.SetManyFanOut)),
+                Is.False,
+                "retrying a fan-out refusal below the routing layer re-fans the batch across every shard");
+
+            Assert.That(
+                ShardActivationRetry.IsRetryableSaturation(
+                    new InvalidOperationException("wrapped", Refusal(LatticeSaturationSource.SetManyFanOut))),
+                Is.False,
+                "the exclusion must hold through an inner chain too");
+        });
+    }
 }

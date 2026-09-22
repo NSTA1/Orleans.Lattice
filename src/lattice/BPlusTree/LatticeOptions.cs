@@ -3850,6 +3850,57 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// How long a batch write's per-shard fan-out may run before the call is
+    /// refused with a <see cref="LatticeSaturatedException"/> carrying
+    /// <see cref="LatticeSaturationSource.SetManyFanOut"/>.
+    /// <para>
+    /// <b>What it bounds, and why the bound is needed.</b> A scatter-gather
+    /// fan-out that awaits every branch pays the <em>slowest</em> branch rather
+    /// than the typical one, so its duration tracks the branch
+    /// p(1 - 1/N) quantile. Issue #3348 measured a cluster where that
+    /// distribution split rather than shifted: going from four silos to eight,
+    /// the per-branch median <em>improved</em> 7.7x to 386 ms while the 99th
+    /// percentile degraded 11x to 94 s, and the fan-out duration followed the
+    /// tail. Adding hosts made the cluster slower in absolute terms even though
+    /// nothing downstream had got slower. Without this bound the only limit on
+    /// a batch write is the slowest branch, which is unbounded.
+    /// </para>
+    /// <para>
+    /// <b>Sizing rule.</b> The budget should exceed the fan-out duration of a
+    /// healthy cluster at the widest shard count in use, so it never fires in
+    /// the regime it is not meant to police, and should sit below the caller's
+    /// own patience. The default
+    /// (<see cref="DefaultSetManyFanOutBudget"/>, 30 seconds) is set against
+    /// the measurements in #3348: a healthy four-silo fan-out there completed
+    /// in ~6.0 s with a 8.6 s branch p99, comfortably inside the budget, while
+    /// the collapsed eight-silo fan-out averaged 80.2 s and is capped by it. It
+    /// also matches <see cref="WalAppendDispatchTimeout"/>'s 30-second default,
+    /// so a fan-out branch may not outlive the outer bound on the single WAL
+    /// dispatch it is waiting for.
+    /// </para>
+    /// <para>
+    /// <b>This refusal rolls nothing back.</b> A batch write is not atomic
+    /// across shards, so branches that already committed stay committed and
+    /// branches still in flight are left running rather than cancelled. The
+    /// durable outcome is therefore identical to the one an unbounded wait
+    /// would have produced; the budget changes when the caller learns, not what
+    /// is written. Callers that need all-or-nothing semantics across shards
+    /// must use the atomic write surface, which is unaffected by this option.
+    /// </para>
+    /// <para>
+    /// Set to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
+    /// restore the historical unbounded wait (every branch is awaited however
+    /// long it takes). The registered options validator rejects zero and any
+    /// other negative value: zero would refuse every fan-out immediately, which
+    /// is never a useful configuration and is far more likely to be a mistake.
+    /// </para>
+    /// </summary>
+    public TimeSpan SetManyFanOutBudget { get; set; } = DefaultSetManyFanOutBudget;
+
+    /// <summary>Default value for <see cref="SetManyFanOutBudget"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultSetManyFanOutBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Per-append pacing delay the WAL writer applies on the local admission
     /// path while the per-tree saturation signal reports
     /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. This is what

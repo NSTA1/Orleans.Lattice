@@ -367,4 +367,180 @@ public partial class LatticeGrainTests
             "The first-fault signal lost the race and was dropped without being observed. "
             + "It resurfaced on finalization as an unobserved task exception.");
     }
+
+    [Test]
+    public async Task SetManyAsync_refuses_when_the_fan_out_budget_elapses()
+    {
+        // #3348's ESTABLISHED mechanism, as distinct from the fail-fast test
+        // above. There the batch was doomed because a branch FAULTED. Here
+        // nothing faults and nothing refuses: shard 0 commits normally and
+        // shard 1 is merely slow. That is precisely the case the issue
+        // measured - at eight silos the per-branch median IMPROVED 7.7x to
+        // 386 ms while the p99 degraded 11x to 94 s, and the fan-out tracked
+        // the p99 because it awaited every branch. Fail-fast cannot help here,
+        // because there is no fault to be fast about. Under an unbounded wait
+        // this call cannot return at all, so the passing direction is
+        // deterministic rather than a wall-clock threshold.
+        const string treeId = "saturation-setmany-fanout-budget";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId,
+            new LatticeOptions { SetManyFanOutBudget = TimeSpan.FromMilliseconds(250) },
+            shardCount: 2,
+            virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var straggler = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => straggler.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var call = grain.SetManyAsync(batch);
+
+        // Generous, because it only bounds the FAILING direction; a correct
+        // implementation settles this at the 250 ms budget.
+        var settled = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.That(settled, Is.SameAs(call),
+            "The fan-out is still awaiting a branch that has outrun its budget. "
+            + "Unbounded, the cost of every batch is the cost of its slowest branch.");
+
+        var thrown = Assert.ThrowsAsync<LatticeSaturatedException>(async () => await call);
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.SaturationSource, Is.EqualTo(LatticeSaturationSource.SetManyFanOut),
+                "The refusal must name the seam that raised it. A caller's retry policy branches "
+                + "on the source, not on the exception type, because the seams disagree about "
+                + "whether an automatic retry amplifies.");
+            Assert.That(thrown.TreeId, Is.EqualTo(treeId),
+                "Bounding the fan-out must not blur the typed refusal the back-off contract "
+                + "depends on.");
+        });
+
+        // Release the straggler so the abandoned aggregate settles through the
+        // observation path rather than being left to the finalizer.
+        straggler.SetResult();
+    }
+
+    [Test]
+    public async Task SetManyAsync_fan_out_budget_retains_already_committed_branches()
+    {
+        // The refusal rolls nothing back, and that is a deliberate contract
+        // rather than an oversight. A batch write is not atomic across shards,
+        // so a branch that already committed stays committed and a branch still
+        // in flight is left to run. The durable outcome is therefore identical
+        // to the one the unbounded wait would have produced - the budget
+        // changes WHEN the caller is told, never WHAT is written. A future
+        // change that "tidied up" by cancelling the siblings would silently
+        // turn a bounded wait into a partial rollback, and fails here.
+        const string treeId = "saturation-setmany-fanout-budget-retains";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId,
+            new LatticeOptions { SetManyFanOutBudget = TimeSpan.FromMilliseconds(250) },
+            shardCount: 2,
+            virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var straggler = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => straggler.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        Assert.ThrowsAsync<LatticeSaturatedException>(async () => await grain.SetManyAsync(batch));
+
+        // The committed branch was dispatched exactly once and never unwound.
+        await shard0.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+
+        // The straggler is still running rather than cancelled or abandoned
+        // mid-flight, which is what makes the durable outcome unchanged.
+        Assert.That(straggler.Task.IsCompleted, Is.False,
+            "The in-flight branch was terminated by the refusal. Bounding the wait must "
+            + "not cancel work that would otherwise have committed.");
+
+        straggler.SetResult();
+    }
+
+    [Test]
+    public async Task SetManyAsync_awaits_every_branch_when_the_fan_out_budget_is_infinite()
+    {
+        // The documented escape hatch, and the control that proves the bound is
+        // what fires in the test above rather than some unrelated timeout. With
+        // the budget set to InfiniteTimeSpan the historical unbounded wait is
+        // restored exactly, so an operator who prefers a slow write to a refused
+        // one keeps that option.
+        const string treeId = "saturation-setmany-fanout-budget-infinite";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId,
+            new LatticeOptions { SetManyFanOutBudget = Timeout.InfiniteTimeSpan },
+            shardCount: 2,
+            virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var slow = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => slow.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var call = grain.SetManyAsync(batch);
+
+        // Comfortably longer than the 250 ms budget the other tests use, so a
+        // budget that fired regardless of configuration would be caught here.
+        var early = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.That(early, Is.Not.SameAs(call),
+            "The fan-out refused a slow branch even though the budget was infinite.");
+
+        slow.SetResult();
+        await call;
+
+        await shard1.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
 }
