@@ -83,6 +83,8 @@ public sealed class ReflectionSeamAuditTests
             "Split-recovery helper; sibling BPlusLeafGrain fixtures drive the public split path.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.SplitByteBound.cs"] =
             "Known instance of this defect and the one that motivated issue #2735. Owned by issue #2733, not by this audit.",
+        ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.SplitRetryStaleCheckpointHint.cs"] =
+            "CompleteSplitAsync has three unconditional production call sites, all in BPlusLeafGrain.Split.cs: the forward path at the end of SplitAsync, and the two recovery resumes. None is behind a declining predicate, so none can regress the way issue #2735's motivating defect did. Reflection is used to supply the replayed walHeadsAtSplit array a retry carries, which the recovery resumes cannot express because they pass null and re-capture fresh heads. The guarded seam itself (ApplyCheckpointHintAsync) is additionally driven through the public IBPlusLeafGrain.SetCheckpointOffsetHintsAsync by the two SetCheckpointOffsetHints_ tests in the same file, so its wiring is not left to the reflected sites alone.",
         ["test/lattice/BPlusTree/Grains/LatticeLockGrainTests.RemindersAndFaultArms.cs"] =
             "ResolveTtl override has no production call site by design; the fixture says so inline and guards the opt-out.",
         ["test/lattice/BPlusTree/Grains/LeafCacheGrainTests.DivisionCookie.cs"] =

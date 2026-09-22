@@ -1308,6 +1308,21 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     }
 
     /// <inheritdoc />
+    public async Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+
+        var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+            .SurveyOrphanedLeavesAsync(resumeFrom, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToOrphanedLeafReport(report, treeId);
+    }
+
+    /// <inheritdoc />
     public async Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(
         string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
     {
@@ -1347,6 +1362,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                     VerifiedKeyCount = finding.VerifiedKeyCount,
                     Disposition = (TreeOrphanedLeafDisposition)finding.Disposition,
                     UnverifiedKey = finding.UnverifiedKey,
+                    SurveyVerifiedKeyCount = finding.SurveyVerifiedKeyCount,
+                    SurveyMissingKeyCount = finding.SurveyMissingKeyCount,
+                    SurveyRoutingContradictionKeyCount = finding.SurveyRoutingContradictionKeyCount,
                 });
             }
         }
@@ -1371,6 +1389,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             TreeId = treeId,
             DryRun = report.DryRun,
+            Survey = report.Survey,
             LeavesWalked = report.LeavesWalked,
             Findings = findings.MoveToImmutable(),
             Gaps = gaps.MoveToImmutable(),

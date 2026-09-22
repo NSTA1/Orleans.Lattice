@@ -104,9 +104,22 @@ internal sealed partial class ShardRootGrain
     private const int MaxOrphanKeysVerified = 100_000;
 
     /// <inheritdoc />
-    public async Task<OrphanedLeafRepairPage> RepairOrphanedLeavesAsync(
+    public Task<OrphanedLeafRepairPage> RepairOrphanedLeavesAsync(
         string? resumeFromInclusive,
         bool dryRun,
+        CancellationToken cancellationToken = default) =>
+        RunOrphanedLeafPassAsync(resumeFromInclusive, dryRun, survey: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<OrphanedLeafRepairPage> SurveyOrphanedLeavesAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken = default) =>
+        RunOrphanedLeafPassAsync(resumeFromInclusive, dryRun: true, survey: true, cancellationToken);
+
+    private async Task<OrphanedLeafRepairPage> RunOrphanedLeafPassAsync(
+        string? resumeFromInclusive,
+        bool dryRun,
+        bool survey,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -146,6 +159,7 @@ internal sealed partial class ShardRootGrain
             return await RepairOrphanedLeavesCoreAsync(
                 resumeFromInclusive,
                 dryRun,
+                survey,
                 startTimestamp,
                 cancellationToken);
         }
@@ -158,6 +172,7 @@ internal sealed partial class ShardRootGrain
     private async Task<OrphanedLeafRepairPage> RepairOrphanedLeavesCoreAsync(
         string? resumeFromInclusive,
         bool dryRun,
+        bool survey,
         long startTimestamp,
         CancellationToken cancellationToken)
     {
@@ -278,6 +293,7 @@ internal sealed partial class ShardRootGrain
                 currentId,
                 currentProbe,
                 dryRun,
+                survey,
                 path,
                 cancellationToken);
 
@@ -600,6 +616,7 @@ internal sealed partial class ShardRootGrain
         GrainId currentId,
         LeafReclaimProbe currentProbe,
         bool dryRun,
+        bool survey,
         Stack<GrainId> path,
         CancellationToken cancellationToken)
     {
@@ -639,6 +656,11 @@ internal sealed partial class ShardRootGrain
         }
 
         var verified = 0;
+        var surveyVerified = 0;
+        var missing = 0;
+        var contradictions = 0;
+        string? firstUnverifiedKey = null;
+        var disposition = OrphanedLeafDisposition.Repairable;
 
         foreach (var key in keys)
         {
@@ -658,11 +680,16 @@ internal sealed partial class ShardRootGrain
                 // and it comes for free: the verification loop has to route
                 // every key anyway, so it necessarily re-tests reachability
                 // against EVERY key the leaf holds rather than against one.
-                return Finding(
-                    OrphanedLeafDisposition.RefusedRoutingContradiction,
-                    keys.Count,
-                    verified,
-                    key);
+                if (!survey)
+                    return Finding(OrphanedLeafDisposition.RefusedRoutingContradiction, keys.Count, verified, key);
+
+                if (firstUnverifiedKey is null)
+                {
+                    firstUnverifiedKey = key;
+                    disposition = OrphanedLeafDisposition.RefusedRoutingContradiction;
+                }
+                contradictions++;
+                continue;
             }
 
             // Non-null is exactly what a reader of this key would see, which
@@ -674,14 +701,30 @@ internal sealed partial class ShardRootGrain
             // reason that is not a data-loss risk.
             if (await ResolveLeafGrain(ownerId).GetAsync(key) is null)
             {
-                return Finding(
-                    OrphanedLeafDisposition.RefusedUnverifiedKeys,
-                    keys.Count,
-                    verified,
-                    key);
+                if (!survey)
+                    return Finding(OrphanedLeafDisposition.RefusedUnverifiedKeys, keys.Count, verified, key);
+
+                if (firstUnverifiedKey is null)
+                {
+                    firstUnverifiedKey = key;
+                    disposition = OrphanedLeafDisposition.RefusedUnverifiedKeys;
+                }
+                missing++;
+                continue;
             }
 
-            verified++;
+            surveyVerified++;
+            if (firstUnverifiedKey is null) verified++;
+        }
+
+        if (survey)
+        {
+            return Finding(disposition, keys.Count, verified, firstUnverifiedKey) with
+            {
+                SurveyVerifiedKeyCount = surveyVerified,
+                SurveyMissingKeyCount = missing,
+                SurveyRoutingContradictionKeyCount = contradictions,
+            };
         }
 
         if (dryRun)

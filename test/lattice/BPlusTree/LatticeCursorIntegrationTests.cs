@@ -197,7 +197,7 @@ public class LatticeCursorIntegrationTests
         Assert.That(totalDeleted, Is.EqualTo(5)); // b,c,d,e,f
 
         var remaining = new List<string>();
-        await foreach (var k in tree.KeysAsync()) remaining.Add(k);
+        await foreach (var k in tree.ScanKeysAsync()) remaining.Add(k);
         Assert.That(remaining, Is.EqualTo(new[] { "a", "g", "h" }));
     }
 

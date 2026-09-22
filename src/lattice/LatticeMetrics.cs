@@ -1716,6 +1716,76 @@ public static class LatticeMetrics
     public const string WalCompactionReclaimedBytesName = "orleans.lattice.wal.compaction.reclaimed_bytes";
 
     /// <summary>
+    /// Bytes truncated from a WAL shard log by activation-time recovery
+    /// because the bytes occupying them were never sealed by a commit record,
+    /// tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Zero-primed per shard.
+    /// <para>
+    /// Recovery rolls forward every committed batch and truncates the unsealed
+    /// tail. That truncation is correct - an unsealed record was never durable,
+    /// and replaying it would violate the batch atomicity the commit record
+    /// exists to provide - but until issue #3366 it was also entirely silent,
+    /// which left a shard that discarded a tail indistinguishable from one that
+    /// recovered with nothing to discard.
+    /// </para>
+    /// <para>
+    /// <b>This counter does not measure a fault on its own.</b> It measures a
+    /// quantity whose interpretation depends on how the previous host exited.
+    /// After a crash or a kill, a non-zero reading is the expected and benign
+    /// case: writes were in flight and never sealed. After a drain that
+    /// completed, the expected reading is exactly zero, because a completed
+    /// drain has flushed and sealed every batch it acknowledged - so a non-zero
+    /// reading there reports acknowledged writes that did not survive the
+    /// restart. Read it against the recorded exit, never alone.
+    /// </para>
+    /// <para>
+    /// It is also the only point at which the quantity is observable at all:
+    /// recovery destroys the evidence it is derived from by truncating the
+    /// file, so a measurement not taken here cannot be recovered afterwards
+    /// from the log, from the shard, or from a snapshot.
+    /// </para>
+    /// <para>
+    /// Zero-priming is load-bearing for the reason given on
+    /// <see cref="WalCompactions"/>: an absent series and a zero series carry
+    /// opposite meanings, and issue #3107 established in this codebase how
+    /// expensive that particular ambiguity is to diagnose. Priming is per
+    /// shard, so a shard that is not reporting stays distinguishable from a
+    /// shard that recovered cleanly even after a sibling has reported.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalRecoveryTornTailBytes =
+        Meter.CreateCounter<long>("orleans.lattice.wal.recovery.torn_tail_bytes", unit: "By",
+            description: "Bytes truncated from a WAL shard log by activation-time recovery because they were never sealed by a commit record, tagged by tree and by storage shard. Not a fault on its own: after a crash a non-zero reading is expected and benign, while after a drain that completed the expected reading is exactly zero, so a non-zero reading there reports acknowledged writes that did not survive the restart. Read it against the recorded exit. Recovery truncates the evidence this is derived from, so a measurement not taken here cannot be recovered later. Zero-primed per shard.");
+
+    /// <summary>Canonical name of <see cref="WalRecoveryTornTailBytes"/>.</summary>
+    public const string WalRecoveryTornTailBytesName = "orleans.lattice.wal.recovery.torn_tail_bytes";
+
+    /// <summary>
+    /// Count of complete data records discarded from a WAL shard log by
+    /// activation-time recovery because no commit record ever sealed them,
+    /// tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Zero-primed per shard.
+    /// <para>
+    /// The companion to <see cref="WalRecoveryTornTailBytes"/>, and both are
+    /// needed because they separate two different causes that the byte figure
+    /// alone conflates. The byte figure also covers the torn trailing bytes of
+    /// a single partially-written record, which are not a complete record and
+    /// so contribute no count. A reading of bytes greater than zero with a
+    /// record count of zero is therefore one interrupted write, which is the
+    /// ordinary shape of a process killed mid-append. A non-zero record count
+    /// is a run of complete records that were written and never committed,
+    /// which is a different and more serious shape: the batch reached the file
+    /// intact and the commit that would have made it durable never followed.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalRecoveryTornTailRecords =
+        Meter.CreateCounter<long>("orleans.lattice.wal.recovery.torn_tail_records", unit: "{record}",
+            description: "Complete data records discarded from a WAL shard log by activation-time recovery because no commit record sealed them, tagged by tree and by storage shard. Read with orleans.lattice.wal.recovery.torn_tail_bytes, which it disambiguates: bytes above zero with a record count of zero is a single interrupted write (the ordinary shape of a kill mid-append), whereas a non-zero record count is a run of complete records that were written and never committed. Zero-primed per shard.");
+
+    /// <summary>Canonical name of <see cref="WalRecoveryTornTailRecords"/>.</summary>
+    public const string WalRecoveryTornTailRecordsName = "orleans.lattice.wal.recovery.torn_tail_records";
+
+    /// <summary>
     /// Retained (live) payload bytes a WAL shard held at the moment its
     /// compaction threshold was evaluated, tagged with <see cref="TagTree"/>
     /// and <see cref="TagShard"/>. Sampled once per evaluation, before any arm
@@ -8135,6 +8205,64 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafStrandedTag =
         new(TagOutcome, "stranded");
+
+    /// <summary>
+    /// Count of range-scan chain regressions suppressed by a shard root - rows
+    /// dropped from a leaf whose keys sit at or behind the scan's chain
+    /// watermark, which proves the leaf is not reachable by descent for the
+    /// range it claims to own (issue 3271). Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagShard"/>, <see cref="TagOutcome"/> and the tenant label.
+    /// <para>
+    /// This counter exists because the suppression used to be reported
+    /// <em>only</em> as a log warning, and that is not an aggregate anyone can
+    /// read. One field burst emitted 110,322 warnings in about eight minutes -
+    /// roughly 2,354 lines a second, 99.3% of all warning output - which filled
+    /// half of a 100 MB container log ring and collapsed that host's log
+    /// retention to about 108 seconds. Nothing on the box could be diagnosed
+    /// after the fact while it ran. The log line is now bounded (issue 3341) and
+    /// this counter carries the magnitude the log used to carry.
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>suppression</c> - one per suppression event, which is once per
+    ///   offending leaf per page fill. This is the rate the log used to
+    ///   represent line-for-line, so it is the arm to read for how hard the
+    ///   condition is firing.</item>
+    ///   <item><c>distinct-leaf</c> - one the first time a shard-root activation
+    ///   observes a given leaf regress. Summed over an activation it is the
+    ///   <em>distinct damaged-leaf count</em>, which is the quantity an operator
+    ///   actually needs and the one that used to be obtainable only by
+    ///   de-duplicating the warning stream by leaf id. The census is deliberately
+    ///   an aggregate rather than a per-leaf tag: one series per B+ leaf grain is
+    ///   an unbounded-cardinality defect (issue 2518).</item>
+    /// </list>
+    /// <para>
+    /// <b>Reading a zero.</b> Both arms are primed at zero from shard-root
+    /// activation through the same recorder the live path uses, so an absent
+    /// series means the build does not carry the instrument rather than that the
+    /// shard's chain is intact. Read the two together: <c>suppression</c> far
+    /// above <c>distinct-leaf</c> is a small set of damaged leaves re-encountered
+    /// on every page, which is the shape the field burst had, whereas the two
+    /// moving together is fresh damage spreading across the chain.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanChainRegressions =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.chain_regressions", unit: "{regression}",
+            description: "Count of range-scan rows suppressed from leaves that regressed the scan's chain watermark, by whether the event is a suppression or the first sighting of a distinct damaged leaf.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>suppression</c> (one range-scan chain
+    /// regression suppressed, counted once per offending leaf per page fill).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanChainRegressionSuppressionTag =
+        new(TagOutcome, "suppression");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>distinct-leaf</c> (the first time this
+    /// shard-root activation observed this particular leaf regress, so the arm
+    /// sums to the distinct damaged-leaf count).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeScanChainRegressionDistinctLeafTag =
+        new(TagOutcome, "distinct-leaf");
 
 
     /// <summary>

@@ -19,14 +19,24 @@ namespace Orleans.Lattice;
 /// pin.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// catch handlers continue to absorb it; the typed slot lets retry-aware
-/// callers distinguish the quiesce regime from genuine failures.
+/// The typed slot lets retry-aware callers distinguish the quiesce regime from
+/// genuine failures.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> absorbs this fence and applies
+/// remediation calibrated for a genuine failure rather than for the brief,
+/// self-healing quiesce window this signals. This type therefore implements
+/// <see cref="ILatticeDomainFault"/>, so a broad handler declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name, and retrying once the move completes, remains
+/// correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeWalQuiescing)]
-public sealed class LatticeWalQuiescingException : InvalidOperationException
+public sealed class LatticeWalQuiescingException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic message. Provided to

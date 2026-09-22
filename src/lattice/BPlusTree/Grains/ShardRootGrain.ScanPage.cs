@@ -312,6 +312,10 @@ internal sealed partial class ShardRootGrain
         // is a latched bool read on every subsequent call.
         PrimeScanPageStallPhases();
 
+        // Same reasoning, and the same pair of seams, for the chain-regression
+        // counter that replaced the unbounded warning stream (issue 3341).
+        PrimeScanChainRegressions();
+
         var walk = ScanPageWalkPool.Get();
         walk.Begin(optionsResolver.GetScanPageBounds(TreeId), operation);
         return walk;
@@ -875,27 +879,171 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Reports a leaf whose keys regressed the scan's chain watermark, which
     /// proves it is not reachable by descent for the range it claims to own
-    /// (issue 3271). Emitted once per offending leaf per page.
+    /// (issue 3271). Called once per offending leaf per page.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is a warning rather than a throw on purpose. Throwing would convert
     /// a bounded read-correctness defect into a total read outage for exactly
     /// the trees that carry an orphan, and issue 3269 establishes that no
     /// operator repair path exists yet - so the failure would be unrecoverable
     /// rather than merely loud. The page is served correctly and the tree's
     /// need for repair is reported.
+    /// </para>
+    /// <para>
+    /// <b>Why the log is bounded and the counter is not.</b> Reporting the
+    /// suppression <em>only</em> as a log line made the report itself the
+    /// outage: one field burst emitted 110,322 warnings in about eight minutes,
+    /// roughly 2,354 lines a second, which is 99.3% of all warning output. That
+    /// filled half of a 100 MB container log ring and collapsed the host's log
+    /// retention to about 108 seconds, so nothing on that box could be diagnosed
+    /// after the fact - a "we checked the logs and saw nothing" conclusion was
+    /// drawn and had to be retracted. The volume was not new damage: it was
+    /// 2,886 distinct leaves re-encountered about 43 times each, once per page
+    /// fill, because <see cref="ScanChainCursor.TryClaimWarning"/> only dedupes
+    /// within a single page. So every line after the first sighting of a leaf
+    /// restated a fact already on the record (issue 3341).
+    /// </para>
+    /// <para>
+    /// <b>Novelty-throttled, not rate-throttled, and that is deliberate.</b> The
+    /// standing repository guidance on log throttling argues for a time floor
+    /// rather than a count cap, because a pure count cap degrades pathologically
+    /// with cadence - it silences a slow, long-running condition forever after N
+    /// lines while still permitting a fast one to flood. That argument is about
+    /// throttling on the <em>rate</em> axis. This throttles on the <em>fact</em>
+    /// axis: output is bounded by the number of distinct damaged leaves, not by
+    /// elapsed time or by a line budget, so a leaf that has never been reported
+    /// is always reported and a leaf already on the record never is. The set of
+    /// damaged leaves is what an operator acts on, and it does not change with
+    /// how often the shard is scanned. Liveness is not lost to the throttle
+    /// because it moves to
+    /// <see cref="LatticeMetrics.ScanChainRegressions"/>, which is incremented on
+    /// <em>every</em> suppression before any throttling decision is taken and is
+    /// primed at zero so an absent series cannot be misread as a clean shard. A
+    /// wall-clock floor was also rejected on mechanism: this grain takes no
+    /// <see cref="TimeProvider"/>, so a time-based bound could not be tested
+    /// without inventing a seam for the test alone.
+    /// </para>
+    /// <para>
+    /// The bound is one detailed line per distinct leaf up to
+    /// <see cref="ChainRegressionWarnDetailCap"/>, then exactly one summary line
+    /// naming the counter, then silence for the life of the activation: about
+    /// eleven lines where the field burst produced 110,322.
+    /// </para>
     /// </remarks>
-    private void WarnScanChainRegression(ScanPageWalk scan, GrainId leafId, string? watermark) =>
-        logger.LogWarning(
-            "Range scan {Operation} on tree {TreeId} shard {ShardIndex} suppressed rows from leaf {LeafId}: " +
-            "its keys are at or behind the chain watermark {Watermark}, so the leaf is not reachable by descent " +
-            "for the range it claims and its rows duplicate a live leaf (issue 3271). The shard's leaf chain " +
-            "needs repair (issue 3269).",
-            scan.Operation,
-            TreeId,
-            ShardIndex,
-            leafId,
-            watermark);
+    private void WarnScanChainRegression(ScanPageWalk scan, GrainId leafId, string? watermark)
+    {
+        // Allocated lazily, so a shard with an intact chain - the overwhelming
+        // majority - carries no set at all. Its size is bounded by the number
+        // of damaged leaves in this shard, which is bounded by the shard's own
+        // leaf population.
+        var firstSighting = (_chainRegressionLeaves ??= []).Add(leafId);
+
+        // Recorded before any throttling decision, and on every suppression, so
+        // the counter carries the true magnitude the log no longer does.
+        RecordScanChainRegression(1, LatticeMetrics.OutcomeScanChainRegressionSuppressionTag);
+
+        if (!firstSighting)
+        {
+            return;
+        }
+
+        RecordScanChainRegression(1, LatticeMetrics.OutcomeScanChainRegressionDistinctLeafTag);
+
+        var distinctLeaves = _chainRegressionLeaves.Count;
+        if (distinctLeaves <= ChainRegressionWarnDetailCap)
+        {
+            logger.LogWarning(
+                "Range scan {Operation} on tree {TreeId} shard {ShardIndex} suppressed rows from leaf {LeafId}: " +
+                "its keys are at or behind the chain watermark {Watermark}, so the leaf is not reachable by descent " +
+                "for the range it claims and its rows duplicate a live leaf (issue 3271). The shard's leaf chain " +
+                "needs repair (issue 3269).",
+                scan.Operation,
+                TreeId,
+                ShardIndex,
+                leafId,
+                watermark);
+            return;
+        }
+
+        if (distinctLeaves == ChainRegressionWarnDetailCap + 1)
+        {
+            logger.LogWarning(
+                "Range scan {Operation} on tree {TreeId} shard {ShardIndex} has now suppressed rows from more than " +
+                "{DetailCap} distinct leaves whose keys regressed the chain watermark (issue 3271). Further leaves " +
+                "will not be named in the log for the life of this activation, because restating them once per page " +
+                "fill is what collapsed log retention on the host that first met this (issue 3341). Read " +
+                "{CounterName} instead: its distinct-leaf arm is the number of damaged leaves and its suppression " +
+                "arm is the rate. The shard's leaf chain needs repair (issue 3269).",
+                scan.Operation,
+                TreeId,
+                ShardIndex,
+                ChainRegressionWarnDetailCap,
+                LatticeMetrics.ScanChainRegressions.Name);
+        }
+    }
+
+    /// <summary>
+    /// How many distinct chain-regressed leaves a single shard-root activation
+    /// names in the log before it falls back to the counter. Ten is enough for
+    /// an operator to recognise the shape of the damage - which leaves, which
+    /// watermarks - without the log becoming the outage.
+    /// </summary>
+    internal const int ChainRegressionWarnDetailCap = 10;
+
+    /// <summary>
+    /// The distinct leaves this activation has already reported as chain
+    /// regressions. <see langword="null"/> until the first regression, so an
+    /// intact shard allocates nothing.
+    /// </summary>
+    private HashSet<GrainId>? _chainRegressionLeaves;
+
+    private bool _scanChainRegressionsPrimed;
+
+    /// <summary>
+    /// Publishes both arms of <see cref="LatticeMetrics.ScanChainRegressions"/>
+    /// at zero, so that a shard whose chain is intact reports a measured zero
+    /// rather than no series at all.
+    /// <para>
+    /// This matters more here than on most counters, because the whole point of
+    /// issue 3341 is that the suppression stopped being visible in the log. If
+    /// the counter that replaced the log only existed after the first
+    /// suppression, an absent series would read as "the feature is off" or "this
+    /// build does not carry it" exactly as often as it read "this shard is
+    /// clean", and the fix would have traded one blindness for another.
+    /// </para>
+    /// <para>
+    /// Priming is correct here because this is a counter: adding zero is the
+    /// identity, so it creates the series and changes no reading of it. The same
+    /// pattern must not be carried across to a <c>Histogram&lt;T&gt;</c>, where a
+    /// recorded zero is a fabricated sample.
+    /// </para>
+    /// </summary>
+    private void PrimeScanChainRegressions()
+    {
+        if (_scanChainRegressionsPrimed)
+        {
+            return;
+        }
+
+        _scanChainRegressionsPrimed = true;
+        RecordScanChainRegression(0, LatticeMetrics.OutcomeScanChainRegressionSuppressionTag);
+        RecordScanChainRegression(0, LatticeMetrics.OutcomeScanChainRegressionDistinctLeafTag);
+    }
+
+    /// <summary>
+    /// The single write seam for
+    /// <see cref="LatticeMetrics.ScanChainRegressions"/>, so that a primed arm
+    /// and an armed one are the same series by construction rather than by two
+    /// call sites agreeing on a tag list.
+    /// </summary>
+    private void RecordScanChainRegression(long delta, KeyValuePair<string, object?> outcome) =>
+        LatticeMetrics.ScanChainRegressions.Add(
+            delta,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
+            outcome,
+            LatticeTenantLabel.ForTree(TreeId));
 
     /// <summary>
     /// Publishes a finished partial page for the guard to bank if the ceiling

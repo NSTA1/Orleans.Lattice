@@ -20,11 +20,14 @@ public readonly record struct StoragePressure
     [Id(2)] private readonly IReadOnlyList<WalAccountPressure>? _accounts;
 
     /// <summary>
-    /// <see langword="true"/> when aggregate retained WAL bytes have crossed the
-    /// configured storage-pressure threshold, signalling the storage axis is
-    /// under-provisioned. <see langword="false"/> when retained bytes are within
-/// the configured threshold.
-    /// </summary>
+/// <see langword="true"/> when retained WAL bytes have crossed the configured
+/// storage-pressure threshold, signalling the storage axis is
+/// under-provisioned. The comparison sums each tree's own resolved ceiling
+/// rather than reading one silo-wide value, and considers only the trees that
+/// declare a ceiling; a tree with the byte-pressure policy off contributes
+/// neither bytes nor budget. <see langword="false"/> when retained bytes are
+/// within that threshold, and whenever no tree declares a ceiling at all.
+/// </summary>
     [Id(0)] public bool OverThreshold { get; init; }
 
     /// <summary>

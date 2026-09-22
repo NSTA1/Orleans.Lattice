@@ -271,7 +271,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_wal_move_plan` | read | Preview moving a WAL partition to a target storage provider. |
 | `lattice_treeadmin_wal_move_execute` | manage | Execute a planned WAL partition move. |
 | `lattice_treeadmin_wal_move_reclaim` | manage | Reclaim source WAL storage after a move. |
-| `lattice_treeadmin_orphaned_leaves_audit` | read | Audit a tree for descent-unreachable leaves and report what the repair would do about each, plus every region it could not establish a verdict over. One bounded batch per call; drive to `complete=true`, then check `verdict_complete`. |
+| `lattice_treeadmin_orphaned_leaves_audit` | read | Audit descent-unreachable leaves and repair eligibility. Optional `survey=true` counts every key outcome per leaf (100,000-key bound, read-only, off by default); `VerifiedKeyCount` remains a prefix, not a census. Nullable survey counts distinguish unknown from zero; findings identify shard, leaf, range and first failure. Batch totals include orphan/repairable/refused leaves and surveyed missing keys. Keep survey enabled on resumed batches; drive to `complete=true`, then check `verdict_complete` and unknown counts. |
 | `lattice_treeadmin_orphaned_leaves_repair` | manage | Unsplice every orphaned leaf whose keys were all verified readable elsewhere, releasing the WAL trim floor. One bounded batch per call; drive to `complete=true`, then re-audit. On a timeout the return value is not authoritative. |
 
 ### Views, tag indexes, compaction, and retention

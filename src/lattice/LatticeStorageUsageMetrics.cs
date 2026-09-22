@@ -328,6 +328,9 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
                     TotalBytes = report.WalRetainedBytes + prev.SnapshotBytes + prev.LeafStateBytes,
                     Partial = prev.Partial,
                     SampledAt = report.SampledAt,
+                    // The shallow WAL poll carries no ceiling, so the last deep
+                    // report's value is carried forward rather than dropped.
+                    WalMaxRetainedBytes = prev.WalMaxRetainedBytes,
                 };
                 return (merged, existing.DeepMeasured, now);
             });

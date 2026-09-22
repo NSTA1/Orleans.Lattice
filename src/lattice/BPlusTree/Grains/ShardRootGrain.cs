@@ -58,6 +58,7 @@ internal sealed partial class ShardRootGrain(
         PrimeScanPageLeafReadOutcomes();
         PrimeScanPageStallPhases();
         PrimeScanPageZeroProgressOutcomes();
+        PrimeScanChainRegressions();
         return HealBakedRootIsLeafFlagAsync();
     }
 

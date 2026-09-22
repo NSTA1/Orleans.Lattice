@@ -23,4 +23,7 @@ public sealed record TreeAdminOrphanedLeafRequest
     /// <see langword="null"/> to start a new pass at the first shard.
     /// </summary>
     [Id(1)] public string? ResumeFrom { get; init; }
+
+    /// <summary>Opt-in full key census on the read-only audit RPC. Ignored by repair.</summary>
+    [Id(2)] public bool Survey { get; init; }
 }

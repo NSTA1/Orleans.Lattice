@@ -80,7 +80,7 @@ public partial class BPlusTreeBulkLoadTests
         await tree.BulkLoadAsync(entries);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         var expected = entries.Select(e => e.Key).Order().ToList();
@@ -147,7 +147,7 @@ public partial class BPlusTreeBulkLoadTests
 
         // Verify key scan is complete and sorted.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys.Count, Is.EqualTo(count));
     }
@@ -219,7 +219,7 @@ public partial class BPlusTreeBulkLoadTests
 
         // Verify key scan returns all in order.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys.Count, Is.EqualTo(totalCount));
     }
@@ -302,7 +302,7 @@ public partial class BPlusTreeBulkLoadTests
 
         // Verify key count matches expected (no duplicates).
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys.Count, Is.EqualTo(12));
@@ -325,7 +325,7 @@ public partial class BPlusTreeBulkLoadTests
         await shard.BulkAppendAsync("op-b", batch2);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys.Count, Is.EqualTo(16));
@@ -359,7 +359,7 @@ public partial class BPlusTreeBulkLoadTests
         await shard.BulkAppendAsync("op-2", []);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys.Count, Is.EqualTo(5));
@@ -384,7 +384,7 @@ public partial class BPlusTreeBulkLoadTests
         await shard.BulkAppendAsync("op-fill-2", batch2);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         var expected = Enumerable.Range(0, 8).Select(i => $"k{i:D4}").ToList();
@@ -406,7 +406,7 @@ public partial class BPlusTreeBulkLoadTests
 
         Assert.That(accepted, Is.EqualTo(30));
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys, Is.EquivalentTo(entries.Select(e => e.Key)));
     }
@@ -426,7 +426,7 @@ public partial class BPlusTreeBulkLoadTests
         await tree.BulkAppendChunkAsync("idem-op/0", entries);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys.Count, Is.EqualTo(24));
         Assert.That(keys, Is.EquivalentTo(entries.Select(e => e.Key)));
@@ -473,7 +473,7 @@ public partial class BPlusTreeBulkLoadTests
         await tree.BulkLoadAsync(GenerateEntries(), _cluster.GrainFactory, chunkSize: 7);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys.Count, Is.EqualTo(count));
@@ -505,7 +505,7 @@ public partial class BPlusTreeBulkLoadTests
 
         // Keys scan should reflect the changes.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Does.Contain("k0099"));
@@ -555,7 +555,7 @@ public partial class BPlusTreeBulkLoadTests
         await tree.DeleteRangeAsync("a", "c");
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(new[] { "c" }));

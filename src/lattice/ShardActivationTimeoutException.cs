@@ -29,15 +29,25 @@ namespace Orleans.Lattice;
 /// retry path).
 /// </para>
 /// <para>
-/// Derives from <see cref="System.TimeoutException"/> so existing catch
-/// handlers that match on <see cref="System.TimeoutException"/> continue to
-/// work; the typed slots (<see cref="TreeId"/>, <see cref="ShardIndex"/>,
+/// The typed slots (<see cref="TreeId"/>, <see cref="ShardIndex"/>,
 /// <see cref="TimeoutSeconds"/>) carry the per-occurrence attribution.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.TimeoutException"/> for backwards
+/// compatibility. Unlike most of the domain-fault family, a bounded retry is
+/// genuinely the right remediation here, and the internal retry loop that
+/// catches this type by name performs exactly that; a broad
+/// <c>catch (TimeoutException)</c> that retries is therefore not actively
+/// harmful. It is nonetheless a domain condition rather than an ambient I/O
+/// timeout, so this type implements <see cref="ILatticeDomainFault"/> to let a
+/// handler that must distinguish the two decline it with
+/// <c>catch (TimeoutException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.ShardActivationTimeout)]
-public sealed class ShardActivationTimeoutException : TimeoutException
+public sealed class ShardActivationTimeoutException : TimeoutException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic context. Provided to

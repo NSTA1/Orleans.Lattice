@@ -14,6 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 public partial class ResilientScanExtensionsTests
 {
+    // Raw stream stubs are deliberate: they inject the aborts the recovering wrappers must handle.
     private record TestItem(string Name, int Score);
 
     private static readonly ILatticeSerializer<TestItem> Serializer = JsonLatticeSerializer<TestItem>.Default;

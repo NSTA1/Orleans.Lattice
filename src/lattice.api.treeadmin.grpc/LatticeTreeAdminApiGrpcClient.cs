@@ -777,6 +777,17 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>Runs the opt-in read-only key census, continuing bounded batches with the supplied resume token.</summary>
+    public Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.AuditOrphanedLeaves,
+            new TreeAdminOrphanedLeafRequest { TreeId = treeId, ResumeFrom = resumeFrom, Survey = true },
+            cancellationToken);
+    }
+
     /// <summary>
     /// Repairs <paramref name="treeId"/> by unsplicing every descent-unreachable leaf
     /// whose keys were all shown to be readable elsewhere. An irreversible structural

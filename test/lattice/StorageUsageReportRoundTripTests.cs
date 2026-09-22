@@ -44,6 +44,7 @@ public sealed class StorageUsageReportRoundTripTests
             TotalBytes = 3584,
             Partial = true,
             SampledAt = sampledAt,
+            WalMaxRetainedBytes = 4096,
         };
 
         var decoded = _treeSerializer.Deserialize(_treeSerializer.SerializeToArray(report));
@@ -55,6 +56,7 @@ public sealed class StorageUsageReportRoundTripTests
         Assert.That(decoded.TotalBytes, Is.EqualTo(3584));
         Assert.That(decoded.Partial, Is.True);
         Assert.That(decoded.SampledAt, Is.EqualTo(sampledAt));
+        Assert.That(decoded.WalMaxRetainedBytes, Is.EqualTo(4096));
     }
 
     [Test]
@@ -66,6 +68,7 @@ public sealed class StorageUsageReportRoundTripTests
         Assert.That(decoded.WalRetainedBytes, Is.EqualTo(0));
         Assert.That(decoded.TotalBytes, Is.EqualTo(0));
         Assert.That(decoded.Partial, Is.False);
+        Assert.That(decoded.WalMaxRetainedBytes, Is.Null);
     }
 
     [Test]

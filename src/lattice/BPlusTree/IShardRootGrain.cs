@@ -518,6 +518,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Read-only orphan audit that counts every key outcome, bounded by the same
+    /// walk and per-leaf key limits as repair. Never retires or unlinks a leaf.
+    /// </summary>
+    Task<OrphanedLeafRepairPage> SurveyOrphanedLeavesAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the <see cref="GrainId"/> of the leaf a chain walk should start
     /// at, honouring an optional resume key, or <c>null</c> if the shard's tree
     /// has not been initialised yet.
