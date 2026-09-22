@@ -43,10 +43,14 @@ public readonly record struct WalAccountPressure
 
     /// <summary>
     /// <see langword="true"/> when this account's retained WAL bytes have crossed
-    /// the advisory fraction of
-    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> - the
-    /// capacity-bound trigger. <see langword="false"/> for a healthy or a purely
-    /// throughput-bound account.
+    /// the advisory fraction of the summed
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> ceilings of
+    /// the trees whose partitions sit on it - the capacity-bound trigger. The
+    /// ceilings are resolved per tree, so trees with different ceilings on
+    /// different accounts cross at different points.
+    /// <see langword="false"/> for a healthy or a purely throughput-bound account,
+    /// and always <see langword="false"/> when no tree on the account declares a
+    /// ceiling.
     /// </summary>
     [Id(4)] public bool OverThreshold { get; init; }
 }

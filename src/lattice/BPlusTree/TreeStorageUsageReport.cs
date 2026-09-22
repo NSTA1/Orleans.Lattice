@@ -117,4 +117,30 @@ public readonly record struct TreeStorageUsageReport
     /// <see cref="Partial"/> (an unsupported byte surface) leaves it exact.
     /// </summary>
     [Id(7)] public long LiveKeys { get; init; }
+
+    /// <summary>
+    /// The advisory retained-WAL-byte ceiling <b>in effect for this tree</b> at
+    /// the moment the report was sampled, or <see langword="null"/> when the
+    /// byte-pressure policy is disabled for it. This is the fully resolved
+    /// value, so it already reflects the per-tree runtime override
+    /// (<see cref="ILatticeRegistry.SetWalMaxRetainedBytesAsync(string, long?)"/>)
+    /// layered over named per-tree options layered over the silo-wide
+    /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> default.
+    /// <para>
+    /// It rides on the report so a consumer that reduces many trees - the
+    /// scaling package's storage axis in particular, which attributes each
+    /// tree's bytes across the WAL accounts backing its partitions - can weigh
+    /// each tree's bytes against <i>that tree's own</i> budget instead of
+    /// against a single globally-read ceiling. Reading the ceiling globally
+    /// gave every tree the same answer, so a silo that set the ceiling only
+    /// per tree reported no capacity classification at all (issue #3336).
+    /// </para>
+    /// <para>
+    /// Diagnostic echo only: it never changes what a WAL garbage-collection
+    /// pass is allowed to trim. Unlike the byte surfaces it is always exact -
+    /// it is read from configuration rather than measured - so
+    /// <see cref="Partial"/> says nothing about it.
+    /// </para>
+    /// </summary>
+    [Id(9)] public long? WalMaxRetainedBytes { get; init; }
 }

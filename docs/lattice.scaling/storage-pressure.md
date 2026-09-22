@@ -10,8 +10,11 @@ WAL-move surface yourself. Nothing on this axis ever changes the compute
 
 `StoragePressure` is a cluster-aggregate snapshot with:
 
-- `OverThreshold` - `true` when aggregate retained WAL bytes have crossed the
-  configured threshold (the advisory fraction of `LatticeOptions.WalMaxRetainedBytes`).
+- `OverThreshold` - `true` when budgeted retained WAL bytes have crossed the
+  configured threshold (the advisory fraction of the summed per-tree
+  `WalMaxRetainedBytes` ceilings). Each tree is measured against its own
+  resolved ceiling, so trees configured differently cross at different points;
+  a tree with no ceiling contributes neither bytes nor budget to the comparison.
 - `WalRetainedBytes` - total retained WAL bytes across every catalogue key.
 - `Accounts` - a `WalAccountPressure` per `IWalStorageProviderCatalog` key that
   backs a WAL partition (never `null`; empty when nothing is tracked).
@@ -27,10 +30,13 @@ of pressure have different remedies:
 |---|---|---|
 | `None` | Healthy: neither backend-saturated nor over the retained-bytes threshold. | Nothing to do. |
 | `ThroughputBound` | A single hot account has topped out its backend write rate (its per-tree `WalSaturationState` is `Throttled` or `Saturated`, in practice around 22-24 thousand entries per second for one storage account) continuously for `AccountSaturationWindow`. | Spread the account's hot partitions across more accounts (a WAL move). Adding retention headroom does not help. |
-| `CapacityBound` | Retained WAL bytes have grown past `RetainedBytesAdvisoryRatio` of `WalMaxRetainedBytes`. | Reclaim retained bytes or provision more retention. Spreading throughput does not help. |
+| `CapacityBound` | Retained WAL bytes have grown past `RetainedBytesAdvisoryRatio` of the account's budget - the sum of the effective per-tree `WalMaxRetainedBytes` ceilings of the trees holding partitions there. | Reclaim retained bytes or provision more retention. Spreading throughput does not help. |
 
 `WalAccountPressure.OverThreshold` is the capacity-bound trigger specifically -
-`true` when that account's retained bytes crossed the advisory fraction.
+`true` when that account's budgeted retained bytes crossed the advisory fraction
+of its budget. The budget is the sum of the effective per-tree ceilings
+attributed to that account, so two trees configured with different ceilings are
+judged independently rather than against one silo-wide number.
 
 ## The rebalance recommendation
 

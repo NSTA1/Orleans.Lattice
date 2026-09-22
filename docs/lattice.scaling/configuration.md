@@ -56,7 +56,7 @@ The storage axis is report-only: none of these knobs affect the compute
 
 | Option | Type | Default | Guidance |
 |---|---|---|---|
-| `RetainedBytesAdvisoryRatio` | `double` | `0.8` | Fraction of `LatticeOptions.WalMaxRetainedBytes` at or above which retained WAL bytes count as capacity pressure. Clamped to `(0, 1]`. Ignored when `WalMaxRetainedBytes` is `null` (no ceiling configured). |
+| `RetainedBytesAdvisoryRatio` | `double` | `0.8` | Fraction of an account's retention budget at or above which its retained WAL bytes count as capacity pressure. The budget is the sum of the *effective* per-tree `WalMaxRetainedBytes` ceilings (runtime override, then named options, then the silo default) of the trees holding partitions on that account, attributed across their partitions. Clamped to `(0, 1]`. A tree whose ceiling is `null` contributes neither bytes nor budget, so an account backing only such trees never reports capacity pressure. |
 | `AccountSaturationWindow` | `TimeSpan` | `30s` | How long a provider key must be continuously observed saturated before the collector classifies it throughput-bound and recommends a move. Debounces a transient blip. A non-positive value classifies on the first saturated sample. |
 | `StorageRecommendationsEnabled` | `bool` | `true` | Master switch for emitting a `WalRebalanceRecommendation`. When `false` the collector still reports `OverThreshold` and the per-account breakdown but leaves `Recommendation` `null`. |
 

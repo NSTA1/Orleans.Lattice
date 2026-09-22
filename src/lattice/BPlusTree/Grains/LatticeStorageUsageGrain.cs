@@ -235,6 +235,11 @@ internal sealed class LatticeStorageUsageGrain(
             Partial = !walComplete || !shardsComplete,
             SampledAt = DateTimeOffset.UtcNow,
             LiveKeys = liveKeys,
+            // The resolved per-tree ceiling, echoed so a multi-tree consumer can
+            // weigh this tree's bytes against its own budget rather than against
+            // a globally-read ceiling (issue #3336). `options` is already the
+            // resolver's output, so the runtime override is folded in.
+            WalMaxRetainedBytes = options.WalMaxRetainedBytes,
         };
 
         return (report, walComplete);
