@@ -26,10 +26,21 @@ for throughput rather than for comparability will beat these figures.
 ## The scaling curve
 
 <!-- perf-chart:layer3:start
+  schema=v1
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-_No multi-silo cells measured yet._
+```mermaid
+xychart-beta
+    title "Sustained throughput vs silo count"
+    x-axis "Silos" ["1", "2"]
+    y-axis "Thousand keys/s" 0 --> 44
+    line [19.87, 39.64]
+    line [5.21, 9.04]
+    line [0.88, 0.61]
+```
+
+Series order (xychart-beta renders no legend): `GetManyAsync` (4,096 keys/call), then `SetManyAsync` (4,096 keys/call), then `SetAsync` (point write).
 
 <!-- perf-chart:layer3:end -->
 
@@ -51,14 +62,37 @@ resource group is deleted at the end of the sweep.
 
 <!-- perf-table:layer3:start
   schema=v1
+  batchSize=4096
+  cohortN=1
+  dotnet=10.0.x
+  gitSha=eb78c703c
+  host=Azure Container Apps (Consumption)
+  region=westus3
+  responseTimeoutSec=180
+  rowsMeasured=2026-09-22
+  rungPerSilo=get-many=4000 veh/silo @ 5 Hz / 45s; set-many=1200 veh/silo @ 5 Hz / 45s; set-point=200 veh/silo @ 5 Hz / 45s
+  shardCount=64
+  siloCounts=1,2
+  siloSize=4 vCPU / 8 GiB
+  walAccounts=1
+  walMaxPendingBatches=16
+  walPartitions=8
+  methodology=Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine's active elapsed time. Layer 3 deliberately does NOT reuse Layer 2's rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL, so a write-mode knee may be that account's ceiling rather than the cluster's - see the caveats section.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 |
-|------------------------------------------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|
-| _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+|-----------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|
+| `GetManyAsync` (4,096 keys/call) | 1 | ~20 k keys/s | **~19.9 k keys/s** | 1x | 100% | ~1.47 ms | ~10.98 ms |
+| `GetManyAsync` (4,096 keys/call) | 2 | ~40 k keys/s | **~39.6 k keys/s** | 2x | 100% | ~8.29 ms | ~14.73 ms |
+| `SetManyAsync` (4,096 keys/call) | 1 | ~6 k keys/s | **~5.2 k keys/s** | 1x | 100% | ~837.27 ms | ~2143.95 ms |
+| `SetManyAsync` (4,096 keys/call) | 2 | ~12 k keys/s | **~9 k keys/s** | 1.74x | 87% | ~1492.99 ms | ~1492.99 ms |
+| `SetAsync` (point write) | 1 | ~1 k keys/s | **880 keys/s** | 1x | 100% | ~10.66 ms | ~736.63 ms |
+| `SetAsync` (point write) | 2 | ~2 k keys/s | **611 keys/s** | 0.69x | 35% | ~47.98 ms | ~601.58 ms |
 
 <!-- perf-table:layer3:end -->
+
+> Measured 2026-09-22 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha eb78c703c, n=1 cohorts per cell, silo counts 1,2. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL - see the caveats below before reading a write-mode knee as the cluster's.
 
 ## How to read this
 

@@ -22,11 +22,22 @@ namespace Orleans.Lattice.Testing.Hygiene;
 /// A marker block carries a <em>kind</em> as well as a layer id. A
 /// <c>perf-table</c> block must be followed by a markdown table header with
 /// the layer's expected column count; a <c>perf-chart</c> block must be
-/// followed by a mermaid fence. Both kinds share every other rule (balance,
-/// non-overlap, meta-header schema, provenance note), which is why the kind
-/// is a captured group on one regex rather than a second pair of regexes:
-/// a new kind then inherits the shared rules automatically and only has to
-/// declare its own body check.
+/// followed by a mermaid fence. Both kinds share the structural rules
+/// (balance, non-overlap, a <c>schema=</c> key and the
+/// DO-NOT-HAND-EDIT-BETWEEN-MARKERS notice, a recognised layer id), which is
+/// why the kind is a captured group on one regex rather than a second pair
+/// of regexes: a new kind then inherits the shared rules automatically and
+/// only has to declare its own body check.
+/// </para>
+/// <para>
+/// Two rules are <em>table-only</em>: the full per-layer required-key set,
+/// and the trailing <c>&gt; Measured ...</c> provenance note. Both describe
+/// the provenance of a set of figures, and a layer's chart and table are
+/// rendered from one state object in a single atomic doc update - so the
+/// chart can never disagree with the table beside it, and a second copy
+/// would pin nothing new while duplicating every key (including the
+/// multi-paragraph <c>methodology</c> value) and repeating the same
+/// sentence on screen for one set of numbers.
 /// </para>
 /// <para>
 /// The docs are repo-level files owned by exactly one fixture (the core test
@@ -229,10 +240,21 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
                     + "DO-NOT-HAND-EDIT-BETWEEN-MARKERS notice in the meta header");
             }
 
-            // Rule 3: per-layer required keys present. The required-key set is
-            // a property of the layer, not the kind: a chart and a table for
-            // the same layer describe the same run and must pin the same
-            // provenance.
+            // Rule 3: per-layer required keys present, on TABLE blocks only.
+            // The layer id must still be recognised for either kind, so a typo
+            // in a chart's layer name is caught rather than silently skipped.
+            //
+            // The full provenance set is deliberately required on the table and
+            // not on the chart. Both blocks for a layer are rendered from one
+            // state object in a single atomic doc update, so a chart can never
+            // disagree with the table beside it and a second copy of the keys
+            // would pin nothing the table does not already pin. It would,
+            // however, duplicate every key - including the multi-paragraph
+            // 'methodology' value - directly above the figure, roughly doubling
+            // the doc's marker bulk for no reader or tooling benefit. What both
+            // kinds do carry is 'schema' and the DO-NOT-HAND-EDIT notice
+            // (checked above), because those are what identify a block as
+            // mechanically managed at all.
             var requiredKeys = layer switch
             {
                 "layer1" => Layer1RequiredKeys,
@@ -246,7 +268,7 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
                     $"{docName}: perf-{id}:start (line {startLine}) uses an unknown layer id; "
                     + "expected 'layer1', 'layer2' or 'layer3'");
             }
-            else
+            else if (string.Equals(kind, "table", StringComparison.Ordinal))
             {
                 foreach (var key in requiredKeys)
                 {
@@ -290,10 +312,11 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
             if (bodyEnd <= bodyStart) continue;
 
             var between = content[bodyStart..bodyEnd];
-            var firstNonBlank = between
+            var betweenLines = between
                 .Split('\n')
                 .Select(s => s.TrimEnd('\r'))
-                .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
+                .ToArray();
+            var firstNonBlank = betweenLines.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
 
             if (string.Equals(kind, "chart", StringComparison.Ordinal))
             {
@@ -303,11 +326,28 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
                         $"{docName}: perf-{id}:start (line {startLine}) is not followed by a mermaid fence; "
                         + $"first non-blank line was: '{firstNonBlank?.Trim() ?? "<none>"}'");
                 }
-                else if (!between.Contains("```\n", StringComparison.Ordinal)
-                    && !between.TrimEnd().EndsWith("```", StringComparison.Ordinal))
+                else
                 {
-                    violations.Add(
-                        $"{docName}: perf-{id}:start (line {startLine}) opens a mermaid fence that is never closed");
+                    // Look for a bare closing fence on its own line, after the
+                    // opening one. This is deliberately line-based: the docs are
+                    // written with CRLF, so a substring probe for "```\n" never
+                    // matches (the newline is preceded by \r) and every chart
+                    // block would be reported as unterminated.
+                    var openIndex = Array.FindIndex(betweenLines, s => s.TrimStart().StartsWith("```mermaid", StringComparison.Ordinal));
+                    var closed = false;
+                    for (var k = openIndex + 1; k < betweenLines.Length; k++)
+                    {
+                        if (string.Equals(betweenLines[k].Trim(), "```", StringComparison.Ordinal))
+                        {
+                            closed = true;
+                            break;
+                        }
+                    }
+                    if (!closed)
+                    {
+                        violations.Add(
+                            $"{docName}: perf-{id}:start (line {startLine}) opens a mermaid fence that is never closed");
+                    }
                 }
                 continue;
             }
@@ -342,8 +382,12 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
 
     /// <summary>
     /// Validates the script-managed provenance note ("&gt; Measured ...") that
-    /// appears immediately after every perf-table / perf-chart :end marker,
-    /// across both mechanically-managed performance docs.
+    /// appears immediately after every perf-table :end marker, across both
+    /// mechanically-managed performance docs. Chart blocks are excluded: the
+    /// note states the provenance of the numbers, and a layer's chart is
+    /// rendered from the same state as its table in one atomic update, so the
+    /// single note under the table already covers both. Requiring it twice
+    /// would put the same sentence on screen twice for one set of figures.
     /// </summary>
     [Test]
     public void Performance_doc_provenance_notes_are_well_formed()
@@ -366,8 +410,7 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
             for (var i = 0; i < lines.Length; i++)
             {
                 var line = lines[i];
-                var isEnd = (line.Contains("<!-- perf-table:") || line.Contains("<!-- perf-chart:"))
-                    && line.Contains(":end -->");
+                var isEnd = line.Contains("<!-- perf-table:") && line.Contains(":end -->");
                 if (!isEnd) continue;
                 seenEnds.Add(i);
                 // Find the next non-blank line.

@@ -2379,7 +2379,15 @@ function Update-MultiSiloDocMarkers {
 	$content = Set-ProvenanceNote -Content $content -Layer 'layer3' -Note (Render-ProvenanceNote -Layer 'layer3' -Meta $meta)
 
 	$chart = Render-Layer3Chart -RowsAgg $rowsAgg
-	$chartBlock = '<!-- perf-chart:layer3:start' + $nl + '  DO-NOT-HAND-EDIT-BETWEEN-MARKERS' + $nl + '-->' + $nl + $nl + $chart + $nl + $nl + '<!-- perf-chart:layer3:end -->'
+	# The chart block carries 'schema' and the do-not-edit notice - the two keys
+	# that mark a block as mechanically managed - but deliberately not the full
+	# provenance key set. It is rendered from the same $rowsAgg as the table in
+	# this one atomic update, so it cannot disagree with the table beside it,
+	# and duplicating 14 keys (including the multi-paragraph 'methodology'
+	# value) directly above the figure would double the doc's marker bulk for
+	# no reader benefit. PerformanceReportMarkerHygieneTestsBase encodes the
+	# same split.
+	$chartBlock = '<!-- perf-chart:layer3:start' + $nl + '  schema=v1' + $nl + '  DO-NOT-HAND-EDIT-BETWEEN-MARKERS' + $nl + '-->' + $nl + $nl + $chart + $nl + $nl + '<!-- perf-chart:layer3:end -->'
 	$chartPattern = '(?s)<!-- perf-chart:layer3:start.*?<!-- perf-chart:layer3:end -->'
 	if (-not [regex]::IsMatch($content, $chartPattern)) {
 		throw "Missing <!-- perf-chart:layer3:start --> ... <!-- perf-chart:layer3:end --> marker pair in $DocPath"
@@ -2410,6 +2418,33 @@ function Main {
 		}
 		Write-Host "[dry-run] state file: $stateFile" -ForegroundColor Cyan
 		$state = Read-StateFile -Path $stateFile
+
+		# Layer 3 replays the multi-silo doc and returns. Without this the
+		# switch combination silently did the wrong thing: -Layer3 -DryRun fell
+		# through to the Layer 1/2 replay below, rewrote performance-single-silo.md
+		# from a state file that has no layer1/layer2 section, reported "doc
+		# rewritten", and left the multi-silo doc untouched. A no-op that
+		# announces success is worse than a throw, because the operator's next
+		# move is to conclude the render bug they were chasing is fixed.
+		if ($Layer3) {
+			if (-not $state.ContainsKey('layer3')) {
+				throw "DryRun -Layer3: $stateFile has no 'layer3' section. Run a Layer 3 pass first, or drop -Layer3 to replay the single-silo doc."
+			}
+			# Re-aggregate from the raw cells for the same reason Layer 2 does:
+			# replaying is how an aggregator fix is validated without paying for
+			# a fresh sweep. Layer 3 does not re-parse the cohort logs, because
+			# Read-SiloLogStats already froze the FINAL-line throughput into the
+			# cohort record and the raw logs are harvested per cell rather than
+			# per silo.
+			if ($state.layer3.ContainsKey('cohorts') -and $state.layer3.cohorts -is [System.Collections.IDictionary] -and $state.layer3.cohorts.Count -gt 0) {
+				$state.layer3.rows = Aggregate-Layer3Cells -Cells $state.layer3.cohorts
+			}
+			Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $state -WhatIf:$Diff
+			if (-not $Diff -and -not $SkipDocUpdate) {
+				Write-Host "[dry-run] multi-silo doc rewritten from state.json" -ForegroundColor Green
+			}
+			return
+		}
 		# Re-aggregate from the raw per-cohort metrics whenever the state file
 		# carries them. The pre-baked $state.layer1.rows / $state.layer2.rows
 		# are kept as a fallback for state files written before the cohorts
