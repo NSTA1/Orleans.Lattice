@@ -96,10 +96,27 @@ param(
 	# round-robin per client, so 4x N makes full coverage overwhelmingly
 	# likely rather than merely possible.
 	[int] $ClientsPerSilo = 4,
-	# Matches Layer 2's ResponseTimeoutSec. The silo default of 30s turns a
-	# transient queue depth into a flood of grain-rpc-deadline failures and
-	# reports collapse where Layer 2 would have reported latency.
-	[int] $ResponseTimeoutSec = 180,
+	# The silo default of 30s turns a transient queue depth into a flood of
+	# grain-rpc-deadline failures and reports collapse where Layer 2 would
+	# have reported latency, so this tier raises it as Layer 2 does.
+	#
+	# It is raised *further* than Layer 2's 180s because this tier pays two
+	# cold cluster-wide structural calls per cohort that Layer 2 does not:
+	# ReshardAsync to 64 shards, and WarmUpAsync across all 64 roots, both
+	# against a cold tree on a freshly-started replica. Both were observed
+	# to exceed 180s while the grain was demonstrably still executing
+	# (NumRunning=1, work items still retiring) - a slow call, not a wedged
+	# one. Reshard aborts after a single attempt, so one timeout there
+	# destroys the cohort outright; roughly a third of cohorts were lost
+	# this way before the limit was raised.
+	#
+	# Raising it cannot distort the published numbers, because no
+	# measurement-phase failure on this tier is timeout-driven: saturation
+	# arrives as an explicit server-side rejection and the dominant failure
+	# is an Azure Tables transaction conflict, both of which are reported
+	# immediately regardless of this value. It only buys patience for the
+	# setup calls that precede the measurement window.
+	[int] $ResponseTimeoutSec = 420,
 	# How long the engine may spend draining its in-flight flushes before
 	# emitting FINAL. The engine default is 12s, sized to fit inside the
 	# systemd TimeoutStopSec=30 window Layer 2's VM units run under; the
@@ -127,7 +144,13 @@ param(
 	# client response timeout; the attempt cap alone permits a half-hour hang
 	# per cohort, which an unattended silo-count sweep multiplies by every
 	# cell. A healthy warm-up on this topology completes in about a second.
-	[int] $WarmUpBudgetSec = 300,
+	#
+	# Sized to admit at least two full-length attempts at the response
+	# timeout above. At the previous 300s it admitted only one-and-a-bit,
+	# so a single slow-but-healthy warm-up exhausted the budget and failed
+	# the cohort with no real retry - the budget was cutting in before the
+	# retry it exists to bound could ever happen.
+	[int] $WarmUpBudgetSec = 900,
 	[string] $TreeId,
 	# Disambiguates the cohort log when the same (silos, workload) cell is
 	# repeated N times. Without it every repeat overwrites the previous
@@ -258,7 +281,17 @@ try {
 	$execName = (($startJson | ConvertFrom-Json).name)
 	Write-Host "[cohort] execution=$execName" -ForegroundColor DarkGray
 
-	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec ($DurationSec + 900)
+	# Derive the ceiling from the budgets the producer actually runs under
+	# rather than a flat constant. A cohort legitimately spends, in series:
+	# a reshard (up to one response timeout), a warm-up retry loop (up to
+	# its wall-clock budget), the measurement window, and the in-flight
+	# drain. A constant smaller than that sum stops a *healthy* job partway
+	# and reports it as a failure, which is the worst possible outcome -
+	# the cell is lost and the log says the producer died rather than that
+	# the harness killed it. The slack absorbs container start and the
+	# preseed pass.
+	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300
+	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec
 	Write-Host "[cohort] execution finished: $state" -ForegroundColor DarkGray
 
 	# A failed producer never prints its DONE marker, so the harvest would

@@ -605,7 +605,8 @@ static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, 
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (IsOrleansMessageRejection(ex)
             || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
-            || WarmUpRetryClassifier.IsTransientSaturation(ex))
+            || WarmUpRetryClassifier.IsTransientSaturation(ex)
+            || WarmUpRetryClassifier.IsTransientRequestTimeout(ex))
         {
             lastReshardException = ex;
             // Saturation needs a materially longer backoff than a placement
@@ -616,13 +617,27 @@ static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, 
             // starts at 100ms, which retries straight back into a queue that
             // has not moved and burns the whole 12-attempt budget in under a
             // second. Saturation therefore gets its own floor.
-            var isSaturation = WarmUpRetryClassifier.IsTransientSaturation(ex);
+            //
+            // A response timeout is retryable here for the same reason it is
+            // during warm-up: on a cold tree the reshard is genuinely slow
+            // rather than stuck - the grain is still executing and retiring
+            // work items when the client's deadline fires. Without this arm
+            // a timeout fell through to the generic handler below, which
+            // breaks out of the loop, so reshard "ABORTED after 1 attempt(s)"
+            // while 11 attempts of budget went unused and the cohort was
+            // lost outright. It is treated as saturation for backoff
+            // purposes because a slow reshard is a busy cluster, and
+            // retrying into it after 100ms only adds load.
+            var isSaturation = WarmUpRetryClassifier.IsTransientSaturation(ex)
+                || WarmUpRetryClassifier.IsTransientRequestTimeout(ex);
             var backoffMs = isSaturation
                 ? Math.Min(2000 * attempt, MaxReshardSaturationBackoffMs)
                 : Math.Min(100 * (1 << (attempt - 1)), MaxReshardBackoffMs);
-            var kind = isSaturation
-                ? "SATURATED"
-                : IsOrleansMessageRejection(ex) ? "REJECTED" : "PLACEMENT-CONVERGING";
+            var kind = WarmUpRetryClassifier.IsTransientRequestTimeout(ex)
+                ? "TIMEOUT"
+                : WarmUpRetryClassifier.IsTransientSaturation(ex)
+                    ? "SATURATED"
+                    : IsOrleansMessageRejection(ex) ? "REJECTED" : "PLACEMENT-CONVERGING";
             Console.WriteLine($"[producer] reshard treeId={treeId} attempt={attempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
             await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), ct).ConfigureAwait(false);
         }

@@ -125,15 +125,33 @@ summing them is meaningless). Treat the latency columns as *representative
 of one host under the cluster's share of the load*, not as a cluster-wide
 distribution.
 
-**Failures are data here, not defects.** Layer 2 tunes every write rung to
-sit below the single-account saturation point, so a failed call there is
-anomalous. Layer 3 deliberately offers `rung x N` in order to *find* the
-knee, so the cells past it are expected to show WAL back-pressure
-(`LatticeSaturatedException` on append). The harness grades a cohort only
-on whether it produced a productive measurement window at all, and carries
-the failure count through as a signal rather than discarding the cell.
+**Failures are data here, not defects - but not the kind you would
+guess.** Layer 2 tunes every write rung to sit below the single-account
+saturation point, so a failed call there is anomalous. Layer 3 deliberately
+offers `rung x N` in order to *find* the knee, so cells past it are expected
+to report failures. The failure that actually dominates is **not** WAL
+back-pressure: it is an Azure Tables transaction conflict
+(`TableTransactionFailedException: The specified entity already exists`),
+the signature of a storage transaction being retried after it had in fact
+landed. The keys are durable; the retry is what is counted as failed. So a
+large failure count on a write row means the account is being pushed hard
+enough to make the storage SDK retry, and it *depresses the reported
+throughput without implying data loss*. The harness grades a cohort only on
+whether it produced a productive measurement window at all, and carries the
+failure count through as a signal rather than discarding the cell.
 
 ## Caveats that bound these numbers
+
+**The N=1 cell is the control, and it reproduces Layer 2.** A scaling curve
+measured on different hardware to the single-host tier would be
+uncomparable, so the first thing to check is that one ACA silo performs
+like one Layer 2 VM. It does: the N=1 `get-many` cell lands on Layer 2's
+published single-VM read figure. That is what licenses reading the rest of
+this document alongside the single-silo guide rather than as an unrelated
+experiment, and it is the reason `get-many` is in the sweep at all even
+though it exercises no WAL. If a future re-run shows the N=1 cell drifting
+away from Layer 2's, treat the whole curve as suspect before believing
+anything it says about scaling.
 
 **The throughput basis differs from Layer 2's, deliberately.** Layer 2
 publishes the mean of the silo's per-second rate samples. That works when
