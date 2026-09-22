@@ -1147,6 +1147,24 @@
       "targets": [
         { "refId": "A", "expr": "sum(rate(orleans_lattice_leaf_snapshot_driver_declines_total{reason=\"deactivate_unproven_coverage_stale\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum(rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 0.0001)", "legendFormat": "minting / drive completion (above 1 = divergent)" }
       ]
+    },
+    {
+      "id": 163,
+      "title": "Leaf deactivation BARRIER failures by barrier - issue #3366 (a teardown step threw and was contained)",
+      "description": "Deactivation barriers that threw during OnDeactivateAsync (orleans.lattice.leaf.deactivation.barrier.failures), split by which barrier faulted - issue #3366. WHAT THIS MEASURES IS A CONTAINMENT EVENT, NOT A CRASH. A leaf teardown runs four ordered barriers - digest_publish, checkpoint_flush, snapshot_capture, frontier_pin - and before this instrument existed they shared one try/catch, so the FIRST barrier to throw cancelled every barrier after it and the whole teardown reported nothing at all. A faulting checkpoint flush therefore silently suppressed the snapshot capture that would have preserved the leaf's rows, which is the mechanism by which a GRACEFUL restart destroyed recently-written durable entries. Each barrier now fails independently and is counted here, so a fault is both survivable and attributable. READ THE reason TAG AS THE REMEDY SELECTOR, because the four are not interchangeable. checkpoint_flush is the expected arm and the one implicated in #3366: it means the projection checkpoint could not be persisted at teardown, so the leaf's durable coverage is behind its in-memory state and the rows written since the last checkpoint survive only if the snapshot barrier below it succeeded. snapshot_capture is strictly worse - the flush may have succeeded but the blob that would have carried the uncheckpointed tail was not written, so those rows are unrecoverable after the process exits. digest_publish and frontier_pin are internally best-effort and realistically cannot throw; a non-zero value on either means an invariant inside those paths is violated and is a defect report, not a rate to tune. DO NOT READ A NON-ZERO VALUE HERE AS THE CAUSE OF A DATA LOSS ON ITS OWN. It establishes that a barrier faulted and that the barriers after it still ran, which is precisely the distinction that was unavailable before: an absent snapshot can now be attributed to a declining capture (orleans.lattice.leaf.snapshot.capture.declines), to a barrier that threw (this instrument), or to the hook never running at all (no series on either), and those three have materially different remedies. Pair it with orleans.lattice.leaf.snapshot.capture.declines{reason=\"no_tree_id\"} on the same window: the two together partition the silent-teardown population that #3366 was opened against. ABSENT IS NOT A MEASURED ZERO. This instrument is NOT zero-primed, matching its capture.declines and driver.declines siblings on this dashboard, so a series appears only on the first fault and a missing line is consistent BOTH with a build that lacks the instrument AND with one that carries it and has torn down cleanly every time. Confirm deployment from the image digest, never from the presence of this series. A HEALTHY ESTATE IS FLAT AT ABSENT, so any line at all here is worth reading.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 384 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} faulted/s" }
+      ]
     }
   ]
 }
