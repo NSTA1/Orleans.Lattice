@@ -254,7 +254,8 @@ public partial class BPlusLeafGrainTests
             }
         }
 
-        var drives = reasons.Count(r => r == LatticeMetrics.DriverDeclineRecheckCheckpointStalled.Value);
+        var stalledReason = (string?)LatticeMetrics.DriverDeclineRecheckCheckpointStalled.Value;
+        var drives = reasons.Count(r => string.Equals(r, stalledReason, StringComparison.Ordinal));
 
         Assert.Multiple(() =>
         {
