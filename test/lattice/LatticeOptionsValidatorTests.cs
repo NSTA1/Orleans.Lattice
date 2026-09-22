@@ -985,6 +985,44 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationRecoveryWindow)));
     }
 
+    // --- Paced recovery release batch (#3402) ---
+
+    [Test]
+    public void WalSaturationRecoveryReleaseBatch_default_matches_the_admission_pipeline_depth()
+    {
+        // The batch is sized to refill one partition's admission
+        // pipeline per sampler tick, so it tracks WalMaxPendingBatches.
+        Assert.That(new LatticeOptions().WalSaturationRecoveryReleaseBatch, Is.EqualTo(16));
+        Assert.That(LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch, Is.EqualTo(16));
+        Assert.That(
+            LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch,
+            Is.EqualTo(LatticeOptions.DefaultWalMaxPendingBatches));
+    }
+
+    [Test]
+    public void WalSaturationRecoveryReleaseBatch_positive_passes()
+    {
+        var result = Validate(o => o.WalSaturationRecoveryReleaseBatch = 4);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationRecoveryReleaseBatch_zero_passes()
+    {
+        // Zero is the documented "disable pacing" sentinel restoring the
+        // pre-#3402 release-every-parked-waiter behaviour.
+        var result = Validate(o => o.WalSaturationRecoveryReleaseBatch = 0);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationRecoveryReleaseBatch_negative_fails()
+    {
+        var result = Validate(o => o.WalSaturationRecoveryReleaseBatch = -1);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationRecoveryReleaseBatch)));
+    }
+
     // --- Admission-gate saturation wait budget ---
 
     [Test]

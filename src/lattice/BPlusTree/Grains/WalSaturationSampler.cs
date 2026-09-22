@@ -477,6 +477,11 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var providerFailureThreshold = opts.WalSaturationProviderFailureRateThreshold;
         var throttledRatio = opts.WalSaturationThrottledRatio;
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
+        // (#3402) How many parked admission-gate callers a single tick may
+        // release once a partition reads Healthy. Paces the recovery so the
+        // released herd cannot instantly re-saturate the partition it was
+        // just admitted into.
+        var recoveryReleaseBatch = opts.WalSaturationRecoveryReleaseBatch;
         var flushLatencyEnabled = opts.WalSaturationFlushLatencyThreshold is not null;
         var flushLatencySampleWindows = opts.WalSaturationFlushLatencySampleWindows;
         var drainLagEnabled = opts.WalSaturationMaterialiserLagThreshold is not null;
@@ -885,13 +890,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         partitionState = WalSaturationState.Throttled;
                     }
 
-                    _signal.UpdatePartitionState(acc.TreeId, partition, partitionState);
+                    _signal.UpdatePartitionState(acc.TreeId, partition, partitionState, recoveryReleaseBatch);
                 }
                 acc.MaxDepthRatio = savedRatio;
                 acc.HasParkedCallers = savedParked;
             }
 
-            var previousState = _signal.UpdateState(acc.TreeId, newState);
+            var previousState = _signal.UpdateState(acc.TreeId, newState, recoveryReleaseBatch);
             if (previousState == newState) continue;
 
             // Record the transition counter with the appropriate

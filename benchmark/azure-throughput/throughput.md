@@ -790,6 +790,7 @@ The bench silo's `TcpIngestService.HandleConnectionAsync` now subscribes to the 
   - `BENCH_SATURATION_SAMPLE_MS` (default 200 ms) - sampler tick interval; lower for faster transition propagation, set to 0 to disable the sampler entirely.
   - `BENCH_SATURATION_THROTTLED_RATIO` (default 0.75) - admission-depth ratio at or above which the signal raises a tree to `Throttled`.
   - `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` (default 1) - minimum `WalAppendDispatchTimeout` trips per sample window that raise the tree to `Saturated`.
+  - `BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH` (default 16) - parked WAL-admission waiters a recovered partition admits per sampler tick; `0` releases every parked waiter at once (the pre-#3402 behaviour).
 
 The producer is **unchanged**. The bench's open-loop producer (`benchmark/azure-throughput/Producer/Program.cs`) has no knowledge of the saturation signal, and the existing `slipMaxMs` instrument becomes the cross-process correlation signal for the cohort acceptance test.
 

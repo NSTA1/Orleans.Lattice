@@ -387,6 +387,12 @@ if (options.WalSaturationRecoveryWindow < TimeSpan.Zero
         $"{nameof(LatticeOptions.WalSaturationRecoveryWindow)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the recovery window holds a tree at Throttled after the most-recent Saturated observation; zero disables the window entirely, infinite holds Throttled forever after the first Saturated observation).");
 }
+if (options.WalSaturationRecoveryReleaseBatch < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationRecoveryReleaseBatch)} must be greater than or equal to 0 "
+        + "(the maximum number of parked WAL admission-gate callers one sampler tick releases when a partition reads Healthy; zero releases every parked caller at once, which lets a recovered partition be immediately re-saturated by the herd it just admitted).");
+}
 if (options.WalSaturationFlushLatencyThreshold is { } flushLatencyThreshold
     && flushLatencyThreshold <= TimeSpan.Zero)
 {

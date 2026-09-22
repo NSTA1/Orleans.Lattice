@@ -216,6 +216,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationMaterialiserPinLatencyThreshold`](#walsaturationmaterialiserpinlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
 | [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
+| [`WalSaturationRecoveryReleaseBatch`](#walsaturationrecoveryreleasebatch) | `int` | 16 | Yes |
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes |
 | [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
@@ -1460,6 +1461,20 @@ The window does NOT affect the `Healthy -> Saturated` transition latency - `Satu
 Set to `TimeSpan.Zero` to disable the upgrade entirely and restore the per-tick classifier behaviour the sampler shipped with. Set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation - useful for tests that want a sticky `Throttled` floor without arming a wall-clock dependency, or for defensive deployments that prefer the saturation regime to be sticky. The validator rejects any other negative value.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick (or the next tick that would otherwise upgrade a tree, if the tree was Saturated more than `WalSaturationRecoveryWindow` ago).
+
+### `WalSaturationRecoveryReleaseBatch`
+
+Maximum number of parked WAL-admission waiters a recovered partition admits per sampler tick (default: 16). Bounds the burst a recovery hands back to the admission pipeline, so a partition that has just dropped to `Healthy` is not immediately re-saturated by the entire population that was waiting on it.
+
+The defect this closes is a thundering herd. `IWalSaturationSignal.WaitForHealthyAsync` parks one waiter per blocked WAL dispatch, and a recovery used to complete every one of them in a single pass. Once the parked population exceeds the partition's admission capacity (`WalMaxPendingBatches`, default 16), the released herd re-fills the pipeline to its cap before any meaningful drain has occurred, the classifier flips straight back to `Saturated`, and the cycle repeats with no net progress. Each failed cycle costs its callers a full `WalAdmissionSaturationWaitBudget` while holding a concurrency slot, so at scale the gate stops behaving as a back-pressure valve and becomes an absorbing state: recovery is observed, but no caller ever benefits from it.
+
+Pacing the release turns that into a metered drain. The oldest-parked waiters are released first, so a paced drain cannot starve the callers closest to exhausting their wait budget, and the residue stays parked under the same key. Release is **level-triggered**: every tick that observes the partition `Healthy` releases a further batch, not only the tick that observes the `Saturated -> Healthy` transition. That is what guarantees the residue drains - the later ticks see no transition, so an edge-triggered release would strand every waiter beyond the first batch until the next saturation episode.
+
+The default (16) equals `WalMaxPendingBatches`, so one tick admits exactly enough work to refill the partition's pipeline once. At the default `WalSaturationSampleInterval` of 200 ms that is roughly 80 admissions per second per partition, which comfortably exceeds the offered per-partition append rate of a saturating multi-silo workload, so pacing bounds the recovery burst without becoming the new bottleneck. Raise it if recovery is observed to be the limiting factor on a workload whose partitions drain far faster than the sampler cadence; lower it to meter recovery harder on a provider with a long tail.
+
+Set to `0` to disable pacing entirely and restore the previous release-every-parked-waiter behaviour. The validator rejects negative values.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
 ### `WalAdmissionSaturationWaitBudget`
 

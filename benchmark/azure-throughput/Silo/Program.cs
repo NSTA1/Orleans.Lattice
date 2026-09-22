@@ -392,6 +392,13 @@ var saturationThrottledRatio = ReadDouble(
 var saturationDispatchTimeoutThreshold = ReadInt(
     "BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD",
     LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold);
+// BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH: how many parked WAL-admission
+// waiters a recovered partition admits per sampler tick (#3402). Zero is the
+// documented "release every parked waiter at once" sentinel - the pre-#3402
+// behaviour - so this must read through ReadIntAllowZero rather than ReadInt.
+var saturationReleaseBatch = ReadIntAllowZero(
+    "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH",
+    LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
@@ -703,6 +710,7 @@ builder.UseOrleans(silo =>
         o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(saturationSampleMs);
         o.WalSaturationThrottledRatio = saturationThrottledRatio;
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
+        o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
         // See the BENCH_WAL_REPLAY_QUEUE_DEPTH block above. Assigned
         // unconditionally because the default IS the library default, so
         // the single-silo path is byte-for-byte unchanged.
