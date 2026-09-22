@@ -156,6 +156,7 @@ public static class RepoContextEffectiveConfiguration
             RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
             RepoContextPinBucketing.PinBucketsKey,
             RepoContextPinShedCeiling.PinShedCeilingKey,
+            RepoContextFanOutBudget.FanOutBudgetKey,
             RepoContextWalRetention.MaxRetainedBytesKey,
             RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
             RepoContextClaimLeases.MaxLockLeaseSecondsKey,

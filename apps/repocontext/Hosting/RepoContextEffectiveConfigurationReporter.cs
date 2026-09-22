@@ -245,6 +245,7 @@ public sealed class RepoContextEffectiveConfigurationReporter(
         RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey,
         RepoContextPinBucketing.PinBucketsKey,
         RepoContextPinShedCeiling.PinShedCeilingKey,
+        RepoContextFanOutBudget.FanOutBudgetKey,
         RepoContextWalRetention.MaxRetainedBytesKey,
         RepoContextReplayConcurrency.MaxConcurrentReplaysKey,
         RepoContextClaimLeases.MaxLockLeaseSecondsKey,
@@ -361,6 +362,19 @@ public sealed class RepoContextEffectiveConfigurationReporter(
                 RepoContextPinShedCeiling.PinShedCeilingKey,
                 RepoContextPinShedCeiling.ResolveCeilingSeconds,
                 RepoContextPinShedCeiling.DefaultPinShedCeilingSeconds),
+
+            // Also a Knob, but read its zero the OPPOSITE way to the ceiling above.
+            // There a zero disarms a bound; here it removes one, resolving to an
+            // infinite budget under which a fan-out waits as long as it takes. The
+            // two are adjacent, both are integer seconds, and both accept zero, so
+            // the asymmetry is exactly the kind a reader infers from the neighbour
+            // rather than checking. Printing the typed value keeps the report honest;
+            // it does not make the meaning self-evident, which is what the operator
+            // documentation is for.
+            Knob(
+                RepoContextFanOutBudget.FanOutBudgetKey,
+                RepoContextFanOutBudget.ResolveBudgetSeconds,
+                RepoContextFanOutBudget.DefaultFanOutBudgetSeconds),
 
             // Rendered through its own helper rather than Knob, because its resolved value
             // is nullable and null is a meaningful state rather than an absence: it is the
