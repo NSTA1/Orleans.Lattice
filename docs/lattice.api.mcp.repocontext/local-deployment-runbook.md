@@ -200,6 +200,39 @@ script.
 The same limit applies to this runbook's own guard test, which is discussed under
 [How this runbook is kept honest](#how-this-runbook-is-kept-honest).
 
+### Which of the seven checks answers "was this image built from that commit"
+
+Exit `0` means all seven checks agreed. It does not mean all seven asked
+independent questions, and on the ordinary passing path two of them do not.
+
+`-ExpectedCommit` defaults to the HEAD of `-ExpectedCheckout`, and
+`-ExpectedCheckout` defaults to the checkout this script is being run out of.
+Check 1 then REQUIRES the container's compose directory to equal
+`-ExpectedCheckout`. So on every passing run the "independent" expectation and the
+directory the container resolved to are the SAME directory, and check 2 is one
+`git rev-parse` compared against itself. That is the ordinary green path rather
+than a corner case, and it printed `OK` for eleven hours over an image built 45
+commits earlier (#2686). The script now reports that state as a single checkout
+reading instead of as two agreeing values.
+
+**Check 6 is the one that answers the commit question**, because it reads
+`org.opencontainers.image.revision` off the IMAGE rather than off a checkout. It
+falls back to a `candidate-<sha>` tag when the label is absent, and reports the
+fallback as a fallback rather than silently substituting it. Its chronology arm
+also refuses a commit authored after the image was created, beyond a two-minute
+clock-skew tolerance; the incident that arm exists to catch had a delta of 10h47m.
+
+Pass the commit you believe you deployed explicitly, so the expectation comes from
+your intent rather than from whatever HEAD happens to be when you run it:
+
+```powershell
+pwsh -File ./scripts/Assert-ContainerProvenance.ps1 -ExpectedCommit (git rev-parse HEAD)
+```
+
+This matters most in a git worktree, where HEAD can differ from the branch the
+image was built from. Gate automation on `-eq 0`, and branch on the specific code
+when the remedy differs - `3` and `4` mean the question was never asked.
+
 ## What the box points at
 
 Every other setting in this document describes how the deployment *performs*. This
@@ -372,6 +405,39 @@ checkout alone rather than from one machine's untracked state.
 escape hatch. If you use one, record what it changes under
 [Local-only deltas](#local-only-deltas), or you have recreated the defect this
 document exists to close.
+
+### Read back which files the RUNNING container was composed from
+
+Nothing in the checkout can answer this: the overlay set is a property of the
+command someone ran, not of the files on disk. Compose records it on the container,
+so ask the container:
+
+```powershell
+docker inspect repocontextcontainer-repocontext-1 `
+  --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+```
+
+On a correctly deployed host that resolves to exactly TWO paths -
+`docker-compose.yml` and `docker-compose.tuning.yml` - and to no others. A third
+entry means the running container is not the configuration this document describes,
+and any before/after comparison made across it is measuring two different resource
+grants rather than the change under test. The same label family also reports
+`com.docker.compose.project` and `...project.working_dir`, which together say which
+CHECKOUT the stack was composed from; in a worktree that is the question that
+matters most, and it is the one check 1 of the provenance script performs.
+
+### Do not re-derive the tuning during a measurement
+
+[`New-TuningEnv.ps1`](../../samples/RepoContextContainer/scripts/New-TuningEnv.ps1)
+is required to produce the `.env` the overlay demands, and
+[Before you start the stack](#before-you-start-the-stack) is the right place to run
+it. It is the wrong thing to run in the middle of a measurement campaign: it
+re-derives the grants from the host, so a rerun between two readings can change
+`REPOCONTEXT_CPUS`, `REPOCONTEXT_MEM_LIMIT`, and the GC heap count underneath them.
+Peak replay memory is the PRODUCT of replay concurrency and per-replay buffer width,
+and the replay gate itself derives from the CPU grant, so a changed grant changes
+WAL behaviour itself. The two readings then differ for a reason that is not the
+change under test, and nothing in the output says so.
 
 ## Build and tag from a known sha
 
@@ -877,6 +943,52 @@ pwsh -File ./scripts/Assert-ContainerProvenance.ps1
 A persistent 503 has its own diagnosis section in the
 [sample README](../../samples/RepoContextContainer/README.md); do not skip it in
 favour of restarting again, because a restart discards the evidence.
+
+### The host answers four health endpoints, and the two above are not all of them
+
+`RepoContextHostBuilder` registers four (`LivenessPath`, `ReadinessPath`,
+`BackupPath`, `SiloPath`), and the verification list above deliberately uses only
+the first two. The other two matter when reading a contradictory state:
+
+| Endpoint | Answers |
+| --- | --- |
+| `/health/live` | the process and silo host are alive |
+| `/health/ready` | the aggregate: silo joined, stores reachable, MCP serving, retrieval serving |
+| `/health/silo` | silo membership is active and the grain layer answered a trivial call |
+| `/health/backup` | the backup component |
+
+**`docker ps` reporting `(healthy)` while `/health/ready` returns 503 is not a
+contradiction, and neither reading is wrong.** The image HEALTHCHECK in
+`apps/repocontext/Dockerfile` runs the host with `--healthcheck`, which probes
+`/health/silo` - membership and one grain call - and nothing else. Readiness is a
+strictly wider question, so the silo arm can be green while readiness is held down
+by, for example, a vector plane that has not served yet. An operator who reads only
+`docker ps` concludes the container is fine; one who reads only `/health/ready`
+concludes it is broken. Read the readiness BODY, which names the component holding
+it down (#2962), before acting on either.
+
+### Re-baseline every counter after a restart
+
+Counters live in the process, so they reset at the process boundary. Never compare a
+post-deploy absolute counter against a pre-deploy one: the comparison is not merely
+noisy, it is meaningless, and it reads as a dramatic improvement every time. Measure
+deltas over a window that starts after readiness, and persist the raw snapshots to
+disk before formatting them.
+
+### Ground truth for on-disk bytes
+
+The container is distroless and has no shell, so `docker exec` cannot measure the
+volume. Use a sidecar, which is also the only reading that is unambiguous about
+which store is growing:
+
+```bash
+docker run --rm -v repocontextcontainer_repocontext-data:/d:ro alpine:3 \
+  du -sm /d/wal /d/repocontext.db /d
+```
+
+The lattice WAL (`/d/wal`) and the ADO.NET grain store (`/d/repocontext.db`) grow
+for different reasons and are bounded by different mechanisms, so a single total
+hides which one is running away. Record them separately.
 
 ## Recover the deployment from nothing
 

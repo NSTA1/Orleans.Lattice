@@ -2423,6 +2423,59 @@ public class LatticeOptions
     public const int DefaultWalMaxPendingBatches = 16;
 
     /// <summary>
+    /// In-flight depth at or above which a per-shard WAL append stops
+    /// opening a flush of its own and instead coalesces into the pending
+    /// batch, to be drained by the follow-on kick that fires when an
+    /// existing flush settles ("group commit").
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A <c>SetManyAsync</c> fans out over shards and then over each
+    /// shard's WAL partitions, so a batch arrives at any one
+    /// <c>WalShardGrain</c> already divided down to a handful of entries
+    /// (4096 keys over 64 shards over 16 partitions is four). Because a
+    /// batch's final entry always kicks a flush - the latency-floor
+    /// guarantee that a lone entry must not wait for a future cutover -
+    /// each of those tiny slices pays a full provider round trip of its
+    /// own, and offering more load buys more concurrent small appends
+    /// rather than fuller ones. Append cost therefore never amortises
+    /// with load.
+    /// </para>
+    /// <para>
+    /// Setting this to <c>N &gt;= 1</c> suppresses that final-entry kick
+    /// once <c>N</c> flushes are already in flight, so arrivals
+    /// accumulate into the pending batch while the provider is busy and
+    /// settle as one larger append. Latency is not at risk: suppression
+    /// can only engage while at least one flush is outstanding, and the
+    /// completion path already kicks a follow-on flush whenever a
+    /// pending batch is waiting and the chain has spare capacity. The
+    /// accumulated batch stays bounded by
+    /// <see cref="WalMaxBatchEntries"/> and
+    /// <see cref="WalMaxBatchBytes"/>.
+    /// </para>
+    /// <para>
+    /// This is enabled by default because the deployments that suffer
+    /// the pathology are precisely those that would never think to opt
+    /// in. It is safe to enable by default because it is self-disabling
+    /// below the threshold: until <c>N</c> flushes are concurrently in
+    /// flight the final-entry kick is unconditional exactly as before,
+    /// so a quiet or moderately loaded shard behaves bit-for-bit as it
+    /// always has. Nothing about ordering, durability, or offset
+    /// assignment changes - coalescing only alters how many entries
+    /// share one flush window.
+    /// </para>
+    /// <para>
+    /// Set to <c>0</c> to disable coalescing entirely and restore the
+    /// historical unconditional final-entry kick.
+    /// </para>
+    /// </remarks>
+    public int WalAppendCoalescingInFlightThreshold { get; set; } = DefaultWalAppendCoalescingInFlightThreshold;
+
+    /// <summary>Default value for <see cref="WalAppendCoalescingInFlightThreshold"/> (<c>4</c>). Permits four concurrent provider round trips per shard before coalescing engages, so the measured <see cref="WalMaxPendingBatches"/> concurrency is preserved for shards whose batches are already well filled, while capping the many-tiny-concurrent-appends pathology. <c>0</c> disables.</summary>
+    public const int DefaultWalAppendCoalescingInFlightThreshold = 4;
+
+
+    /// <summary>
     /// Hard ceiling on how long a single per-shard WAL flush (the
     /// <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/> call,
     /// and the post-failure tail resync against

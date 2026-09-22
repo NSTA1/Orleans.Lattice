@@ -21,6 +21,7 @@ caps:
 | Knob | Default | What it bounds |
 |---|---|---|
 | `LatticeOptions.WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started batches **per shard**. |
+| `LatticeOptions.WalAppendCoalescingInFlightThreshold` | `4` | In-flight depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables. |
 | `LatticeOptions.WalPartitions` | `8` | Number of per-shard WAL grains the producer fans out across. |
 
 The combined ceiling on simultaneous provider calls from a single silo

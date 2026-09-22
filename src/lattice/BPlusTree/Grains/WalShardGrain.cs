@@ -922,6 +922,7 @@ internal sealed partial class WalShardGrain(
         var maxEntries = options.WalMaxBatchEntries;
         var maxBytes = options.WalMaxBatchBytes;
         var maxPending = options.WalMaxPendingBatches;
+        var coalesceThreshold = options.WalAppendCoalescingInFlightThreshold;
 
         // Enqueue every entry. For each one, follow the same cutover
         // protocol AppendAsync uses (flush the current pending batch
@@ -1026,11 +1027,23 @@ internal sealed partial class WalShardGrain(
                     // With cap = 1 the outer `_inFlight.Count < maxPending`
                     // guard collapses to `_inFlight.Count == 0`, so the
                     // single-in-flight protocol is preserved bit-for-bit.
+                    //
+                    // #3396: the final-entry kick is suppressed once
+                    // `coalesceThreshold` flushes are already in flight, so
+                    // that a shard being fed tiny fan-out slices accumulates
+                    // them into one larger append instead of paying a provider
+                    // round trip per slice. This cannot strand the pending
+                    // batch: suppression requires inFlight >= threshold >= 1,
+                    // so a flush is necessarily outstanding, and its completion
+                    // path kicks a follow-on flush whenever a pending batch is
+                    // waiting under the cap. Below the threshold the predicate
+                    // is unchanged, which is what makes enabling it by default
+                    // safe for a quiet shard.
                     var isLast = i == count - 1;
                     kickFlush = _inFlight.Count < maxPending
                         && (_pendingSegments.Count >= maxEntries
                             || _pendingBatchSizeBytes >= maxBytes
-                            || isLast);
+                            || (isLast && (coalesceThreshold <= 0 || _inFlight.Count < coalesceThreshold)));
                 }
             }
             if (fenced)
