@@ -90,6 +90,39 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
         VersionVector? sourceVectorClock);
 
     /// <summary>
+    /// Reads the local entry for <paramref name="key"/> in its <em>stored</em>
+    /// form - the exact bytes the leaf holds, with any per-value schema
+    /// envelope intact - paired with its current
+    /// <see cref="HybridLogicalClock"/> version.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the apply-side counterpart of
+    /// <see cref="ILattice.GetWithVersionAsync"/>. The public surface is a
+    /// client-facing read and therefore runs the read-path value-decoder
+    /// boundary, stripping (and, under an active schema, upcasting) the
+    /// per-value envelope on the way out. An applier that read through it
+    /// would fold a decoded value and write the result back, silently
+    /// destroying the envelope on the stored row and making the storage form
+    /// of a key depend on whether it happened to pre-exist the merge.
+    /// </para>
+    /// <para>
+    /// Replication's read-merge-write loops must therefore route here: both
+    /// halves of a state merge then see the stored form, the write-back
+    /// preserves it, and no fold-time upcast can occur - the determinism
+    /// requirement documented on <see cref="ILatticeEnvelopeCodec"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="key">The key to read.</param>
+    /// <returns>
+    /// The stored value and its version, or an empty
+    /// <see cref="VersionedValue"/> (<c>Value</c> <see langword="null"/>,
+    /// <c>Version</c> <see cref="HybridLogicalClock.Zero"/>) when the key is
+    /// absent or tombstoned.
+    /// </returns>
+    Task<VersionedValue> ReadStoredWithVersionAsync(string key);
+
+    /// <summary>
     /// Installs a range delete authored on the remote cluster identified
     /// by <paramref name="originClusterId"/>. The receiver walks the leaf
     /// chain locally and stamps every per-leaf tombstone with

@@ -152,6 +152,17 @@ public class LeafSpanAdmissionIntegrationTests
         return default;
     }
 
+    // The conditional batched write path needs a guard to evaluate. These mirror
+    // the shapes BPlusLeafGrainTests.ConditionalSetMany.cs uses, so the two
+    // fixtures agree on what "matching" means.
+    private sealed record Scored(int Score);
+
+    private static byte[] ScoredJson(int score) => Encoding.UTF8.GetBytes($"{{\"Score\":{score}}}");
+
+    private static LatticePredicateNode ScoreAtLeast(int threshold) =>
+        LatticePredicatePushdown.Compile<Scored>(
+            s => s.Score >= threshold, JsonLatticeSerializer<Scored>.Default);
+
     /// <summary>
     /// The core claim. A key handed straight to a leaf whose declared span
     /// excludes it must not be admitted there. Before the fix the donor
@@ -330,6 +341,158 @@ public class LeafSpanAdmissionIntegrationTests
                 "the import must be routed to the leaf that declares the key, exactly as a "
                 + "non-migration merge already is");
         });
+    }
+
+    /// <summary>
+    /// The conditional batched write path (<c>SetManyWherePredicateAsync</c>,
+    /// behind <c>ILattice.ConditionalSetManyAsync</c>) is the regression guard
+    /// for issue #2663, and it is the one batched write entry point that was
+    /// never covered by the rest of this fixture.
+    /// <para>
+    /// Every other path here forwards an out-of-span key. This one could not,
+    /// and the reason it failed differently is what made the defect so quiet.
+    /// The conditional path evaluates its guard by probing the leaf's own
+    /// cache, and reads a key it finds no row for as "no live committed value",
+    /// which it is specified to treat as non-matching and skip. That inference
+    /// is sound only for a key the leaf declares. For a key whose row a split
+    /// moved to a sibling, the absence says nothing about the guard - the real
+    /// value still lives on the declaring leaf and may well satisfy it - yet
+    /// the answer is identical: the key is dropped from the written set with
+    /// no error, no metric, and nothing to distinguish "your guard did not
+    /// match" from "I never evaluated it". The caller is told the write
+    /// completed.
+    /// </para>
+    /// <para>
+    /// That is the completeness violation the chaos fixture observes as
+    /// <c>matchMissing</c>: soundness holds (nothing wrong is written) while
+    /// completeness fails (matching keys go unwritten), which is exactly the
+    /// signature of skip-rather-than-corrupt. Reverting the pre-guard span
+    /// admission reddens the <c>WrittenKeys</c> arm with
+    /// <c>Expected: ... "span-cond-out" ... But was: &lt; "..." &gt;</c> and
+    /// the declaring-leaf arm with the seeded value still in place.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_conditional_batched_write_evaluates_the_guard_on_the_leaf_that_declares_the_key()
+    {
+        var (router, shard) = await CreateSingleShardTreeAsync($"span-cond-{Guid.NewGuid():N}");
+        var f = await BuildSealedDonorAsync(router, shard);
+
+        var inSpanKey = (f.DonorRange.LowKeyInclusive ?? "k") + "-cond-in";
+        Assert.That(
+            SplitBoundary.Owns(inSpanKey, f.DonorRange.LowKeyInclusive, f.DonorRange.HighKeyExclusive),
+            Is.True,
+            "precondition: the control key must fall inside the donor's declared span");
+
+        // Both keys start with a guard-matching value, the out-of-span one on
+        // the leaf that genuinely declares it.
+        await router.SetAsync(inSpanKey, ScoredJson(1000));
+        await router.SetAsync(f.OutOfSpanKey, ScoredJson(1000));
+        Assert.That(await Leaf(f.Declaring).GetAsync(f.OutOfSpanKey), Is.Not.Null,
+            "precondition: the out-of-span row must start life on the leaf that declares it");
+
+        var result = await Leaf(f.Donor).SetManyWherePredicateAsync(
+            [
+                new KeyValuePair<string, byte[]>(inSpanKey, ScoredJson(2000)),
+                new KeyValuePair<string, byte[]>(f.OutOfSpanKey, ScoredJson(2000)),
+            ],
+            ScoreAtLeast(500));
+
+        var inThroughRouter = await router.GetAsync(inSpanKey);
+        var outOnDonor = await Leaf(f.Donor).GetAsync(f.OutOfSpanKey);
+        var outOnDeclaring = await Leaf(f.Declaring).GetAsync(f.OutOfSpanKey);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.WrittenKeys, Is.EquivalentTo(new[] { inSpanKey, f.OutOfSpanKey }),
+                "both keys hold a guard-matching value, so both must be reported written - reporting "
+                + "only the in-span key tells the caller the batch completed while a matching key was "
+                + "never evaluated (issue #2663)");
+            Assert.That(Encoding.UTF8.GetString(inThroughRouter!), Is.EqualTo("{\"Score\":2000}"),
+                "the in-span entry belongs here and must still be committed locally");
+            Assert.That(outOnDonor, Is.Null,
+                "the out-of-span entry must not be admitted on the donor, whose declared span excludes it");
+            Assert.That(Encoding.UTF8.GetString(outOnDeclaring!), Is.EqualTo("{\"Score\":2000}"),
+                "the guard must be evaluated against the key's real committed value on the leaf that "
+                + "declares it, and the matching entry committed there");
+        });
+    }
+
+    /// <summary>
+    /// The complement of the test above, and what keeps it from being satisfied
+    /// by a forward that ignores the guard: an out-of-span key whose real
+    /// committed value does <b>not</b> satisfy the predicate must still be
+    /// rejected. Forwarding moves where the guard is evaluated; it must not
+    /// weaken it into an unconditional write.
+    /// </summary>
+    [Test]
+    public async Task A_forwarded_conditional_entry_is_still_rejected_when_the_real_value_fails_the_guard()
+    {
+        var (router, shard) = await CreateSingleShardTreeAsync($"span-cond-miss-{Guid.NewGuid():N}");
+        var f = await BuildSealedDonorAsync(router, shard);
+
+        await router.SetAsync(f.OutOfSpanKey, ScoredJson(10));
+
+        var result = await Leaf(f.Donor).SetManyWherePredicateAsync(
+            [new KeyValuePair<string, byte[]>(f.OutOfSpanKey, ScoredJson(2000))],
+            ScoreAtLeast(500));
+
+        var outOnDeclaring = await Leaf(f.Declaring).GetAsync(f.OutOfSpanKey);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.WrittenKeys, Is.Empty,
+                "the forwarded entry's real value fails the guard, so it must be reported unwritten");
+            Assert.That(Encoding.UTF8.GetString(outOnDeclaring!), Is.EqualTo("{\"Score\":10}"),
+                "forwarding relocates where the guard runs; it must not turn a conditional write into "
+                + "an unconditional one");
+        });
+    }
+
+    /// <summary>
+    /// <c>ShardRootGrain.ForwardWrittenEntriesToShadowIfNeededAsync</c> pairs a
+    /// leaf's written keys back against the slice it dispatched with an
+    /// allocation-free two-pointer walk, which assumes the written set is an
+    /// <b>in-order subsequence</b> of that slice. A span forward produces its
+    /// written keys out of band, so the union has to be re-derived in the
+    /// caller's original order rather than appended. This pins that ordering
+    /// with a batch whose forwarded key sits in the middle of the slice, where
+    /// an appended tail would be observable.
+    /// </summary>
+    [Test]
+    public async Task A_span_forwarded_conditional_write_reports_written_keys_in_the_callers_order()
+    {
+        var (router, shard) = await CreateSingleShardTreeAsync($"span-cond-order-{Guid.NewGuid():N}");
+        var f = await BuildSealedDonorAsync(router, shard);
+
+        var low = f.DonorRange.LowKeyInclusive ?? "k";
+        var firstInSpan = low + "-cond-a";
+        var lastInSpan = low + "-cond-z";
+        foreach (var key in new[] { firstInSpan, lastInSpan })
+        {
+            Assert.That(
+                SplitBoundary.Owns(key, f.DonorRange.LowKeyInclusive, f.DonorRange.HighKeyExclusive),
+                Is.True,
+                $"precondition: control key '{key}' must fall inside the donor's declared span");
+            await router.SetAsync(key, ScoredJson(1000));
+        }
+
+        await router.SetAsync(f.OutOfSpanKey, ScoredJson(1000));
+
+        // The forwarded key is deliberately in the middle of the batch.
+        var slice = new List<KeyValuePair<string, byte[]>>
+        {
+            new(firstInSpan, ScoredJson(2000)),
+            new(f.OutOfSpanKey, ScoredJson(2000)),
+            new(lastInSpan, ScoredJson(2000)),
+        };
+
+        var result = await Leaf(f.Donor).SetManyWherePredicateAsync(slice, ScoreAtLeast(500));
+
+        Assert.That(result.WrittenKeys,
+            Is.EqualTo(new[] { firstInSpan, f.OutOfSpanKey, lastInSpan }).AsCollection,
+            "the written set must stay an in-order subsequence of the dispatched slice, because the "
+            + "shard root pairs the two with a forward-only two-pointer walk");
     }
 
     /// <summary>

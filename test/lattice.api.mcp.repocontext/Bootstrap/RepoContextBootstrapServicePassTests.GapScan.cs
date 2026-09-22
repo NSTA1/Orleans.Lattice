@@ -111,17 +111,33 @@ public sealed partial class RepoContextBootstrapServicePassTests
     }
 
     [Test]
-    public async Task A_probe_that_never_established_coverage_keeps_the_scan_armed()
+    public async Task A_probe_that_never_established_coverage_is_re_examined_by_the_shipped_cadence()
     {
-        // A failed or absent coverage probe is not evidence of convergence. Backing
-        // off on it would turn a transient store fault into a permanently unhealed
-        // corpus, so silence must re-arm rather than settle.
+        // A failed or absent coverage probe is not evidence of convergence, so it
+        // must not settle the scan permanently. Before issue #3340 that was achieved
+        // by treating the silence as a gap and arming the scan on EVERY pass, which
+        // is what closed the amplification loop: the escalated whole-corpus sweep
+        // was the load that refused the next probe. The re-examination now comes
+        // from the periodic cadence instead, which under the shipped default is the
+        // very next pass - so nothing is lost here, and the saturating escalation is
+        // gone. The back-off itself is pinned by
+        // An_unmeasurable_probe_backs_the_gap_scan_off_to_the_periodic_cadence, and
+        // its lifting by
+        // An_unmeasurable_probe_backs_off_to_the_cadence_rather_than_latching_the_scan_off.
+        var options = new RepoContextIndexingOptions();
         using var harness = await ConvergedHarnessAsync(
-            coldOutcome: new RepoFileVectorIngestOutcome(0, 0, false));
+            options, coldOutcome: new RepoFileVectorIngestOutcome(0, 0, false));
 
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
 
-        Assert.That(harness.UnchangedOfferedToIngestor, Is.Not.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.PassesPerEmbeddingGapScan,
+                Is.EqualTo(1),
+                "precondition: this test reads the shipped cadence, so it must be the every-pass one");
+            Assert.That(harness.UnchangedOfferedToIngestor, Is.Not.Empty);
+        });
     }
 
     [Test]

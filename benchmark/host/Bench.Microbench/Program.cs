@@ -80,11 +80,18 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "condsetmanyadmission", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> condsetmanyadmission (ConditionalSetManyAdmissionBenchmarks)");
+    var condSetManySummary = BenchmarkRunner.Run<ConditionalSetManyAdmissionBenchmarks>(config);
+    return condSetManySummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "batchhoisttrims", StringComparison.OrdinalIgnoreCase))
@@ -145,6 +152,13 @@ if (string.Equals(suite, "ordedup", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> ordedup (OrCrdtReconcileBenchmarks)");
     var orDedupSummary = BenchmarkRunner.Run<OrCrdtReconcileBenchmarks>(config);
     return orDedupSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "replayadmission", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> replayadmission (ReplayPermitAdmissionBenchmarks)");
+    var replayAdmissionSummary = BenchmarkRunner.Run<ReplayPermitAdmissionBenchmarks>(config);
+    return replayAdmissionSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "mergefold", StringComparison.OrdinalIgnoreCase))

@@ -12,7 +12,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
-- **Benchmark - Layer 3 multi-silo scaling tier.** `performance-report.ps1 -Layer3` stands up a fixed-size multi-silo Orleans cluster on Azure Container Apps, sweeps a silo-count series with an Orleans-client producer, publishes the scaling curve and grid into `docs/lattice/performance-multi-silo.md`, and tears the infrastructure down. ([#3338](https://github.com/NSTA1/Orleans.Lattice/issues/3338))
+- **Benchmark - Layer 3 multi-silo scaling tier.** `performance-report.ps1 -Layer3` stands up a fixed-size multi-silo Orleans cluster on Azure Container Apps, sweeps a silo-count series with an Orleans-client producer, publishes the scaling curve and grid into `docs/lattice/performance-multi-silo.md`, and tears the infrastructure down. ([#3338](https://github.com/NSTA1/Orleans.Lattice/issues/3338)) (`repository-wide`)
 
 - **Retrieval - Latency and readiness.** Retrieval latency is measured end to end and by stage, readiness and its 503 are attributable on the wire, a suppressed exact fallback is its own retrieval path, and both ladder guards report their operating state. ([#2253](https://github.com/NSTA1/Orleans.Lattice/issues/2253), [#2624](https://github.com/NSTA1/Orleans.Lattice/issues/2624), [#2720](https://github.com/NSTA1/Orleans.Lattice/issues/2720), [#2936](https://github.com/NSTA1/Orleans.Lattice/issues/2936), [#2962](https://github.com/NSTA1/Orleans.Lattice/issues/2962)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -37,6 +37,16 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Fixed
 
 - **WAL - Purged tree resurrection.** A WAL shard activating after its tree was purged resolved options through the lazy seeding path, re-creating the registry row and resurrecting the tree. The activation now uses the pure fast path, which never mutates the registry. ([#3343](https://github.com/NSTA1/Orleans.Lattice/issues/3343)) (`Orleans.Lattice`)
+
+- **Replay - Latched admission gate.** A cold-replay storm drove the process-wide smoothed permit queue wait above the refusal bound, and refused arrivals never sample, so nothing could fold it back: the gate shed activations for the rest of the process lifetime. A stale mean is now discarded. ([#3306](https://github.com/NSTA1/Orleans.Lattice/issues/3306)) (`Orleans.Lattice`)
+
+- **Atomic - Conditional multi-key completeness.** `ConditionalSetManyAsync` silently dropped keys whose row a split had moved to a sibling leaf, because the guard read a cache miss as non-matching. Declared-span admission now runs before the guard, so a key is evaluated on the leaf that declares it. ([#2663](https://github.com/NSTA1/Orleans.Lattice/issues/2663)) (`Orleans.Lattice`)
+
+- **CRDT - Full-state merge read form.** A replication full-state merge read local state through the client read path, which strips the schema envelope and upcasts, then folded and wrote that decoded value back. The merge now reads the stored form through the replication-apply seam. ([#2813](https://github.com/NSTA1/Orleans.Lattice/issues/2813)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Indexing - Unmeasurable coverage probe.** A refused coverage probe was indistinguishable from one that measured a real gap, so an unmeasurable pass was read as a measured shortfall. A pass that reaches the verdict now classifies it explicitly and counts it, separating the two. ([#3340](https://github.com/NSTA1/Orleans.Lattice/issues/3340)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Guards that could not fail.** Two gates could not detect the defect they existed for: a sweep-count guard passed on its own failure mode, and the leaf cursor reporter was never pinned to the WAL garbage-collection floor advance. Both now fail when the behaviour is removed. ([#2656](https://github.com/NSTA1/Orleans.Lattice/issues/2656), [#3310](https://github.com/NSTA1/Orleans.Lattice/issues/3310)) (`repository-wide`)
 
 - **Container - Grain-state rows.** Nothing in the RepoContext host ever removed a row from grain storage: a clear nulled the payload and left the row behind, so generationally-keyed grains accumulated dead rows without bound. Cleared state is now deleted. ([#3307](https://github.com/NSTA1/Orleans.Lattice/issues/3307)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 

@@ -29,6 +29,28 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// defect diagnosable from outside the process; it does not cure it, which is
 /// #2406's job and is deliberately not attempted here.
 /// </para>
+/// <para>
+/// <b>Why the observed-count guard is driven over two listing sizes.</b> Its first
+/// revision exercised an empty listing only, which made the <i>correct</i> answer
+/// and the <i>degenerate</i> answer the same value - zero. Replacing the computed
+/// count with the constant <c>0</c> at the production announce site therefore left
+/// the guard green, so the one test named for "report the observation rather than
+/// assert an empty store" could not fail on precisely that defect. Issue #2656
+/// records the measurement. The remedy is a fixture value at which the two answers
+/// differ, so the guard now also runs over a three-repository listing whose
+/// coordinators all defer: the sweep still arms nothing and still takes this arm,
+/// but the only line that can satisfy the assertion is one carrying the count the
+/// sweep actually measured.
+/// </para>
+/// <para>
+/// The generalisable rule, banked as
+/// <c>gotchas/perturb-toward-the-degenerate-value-the-assertion-expects</c>:
+/// perturb <b>toward</b> the degenerate value an assertion expects, not only away
+/// from it. An arm that moves a value away from what the test expects reddens
+/// almost any assertion and proves almost nothing; the arm that matters replaces
+/// the computed value with the constant the scenario happens to expect. A scenario
+/// in which those two coincide is untestable by construction.
+/// </para>
 /// </summary>
 public sealed partial class RepoContextAnnIndexSweepServiceTests
 {
@@ -52,9 +74,56 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
     /// </summary>
     private static readonly TimeSpan NoWarningSettleWindow = TimeSpan.FromMilliseconds(500);
 
-    [Test]
-    public async Task A_sweep_that_armed_nothing_reports_the_observed_repository_count_rather_than_asserting_an_empty_store()
+    /// <summary>
+    /// Repository ids used by the non-empty arm of the observed-count guard.
+    /// <para>
+    /// Three rather than one, so the asserted count differs from every value a
+    /// degenerate implementation is likely to hard-code: not the zero of an empty
+    /// listing, and not the one a "did it find anything?" flag would collapse to.
+    /// </para>
+    /// </summary>
+    private static readonly string[] DeferringRepositoryIds = ["alpha", "beta", "gamma"];
+
+    /// <summary>
+    /// A grain factory listing <paramref name="repoIds"/> whose build coordinators
+    /// all defer the arming call.
+    /// <para>
+    /// This is the shape that lets a <i>non-empty</i> listing still reach the
+    /// armed-nothing arm: a deferral is not a fault and does not arm, so the sweep
+    /// completes with <c>armed = 0</c> against a non-zero observed count. Passing no
+    /// ids yields a plain empty listing.
+    /// </para>
+    /// </summary>
+    /// <param name="repoIds">The repository ids the structural listing yields.</param>
+    /// <returns>A grain factory wired for the requested listing.</returns>
+    private static IGrainFactory GrainFactoryWhereEveryListedCoordinatorDefers(params string[] repoIds)
     {
+        var space = EmbeddingSpaceTag.FromSpace(StubEmbedder.Instance.Space);
+        var factory = GrainFactoryListing(repoIds);
+        foreach (var repoId in repoIds)
+        {
+            var busy = Substitute.For<IRepoContextAnnIndexBuildGrain>();
+            busy.EnsureBuildingAsync(Arg.Any<EmbeddingSpaceTag>())
+                .Returns(Task.FromException(new TimeoutException("coordinator is busy building")));
+            factory.GetGrain<IRepoContextAnnIndexBuildGrain>(
+                RepoContextAnnIndexKeys.BuildGrainKey(repoId, space)).Returns(busy);
+        }
+
+        return factory;
+    }
+
+    [TestCase(0)]
+    [TestCase(3)]
+    public async Task A_sweep_that_armed_nothing_reports_the_observed_repository_count_rather_than_asserting_an_empty_store(
+        int listed)
+    {
+        // Driven over two listing sizes on purpose. The zero case is the original
+        // empty-listing scenario and is kept; the three case is what makes the
+        // guard able to fail on the defect it is named for, because only there does
+        // the correct answer differ from the constant a hard-coded zero would
+        // publish. See issue #2656.
+        var repoIds = DeferringRepositoryIds[..listed];
+
         var provider = new CapturingLoggerProvider();
         using var factory = LoggerFactory.Create(builder =>
         {
@@ -62,7 +131,7 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
             builder.AddProvider(provider);
         });
 
-        var grainFactory = GrainFactoryListing();
+        var grainFactory = GrainFactoryWhereEveryListedCoordinatorDefers(repoIds);
         var sweep = Sweep(
             Store(grainFactory),
             Scheduler(grainFactory),
@@ -78,8 +147,12 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
             Assert.Multiple(() =>
             {
                 Assert.That(
+                    sweep.Reporter.Read().Armed,
+                    Is.Zero,
+                    "precondition: this arm is only reached by a sweep that armed nothing, whatever the listing held");
+                Assert.That(
                     line,
-                    Does.Contain("observed 0 repository id(s)"),
+                    Does.Contain($"observed {listed} repository id(s)"),
                     "the line must report what the listing yielded, which is the only thing the sweep measured");
                 Assert.That(
                     line,

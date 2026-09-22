@@ -124,6 +124,15 @@ internal sealed class RepoContextBootstrapService : IDisposable
     private readonly ILogger<RepoContextBootstrapService> _logger;
     private readonly IRepoContextSourceScanner? _sourceScanner;
 
+    /// <summary>
+    /// Publishes why each pass reached its embedding-coverage verdict, so a pass
+    /// that stands the gap scan down because it could not measure coverage stays
+    /// distinguishable from one that stands it down because the corpus is covered
+    /// (issue #3340). Optional: an unregistered reporter leaves the verdict
+    /// unpublished rather than failing the pass.
+    /// </summary>
+    private readonly RepoContextCoverageVerdictReporter? _coverageVerdictReporter;
+
     // The meter is declared above every instrument it owns, and each instrument is
     // constructed from THIS field, so re-ordering the two throws loudly at type
     // initialisation rather than publishing an instrument whose meter is still null
@@ -189,6 +198,12 @@ internal sealed class RepoContextBootstrapService : IDisposable
     /// add / modify / delete changeset exact rather than inferred from absence on
     /// disk. <see langword="null"/> (the default) means every run walks the tree,
     /// which is the mounted-workspace behaviour.</param>
+    /// <param name="coverageVerdictReporter">An optional reporter that publishes why
+    /// each pass reached the embedding-coverage verdict it did.
+    /// <see langword="null"/> (the default) leaves the verdict unpublished; the host
+    /// registers one so that a pass standing down because it could not measure stays
+    /// distinguishable from one standing down because the corpus is covered
+    /// (issue #3340).</param>
     public RepoContextBootstrapService(
         IGrainFactory grainFactory,
         Serializer<FileNode> fileNodeSerializer,
@@ -201,7 +216,8 @@ internal sealed class RepoContextBootstrapService : IDisposable
         TimeProvider timeProvider,
         RepoContextIndexingOptions options,
         ILogger<RepoContextBootstrapService> logger,
-        IRepoContextSourceScanner? sourceScanner = null)
+        IRepoContextSourceScanner? sourceScanner = null,
+        RepoContextCoverageVerdictReporter? coverageVerdictReporter = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(fileNodeSerializer);
@@ -227,6 +243,7 @@ internal sealed class RepoContextBootstrapService : IDisposable
         _options = options;
         _logger = logger;
         _sourceScanner = sourceScanner;
+        _coverageVerdictReporter = coverageVerdictReporter;
 
         // Publish under the same meter name as the rest of the repocontext surface so
         // a single scraper subscription covers it.
@@ -411,11 +428,21 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // converged, or when the periodic cadence is due. A converged repository
             // still heals promptly: the self-index grain's out-of-band paged sweep
             // sets ForceEmbeddingGapScan the moment it finds a real gap.
+            //
+            // CoverageUnmeasurable suppresses the "not yet converged" re-arm, and only
+            // that one (issue #3340). A pass that could not measure coverage has not
+            // observed a gap, so escalating to every-pass scanning buys no detection -
+            // and on a saturated store it is actively harmful, because the escalated
+            // whole-corpus sweep is the load that refuses the next probe, which keeps
+            // the verdict unmeasurable, which holds the escalation on. The periodic
+            // cadence still comes due, so an unmeasurable repository is re-checked on
+            // schedule rather than abandoned; a MEASURED gap still re-arms every pass.
             var coverageConverged = priorPrune?.CoverageConverged ?? false;
+            var coverageUnmeasurable = priorPrune?.CoverageUnmeasurable ?? false;
             var passesSinceGapScan = priorPrune?.PassesSinceGapScan ?? 0;
             var gapScanDue = !request.AllowPrune
                 || request.ForceEmbeddingGapScan
-                || !coverageConverged
+                || (!coverageConverged && !coverageUnmeasurable)
                 || passesSinceGapScan + 1 >= _options.PassesPerEmbeddingGapScan;
 
             // The walk is synchronous, so a run with a progress sink drives a
@@ -477,7 +504,8 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 forceFull ? nowTicks : lastFullSweepTicks,
                 forceFull ? 0 : passesSinceFullSweep + 1,
                 gapScanDue ? 0 : passesSinceGapScan + 1,
-                coverageConverged);
+                coverageConverged,
+                coverageUnmeasurable);
 
             // A full sweep whose wall clock overran the operator's configured interval
             // is the observable symptom of issue #2048: passes are slower than the
@@ -863,14 +891,45 @@ internal sealed class RepoContextBootstrapService : IDisposable
 
             embedded = fileIngest.FilesEmbedded;
 
-            // Convergence is only ever asserted from a pass that actually looked. A
-            // deferred scan carries the previous verdict forward unchanged; a failed
-            // arm, a failed coverage probe, or any gap found clears it, so the next
-            // pass scans again until the repository is observed clean once more.
+            // Convergence is only ever asserted from a pass that actually looked, and -
+            // since issue #3340 - only ever withdrawn by a pass that actually looked.
+            // The three non-converged reasons are not interchangeable:
+            //
+            //   arm_failure        an ingestion arm threw, so this pass's coverage facts
+            //                      are inadmissible whatever they said. Clears
+            //                      convergence and re-arms the scan, as before.
+            //   gap_found          coverage was measured and a real gap was seen. Clears
+            //                      convergence and holds the scan armed on every pass -
+            //                      the escalation doing the job it exists for.
+            //   probe_unmeasurable coverage could not be measured: the membership probe
+            //                      failed or was gate-pruned, embed work deferred under
+            //                      saturation, or the gap scan stood itself down. This is
+            //                      an UNKNOWN, not a gap. It carries the standing verdict
+            //                      forward - asserting neither convergence nor its
+            //                      absence - and lets the periodic cadence resume.
+            //
+            // Collapsing the last two was the amplifier in issue #3340: a refused probe
+            // escalated the scan to every pass, the escalated whole-corpus sweep was
+            // itself the load that refused the next probe, and the loop wrote a full
+            // re-walk into the WAL on every pass while embedding almost nothing. The
+            // cure is not a longer timeout or a retry - both deepen the queue that caused
+            // the refusal - it is to stop spending an unknown as a finding.
             if (gapScanDue)
             {
-                var converged = armFailure is null && fileIngest.Converged;
-                updatedSnapshot = updatedSnapshot with { CoverageConverged = converged };
+                var verdict = RepoContextCoverageVerdictReporter.Classify(armFailure is not null, fileIngest);
+
+                // Publish the verdict on every measured pass. The fix makes an
+                // unmeasurable pass quiet, and a quiet pass is indistinguishable from a
+                // converged one unless the reason is recorded; leaving it unrecorded
+                // would trade issue #3340's loud pathology for a silent latch, which is
+                // the defect class of issues #3320 and #2656.
+                _coverageVerdictReporter?.Record(verdict);
+
+                var converged = verdict == RepoContextCoverageVerdict.Converged;
+                var unmeasurable = verdict == RepoContextCoverageVerdict.ProbeUnmeasurable;
+                updatedSnapshot = unmeasurable
+                    ? updatedSnapshot with { CoverageUnmeasurable = true }
+                    : updatedSnapshot with { CoverageConverged = converged, CoverageUnmeasurable = false };
 
                 // Report the verdict on EVERY pass that measured it, not only when it
                 // changes. Gating it on the transition is the same defect the plan line
@@ -881,15 +940,30 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 // rather than read. The line is emitted only when the scan actually
                 // ran, so a converged repository still logs at its slower cadence
                 // rather than on every pass.
-                _logger.LogInformation(
-                    converged
-                        ? "Repo {RepoId}: embedding coverage is complete ({Transition}); the gap scan runs every "
-                          + "{Passes} pass(es) unless a gap is detected out of band."
-                        : "Repo {RepoId}: embedding coverage is incomplete ({Transition}); the gap scan runs on "
-                          + "every pass until it is clean (cadence would otherwise be {Passes} pass(es)).",
-                    repoId,
-                    converged == coverageConverged ? "unchanged since the previous scan" : "changed this scan",
-                    _options.PassesPerEmbeddingGapScan);
+                if (unmeasurable)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedding coverage could not be measured this pass ({Transition}); the "
+                        + "standing verdict is carried forward and the gap scan falls back to every {Passes} "
+                        + "pass(es) rather than escalating on an unmeasured result.",
+                        repoId,
+                        coverageUnmeasurable ? "unchanged since the previous scan" : "changed this scan",
+                        _options.PassesPerEmbeddingGapScan);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        converged
+                            ? "Repo {RepoId}: embedding coverage is complete ({Transition}); the gap scan runs every "
+                              + "{Passes} pass(es) unless a gap is detected out of band."
+                            : "Repo {RepoId}: embedding coverage is incomplete ({Transition}); the gap scan runs on "
+                              + "every pass until it is clean (cadence would otherwise be {Passes} pass(es)).",
+                        repoId,
+                        converged == coverageConverged && !coverageUnmeasurable
+                            ? "unchanged since the previous scan"
+                            : "changed this scan",
+                        _options.PassesPerEmbeddingGapScan);
+                }
             }
 
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
@@ -1137,13 +1211,24 @@ internal sealed class RepoContextBootstrapService : IDisposable
     /// <see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/>.</param>
     /// <param name="CoverageConverged">Whether the last gap scan that actually ran proved
     /// every content-unchanged file has a live vector. While false the scan runs on every
-    /// pass, so a repository still filling in its embeddings is never throttled.</param>
+    /// pass, so a repository still filling in its embeddings is never throttled - unless
+    /// <paramref name="CoverageUnmeasurable"/> is also set, in which case the false is an
+    /// unknown rather than a finding and the scan falls back to its periodic cadence.</param>
+    /// <param name="CoverageUnmeasurable">Whether the last gap scan that actually ran was
+    /// unable to measure coverage at all - a failed or gate-pruned membership probe, embed
+    /// work deferred under saturation, or a skipped gap scan. Set alongside an unchanged
+    /// <paramref name="CoverageConverged"/>, because an unmeasured pass may neither assert
+    /// nor withdraw convergence. It exists to stop an unknown being spent as a gap: an
+    /// unmeasurable pass backs the scan off to the periodic cadence instead of escalating
+    /// it to every pass, whose whole-corpus sweep is the load that prevents the next
+    /// measurement (issue #3340).</param>
     private sealed record PruneCacheEntry(
         IReadOnlyDictionary<string, long> DirectoryMtimes,
         long LastFullSweepTicks,
         int PassesSinceFullSweep,
         int PassesSinceGapScan,
-        bool CoverageConverged);
+        bool CoverageConverged,
+        bool CoverageUnmeasurable = false);
 
     /// <summary>
     /// Selects the symbol back-fill candidates from the content-unchanged set: files

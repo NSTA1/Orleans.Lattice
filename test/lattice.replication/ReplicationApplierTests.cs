@@ -402,7 +402,11 @@ public partial class ReplicationApplierTests
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        lattice.GetWithVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        // Local state is read through the apply seam, never through the
+        // client-facing ILattice.GetWithVersionAsync (issue #2813).
+        // lattice.GetWithVersionAsync is deliberately left unstubbed so a
+        // regression to that boundary faults rather than passing silently.
+        apply.ReadStoredWithVersionAsync(Arg.Any<string>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);

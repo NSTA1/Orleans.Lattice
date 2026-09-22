@@ -59,6 +59,20 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
+    public Task<VersionedValue> ReadStoredWithVersionAsync(string key)
+    {
+        EnsureInternalOrigin(LatticeOperation.Replication);
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(key);
+
+        // decode: false is the whole point of this seam - the applier folds
+        // the stored form and writes the fold back, so running the read-path
+        // value decoder here would strip the per-value envelope off the row
+        // on the next merge (issue #2813).
+        return GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
+    }
+
+    /// <inheritdoc />
     public async Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
