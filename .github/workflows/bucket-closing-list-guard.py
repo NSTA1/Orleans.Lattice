@@ -467,6 +467,20 @@ def main() -> int:
             return 1
 
         closing = closing_set(graphql, owner, name, number)
+        if not closing:
+            print(f"::error::NON-VACUITY: {len(claims)} issue(s) are claimed by a merged "
+                  "member, but this pull request's computed closing set came back EMPTY. "
+                  "That is reported separately from an ordinary gap because the two have "
+                  "different causes and different fixes: a partial list means some "
+                  "references were not carried over, whereas a wholly empty one usually "
+                  "means the read itself stopped working - a changed GraphQL field, a "
+                  "missing 'pull-requests: read' scope, or a body whose references GitHub "
+                  "never parsed. Check the set directly with: gh pr view <n> --json "
+                  "closingIssuesReferences. If it really is empty, this pull request "
+                  "currently closes nothing at all and every claimed issue would be left "
+                  "open by a merge.")
+            return 1
+
         candidates = reconcile(claims, closing, set(excluded))
 
         gaps: list[int] = []

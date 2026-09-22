@@ -176,15 +176,41 @@ def run(scenario: Scenario, *, body: str = "", head: str = BUCKET,
 # Scenarios
 # ---------------------------------------------------------------------------
 
+# Decoy references planted in a member body inside the three regions GitHub
+# does not linkify. They are registered as OPEN issues on purpose: an unknown
+# number would be dropped as MISSING and the check would pass whether or not
+# the stripper worked, so the decoys have to be real and open for their
+# leakage to be fatal. If any one of them is read as a claim, `complete()`
+# acquires a phantom gap and case B fails - which is exactly the false
+# positive that would block a whole wave at its last gate.
+DECOYS = {9001: "OPEN", 9002: "OPEN", 9003: "OPEN"}
+
+DECORATED = (
+    "Refs #10\n"
+    "\n"
+    "A member gives up its closing keyword, because GitHub honours one only on\n"
+    "the default branch, and records the deferral as a reference instead.\n"
+    "References inside these regions must NOT be read as claims:\n"
+    "\n"
+    "- an inline code span: `Refs #9001`\n"
+    "\n"
+    "```\n"
+    "Refs #9002\n"
+    "```\n"
+    "\n"
+    "> Refs #9003\n"
+)
+
+
 def complete() -> Scenario:
-    return Scenario([member(1, "Refs #10"), member(2, "Refs #11")],
-                    [10, 11], {10: "OPEN", 11: "OPEN"})
+    return Scenario([member(1, DECORATED), member(2, "Refs #11")],
+                    [10, 11], {10: "OPEN", 11: "OPEN", **DECOYS})
 
 
 def incomplete() -> Scenario:
     """The shape of the live defect: a member merged, its issue never listed."""
-    return Scenario([member(1, "Refs #10"), member(2, "Refs #11")],
-                    [10], {10: "OPEN", 11: "OPEN"})
+    return Scenario([member(1, DECORATED), member(2, "Refs #11")],
+                    [10], {10: "OPEN", 11: "OPEN", **DECOYS})
 
 
 def paged() -> Scenario:
@@ -242,10 +268,16 @@ def main() -> int:
     print("  --- end ---")
 
     print()
-    print("B. PASS - a complete bucket")
+    print("B. PASS - a complete bucket, whose members also carry decoy references")
     code, out = run(complete())
     check(code == 0, "a complete closing list passes")
     check("OK:" in out, "and says so")
+    check("2 issue(s) claimed" in out,
+          "only the 2 real claims are counted - the code-span, fenced and "
+          "blockquote references are not read as claims")
+    for decoy in DECOYS:
+        check(f"#{decoy}" not in out,
+              f"the decoy #{decoy} is never named, so it raised no phantom gap")
     verbatim(out)
 
     print()
@@ -260,6 +292,12 @@ def main() -> int:
     verbatim(out)
     code, out = run(Scenario([member(1, "Refs #10", merged=False)], [10], {10: "OPEN"}))
     check(code != 0, "an UNMERGED member is not counted as a population")
+    code, out = run(Scenario([member(1, "Refs #10"), member(2, "Refs #11")], [],
+                             {10: "OPEN", 11: "OPEN"}))
+    check(code != 0, "an EMPTY computed closing set FAILS rather than passes")
+    check("NON-VACUITY" in out and "EMPTY" in out,
+          "and is reported as its own condition, not as an ordinary gap")
+    verbatim(out)
 
     print()
     print("D. SHAPE - the guard must not fire on a member or an ordinary pull request")
@@ -408,6 +446,16 @@ def main() -> int:
          mutate('or "/epic/" not in head_ref', ""),
          dict(scenario=incomplete, head="feat/ordinary-thing"),
          lambda c, o: c == 0 and "not applicable" in o),
+        # M12 pins the third non-vacuity condition, and is the clearest case
+        # for pinning a message rather than a code. With the check neutered the
+        # run still fails - every claim becomes a gap - so an exit-code-only
+        # assertion would call the mutant caught while the diagnostic that
+        # tells a human the READ broke, rather than that the list is short, had
+        # been deleted.
+        ("M12 empty-closing-set non-vacuity neutered",
+         mutate("if not closing:", "if False and not closing:"),
+         dict(scenario=lambda: Scenario([member(1, "Refs #10")], [], {10: "OPEN"})),
+         lambda c, o: c != 0 and "came back EMPTY" in o),
     ]
     for label, mutated, kwargs, expect in mutations:
         factory = kwargs.pop("scenario")
