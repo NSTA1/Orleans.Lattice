@@ -528,7 +528,8 @@ internal sealed class WalCommitLogWriter(
     /// Local-path Throttled pacing: when the optional
     /// <see cref="IWalSaturationSignal"/> reports
     /// <see cref="WalSaturationState.Throttled"/> for
-    /// <paramref name="treeId"/>, applies a single bounded
+    /// <paramref name="treeId"/> partition
+    /// <paramref name="partition"/>, applies a single bounded
     /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> of
     /// <paramref name="pace"/> before the caller admits into the
     /// per-partition admission semaphore. This gives the Throttled
@@ -554,18 +555,20 @@ internal sealed class WalCommitLogWriter(
     /// </para>
     /// </summary>
     /// <param name="treeId">Tree id whose saturation signal to consult.</param>
+    /// <param name="partition">Writer partition whose verdict to pace on.</param>
     /// <param name="pace">Per-append pacing delay applied while Throttled.</param>
     /// <param name="cancellationToken">Caller-supplied cancellation.</param>
     /// <param name="drainToken">Writer-supplied drain token.</param>
     private async ValueTask PaceOnThrottleAsync(
         string treeId,
+        int partition,
         TimeSpan pace,
         CancellationToken cancellationToken,
         CancellationToken drainToken)
     {
         if (saturationSignal is null) return;
         if (pace <= TimeSpan.Zero) return;
-        if (saturationSignal.GetCurrentState(treeId) != WalSaturationState.Throttled) return;
+        if (GetGateState(treeId, partition) != WalSaturationState.Throttled) return;
 
         CancellationTokenSource? linkedCts = null;
         try
@@ -686,10 +689,10 @@ internal sealed class WalCommitLogWriter(
 
         // Local-path Throttled pacing. Gives the drain-lag back-pressure
         // teeth on the single-silo write path by applying a bounded
-        // per-append delay while the tree is Throttled. Pure back-off:
-        // never throws. No-op when no signal is registered, the pace is
-        // Zero, or the tree is not Throttled.
-        await PaceOnThrottleAsync(stamped.TreeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+        // per-append delay while this partition is Throttled. Pure
+        // back-off: never throws. No-op when no signal is registered, the
+        // pace is Zero, or the partition is not Throttled.
+        await PaceOnThrottleAsync(stamped.TreeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
 
         // Writer-side admission: cap PartitionTracker._inFlight at
         // WalMaxPendingBatches so the writer back-pressures honestly
@@ -1052,7 +1055,7 @@ internal sealed class WalCommitLogWriter(
 
         // Local-path Throttled pacing (batched path); same shape as the
         // single-entry overload above.
-        await PaceOnThrottleAsync(treeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+        await PaceOnThrottleAsync(treeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
 
         // Writer-side admission (batched path): same shape as the
         // single-entry overload above. The acquire bound is the same

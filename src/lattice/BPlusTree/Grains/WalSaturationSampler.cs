@@ -802,6 +802,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             //   classifier behaves as the pre-recovery-window shape
             //   did (per-tick classification drives the regime
             //   directly).
+            var throttledByRecoveryWindow = false;
             if (newState == WalSaturationState.Saturated)
             {
                 _lastSaturatedTickUtc[acc.TreeId] = observedAt;
@@ -813,6 +814,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     || (observedAt - lastSat) < recoveryWindow))
             {
                 newState = WalSaturationState.Throttled;
+                throttledByRecoveryWindow = true;
             }
 
             // (#3348) Publish a per-partition verdict alongside the
@@ -852,12 +854,32 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         pinLatencyConsecutiveWindows,
                         pinLatencyEnabled ? pinLatencySampleWindows : 0);
 
-                    // A partition never reads healthier than a tree held
-                    // at Throttled by the recovery window: that upgrade
-                    // exists to stop the regime flapping at the sampler
-                    // cadence, and it is a pure back-off that does not
-                    // engage the admission gate's refusal.
-                    if (newState == WalSaturationState.Throttled
+                    // A partition never reads healthier than a tree the
+                    // *recovery window* is holding at Throttled: that
+                    // hysteresis exists to stop the regime flapping at
+                    // the sampler cadence, and it is a genuinely
+                    // tree-wide cause, so it belongs on every partition.
+                    //
+                    // It is deliberately NOT applied when the tree reads
+                    // Throttled because `Classify` said so, because the
+                    // only input that can do that is `acc.MaxDepthRatio`
+                    // - the max across partitions - which is precisely
+                    // the #3348 coupling. Flooring on it would hand every
+                    // idle partition the busiest partition's verdict and
+                    // re-create the defect one layer down.
+                    //
+                    // The distinction is load-bearing rather than
+                    // cosmetic: Throttled is not free. PaceOnThrottleAsync
+                    // charges WalThrottledAdmissionPace per append on the
+                    // strength of this verdict, so a floor applied to the
+                    // depth-driven case taxes every append to every idle
+                    // partition because one partition is busy. An earlier
+                    // revision justified the unconditional floor as "a
+                    // pure back-off that does not engage the admission
+                    // gate's refusal" - true, but refusal is not the only
+                    // cost, and the pacing cost is the one that scales
+                    // with fan-out.
+                    if (throttledByRecoveryWindow
                         && partitionState == WalSaturationState.Healthy)
                     {
                         partitionState = WalSaturationState.Throttled;

@@ -343,4 +343,98 @@ public class WalSaturationCrossPartitionBlockingTests
         signal.Received().GetCurrentState(Arg.Any<string>());
         _ = signal.Received().WaitForHealthyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    /// <summary>
+    /// Seeds one partition into Throttled (depth ratio at the throttle
+    /// threshold but below cap, so the admission gate does not refuse)
+    /// and leaves every other partition idle.
+    /// </summary>
+    private WalSaturationSampler SeedOneThrottledPartition(
+        int hotPartition,
+        LatticeOptions options,
+        out WalSaturationSignal signal)
+    {
+        for (var p = 0; p < Partitions; p++)
+        {
+            SeedPartition(_treeId, p, depth: p == hotPartition ? 12 : 0, cap: 16);
+        }
+
+        return CreateSampler(options, out signal);
+    }
+
+    private static LatticeOptions PacingOptions(TimeSpan pace) => new()
+    {
+        WalPartitions = Partitions,
+        WalSaturationThrottledRatio = 0.75,
+        WalSaturationDispatchTimeoutThreshold = 1,
+        WalAdmissionSaturationWaitBudget = TimeSpan.FromMilliseconds(200),
+        WalThrottledAdmissionPace = pace,
+    };
+
+    /// <summary>
+    /// (#3348) Throttled <i>pacing</i> must be partition-scoped for the
+    /// same reason the refusal gate is.
+    /// <para>
+    /// <c>PaceOnThrottleAsync</c> runs on every append, one line below
+    /// <c>GateOnSaturationAsync</c>, and charged a bounded delay to
+    /// every partition whenever the tree-wide roll-up read Throttled.
+    /// Because that roll-up is a <c>max</c> across partitions, a single
+    /// busy partition taxed all <c>B</c> of them - the same coupling as
+    /// the refusal gate, differing only in that it burns latency rather
+    /// than failing the call, which is why it survived the first fix.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task AppendAsync_to_idle_partition_is_not_paced_while_a_different_partition_is_throttled()
+    {
+        const int hotPartition = 3;
+
+        // A pace far larger than the assertion ceiling, so a tree-wide
+        // read cannot pass this test by being merely fast.
+        var options = PacingOptions(TimeSpan.FromSeconds(5));
+        var sampler = SeedOneThrottledPartition(hotPartition, options, out var signal);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "precondition: one partition at the throttle ratio must drive the tree-wide verdict "
+            + "to Throttled (and not to Saturated, which the refusal gate would absorb first)");
+
+        var writer = CreateWriter(signal, options);
+        var idlePartition = (hotPartition + 1) % Partitions;
+        var key = KeyForPartition(idlePartition, Partitions);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        _ = await writer.AppendAsync(MakeMutation(key));
+        started.Stop();
+
+        Assert.That(started.Elapsed, Is.LessThan(TimeSpan.FromSeconds(1)),
+            $"an append to idle partition {idlePartition} must not be paced by the throttling of "
+            + $"partition {hotPartition}; a 5s pace was charged, so anything near it means the "
+            + "pace still reads the tree-wide roll-up");
+    }
+
+    /// <summary>
+    /// The converse: narrowing the pace must not disable it. An append
+    /// routed at the genuinely Throttled partition is still paced.
+    /// </summary>
+    [Test]
+    public async Task AppendAsync_to_the_throttled_partition_is_still_paced()
+    {
+        const int hotPartition = 3;
+
+        var options = PacingOptions(TimeSpan.FromMilliseconds(400));
+        var sampler = SeedOneThrottledPartition(hotPartition, options, out var signal);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        var writer = CreateWriter(signal, options);
+        var key = KeyForPartition(hotPartition, Partitions);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        _ = await writer.AppendAsync(MakeMutation(key));
+        started.Stop();
+
+        Assert.That(started.Elapsed, Is.GreaterThan(TimeSpan.FromMilliseconds(250)),
+            $"partition {hotPartition} is genuinely Throttled, so its own appends must still pay "
+            + "the pace - narrowing the scope must not silently delete the back-pressure");
+    }
 }
