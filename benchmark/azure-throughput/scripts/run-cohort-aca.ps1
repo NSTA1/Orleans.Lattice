@@ -195,6 +195,17 @@ Set-StrictMode -Version Latest
 $ctx = Read-AcaContext -NamePrefix $NamePrefix
 if (-not $TreeId) { $TreeId = "l3-$WorkloadMode-n$SiloCount-$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
 
+# One ClusterId per cohort. Azure Table membership partitions by ClusterId and
+# Orleans only reaps defunct rows after DefunctSiloExpiration (7 days by default),
+# so a shared id accumulates every prior cohort's silo rows in one partition - and
+# worse, a cohort that starts while the previous ACA revision is still retiring
+# reads those already-killed silos as Active and must probe each to timeout before
+# membership settles. That is what stalls warm-up past its budget and wedges a
+# cohort. A fresh id hands each cohort an empty partition, so a retiring revision
+# is simply invisible to it. Derived from TreeId so the cluster stays greppable
+# back to its tree; both silo and producer must be given the same value.
+$ClusterId = "azure-throughput-$TreeId"
+
 $runRoot = Get-AcaRunRoot
 $logStem = if ($CohortTag) { "$NamePrefix.n$SiloCount.$WorkloadMode.$CohortTag" } else { "$NamePrefix.n$SiloCount.$WorkloadMode" }
 $logPath = Join-Path $runRoot "$logStem.log"
@@ -234,6 +245,7 @@ $siloEnv = @(
 	# walk; the bench has no foreground reader, so there is nothing to
 	# protect. Raising it is the remediation the exception itself names.
 	"BENCH_WAL_REPLAY_QUEUE_DEPTH=$WalReplayQueueDepth",
+	"BENCH_CLUSTER_ID=$ClusterId",
 	'BENCH_SHARD_COUNT=0',
 	'BENCH_CLUSTERING=azuretable',
 	'BENCH_INGEST_MODE=cluster',
@@ -288,7 +300,10 @@ try {
 		# time and nothing in the job status to distinguish it from progress.
 		# A healthy warm-up here takes about a second, so this only ever fires
 		# on the pathological case.
-		"BENCH_WARMUP_BUDGET_SEC=$WarmUpBudgetSec"
+		"BENCH_WARMUP_BUDGET_SEC=$WarmUpBudgetSec",
+		# Must match the silo's value exactly, or the client joins an empty
+		# membership partition and finds no gateway.
+		"BENCH_CLUSTER_ID=$ClusterId"
 	)
 	Invoke-Az (@(
 		'containerapp', 'job', 'update',

@@ -350,6 +350,14 @@ if (ingestMode is not ("tcp" or "cluster"))
 var clusteringConn = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_CONNECTION_STRING");
 var clusteringTableServiceUri = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE_SERVICE_URI");
 var clusteringTable = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE") ?? "OrleansSiloInstances";
+// Azure Table membership partitions by ClusterId, and Orleans only reaps defunct
+// rows after ClusterMembershipOptions.DefunctSiloExpiration (7 days by default).
+// A rig that reuses one ClusterId therefore carries every prior cohort's dead silo
+// rows into the next cluster, which must probe them before membership settles; that
+// is what stalls warm-up when a cohort starts while the previous ACA revision is
+// still retiring. Rotating ClusterId per cohort hands each one an empty partition.
+// ServiceId stays fixed: it keys persistence, not membership.
+var clusterId = Environment.GetEnvironmentVariable("BENCH_CLUSTER_ID") ?? "azure-throughput";
 var siloClusterPort = ReadInt("BENCH_SILO_CLUSTER_PORT", 11111);
 var gatewayPort = ReadInt("BENCH_GATEWAY_PORT", 30000);
 var leafStorageKind = (Environment.GetEnvironmentVariable("BENCH_LEAF_STORAGE_KIND") ?? "azure").Trim().ToLowerInvariant();
@@ -501,7 +509,7 @@ builder.UseOrleans(silo =>
 {
     silo.Configure<ClusterOptions>(o =>
     {
-        o.ClusterId = "azure-throughput";
+        o.ClusterId = clusterId;
         o.ServiceId = "azure-throughput";
     });
 
