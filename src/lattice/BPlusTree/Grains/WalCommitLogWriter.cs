@@ -178,6 +178,23 @@ internal sealed class WalCommitLogWriter(
     // at process exit.
     private readonly CancellationTokenSource _drainCts = new();
 
+    // (#3348) The partition-scoped view of the saturation signal,
+    // resolved once at construction so the gate's hot path costs a
+    // null-check on a readonly field rather than a type test per
+    // append.
+    //
+    // Null whenever the injected IWalSaturationSignal does not carry
+    // the internal partition-scoped surface - a foreign implementation,
+    // or one standing behind a dynamic proxy (a mocking framework, a DI
+    // interception decorator). The gate then falls back to the
+    // tree-wide verdict, which is strictly more restrictive and
+    // byte-identical to the pre-#3348 behaviour, so the fallback is
+    // fail-closed. See IWalPartitionSaturationSignal for why the
+    // partition surface is a separate internal interface rather than a
+    // default interface method on the public one.
+    private readonly IWalPartitionSaturationSignal? _partitionSaturationSignal
+        = saturationSignal as IWalPartitionSaturationSignal;
+
     // Writer-level drain flag. Flipped at DrainAsync entry so
     // GetTracker calls during shutdown fast-fail with
     // InvalidOperationException instead of registering fresh dispatches
@@ -340,7 +357,14 @@ internal sealed class WalCommitLogWriter(
     {
         if (saturationSignal is null) return;
         if (budget == TimeSpan.Zero) return;
-        var state = saturationSignal.GetCurrentState(treeId);
+        // (#3348) Partition-scoped, not tree-scoped. The tree-wide
+        // verdict is a max across every partition, so consulting it here
+        // let one partition at its admission cap refuse appends routed
+        // at its idle siblings - turning a single hot partition into a
+        // tree-wide write stall, and reporting it against the innocent
+        // partition below. Tree-wide causes are still reflected in every
+        // partition's state, so narrowing the gate does not lose them.
+        var state = GetGateState(treeId, partition);
         if (state != WalSaturationState.Saturated) return;
 
         // Saturated regime observed. Park on WaitForHealthyAsync up
@@ -358,7 +382,7 @@ internal sealed class WalCommitLogWriter(
             }
             try
             {
-                await saturationSignal.WaitForHealthyAsync(treeId, linkedCts.Token);
+                await WaitForGateHealthyAsync(treeId, partition, linkedCts.Token);
                 // Recovery observed within the budget; the caller
                 // proceeds into the admission semaphore as normal.
                 return;
@@ -383,7 +407,7 @@ internal sealed class WalCommitLogWriter(
                 // tree recovered between the wait expiring and us
                 // re-reading, suppress the refusal so a borderline
                 // recovery is not penalised.
-                if (saturationSignal.GetCurrentState(treeId) != WalSaturationState.Saturated)
+                if (GetGateState(treeId, partition) != WalSaturationState.Saturated)
                 {
                     return;
                 }
@@ -393,7 +417,7 @@ internal sealed class WalCommitLogWriter(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                     LatticeTenantLabel.ForTree(treeId));
                 throw new LatticeSaturatedException(
-                    $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the per-tree saturation signal stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget}); offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
+                    $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the saturation signal for this partition stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget}); offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
                     treeId,
                     LatticeSaturationSource.WalAdmission);
             }
@@ -403,6 +427,34 @@ internal sealed class WalCommitLogWriter(
             linkedCts?.Dispose();
         }
     }
+
+    /// <summary>
+    /// (#3348) Reads the saturation verdict the writer's admission gate
+    /// should act on: partition-scoped when the injected signal carries
+    /// <see cref="IWalPartitionSaturationSignal"/>, otherwise the
+    /// tree-wide verdict.
+    /// <para>
+    /// The fallback is deliberately the more restrictive of the two - a
+    /// tree reads Saturated whenever <i>any</i> partition is - so an
+    /// implementation that cannot answer per partition keeps exactly
+    /// the pre-#3348 gating rather than silently losing back-pressure.
+    /// </para>
+    /// </summary>
+    private WalSaturationState GetGateState(string treeId, int partition)
+        => _partitionSaturationSignal is { } partitionSignal
+            ? partitionSignal.GetCurrentState(treeId, partition)
+            : saturationSignal!.GetCurrentState(treeId);
+
+    /// <summary>
+    /// (#3348) The await-able sibling of
+    /// <see cref="GetGateState(string, int)"/>, with the same
+    /// partition-scoped-when-available, tree-scoped-otherwise
+    /// resolution.
+    /// </summary>
+    private Task WaitForGateHealthyAsync(string treeId, int partition, CancellationToken cancellationToken)
+        => _partitionSaturationSignal is { } partitionSignal
+            ? partitionSignal.WaitForHealthyAsync(treeId, partition, cancellationToken)
+            : saturationSignal!.WaitForHealthyAsync(treeId, cancellationToken);
 
     /// <summary>
     /// Local-path Throttled pacing: when the optional
