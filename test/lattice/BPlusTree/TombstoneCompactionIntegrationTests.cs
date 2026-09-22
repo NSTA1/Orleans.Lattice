@@ -62,7 +62,7 @@ public class TombstoneCompactionIntegrationTests
         // return only live keys, and a second compaction should be a no-op
         // (no version change → LastCompactionVersion fast-path).
         var keys = new List<string>();
-        await foreach (var key in router.KeysAsync())
+        await foreach (var key in router.ScanKeysAsync())
         {
             keys.Add(key);
         }
@@ -107,7 +107,7 @@ public class TombstoneCompactionIntegrationTests
 
         // Full key enumeration shows only live keys.
         var keys = new List<string>();
-        await foreach (var key in router.KeysAsync())
+        await foreach (var key in router.ScanKeysAsync())
         {
             keys.Add(key);
         }

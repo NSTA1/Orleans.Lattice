@@ -198,7 +198,8 @@ public partial class AccessGateKeyFilterIntegrationTests
     private static async Task<List<string>> CollectKeysAsync(ILattice tree)
     {
         var keys = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        // This collects gate-visible keys; raw enumerator lifetime is not under test.
+        await foreach (var key in tree.ScanKeysAsync())
         {
             keys.Add(key);
         }

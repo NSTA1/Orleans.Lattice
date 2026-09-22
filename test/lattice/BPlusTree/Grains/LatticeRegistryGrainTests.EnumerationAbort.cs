@@ -28,6 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class LatticeRegistryGrainTests
 {
+    // Raw stream stubs deliberately expose abort/resume behaviour to the registry's production caller.
     [Test]
     public async Task GetAllTreeIdsAsync_returns_the_complete_catalog_across_an_enumerator_abort()
     {

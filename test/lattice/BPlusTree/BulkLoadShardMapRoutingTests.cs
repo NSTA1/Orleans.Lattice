@@ -68,7 +68,7 @@ public class BulkLoadShardMapRoutingTests
 
         // All entries are retrievable.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys, Has.Count.EqualTo(count));
 
@@ -88,4 +88,3 @@ public class BulkLoadShardMapRoutingTests
             $"All {count} entries must route to pinned shard {pinnedShard}.");
     }
 }
-

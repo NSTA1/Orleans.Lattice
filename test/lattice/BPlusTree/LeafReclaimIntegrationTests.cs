@@ -165,7 +165,7 @@ public class LeafReclaimIntegrationTests
         }
 
         var scanned = new List<string>();
-        await foreach (var key in router.KeysAsync())
+        await foreach (var key in router.ScanKeysAsync())
             scanned.Add(key);
 
         Assert.That(scanned.Count, Is.EqualTo(60), "a chain walk must see exactly the surviving rows");
@@ -196,7 +196,7 @@ public class LeafReclaimIntegrationTests
             "a point read must find the row written into the reclaimed range");
 
         var scanned = new List<string>();
-        await foreach (var key in router.KeysAsync())
+        await foreach (var key in router.ScanKeysAsync())
             scanned.Add(key);
 
         Assert.That(scanned, Does.Contain("k050"),

@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration coverage for the read-path access-gate key-filter seam
 /// (issue #977). A test <see cref="ILatticeAccessGate"/> returns a
 /// <see cref="LatticeAccessDecision.Filtered"/> decision scoped to the tree
-/// under test; the range-read surfaces (<c>KeysAsync</c> / <c>EntriesAsync</c>),
+/// under test; the recovering range-read surfaces (<c>ScanKeysAsync</c> / <c>ScanEntriesAsync</c>),
 /// the multi-key point read (<c>GetManyAsync</c>), and <c>CountAsync</c> must
 /// admit only the authorized keys, prune unauthorized keys/values server-side,
 /// keep the null (allow-all) path unchanged, and bypass filtering entirely under
@@ -91,7 +91,7 @@ public partial class AccessGateKeyFilterIntegrationTests
         await SeedAsync(tree, "user/alice", "user/amy", "user/bob", "user/carol");
         FilterUserAToTree(treeId);
 
-        var keys = await CollectAsync(tree.KeysAsync());
+        var keys = await CollectAsync(tree.ScanKeysAsync());
 
         Assert.That(keys, Is.EquivalentTo(new[] { "user/alice", "user/amy" }));
     }
@@ -173,7 +173,7 @@ public partial class AccessGateKeyFilterIntegrationTests
         // Default decision is a plain Allow() with a null KeyFilter, exercising
         // the zero-per-key-cost hot path.
 
-        var keys = await CollectAsync(tree.KeysAsync());
+        var keys = await CollectAsync(tree.ScanKeysAsync());
         var count = await tree.CountAsync();
         var many = await tree.GetManyAsync(new List<string> { "user/alice", "user/bob", "user/carol" });
 
@@ -198,7 +198,7 @@ public partial class AccessGateKeyFilterIntegrationTests
                 ? LatticeAccessDecision.Filtered(static _ => false)
                 : LatticeAccessDecision.Allow();
 
-        var keys = await CollectAsync(tree.KeysAsync());
+        var keys = await CollectAsync(tree.ScanKeysAsync());
         var count = await tree.CountAsync();
 
         Assert.Multiple(() =>
@@ -222,7 +222,7 @@ public partial class AccessGateKeyFilterIntegrationTests
         int count;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            keys = await CollectAsync(tree.KeysAsync());
+            keys = await CollectAsync(tree.ScanKeysAsync());
             count = await tree.CountAsync();
         }
 
