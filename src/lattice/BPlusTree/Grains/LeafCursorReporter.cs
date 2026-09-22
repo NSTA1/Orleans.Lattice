@@ -546,12 +546,16 @@ internal sealed class LeafCursorReporter(
             await (writeThrough ? pin.SeedManyAsync(bucket) : pin.ReportManyAsync(bucket))
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (pinStorage is not null && IsActivationCollectionRejection(ex))
+        catch (Exception ex) when (pinStorage is not null && IsPinRoutingUnavailable(ex))
         {
-            // Full-silo graceful shutdown (issue #1464): the pin-store grain is
-            // itself deactivating and the stopping silo refuses to create its
-            // activation, so this durable retention barrier's grain call is
-            // rejected mid-teardown. That defeats the "fall off the log" floor -
+            // Full-silo graceful shutdown (issues #1464 and #3382): the durable
+            // pin cannot be routed mid-teardown, either because the stopping
+            // silo refuses to create its activation (#1464) or because the grain
+            // type has already been withdrawn from the cluster catalog so
+            // placement fails outright (#3382 - "No active nodes are compatible
+            // with grain walmaterialiserpin ... Known nodes with grain type:
+            // none"). Either way this durable retention barrier's grain call
+            // fails. That defeats the "fall off the log" floor -
             // and, when a leaf's FIRST real-frontier checkpoint is produced by
             // the deactivation flush, defeats BOTH barriers, leaving no durable
             // floor at all and reintroducing LeafProjectionStaleException on cold
@@ -783,14 +787,50 @@ internal sealed class LeafCursorReporter(
 
     /// <summary>
     /// True when <paramref name="exception"/> (or any of its inner or aggregated
-    /// causes) is Orleans rejecting a grain call because the target activation
-    /// could not be created on a stopping silo - the signature of a durable-pin
+    /// causes) is Orleans refusing to route a grain call because the target
+    /// cannot be placed on a stopping silo - the signature of a durable-pin
     /// grain call issued during full-silo graceful shutdown. Matched by the
     /// rejection type name and the canonical rejection message fragments rather
     /// than a hard dependency on an Orleans.Runtime type, so the detection is
     /// portable and unit-testable with a plain exception carrying the marker.
+    /// <para>
+    /// Teardown presents in <b>two</b> distinct shapes and both must be matched,
+    /// because either one reaching the caller's swallow-and-log leaves the
+    /// durable floor un-advanced:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>
+    /// The silo still hosts the grain type but refuses to create the activation.
+    /// This is the activation-collection rejection #1464 observed and #1471
+    /// fixed (<c>MessageRejectionException</c>, "Unable to create local
+    /// activation" / "invalid activation").
+    /// </description></item>
+    /// <item><description>
+    /// The grain type has already been <b>withdrawn from the cluster catalog</b>,
+    /// so placement fails before any activation is attempted:
+    /// <c>OrleansException: No active nodes are compatible with grain
+    /// walmaterialiserpin and interface ol.wpi version 0. Known nodes with grain
+    /// type: none.</c> This shape matches <i>neither</i> of the shape-1 markers -
+    /// the type is a plain <c>OrleansException</c> and the message shares no
+    /// fragment - so a predicate written only against shape 1 silently stops
+    /// firing when teardown ordering shifts, and the #1471 fallback below is
+    /// never reached.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// Shape 2 is not hypothetical. A single graceful shutdown of the RepoContext
+    /// container logged <b>85,878</b> shape-2 rejections for
+    /// <c>walmaterialiserpin</c> and <b>15,873</b> swallowed
+    /// "Failed to flush ... frontier pins" warnings, after which WAL GC's trim
+    /// scan stopped on <c>offset_floor</c> as its <i>only</i> non-zero reason and
+    /// the tree retained <b>4.56 GiB</b> of WAL to protect <b>7.1 MiB</b> of live
+    /// data. Widening here is safe: the fallback writes the same durable state
+    /// slot under the same monotonic-max merge and per-shard lock, so taking it
+    /// for a non-teardown placement failure costs one direct write and still
+    /// advances the floor, whereas missing it forfeits the floor entirely.
+    /// </para>
     /// </summary>
-    private static bool IsActivationCollectionRejection(Exception exception)
+    private static bool IsPinRoutingUnavailable(Exception exception)
     {
         for (var ex = exception; ex is not null; ex = ex.InnerException!)
         {
@@ -802,7 +842,9 @@ internal sealed class LeafCursorReporter(
 
             if (ex.Message is { } message &&
                 (message.Contains("Unable to create local activation", StringComparison.Ordinal) ||
-                 message.Contains("invalid activation", StringComparison.Ordinal)))
+                 message.Contains("invalid activation", StringComparison.Ordinal) ||
+                 message.Contains("No active nodes are compatible with grain", StringComparison.Ordinal) ||
+                 message.Contains("Known nodes with grain type: none", StringComparison.Ordinal)))
             {
                 return true;
             }
@@ -811,7 +853,7 @@ internal sealed class LeafCursorReporter(
             {
                 foreach (var inner in aggregate.InnerExceptions)
                 {
-                    if (IsActivationCollectionRejection(inner))
+                    if (IsPinRoutingUnavailable(inner))
                     {
                         return true;
                     }
