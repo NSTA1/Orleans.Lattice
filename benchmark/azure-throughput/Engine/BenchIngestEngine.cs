@@ -545,7 +545,47 @@ internal sealed class BenchIngestEngine(
             mvLagProbe.Dispose();
         }
 
-        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
+        // #3339: surface saturation-retry accounting so a rung stays
+        // interpretable once retries can absorb time. Without these tokens a
+        // reader cannot distinguish "this rung did not saturate" from "this
+        // rung saturated and the engine absorbed it", and the fix would look
+        // like a silent throughput regression rather than a correctness gain.
+        //
+        //   satRetries   - saturation refusals retried (0 = rung never saturated)
+        //   satRecovered - entries that landed on a retry and would have been
+        //                  booked `failed` by the pre-fix engine. This is the
+        //                  direct evidence for the issue's acceptance criterion.
+        //   satExhausted - entries still lost after the full ladder; these ARE
+        //                  in failed= above, and a non-zero value means the rung
+        //                  is genuinely beyond capacity rather than merely bursty.
+        //   satBackoff   - SLOT-seconds asleep in saturation back-off, summed
+        //                  across concurrent flush slots. Deliberately not wall
+        //                  clock: with FlushConcurrency slots backing off at once
+        //                  it can legitimately exceed `active`, so it reads as
+        //                  "how much flush capacity was parked", not "how long
+        //                  the run stalled".
+        //   offeredPerSec - (written + failed) / active: the rate actually pushed
+        //                  at the lattice, as distinct from ops/sec, which counts
+        //                  only what landed. On a saturating rung these diverge,
+        //                  and that gap is the measurement the curve needs.
+        // All tokens are suffix-appended, so the existing `ops=` / `failed=`
+        // token parses in run-cohort.ps1 are unaffected (same contract the
+        // FX-029 `discarded=` token was added under).
+        //
+        // `offeredPerSec` deliberately breaks the `x/sec (avg)=` style of the
+        // tokens before it. Written as `offered/sec (active avg)=` it would
+        // embed a second literal `(active avg)=`, which is exactly the pattern
+        // run-cohort.ps1 scrapes for $avgActiveFinal. That parse would still
+        // work - PowerShell's -match takes the first hit and ours is later on
+        // the line - but only by accident of token order, so any future
+        // reordering would silently rebind a published metric to the wrong
+        // number. An unambiguous token is worth more than the symmetry.
+        var satRetries = Interlocked.Read(ref saturationRetryTotal);
+        var satRecovered = Interlocked.Read(ref saturationRecoveredTotal);
+        var satExhausted = Interlocked.Read(ref saturationExhaustedTotal);
+        var satBackoffSec = Interlocked.Read(ref saturationBackoffMsTotal) / 1000.0;
+        var offeredActive = (opsFinal + failedFinal) / Math.Max(0.001, activeElapsed);
+        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0} satRetries={satRetries:N0} satRecovered={satRecovered:N0} satExhausted={satExhausted:N0} satBackoff={satBackoffSec:0.0}s offeredPerSec={offeredActive:N0}");
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected
@@ -574,6 +614,38 @@ internal sealed class BenchIngestEngine(
     private const int FlushMaxAttempts = 5;
     private const int FlushRetryBaseMs = 50;
     private const int FlushRetryMaxMs = 800;
+
+    // Saturation gets its own, materially longer schedule. The ladder above
+    // is tuned for the placement directory, which recovers in hundreds of
+    // milliseconds; LatticeSaturatedException documents a recovery of 1-10
+    // seconds ("until the underlying storage account or per-partition WAL
+    // admission gate drains"). Retrying a WAL admission refusal on the 50 ms
+    // ladder retries straight back into a gate that has not moved and burns
+    // the whole attempt budget inside one second - which is why admitting the
+    // classifier to the filter is necessary but NOT sufficient (#3339).
+    //
+    // Linear rather than exponential, for the same reason the reshard path
+    // (Producer/Program.cs SubmitAndWaitForReshardAsync) uses a linear floor:
+    // a drain is a roughly constant-rate process, so backing off proportional
+    // to attempt tracks it more closely than doubling, which overshoots late.
+    // base*attempt capped at the max gives 1s + 2s + 3s + 4s = 10s of
+    // cumulative grace across the 4 retries of the shared FlushMaxAttempts
+    // budget, which spans the documented recovery window exactly.
+    private const int FlushSaturationRetryBaseMs = 1000;
+    private const int FlushSaturationRetryMaxMs = 4000;
+
+    // Saturation retry accounting, surfaced on FINAL (#3339 AC: "a saturating
+    // cohort shows non-zero retry attempts and a materially reduced failed=
+    // count"). Instance fields rather than locals in RunAsync because they are
+    // written from FlushAsync, which runs on the flush tasks; read once at
+    // FINAL. Deliberately NOT new metric instruments - the existing
+    // BenchMetrics.LatticeOpRetryAttempts histogram already carries attempt
+    // counts, and adding an instrument would pull the repository-wide meter
+    // gates into a benchmark-only change for no extra signal.
+    private long saturationRetryTotal;
+    private long saturationRecoveredTotal;
+    private long saturationExhaustedTotal;
+    private long saturationBackoffMsTotal;
 
     // FX-029: time window after the most-recently observed Saturated
     // transition during which the bench's drain loop treats the silo
@@ -671,6 +743,16 @@ internal sealed class BenchIngestEngine(
     {
         var startTs = Stopwatch.GetTimestamp();
         Exception? lastRejection = null;
+        // Tracked per batch so the success path can attribute a recovery, and
+        // so the op-duration histogram can be corrected for time this method
+        // spent deliberately asleep rather than waiting on the lattice.
+        var saturationRetries = 0;
+        var saturationBackoffMs = 0L;
+        // Which ladder fired last. A cold-start batch can legitimately hit both
+        // (placement rejection, then saturation), and whichever arm breaks the
+        // loop is the one that actually exhausted it - so the diagnostic must
+        // name that one rather than inferring from "did saturation ever occur".
+        var lastRetryWasSaturation = false;
         var modeTag = new KeyValuePair<string, object?>("mode", BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
         var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
         for (var attempt = 1; attempt <= FlushMaxAttempts; attempt++)
@@ -686,9 +768,26 @@ internal sealed class BenchIngestEngine(
                     ct,
                     grainFactory,
                     settings.TreeId).ConfigureAwait(false);
-                var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
-                BenchMetrics.LatticeOpDurationMs.Record(elapsedMs, treeTag, modeTag);
+                // Subtract our own saturation backoff so lattice.op.duration_ms
+                // stays a measure of CALL latency rather than of this method's
+                // sleeping. Without this, a saturating rung - precisely the rung
+                // the histogram exists to characterise - would show a p50 inflated
+                // by up to 10 s of deliberate waiting and read as a latency
+                // regression caused by the fix. The pre-existing rejection backoff
+                // is intentionally left in the figure: it is bounded at ~4 s, fires
+                // only in the cold-start window that the steady-state t>=15s filter
+                // already trims, and changing it would move a published baseline.
+                var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds - saturationBackoffMs;
+                BenchMetrics.LatticeOpDurationMs.Record(Math.Max(0, elapsedMs), treeTag, modeTag);
                 BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
+                if (saturationRetries > 0)
+                {
+                    // This batch was refused for saturation at least once and
+                    // then landed. Under the pre-#3339 engine every one of these
+                    // entries was booked as `failed`.
+                    Interlocked.Add(ref saturationRecoveredTotal, batch.Count);
+                }
+
                 return batch.Count;
             }
             catch (OperationCanceledException) { throw; }
@@ -713,6 +812,7 @@ internal sealed class BenchIngestEngine(
                 // because the target activation has not landed yet. The
                 // directory recovers on its own; back off and retry.
                 lastRejection = ex;
+                lastRetryWasSaturation = false;
                 if (attempt >= FlushMaxAttempts)
                 {
                     break;
@@ -722,6 +822,56 @@ internal sealed class BenchIngestEngine(
                 // resynchronise on the same retry wave.
                 var jitter = Random.Shared.NextDouble() * 0.5 - 0.25;
                 var delayMs = (int)Math.Max(1, backoffMs * (1 + jitter));
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+            }
+            catch (Exception ex) when (!lifetime.ApplicationStopping.IsCancellationRequested && WarmUpRetryClassifier.IsTransientSaturation(ex))
+            {
+                // #3339: the tree's WAL admission gate refused this batch. That
+                // is a typed, documented retry-after-backoff condition, not a
+                // terminal error - LatticeSaturatedException's own contract says
+                // "retry the operation after backing off". Before this arm existed
+                // the exception fell through to the generic handler below, which
+                // logged once and returned 0, booking the whole batch (4096 entries
+                // at the default) as `failed` with no retry and no back-off while
+                // the producer carried on offering load at the full configured rate.
+                // A rung that saturates then measured capacity under a client that
+                // ignores back-pressure, rather than platform capacity.
+                //
+                // The shutdown guard matters as much as the filter. During
+                // ApplicationStopping a saturation refusal must NOT be retried: the
+                // engine has a hard budget to emit FINAL inside the host's stop
+                // window (InFlightTailQuiesceBudget + InFlightTailWhenAllBudget,
+                // sized against systemd TimeoutStopSec=30), and a 10 s ladder here
+                // would eat it and turn a reportable cohort into a WEDGE. On
+                // shutdown this falls through to the generic handler and accounts
+                // as failed=N, exactly as before.
+                //
+                // NOT load shedding, which the issue rules out explicitly: the
+                // offered rate is untouched, only this batch's own dispatch is
+                // deferred. The producer keeps its open-loop semantics, so the
+                // saturation curve still finds a ceiling.
+                lastRejection = ex;
+                saturationRetries++;
+                lastRetryWasSaturation = true;
+                Interlocked.Increment(ref saturationRetryTotal);
+                if (attempt >= FlushMaxAttempts)
+                {
+                    Interlocked.Add(ref saturationExhaustedTotal, batch.Count);
+                    break;
+                }
+
+                var backoffMs = Math.Min(FlushSaturationRetryMaxMs, FlushSaturationRetryBaseMs * attempt);
+                // Same +/-25% jitter rationale as the rejection ladder: without it
+                // the FlushConcurrency slots that saturate together resynchronise
+                // and re-offer as one wave, which is what provoked the refusal.
+                var jitter = Random.Shared.NextDouble() * 0.5 - 0.25;
+                var delayMs = (int)Math.Max(1, backoffMs * (1 + jitter));
+                saturationBackoffMs += delayMs;
+                Interlocked.Add(ref saturationBackoffMsTotal, delayMs);
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), ct).ConfigureAwait(false);
@@ -759,11 +909,18 @@ internal sealed class BenchIngestEngine(
         }
 
         BenchMetrics.LatticeOpRetryAttempts.Record(FlushMaxAttempts - 1, treeTag, modeTag);
+        // Two classes can now exhaust the ladder, so name the one that actually
+        // did rather than asserting the rejection class unconditionally.
+        var exhaustedClass = lastRetryWasSaturation
+            ? "LatticeSaturatedException (WAL admission back-pressure)"
+            : "transient OrleansMessageRejectionException";
         logger.LogWarning(
             lastRejection,
-            "[silo] flush of {Count} failed after {Attempts} retry attempts against transient OrleansMessageRejectionException (mode={Mode})",
+            "[silo] flush of {Count} failed after {Attempts} retry attempts against {Class}; {BackoffMs}ms of that was saturation back-off (mode={Mode})",
             batch.Count,
             FlushMaxAttempts,
+            exhaustedClass,
+            saturationBackoffMs,
             BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
         return 0;
     }

@@ -156,6 +156,22 @@ throughput without implying data loss*. The harness grades a cohort only on
 whether it produced a productive measurement window at all, and carries the
 failure count through as a signal rather than discarding the cell.
 
+**Those failure counts predate the producer honouring WAL back-pressure.**
+During this sweep the ingest engine's retry filter did not match
+`LatticeSaturatedException`, so a WAL admission refusal was never retried:
+the batch was logged once and booked whole into `failed` - 4,096 entries at
+the default batch size - while the producer carried on offering load at the
+full configured rate. Any cell that saturated therefore reports failures a
+back-pressure-honouring client would largely have absorbed, and to that
+extent measures capacity under a client that ignores back-pressure rather
+than platform capacity. The engine now retries a saturation refusal on its
+own back-off ladder spanning the exception's documented 1-10 s recovery,
+and the FINAL line carries `satRetries`, `satRecovered`, `satExhausted` and
+`satBackoff` so a rung's back-pressure is readable directly (#3339). Expect
+a re-run on the current engine to report a lower `failed` count wherever
+saturation was in play, and do not compare these counts against one that
+was measured after it.
+
 ## What the write collapse actually is
 
 The `SetManyAsync` row peaks at 4 silos and then falls away sharply. This
@@ -184,8 +200,26 @@ counts the measured fan-out duration tracks the branch tail, not the
 branch mean.
 
 This is scatter-gather tail amplification in the core write path, filed as
-a defect (#3348) with its full evidence. Read the write rows here as a
-measurement of that defect, not as Orleans.Lattice's write ceiling.
+a defect (#3348) with its full evidence.
+
+**These rows were measured before that defect was fixed, and they are not
+a write ceiling.** The fix addresses the tail at its source rather than
+capping it: under saturation a refused branch no longer re-fanned the
+whole batch through the stale-routing retry (which alone accounted for a
+rise from about 64 to about 146 leaf dispatches per call), the ingest
+engine now backs off instead of re-offering load at the knee (#3339),
+replay-permit refusals retry rather than failing leaf activation (#3294),
+and a batch that one branch has already doomed no longer waits out the
+remaining branches before surfacing the failure. The first three reduce
+the dispatch volume that produces the queueing the tail is made of; the
+fourth bounds the cost of a batch that was going to fail anyway.
+
+What is **not** claimed is a re-measured curve. The success-path tail -
+a branch that takes 94 seconds and then succeeds - is still awaited, by
+design, because `SetManyAsync` publishes its events only once every shard
+write has committed. Whether removing the amplification is enough to move
+the 8-silo row can only be settled by re-running this rig; until that
+happens, treat these numbers as a measurement of the pre-fix engine.
 
 ## Caveats that bound these numbers
 

@@ -211,6 +211,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (8) | WAL grains per tree - the primary write-parallelism lever. Distinct partitions => distinct Azure Tables manifest partitions. |
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. `1` = strict single-in-flight ordering against the provider. |
+| `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `SetManyAsync` awaits its per-shard fan-out before refusing with `LatticeSaturatedException` (`SetManyFanOut`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): an unbounded fan-out is the #3348 collapse, so the rig opts in to the finite budget. `0` = infinite. |
 | `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts). Clamped to the number actually provisioned (`deploy.ps1 -WalAccountCount`). |
 | `BENCH_WAL_EXTRA_ACCOUNT_URIS` | - (set by `update.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, ...`. Normally you don't set this by hand - `deploy.ps1 -WalAccountCount` + `update.ps1` populate it. |
 | `BENCH_PIPELINE_PHASE2` | on | Overlap phase 2 of batch N with phases 0+1 of batch N+1 on the same shard. `0` disables. |

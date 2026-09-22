@@ -202,7 +202,8 @@ internal sealed partial class LatticeGrain
                 $"Snapshot cursor open for tree '{TreeId}' refused: the tree is saturated " +
                 "(WAL back-pressure); the per-shard baseline capture was not started. " +
                 "Retry the open after backing off until the tree drains.",
-                TreeId);
+                TreeId,
+                LatticeSaturationSource.SnapshotCursorOpen);
         }
 
         // Capture the routing map fresh from the registry (force-refresh)

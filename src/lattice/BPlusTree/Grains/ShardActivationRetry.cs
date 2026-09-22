@@ -40,12 +40,47 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// compile-time dependency on the Orleans.Runtime types.
 /// </para>
 /// <para>
-/// <b>Scoping for the wider audit.</b> This helper is presently consumed by
-/// <see cref="LatticeGrain.ReshardAsync"/> only - the observably-broken path
-/// under the bench-startup pattern that motivated the fix. The wider audit
-/// of operator entry points that should adopt the same envelope is tracked
-/// separately on the issue tracker; this helper is the seam that audit work
-/// will reuse rather than reinventing per-call-site.
+/// <b>Replay-permit back-pressure (issue #3294).</b> The envelope also
+/// absorbs a <see cref="LatticeSaturatedException"/> whose
+/// <see cref="LatticeSaturatedException.SaturationSource"/> is
+/// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> - the per-silo
+/// WAL replay permit gate refusing a leaf <em>activation</em> admission. That
+/// refusal has no other retry anywhere: it aborts an activation, and an
+/// activation that fails has no queue to park on and no policy of its own, so
+/// without this arm the bound does not shed the request, it fails it.
+/// </para>
+/// <para>
+/// It is deliberately the <b>only</b> saturation source retried here, and the
+/// filter is on <see cref="LatticeSaturatedException.SaturationSource"/> rather than on
+/// the exception type. Every other source refuses only after its wait budget
+/// has already elapsed against a tree that has just reported it is full, so
+/// retrying re-offers the same work into the regime that refused it. Issue
+/// #3348 was exactly that: a generic handler treating a WAL <em>append</em>
+/// refusal as retryable and re-fanning a whole batch across every shard. Both
+/// paths run through this envelope, so a type-only filter here would
+/// reintroduce #3348 one layer below where it was fixed.
+/// </para>
+/// <para>
+/// Its backoff is a separate, longer, jittered ladder (2 s, 4 s +/- 25%)
+/// rather than the seed ladder above. Longer because the documented recovery
+/// for a saturation regime is 1-10 s, which the seed ladder's 3 s total does
+/// not span; jittered because refusals at this seam are correlated by
+/// construction - the callers were refused by one gate at one moment - so an
+/// unjittered retry re-converges them into the thundering herd that the
+/// admission bound of issue #3284 exists to remove.
+/// </para>
+/// <para>
+/// <b>Scoping.</b> This helper is consumed throughout the
+/// <see cref="LatticeGrain"/> partials - bulk load, cursors, digests, entry
+/// and key enumeration, orphan repair, projection administration, warm-up,
+/// resharding, and the <c>SetManyAsync</c> write fan-out - rather than by a
+/// single entry point. Because <see cref="RunAsync"/> is the one envelope
+/// they all share, every arm described above applies to all of them,
+/// including the replay-permit arm added for issue #3294. That breadth is
+/// wanted here: the refusal is raised by the per-silo permit gate while a
+/// leaf activation is being admitted, so it is reachable from any call that
+/// must activate a leaf, and an arm confined to one call site would leave
+/// the rest of that surface failing load it could have shed.
 /// </para>
 /// </summary>
 internal static class ShardActivationRetry
@@ -69,6 +104,87 @@ internal static class ShardActivationRetry
         TimeSpan.FromSeconds(1),
         TimeSpan.FromSeconds(2),
     ];
+
+    /// <summary>
+    /// Backoff delays applied between attempts that failed with a retryable
+    /// replay-permit saturation refusal, before jitter. Indexed as
+    /// <see cref="BackoffBetweenAttempts"/> is.
+    /// <para>
+    /// Longer than the seed ladder because the two are waiting for different
+    /// things. The seed ladder waits for an activation to finish appearing,
+    /// which is fast; this one waits for a saturated permit queue to drain,
+    /// whose documented recovery is 1-10 seconds. At 1 s + 2 s the seed ladder
+    /// would exhaust its whole budget inside the fastest recovery the regime
+    /// admits, turning a retry that was supposed to shed load into three
+    /// refusals in quick succession. 2 s + 4 s spans the lower half of that
+    /// window and still leaves the worst case (about 6 s of backoff plus the
+    /// attempts themselves) far inside the Orleans response deadline.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan[] SaturationBackoffBetweenAttempts =
+    [
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(4),
+    ];
+
+    /// <summary>
+    /// Proportional jitter applied to <see cref="SaturationBackoffBetweenAttempts"/>,
+    /// as a fraction either side of the nominal delay (0.25 = +/-25%).
+    /// </summary>
+    private const double SaturationBackoffJitter = 0.25;
+
+    /// <summary>
+    /// True when <paramref name="ex"/> - or any exception in its inner chain -
+    /// is a <see cref="LatticeSaturatedException"/> raised by the WAL replay
+    /// permit admission gate, which is the one saturation refusal this
+    /// envelope may safely retry (issue #3294).
+    /// <para>
+    /// The check is on <see cref="LatticeSaturatedException.SaturationSource"/>, never on
+    /// the type alone. Every other source refuses after its wait budget has
+    /// already elapsed, so retrying re-offers work into the regime that
+    /// refused it; the WAL append refusal in particular re-fans an entire
+    /// batch across every shard, which is issue #3348. Both reach this
+    /// envelope, so the discriminator is what keeps the two fixes from
+    /// undoing each other.
+    /// </para>
+    /// <para>
+    /// The walk stops at the first <see cref="LatticeSaturatedException"/> it
+    /// finds rather than searching the chain for a retryable one: the
+    /// outermost saturation is the refusal that actually describes what
+    /// happened, and treating a nested one as authoritative would let an
+    /// inner, already-handled refusal license a retry of an outer refusal that
+    /// forbids it.
+    /// </para>
+    /// </summary>
+    internal static bool IsRetryableSaturation(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            if (e is LatticeSaturatedException saturated)
+                return saturated.SaturationSource == LatticeSaturationSource.ReplayPermitAdmission;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Selects the backoff preceding the next attempt: the jittered saturation
+    /// ladder when <paramref name="ex"/> was a retryable replay-permit
+    /// refusal, otherwise the plain seed ladder.
+    /// </summary>
+    private static TimeSpan NextBackoff(Exception ex, int attempt)
+    {
+        if (!IsRetryableSaturation(ex))
+            return BackoffBetweenAttempts[attempt - 1];
+
+        var nominal = SaturationBackoffBetweenAttempts[attempt - 1];
+
+        // Random.Shared is thread-safe and allocation-free here. The jitter is
+        // symmetric about the nominal delay, so the ladder's expected total is
+        // unchanged and only the correlation between refused callers is broken.
+        var factor = 1.0 + ((Random.Shared.NextDouble() * 2.0 - 1.0) * SaturationBackoffJitter);
+        return nominal * factor;
+    }
 
     /// <summary>
     /// Invokes <paramref name="operation"/> up to <see cref="MaxAttempts"/>
@@ -97,11 +213,14 @@ internal static class ShardActivationRetry
                 await operation().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
                 return;
             }
-            catch (Exception ex) when (ex is ShardActivationTimeoutException || IsTransientSiloChurn(ex))
+            catch (Exception ex) when (
+                ex is ShardActivationTimeoutException
+                || IsTransientSiloChurn(ex)
+                || IsRetryableSaturation(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
-                var backoff = BackoffBetweenAttempts[attempt - 1];
+                var backoff = NextBackoff(ex, attempt);
                 await Task.Delay(backoff, cancellationToken)
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
@@ -129,11 +248,14 @@ internal static class ShardActivationRetry
             {
                 return await operation().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
-            catch (Exception ex) when (ex is ShardActivationTimeoutException || IsTransientSiloChurn(ex))
+            catch (Exception ex) when (
+                ex is ShardActivationTimeoutException
+                || IsTransientSiloChurn(ex)
+                || IsRetryableSaturation(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
-                var backoff = BackoffBetweenAttempts[attempt - 1];
+                var backoff = NextBackoff(ex, attempt);
                 await Task.Delay(backoff, cancellationToken)
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }

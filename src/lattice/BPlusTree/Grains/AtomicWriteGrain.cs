@@ -2559,7 +2559,8 @@ internal sealed class AtomicWriteGrain(
                     {
                         throw new LatticeSaturatedException(
                             $"Atomic-write saga {OperationKey} refused batch dispatch: the per-tree saturation signal stayed Saturated beyond the saga quiesce budget. The caller should back off and retry the saga once the signal returns to Healthy; re-dispatching now would amplify the storage-side back-pressure.",
-                            state.State.TreeId);
+                                                        state.State.TreeId,
+                                                        LatticeSaturationSource.AtomicWriteSaga);
                     }
 
                     // Phase D1c (post-c2-xi): restored the single-call
@@ -2779,6 +2780,7 @@ internal sealed class AtomicWriteGrain(
                     throw new LatticeSaturatedException(
                         $"Atomic write saga for tree '{state.State.TreeId}' could not complete because the per-tree saturation signal stayed Saturated past the saga quiesce budget; the saga will resume on the caller's next retry once the signal returns to Healthy.",
                         treeId: attributedTreeId,
+                        source: LatticeSaturationSource.AtomicWriteSaga,
                         innerException: batchFailure);
                 }
 
