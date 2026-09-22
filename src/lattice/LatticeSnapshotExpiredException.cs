@@ -13,7 +13,7 @@ namespace Orleans.Lattice;
 /// the existing cursor's persisted state is left intact and a
 /// subsequent <c>CloseAsync</c> still cleans it up.
 /// </summary>
-public sealed class LatticeSnapshotExpiredException : InvalidOperationException
+public sealed class LatticeSnapshotExpiredException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with the specified message.

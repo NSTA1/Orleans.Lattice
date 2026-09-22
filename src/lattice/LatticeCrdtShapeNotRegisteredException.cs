@@ -29,17 +29,26 @@ namespace Orleans.Lattice;
 /// remedy is to retry once the tree has finished attaching.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing catch
-/// handlers that match on <see cref="System.InvalidOperationException"/>
-/// continue to absorb it; the typed slot lets the API bindings map this specific
-/// configuration precondition to a client-error status (for example gRPC
+/// The typed slot lets the API bindings map this specific configuration
+/// precondition to a client-error status (for example gRPC
 /// <c>FailedPrecondition</c>) rather than collapsing it into an opaque
 /// server-side fault.
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for backwards
+/// compatibility, but that inheritance is a hazard rather than a convenience: a
+/// broad <c>catch (InvalidOperationException)</c> written for a genuine API
+/// misuse absorbs this configuration fault and applies remediation that cannot
+/// resolve it, because no retry registers a missing shape descriptor. This type
+/// therefore implements <see cref="ILatticeDomainFault"/>, so a broad handler
+/// declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeCrdtShapeNotRegistered)]
-public sealed class LatticeCrdtShapeNotRegisteredException : InvalidOperationException
+public sealed class LatticeCrdtShapeNotRegisteredException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The tree id whose OR-Map shape was unresolved. Empty on the parameterless

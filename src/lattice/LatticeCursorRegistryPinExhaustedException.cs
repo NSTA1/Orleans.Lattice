@@ -12,7 +12,7 @@ namespace Orleans.Lattice;
 /// Callers either retry once a peer cursor closes, reduce the cap, or
 /// fall back to a non-point-in-time cursor.
 /// </summary>
-public sealed class LatticeCursorRegistryPinExhaustedException : InvalidOperationException
+public sealed class LatticeCursorRegistryPinExhaustedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with the specified message.

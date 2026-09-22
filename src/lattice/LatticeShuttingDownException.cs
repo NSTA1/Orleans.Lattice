@@ -46,19 +46,28 @@ namespace Orleans.Lattice;
 ///   single <see langword="is"/> check.</description></item>
 /// </list>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so
-/// existing catch handlers that match on
-/// <see cref="System.InvalidOperationException"/> continue to absorb
-/// it; the typed slot lets callers that care about the shutdown
+/// The typed slot lets callers that care about the shutdown
 /// regime explicitly distinguish it from genuine
 /// <see cref="System.InvalidOperationException"/> failures (which
 /// are not back-pressure and should be retried per the caller's
 /// normal policy).
 /// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for
+/// backwards compatibility, but that inheritance is a hazard rather
+/// than a convenience: a broad <c>catch (InvalidOperationException)</c>
+/// absorbs this refusal and typically retries, which cannot succeed
+/// because the writer drain is a one-way transition and every
+/// subsequent attempt against this activation fails identically. This
+/// type therefore implements <see cref="ILatticeDomainFault"/>, so a
+/// broad handler declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name remains correct and is unaffected.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeShuttingDown)]
-public sealed class LatticeShuttingDownException : InvalidOperationException
+public sealed class LatticeShuttingDownException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic message. Provided to

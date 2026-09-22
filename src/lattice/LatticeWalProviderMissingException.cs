@@ -22,7 +22,7 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeWalProviderMissing)]
-public sealed class LatticeWalProviderMissingException : InvalidOperationException
+public sealed class LatticeWalProviderMissingException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic context. Provided to
