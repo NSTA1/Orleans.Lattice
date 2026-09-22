@@ -173,6 +173,14 @@ internal static class TypeAliases
     // transition for that silo activation.
     internal const string LatticeSaturated = "ol.lsa";
 
+    // Which admission seam raised a LatticeSaturated. The seams share one
+    // exception type because they share one caller contract, but they differ
+    // on whether an automatic retry amplifies: only the replay-permit seam
+    // refuses before the caller has done any work. Additive to the exception
+    // (a host predating it deserialises Unspecified), so the alias is new
+    // rather than a change to ol.lsa.
+    internal const string LatticeSaturationSource = "ol.lso";
+
     // Idempotency-key-reuse misuse surface. Thrown by the atomic-write saga and
     // the cross-tree transaction coordinator when a caller-supplied operationId
     // is re-submitted with a different key set (or, cross-tree, a different tree

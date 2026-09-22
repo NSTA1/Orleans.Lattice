@@ -394,7 +394,8 @@ internal sealed class WalCommitLogWriter(
                     LatticeTenantLabel.ForTree(treeId));
                 throw new LatticeSaturatedException(
                     $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the per-tree saturation signal stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget}); offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
-                    treeId);
+                                        treeId,
+                                        LatticeSaturationSource.WalAdmission);
             }
         }
         finally
