@@ -19,6 +19,38 @@ public sealed class TreeOrphanedLeafModelTests
         => new() { LeafId = "leaf-1", Disposition = disposition };
 
     [Test]
+    public void Survey_counts_distinguish_zero_unknown_and_partial_batch_and_break_down_repair_scope()
+    {
+        var healthy = new TreeOrphanedLeafReport { TreeId = "tree", Survey = true };
+        var refused = Finding(TreeOrphanedLeafDisposition.RefusedUnverifiedKeys) with
+        {
+            SurveyVerifiedKeyCount = 2, SurveyMissingKeyCount = 3,
+            SurveyRoutingContradictionKeyCount = 1,
+        };
+        var repairable = Finding(TreeOrphanedLeafDisposition.Repairable) with
+        {
+            SurveyVerifiedKeyCount = 4, SurveyMissingKeyCount = 0,
+            SurveyRoutingContradictionKeyCount = 0,
+        };
+        var report = healthy with { Findings = [refused, repairable] };
+        Assert.Multiple(() =>
+        {
+            Assert.That(healthy.SurveyMissingKeyCount, Is.Zero);
+            Assert.That(healthy.OrphanedLeafCount, Is.Zero);
+            Assert.That(healthy.RepairableCount, Is.Zero);
+            Assert.That((healthy with { Survey = false }).SurveyMissingKeyCount, Is.Null);
+            Assert.That((healthy with { Findings = [Finding(TreeOrphanedLeafDisposition.RefusedBlockingState)] }).SurveyMissingKeyCount, Is.Null);
+            Assert.That((healthy with { Gaps = [new TreeOrphanedLeafGap { ShardIndex = 1 }] }).SurveyMissingKeyCount, Is.Null);
+            Assert.That(report.SurveyMissingKeyCount, Is.EqualTo(3));
+            Assert.That(report.OrphanedLeafCount, Is.EqualTo(2));
+            Assert.That(report.RepairableCount, Is.EqualTo(1));
+            Assert.That(report.RefusedCount, Is.EqualTo(1));
+            Assert.That((report with { ResumeFrom = "next" }).IsComplete, Is.False);
+            Assert.That((report with { ResumeFrom = "next" }).SurveyMissingKeyCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void Repaired_is_not_a_refusal()
     {
         Assert.That(Finding(TreeOrphanedLeafDisposition.Repaired).IsRefusal, Is.False);

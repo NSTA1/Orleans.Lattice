@@ -35,6 +35,23 @@ public sealed class LatticeTreeAdminApiGrpcClientUnitTests
         return (new LatticeTreeAdminApiGrpcClient(invoker, _methods), invoker);
     }
 
+    [Test]
+    public async Task Survey_sets_opt_in_on_existing_read_only_audit_rpc()
+    {
+        var expected = new TreeOrphanedLeafReport { TreeId = "orders", Survey = true };
+        var (client, invoker) = Create(expected);
+        Assert.That(await client.SurveyOrphanedLeavesAsync("orders", "cursor"), Is.SameAs(expected));
+        var request = (TreeAdminOrphanedLeafRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.Survey, Is.True);
+            Assert.That(request.TreeId, Is.EqualTo("orders"));
+            Assert.That(request.ResumeFrom, Is.EqualTo("cursor"));
+            Assert.That(invoker.LastMethodName, Is.EqualTo(LatticeTreeAdminGrpcMethods.AuditOrphanedLeavesMethodName));
+            Assert.That(async () => await client.SurveyOrphanedLeavesAsync(""), Throws.ArgumentException);
+        });
+    }
+
     private static TreeRestoreResult Restore(string targetTreeId) => new()
     {
         BackupId = "bk-1",

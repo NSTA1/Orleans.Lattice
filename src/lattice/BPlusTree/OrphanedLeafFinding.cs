@@ -45,9 +45,9 @@ public readonly record struct OrphanedLeafFinding
     [Id(4)] public int KeyCount { get; init; }
 
     /// <summary>
-    /// How many of those keys were proven readable from the descent-reachable
-    /// leaf that owns them. Equal to <see cref="KeyCount"/> on every
-    /// disposition that is not a refusal.
+    /// Length of the verified prefix before the first missing key or routing
+    /// contradiction, not a census. By default later keys are untested.
+    /// Survey mode preserves this meaning; use its separate counts below.
     /// </summary>
     [Id(5)] public int VerifiedKeyCount { get; init; }
 
@@ -63,6 +63,15 @@ public readonly record struct OrphanedLeafFinding
     /// at the row rather than being told only that something failed.
     /// </summary>
     [Id(7)] public string? UnverifiedKey { get; init; }
+
+    /// <summary>All keys readable elsewhere in a completed survey; null when not surveyed.</summary>
+    [Id(8)] public int? SurveyVerifiedKeyCount { get; init; }
+
+    /// <summary>All keys absent from their routed owner in a completed survey; null when not surveyed. This is not proof of data loss.</summary>
+    [Id(9)] public int? SurveyMissingKeyCount { get; init; }
+
+    /// <summary>All keys routing back to this supposedly unreachable leaf in a completed survey; null when not surveyed.</summary>
+    [Id(10)] public int? SurveyRoutingContradictionKeyCount { get; init; }
 
     /// <summary>
     /// Whether this finding describes a refusal - anything other than

@@ -44,6 +44,25 @@ public sealed class TreeAdminOrphanedLeafToolTests
         => group.Tools.Single(t => t.ProtocolTool.Name == name);
 
     [Test]
+    public async Task Audit_survey_is_optional_read_only_and_routes_to_survey_facade()
+    {
+        var tool = Tool(CreateGroup(false), AuditToolName).ProtocolTool;
+        var property = tool.InputSchema.GetProperty("properties").GetProperty("survey");
+        Assert.That(property.GetProperty("default").GetBoolean(), Is.False);
+        Assert.That(tool.Description, Does.Contain("VerifiedKeyCount ALWAYS means the verified prefix"));
+        Assert.That(tool.Description, Does.Contain("null means not surveyed, not zero"));
+
+        var facade = Substitute.For<ILatticeTreeAdmin>();
+        var expected = new TreeOrphanedLeafReport { TreeId = "tree", Survey = true };
+        facade.SurveyOrphanedLeavesAsync("tree", "cursor", Arg.Any<CancellationToken>()).Returns(expected);
+        var actual = await TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(
+            facade, "tree", "cursor", survey: true);
+        Assert.That(actual, Is.SameAs(expected));
+        await facade.Received(1).SurveyOrphanedLeavesAsync("tree", "cursor", Arg.Any<CancellationToken>());
+        await facade.DidNotReceive().AuditOrphanedLeavesAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Audit_tool_is_registered_without_any_opt_in()
     {
         var group = CreateGroup(enableLifecycle: false);

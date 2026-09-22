@@ -29,8 +29,9 @@ public sealed record TreeOrphanedLeafFinding
     [Id(4)] public int KeyCount { get; init; }
 
     /// <summary>
-    /// How many of those keys were shown to be readable by descent elsewhere in the
-    /// tree, so unsplicing the leaf would not lose them.
+    /// Length of the verified prefix before the first missing key or routing
+    /// contradiction, not a census. By default later keys are untested.
+    /// Survey mode preserves this meaning; use its separate counts below.
     /// </summary>
     [Id(5)] public int VerifiedKeyCount { get; init; }
 
@@ -39,10 +40,20 @@ public sealed record TreeOrphanedLeafFinding
 
     /// <summary>
     /// The first key that could not be verified, when the disposition is
-    /// <see cref="TreeOrphanedLeafDisposition.RefusedUnverifiedKeys"/>; otherwise
+    /// <see cref="TreeOrphanedLeafDisposition.RefusedUnverifiedKeys"/> or
+    /// <see cref="TreeOrphanedLeafDisposition.RefusedRoutingContradiction"/>; otherwise
     /// <c>null</c>.
     /// </summary>
     [Id(7)] public string? UnverifiedKey { get; init; }
+
+    /// <summary>All keys readable elsewhere in a completed survey; null when not surveyed.</summary>
+    [Id(8)] public int? SurveyVerifiedKeyCount { get; init; }
+
+    /// <summary>All keys absent from their routed owner in a completed survey; null when not surveyed. This is not proof of data loss.</summary>
+    [Id(9)] public int? SurveyMissingKeyCount { get; init; }
+
+    /// <summary>All keys routing back to this supposedly unreachable leaf in a completed survey; null when not surveyed.</summary>
+    [Id(10)] public int? SurveyRoutingContradictionKeyCount { get; init; }
 
     /// <summary>
     /// <see langword="true"/> when the leaf is orphaned but was deliberately left

@@ -39,7 +39,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainOrphanRepairTests
+public sealed partial class ShardRootGrainOrphanRepairTests
 {
     private const string TreeId = "orphan-repair-tree";
     private const string ShardKey = TreeId + "/0";

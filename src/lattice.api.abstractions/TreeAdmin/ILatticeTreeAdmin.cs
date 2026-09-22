@@ -702,6 +702,20 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Opt-in, whole-tree Read-gated audit counting every orphan key outcome,
+    /// up to the core per-leaf safety bound. Read-only and bounded per call;
+    /// continue with ResumeFrom using this same survey verb. The default audit
+    /// retains first-miss verification. Findings identify repair candidates and
+    /// refusals by shard, leaf and key range; survey counts do not authorize repair.
+    /// The default implementation throws <see cref="NotSupportedException"/> so
+    /// existing implementations remain compatible without falsely reporting zero damage.
+    /// </summary>
+    Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(
+        string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "This implementation does not support the orphaned-leaf survey. Implement SurveyOrphanedLeavesAsync to provide a census.");
+
+    /// <summary>
     /// <b>Repairs</b> the orphaned leaves of <paramref name="treeId"/> by unsplicing
     /// every descent-unreachable leaf whose keys were all shown to be readable
     /// elsewhere, after authorizing whole-tree
