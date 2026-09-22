@@ -57,11 +57,11 @@ public partial class BPlusTreeBulkLoadTests
         }
         Assert.That(missing, Is.Empty, "all bulk-appended keys must be retrievable");
 
-        // KeysAsync walks the leaf chain via the next-sibling pointers.
+        // ScanKeysAsync walks the leaf chain via the next-sibling pointers.
         // A stale-Stack regression would corrupt the bubble-up promoted
         // separators, breaking sort order on a subsequent leaf-chain walk.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
         {
             keys.Add(k);
         }
@@ -112,7 +112,7 @@ public partial class BPlusTreeBulkLoadTests
             "last key (steady-state branch) must be retained");
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
         {
             keys.Add(k);
         }
@@ -160,7 +160,7 @@ public partial class BPlusTreeBulkLoadTests
 
         // All 32 keys present, in sorted order.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
         {
             keys.Add(k);
         }

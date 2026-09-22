@@ -1,10 +1,12 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -26,6 +28,26 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public class LatticeGrainOrphanedLeafDriverTests
 {
     private const string TreeId = "orphaned-leaf-driver-tree";
+
+    [Test]
+    public void Survey_core_report_round_trips_without_repurposing_prefix_or_aliases()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<OrphanedLeafRepairReport>>();
+        var report = new OrphanedLeafRepairReport
+        {
+            Survey = true, DryRun = true, Findings = [new OrphanedLeafFinding
+            {
+                LeafId = "leaf", KeyCount = 6, VerifiedKeyCount = 1,
+                SurveyVerifiedKeyCount = 2, SurveyMissingKeyCount = 3,
+                SurveyRoutingContradictionKeyCount = 1,
+            }],
+        };
+        var copy = serializer.Deserialize(serializer.SerializeToArray(report));
+        Assert.That(copy.Survey, Is.True);
+        Assert.That(copy.Findings, Is.EqualTo(report.Findings));
+        Assert.That(copy.SurveyMissingKeyCount, Is.EqualTo(3));
+    }
 
     private static (LatticeGrain Grain, IShardRootGrain Shard) CreateGrain()
     {
@@ -65,6 +87,63 @@ public class LatticeGrainOrphanedLeafDriverTests
         LeafId = leafId,
         KeyHint = leafId,
     };
+
+    [Test]
+    public async Task Survey_drives_all_pages_and_preserves_counts_positions_and_mode()
+    {
+        var (grain, shard) = CreateGrain();
+        shard.SurveyOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(call => new OrphanedLeafRepairPage
+            {
+                Findings = [new OrphanedLeafFinding
+                {
+                    ShardIndex = 0, LeafId = call.ArgAt<string?>(0) ?? "first",
+                    KeyCount = 3, VerifiedKeyCount = 1,
+                    SurveyVerifiedKeyCount = 1, SurveyMissingKeyCount = 2,
+                    SurveyRoutingContradictionKeyCount = 0,
+                    Disposition = OrphanedLeafDisposition.RefusedUnverifiedKeys,
+                }],
+                ResumeFromInclusive = call.ArgAt<string?>(0) is null ? "second" : null,
+            });
+
+        var report = await grain.SurveyOrphanedLeavesAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Survey, Is.True);
+            Assert.That(report.DryRun, Is.True);
+            Assert.That(report.OrphanedLeafCount, Is.EqualTo(2));
+            Assert.That(report.RefusedCount, Is.EqualTo(2));
+            Assert.That(report.RepairableCount, Is.Zero);
+            Assert.That(report.SurveyMissingKeyCount, Is.EqualTo(4));
+            Assert.That(report.Findings.Select(f => f.LeafId), Is.EqualTo(new[] { "first", "second" }));
+            Assert.That(report.IsComplete, Is.True);
+        });
+        await shard.DidNotReceive().RepairOrphanedLeavesAsync(
+            Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void Survey_totals_distinguish_healthy_zero_from_unknown_and_partial_batches()
+    {
+        var healthy = new OrphanedLeafRepairReport { Survey = true, Findings = [] };
+        var repairable = new OrphanedLeafFinding
+        {
+            LeafId = "leaf", Disposition = OrphanedLeafDisposition.Repairable,
+            SurveyMissingKeyCount = 0, SurveyVerifiedKeyCount = 2,
+            SurveyRoutingContradictionKeyCount = 0,
+        };
+        Assert.Multiple(() =>
+        {
+            Assert.That(healthy.SurveyMissingKeyCount, Is.Zero);
+            Assert.That(healthy.OrphanedLeafCount, Is.Zero);
+            Assert.That((healthy with { Survey = false }).SurveyMissingKeyCount, Is.Null);
+            Assert.That((healthy with { Findings = [new OrphanedLeafFinding()] }).SurveyMissingKeyCount, Is.Null);
+            Assert.That((healthy with { Gaps = [Gap(OrphanedLeafAuditGapReason.ChainTruncated, "gap")] }).SurveyMissingKeyCount, Is.Null);
+            Assert.That((healthy with { Findings = [repairable] }).RepairableCount, Is.EqualTo(1));
+            Assert.That((healthy with { ResumeFrom = "next" }).IsComplete, Is.False);
+            Assert.That((healthy with { ResumeFrom = "next" }).SurveyMissingKeyCount, Is.Zero);
+        });
+    }
 
     /// <summary>
     /// The reduction must carry every page's gaps out to the caller. Dropping

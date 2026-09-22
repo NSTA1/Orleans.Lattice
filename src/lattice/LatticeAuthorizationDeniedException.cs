@@ -30,7 +30,7 @@ namespace Orleans.Lattice;
 /// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeAuthorizationDenied)]
-public sealed class LatticeAuthorizationDeniedException : UnauthorizedAccessException
+public sealed class LatticeAuthorizationDeniedException : UnauthorizedAccessException, ILatticeDomainFault
 {
     /// <summary>
     /// The logical tree id the denied operation targeted. Empty on the

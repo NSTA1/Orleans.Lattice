@@ -1147,6 +1147,21 @@ public interface ILattice : IGrainWithStringKey
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Opt-in read-only orphan audit that examines every key, up to the per-leaf
+    /// 100,000-key safety bound, rather than stopping at the first miss. Costs
+    /// O(KeyCount) descents and owner reads per orphan. The ordinary inspection
+    /// and repair keep their first-miss behavior. Drive bounded batches with
+    /// ResumeFrom, and read gaps before interpreting totals as a complete census.
+    /// The default implementation throws <see cref="NotSupportedException"/> so
+    /// existing implementations remain compatible without falsely reporting zero damage.
+    /// </summary>
+    Task<OrphanedLeafRepairReport> SurveyOrphanedLeavesAsync(
+        string? resumeFrom = null,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "This implementation does not support the orphaned-leaf survey. Implement SurveyOrphanedLeavesAsync to provide a census.");
+
+    /// <summary>
     /// Unsplices the descent-unreachable leaves of this tree that can be
     /// proven safe to remove, retiring the write-ahead-log materialiser pins
     /// that were gating the trim floor, and reports what it did.

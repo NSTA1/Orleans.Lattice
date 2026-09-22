@@ -40,8 +40,9 @@ public enum WalPressureClassification
 
     /// <summary>
     /// The account is <b>capacity-bound</b>: its retained WAL bytes have grown
-    /// past the advisory fraction of
-    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/>. The fix
+    /// past the advisory fraction of the summed
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> ceilings of
+    /// the trees whose partitions sit on it, each resolved per tree. The fix
     /// is to reclaim retained bytes or provision more retention, not to spread
     /// write throughput.
     /// </summary>

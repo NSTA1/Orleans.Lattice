@@ -2,6 +2,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 
 public partial class PublicApiContractTests
 {
+    // Raw streams are deliberate here: these tests pin their public enumeration contract.
     // ── KeysAsync ───────────────────────────────────────────────────────
 
     [Test]

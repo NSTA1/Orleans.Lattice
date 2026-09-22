@@ -30,13 +30,28 @@ namespace Orleans.Lattice;
 /// Implements <see cref="ILatticeLeafUnavailable"/>: a stale projection means the
 /// leaf cannot be activated, so an operation that enumerates it cannot make
 /// progress and a caller is entitled to fall back to a primitive that does not
-/// enumerate. The base type is unchanged - the marker is additive, so existing
-/// <c>catch (InvalidOperationException)</c> handlers are unaffected.
+/// enumerate.
+/// </para>
+/// <para>
+/// Also implements <see cref="ILatticeDomainFault"/>, and that marker - not the
+/// base type - is what a handler must branch on. This exception derives from
+/// <see cref="InvalidOperationException"/> for historical reasons, and that
+/// inheritance is a hazard rather than a convenience: a broad
+/// <c>catch (InvalidOperationException)</c> written to absorb an unrelated
+/// framework condition will also absorb this one and apply a remediation that
+/// has nothing to do with a stale projection - silently converting an actionable,
+/// operator-addressable fault into a retry, a cache discard, or a swallow. A
+/// stale projection is never resolved by retrying: it is resolved only by an
+/// explicit operator rebuild or by reconfiguring
+/// <see cref="ProjectionRebuildPolicy"/>. Handlers that catch the base type
+/// broadly must therefore decline this exception explicitly, for example with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>,
+/// and let it propagate to the caller who can act on it.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafProjectionStale)]
-public sealed class LeafProjectionStaleException : InvalidOperationException, ILatticeLeafUnavailable
+public sealed class LeafProjectionStaleException : InvalidOperationException, ILatticeDomainFault, ILatticeLeafUnavailable
 {
     /// <summary>
     /// Initialises a new instance with no diagnostic context. Provided to

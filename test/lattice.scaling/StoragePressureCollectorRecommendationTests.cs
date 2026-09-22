@@ -32,7 +32,6 @@ public sealed class StoragePressureCollectorRecommendationTests
 
     private static StoragePressureCollector Collector(
         WalStorageSample sample,
-        long? walMaxRetainedBytes = null,
         Action<LatticeScalingSignalOptions>? configure = null,
         ILogger<StoragePressureCollector>? logger = null)
     {
@@ -41,7 +40,6 @@ public sealed class StoragePressureCollectorRecommendationTests
         return new StoragePressureCollector(
             new FakeSource(sample),
             Options.Create(scaling),
-            Options.Create(new LatticeOptions { WalMaxRetainedBytes = walMaxRetainedBytes }),
             logger);
     }
 
@@ -61,6 +59,7 @@ public sealed class StoragePressureCollectorRecommendationTests
         long bytes,
         WalSaturationState saturation = WalSaturationState.Healthy,
         TimeSpan saturatedFor = default,
+        long? ceiling = null,
         params (int Partition, string Key)[] partitions)
     {
         var mapped = new WalPartitionSample[partitions.Length];
@@ -79,6 +78,7 @@ public sealed class StoragePressureCollectorRecommendationTests
             WalRetainedBytes = bytes,
             Saturation = saturation,
             SaturatedFor = saturatedFor,
+            WalMaxRetainedBytes = ceiling,
             Partitions = mapped,
         };
     }
@@ -119,12 +119,11 @@ public sealed class StoragePressureCollectorRecommendationTests
         // backend is the acute condition.
         var sample = Sample(
             new[] { AcctA, AcctB, AcctC },
-            Tree("t-a", 1_000L, partitions: (0, AcctA)),
-            Tree("t-b", 10L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), (0, AcctB)));
+            Tree("t-a", 1_000L, ceiling: 1_000L, partitions: (0, AcctA)),
+            Tree("t-b", 10L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), partitions: (0, AcctB)));
 
         var pressure = await Collector(
             sample,
-            walMaxRetainedBytes: 1_000L,
             configure: o => o.AccountSaturationWindow = TimeSpan.FromMinutes(1))
             .CollectAsync(CancellationToken.None);
 
@@ -143,8 +142,8 @@ public sealed class StoragePressureCollectorRecommendationTests
     {
         var sample = Sample(
             new[] { AcctA, AcctB, AcctC },
-            Tree("t-a", 100L, WalSaturationState.Throttled, TimeSpan.FromMinutes(5), (0, AcctA)),
-            Tree("t-b", 100L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), (0, AcctB)));
+            Tree("t-a", 100L, WalSaturationState.Throttled, TimeSpan.FromMinutes(5), partitions: (0, AcctA)),
+            Tree("t-b", 100L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), partitions: (0, AcctB)));
 
         var pressure = await Collector(
             sample,
@@ -165,10 +164,10 @@ public sealed class StoragePressureCollectorRecommendationTests
         // the ranking falls through to retained bytes.
         var sample = Sample(
             new[] { AcctA, AcctB, AcctC },
-            Tree("t-a", 1_000L, partitions: (0, AcctA)),
-            Tree("t-b", 5_000L, partitions: (0, AcctB)));
+            Tree("t-a", 1_000L, ceiling: 1_000L, partitions: (0, AcctA)),
+            Tree("t-b", 5_000L, ceiling: 1_000L, partitions: (0, AcctB)));
 
-        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+        var pressure = await Collector(sample)
             .CollectAsync(CancellationToken.None);
 
         Assert.That(pressure.Recommendation, Is.Not.Null);
@@ -180,10 +179,10 @@ public sealed class StoragePressureCollectorRecommendationTests
     {
         var sample = Sample(
             new[] { AcctA, AcctB, AcctC },
-            Tree("t-a", 2_000L, partitions: (0, AcctA)),
-            Tree("t-b", 2_000L, partitions: (0, AcctB)));
+            Tree("t-a", 2_000L, ceiling: 1_000L, partitions: (0, AcctA)),
+            Tree("t-b", 2_000L, ceiling: 1_000L, partitions: (0, AcctB)));
 
-        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+        var pressure = await Collector(sample)
             .CollectAsync(CancellationToken.None);
 
         Assert.That(pressure.Recommendation, Is.Not.Null);
@@ -201,8 +200,8 @@ public sealed class StoragePressureCollectorRecommendationTests
         // healthy tree would not relieve the pressure.
         var sample = Sample(
             new[] { AcctA, AcctB },
-            Tree("t-a", 10L, WalSaturationState.Healthy, TimeSpan.Zero, (7, AcctA)),
-            Tree("t-b", 10L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), (3, AcctA)));
+            Tree("t-a", 10L, WalSaturationState.Healthy, TimeSpan.Zero, partitions: (7, AcctA)),
+            Tree("t-b", 10L, WalSaturationState.Saturated, TimeSpan.FromMinutes(5), partitions: (3, AcctA)));
 
         var pressure = await Collector(
             sample,
@@ -222,9 +221,9 @@ public sealed class StoragePressureCollectorRecommendationTests
     {
         var sample = Sample(
             new[] { AcctA, AcctB },
-            Tree("t-a", 4_000L, partitions: (5, AcctA)));
+            Tree("t-a", 4_000L, ceiling: 1_000L, partitions: (5, AcctA)));
 
-        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+        var pressure = await Collector(sample)
             .CollectAsync(CancellationToken.None);
 
         Assert.That(pressure.Recommendation, Is.Not.Null);
@@ -243,9 +242,9 @@ public sealed class StoragePressureCollectorRecommendationTests
         // acct-b and acct-c are both idle. The scan must settle on acct-b.
         var sample = Sample(
             new[] { AcctC, AcctB, AcctA },
-            Tree("t-a", 4_000L, partitions: (0, AcctA)));
+            Tree("t-a", 4_000L, ceiling: 1_000L, partitions: (0, AcctA)));
 
-        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+        var pressure = await Collector(sample)
             .CollectAsync(CancellationToken.None);
 
         Assert.That(pressure.Recommendation, Is.Not.Null);
@@ -257,11 +256,10 @@ public sealed class StoragePressureCollectorRecommendationTests
     {
         // 0 is not a meaningful ratio; the collector must substitute the default
         // (0.8) rather than classify everything as over threshold.
-        var sample = Sample(new[] { AcctA }, Tree("t-a", 700L, partitions: (0, AcctA)));
+        var sample = Sample(new[] { AcctA }, Tree("t-a", 700L, ceiling: 1_000L, partitions: (0, AcctA)));
 
         var pressure = await Collector(
             sample,
-            walMaxRetainedBytes: 1_000L,
             configure: o => o.RetainedBytesAdvisoryRatio = 0d)
             .CollectAsync(CancellationToken.None);
 
@@ -274,11 +272,10 @@ public sealed class StoragePressureCollectorRecommendationTests
     [Test]
     public async Task An_advisory_ratio_above_one_is_clamped_to_the_full_ceiling()
     {
-        var sample = Sample(new[] { AcctA }, Tree("t-a", 999L, partitions: (0, AcctA)));
+        var sample = Sample(new[] { AcctA }, Tree("t-a", 999L, ceiling: 1_000L, partitions: (0, AcctA)));
 
         var pressure = await Collector(
             sample,
-            walMaxRetainedBytes: 1_000L,
             configure: o => o.RetainedBytesAdvisoryRatio = 5d)
             .CollectAsync(CancellationToken.None);
 
@@ -291,11 +288,10 @@ public sealed class StoragePressureCollectorRecommendationTests
     [Test]
     public async Task An_advisory_ratio_clamped_to_one_still_trips_at_the_ceiling()
     {
-        var sample = Sample(new[] { AcctA }, Tree("t-a", 1_000L, partitions: (0, AcctA)));
+        var sample = Sample(new[] { AcctA }, Tree("t-a", 1_000L, ceiling: 1_000L, partitions: (0, AcctA)));
 
         var pressure = await Collector(
             sample,
-            walMaxRetainedBytes: 1_000L,
             configure: o => o.RetainedBytesAdvisoryRatio = 5d)
             .CollectAsync(CancellationToken.None);
 
@@ -355,9 +351,9 @@ public sealed class StoragePressureCollectorRecommendationTests
         // collapses the advice to the empty-tree, partition-zero fallback.
         var sample = Sample(
             new[] { IWalStorageProviderCatalog.DefaultProviderKey, AcctB },
-            Tree("orders", 4_000L, partitions: (7, null!)));
+            Tree("orders", 4_000L, ceiling: 1_000L, partitions: (7, null!)));
 
-        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+        var pressure = await Collector(sample)
             .CollectAsync(CancellationToken.None);
 
         Assert.That(pressure.Recommendation, Is.Not.Null);

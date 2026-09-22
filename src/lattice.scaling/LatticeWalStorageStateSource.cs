@@ -84,6 +84,10 @@ internal sealed class LatticeWalStorageStateSource(
                 {
                     TreeId = report.TreeId,
                     WalRetainedBytes = report.WalRetainedBytes,
+                    // The ceiling in effect for THIS tree, not the silo-wide
+                    // default. Reading it globally gave every tree the same
+                    // answer, so a per-tree ceiling never classified (#3336).
+                    WalMaxRetainedBytes = report.WalMaxRetainedBytes,
                     Partial = report.Partial,
                     Saturation = saturation,
                     SaturatedFor = saturatedFor,

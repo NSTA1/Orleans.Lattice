@@ -1078,33 +1078,28 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         // Advance the donor's per-partition projection checkpoints to
-        // the WAL heads captured at split time. Each partition's
-        // SetCheckpointOffsetAsync call is scoped to that partition so
-        // the per-partition clamp is applied correctly.
+        // the WAL heads captured at split time.
         //
         // A split is not instantaneous: while it is in flight the donor
         // keeps applying WAL entries on these partitions, advancing the
         // projection checkpoint past the head captured at split start.
         // The advance here is only meant to push the donor forward to
-        // the split frontier, so when the donor's current checkpoint for
-        // a partition already meets or exceeds the captured head, skip
-        // the advance entirely. Calling SetCheckpointOffsetAsync with a
-        // stale head would otherwise ask it to move the checkpoint
-        // backward and trip the monotonic-non-decreasing guard. See
-        // issue 905.
+        // the split frontier, so a head that no longer moves the donor
+        // forward must be dropped - asking the projection seam to move
+        // the checkpoint backward trips its monotonic-non-decreasing
+        // guard, which throws. See issue 905.
+        //
+        // The drop, the partition scoping, and the seam call all live in
+        // ApplyCheckpointHintAsync, which the sibling hint path above
+        // reaches through SetCheckpointOffsetHintsAsync. Both split call
+        // sites therefore share one guard: issue 905 guarded this site
+        // inline and left the sibling site 28 lines above unguarded,
+        // which is issue #3360.
         if (resolvedHeads is not null)
         {
-            var projection = (ILeafProjection)this;
             for (var p = 0; p < resolvedHeads.Length; p++)
             {
-                var donorHead = resolvedHeads[p];
-                if (donorHead > 0 && GetCurrentCheckpointForPartition(p) < donorHead)
-                {
-                    using (LatticeApplyOffsetContext.BeginScope(p, donorHead))
-                    {
-                        await projection.SetCheckpointOffsetAsync(donorHead, CancellationToken.None);
-                    }
-                }
+                await ApplyCheckpointHintAsync(p, resolvedHeads[p]);
             }
         }
 

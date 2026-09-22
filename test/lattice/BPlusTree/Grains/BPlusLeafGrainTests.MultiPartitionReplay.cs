@@ -54,7 +54,7 @@ public sealed class BPlusLeafGrainMultiPartitionReplayTests
 
         var expectedLive = keys.Where((_, i) => i % 4 != 0).ToArray();
         var actual = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
         {
             actual.Add(key);
         }
@@ -99,7 +99,7 @@ public sealed class BPlusLeafGrainMultiPartitionReplayTests
         await tree.DeleteRangeAsync("r010", "r030");
 
         var remaining = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
         {
             remaining.Add(key);
         }

@@ -56,6 +56,22 @@ internal readonly record struct WalTreeSample
     /// </summary>
     public TimeSpan SaturatedFor { get; init; }
 
+    /// <summary>
+    /// The advisory retained-WAL-byte ceiling <b>in effect for this tree</b>
+    /// (<see cref="Orleans.Lattice.TreeStorageUsageReport.WalMaxRetainedBytes"/>),
+    /// or <see langword="null"/> when the byte-pressure policy is disabled for
+    /// it. Already fully resolved, so it reflects the tree's runtime override
+    /// and named options, not just the silo-wide default.
+    /// <para>
+    /// The collector attributes it across <see cref="Partitions"/> exactly as it
+    /// attributes <see cref="WalRetainedBytes"/>, so each account is weighed
+    /// against the summed budget of the trees that actually sit on it. A tree
+    /// with no ceiling contributes neither bytes nor budget to that comparison,
+    /// so it can never push a budgeted neighbour over the line.
+    /// </para>
+    /// </summary>
+    public long? WalMaxRetainedBytes { get; init; }
+
     private readonly IReadOnlyList<WalPartitionSample>? _partitions;
 
     /// <summary>

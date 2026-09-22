@@ -81,7 +81,7 @@ public class TenantTreeRoutingIntegrationTests
             Assert.That(await tree.CountAsync(), Is.EqualTo(3));
 
             var keys = new List<string>();
-            await foreach (var k in tree.KeysAsync())
+            await foreach (var k in tree.ScanKeysAsync())
                 keys.Add(k);
             Assert.That(keys, Is.EqualTo(new[] { "a", "b", "c" }));
 
@@ -125,7 +125,7 @@ public class TenantTreeRoutingIntegrationTests
         Assert.That(await tree.CountAsync(), Is.EqualTo(2));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
 

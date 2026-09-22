@@ -18,7 +18,7 @@ namespace Orleans.Lattice;
 /// the per-shard materialiser to catch up before retrying.
 /// </para>
 /// </summary>
-public sealed class LatticeSnapshotReplayBudgetExceededException : InvalidOperationException
+public sealed class LatticeSnapshotReplayBudgetExceededException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises a new instance with the specified message.

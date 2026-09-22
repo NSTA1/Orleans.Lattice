@@ -64,14 +64,28 @@ namespace Orleans.Lattice;
 ///   as the more honest one.</description></item>
 /// </list>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so
-/// existing catch handlers that match on
-/// <see cref="System.InvalidOperationException"/> continue to absorb
-/// it; the typed slot lets callers that care about the saturation
+/// The typed slot lets callers that care about the saturation
 /// regime explicitly distinguish it from generic
 /// <see cref="System.InvalidOperationException"/> failures (which
 /// are not back-pressure and should be handled per the caller's
 /// normal policy).
+/// </para>
+/// <para>
+/// It derives from <see cref="System.InvalidOperationException"/> for
+/// backwards compatibility, but that inheritance is a hazard rather
+/// than a convenience, and this type is the worked example of why. A
+/// broad <c>catch (InvalidOperationException)</c> written for some
+/// unrelated condition absorbs this back-pressure signal and applies
+/// its own remediation, which for back-pressure is actively harmful:
+/// the routing layer once treated it as a stale routing alias, discarded
+/// the whole routing cache and re-fanned-out every shard, amplifying
+/// load on a tree that was already saturated in proportion to the shard
+/// count. This type therefore implements
+/// <see cref="ILatticeDomainFault"/>, so a broad handler declines it
+/// with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// Catching this type by name, and backing off, remains the correct
+/// handling and is unaffected.
 /// </para>
 /// <para>
 /// Carries the originating <see cref="TreeId"/> so caller-side
@@ -81,7 +95,7 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeSaturated)]
-public sealed class LatticeSaturatedException : InvalidOperationException
+public sealed class LatticeSaturatedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// Logical tree id whose saturation regime caused the refusal.

@@ -79,6 +79,58 @@ public sealed class LatticeTreeAdminOrphanedLeafTests
     // ----- Audit -----
 
     [Test]
+    public async Task Survey_projects_all_counts_and_uses_read_only_core_verb()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = WireTree(factory);
+        var core = CoreReport(true) with
+        {
+            Survey = true,
+            Findings = [new OrphanedLeafFinding
+            {
+                ShardIndex = 3, LeafId = "leaf", LowKeyInclusive = "a", HighKeyExclusive = "z",
+                KeyCount = 6, VerifiedKeyCount = 1, UnverifiedKey = "b",
+                SurveyVerifiedKeyCount = 2, SurveyMissingKeyCount = 3,
+                SurveyRoutingContradictionKeyCount = 1,
+                Disposition = OrphanedLeafDisposition.RefusedUnverifiedKeys,
+            }],
+        };
+        tree.SurveyOrphanedLeavesAsync("cursor", Arg.Any<CancellationToken>()).Returns(core);
+
+        var report = await Create(factory).SurveyOrphanedLeavesAsync(Tree, "cursor");
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TreeId, Is.EqualTo(Tree));
+            Assert.That(report.Survey, Is.True);
+            Assert.That(report.DryRun, Is.True);
+            Assert.That(report.SurveyMissingKeyCount, Is.EqualTo(3));
+            Assert.That(report.OrphanedLeafCount, Is.EqualTo(1));
+            Assert.That(report.Findings[0].SurveyVerifiedKeyCount, Is.EqualTo(2));
+            Assert.That(report.Findings[0].SurveyRoutingContradictionKeyCount, Is.EqualTo(1));
+            Assert.That(report.Findings[0].VerifiedKeyCount, Is.EqualTo(1));
+            Assert.That(report.Findings[0].UnverifiedKey, Is.EqualTo("b"));
+            Assert.That(report.Findings[0].ShardIndex, Is.EqualTo(3));
+        });
+        await tree.Received(1).SurveyOrphanedLeavesAsync("cursor", Arg.Any<CancellationToken>());
+        await tree.DidNotReceive().RepairOrphanedLeavesAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void Survey_denied_by_read_gate_never_dials_and_rejects_empty_tree_id()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var facade = Create(factory, allow: false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await facade.SurveyOrphanedLeavesAsync(Tree),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(async () => await facade.SurveyOrphanedLeavesAsync(null!), Throws.ArgumentNullException);
+            Assert.That(async () => await facade.SurveyOrphanedLeavesAsync(""), Throws.ArgumentException);
+        });
+        factory.DidNotReceive().GetGrain<ILattice>(Arg.Any<string>());
+    }
+
+    [Test]
     public async Task AuditOrphanedLeavesAsync_projects_the_core_report()
     {
         var factory = Substitute.For<IGrainFactory>();

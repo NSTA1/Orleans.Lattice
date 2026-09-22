@@ -301,6 +301,7 @@ src/lattice/LatticeMetrics.cs#SagaPerKeyDuration	unresolved	reason=dimension (un
 src/lattice/LatticeMetrics.cs#SagaPrepareDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaReminderDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#SagaTerminalDecisionDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#ScanChainRegressions	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageCeilingOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageLeafReadOutcomes	unresolved	reason=dimension tree: no declaration found for TreeId
 src/lattice/LatticeMetrics.cs#ScanPageStalls	unresolved	reason=dimension tree: no declaration found for TreeId
@@ -398,6 +399,8 @@ src/lattice/LatticeMetrics.cs#WalGcSchedulerTerminations	unresolved	reason=dimen
 src/lattice/LatticeMetrics.cs#WalGcSchedulerWait	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcTreeReach	unresolved	reason=dimension (unread-tag-argument:seenTreeTag, LatticeMetrics.ReachTreeSeen, LatticeTenantLabel.ForTree(treeId)): tag argument(s) seenTreeTag, LatticeMetrics.ReachTreeSeen, LatticeTenantLabel.ForTree(treeId) are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcTrimStops	unresolved	reason=dimension tree: no declaration found for treeName
+src/lattice/LatticeMetrics.cs#WalRecoveryTornTailBytes	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalRecoveryTornTailRecords	unresolved	reason=dimension (unread-tag-argument:_treeTag, _shardTag, _tenantTag): tag argument(s) _treeTag, _shardTag, _tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalReplayPermitAdaptations	unresolved	reason=dimension (unread-tag-argument:LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform): tag argument(s) LatticeMetrics.PermitAdaptationWithheld, trigger, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalReplayPermitQueueWait	unresolved	reason=dimension tree: no declaration found for treeId
 src/lattice/LatticeMetrics.cs#WalReplayPermitWaitOldestAge	none	

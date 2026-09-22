@@ -55,6 +55,22 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
 
     private static TreeAdminTreeRequest TreeRequest => new() { TreeId = "orders" };
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Orphan_audit_selects_survey_only_when_requested(bool survey)
+    {
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        var expected = new TreeOrphanedLeafReport { TreeId = "orders", Survey = survey };
+        control.SurveyOrphanedLeavesAsync("orders", "cursor", Arg.Any<CancellationToken>()).Returns(expected);
+        control.AuditOrphanedLeavesAsync("orders", "cursor", Arg.Any<CancellationToken>()).Returns(expected);
+        var actual = await CreateService(control).AuditOrphanedLeaves(
+            new TreeAdminOrphanedLeafRequest { TreeId = "orders", ResumeFrom = "cursor", Survey = survey },
+            Context("AuditOrphanedLeaves"));
+        Assert.That(actual, Is.SameAs(expected));
+        await control.Received(survey ? 1 : 0).SurveyOrphanedLeavesAsync("orders", "cursor", Arg.Any<CancellationToken>());
+        await control.Received(survey ? 0 : 1).AuditOrphanedLeavesAsync("orders", "cursor", Arg.Any<CancellationToken>());
+    }
+
     /// <summary>
     /// Drives one RPC whose facade call is arranged to throw <paramref name="thrown"/>
     /// and returns the resulting <see cref="RpcException"/>.

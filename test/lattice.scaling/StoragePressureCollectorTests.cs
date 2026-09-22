@@ -33,16 +33,11 @@ public sealed class StoragePressureCollectorTests
 
     private static StoragePressureCollector Collector(
         IWalStorageStateSource source,
-        long? walMaxRetainedBytes = null,
         Action<LatticeScalingSignalOptions>? configure = null)
     {
         var scaling = new LatticeScalingSignalOptions();
         configure?.Invoke(scaling);
-        var lattice = new LatticeOptions { WalMaxRetainedBytes = walMaxRetainedBytes };
-        return new StoragePressureCollector(
-            source,
-            Options.Create(scaling),
-            Options.Create(lattice));
+        return new StoragePressureCollector(source, Options.Create(scaling));
     }
 
     private static WalTreeSample Tree(
@@ -50,6 +45,7 @@ public sealed class StoragePressureCollectorTests
         long bytes,
         WalSaturationState saturation = WalSaturationState.Healthy,
         TimeSpan saturatedFor = default,
+        long? ceiling = null,
         params (int Partition, string Key)[] partitions)
     {
         var mapped = new WalPartitionSample[partitions.Length];
@@ -64,6 +60,7 @@ public sealed class StoragePressureCollectorTests
             WalRetainedBytes = bytes,
             Saturation = saturation,
             SaturatedFor = saturatedFor,
+            WalMaxRetainedBytes = ceiling,
             Partitions = mapped,
         };
     }
@@ -138,8 +135,8 @@ public sealed class StoragePressureCollectorTests
         // idle and registered, so it is the headroom target.
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("hot", 1000, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), (2, AcctA)),
-            Tree("cool", 10, WalSaturationState.Healthy, default, (0, AcctB)));
+            Tree("hot", 1000, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), partitions: (2, AcctA)),
+            Tree("cool", 10, WalSaturationState.Healthy, default, partitions: (0, AcctB)));
         var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.FromSeconds(30));
 
@@ -168,8 +165,8 @@ public sealed class StoragePressureCollectorTests
         // ceiling: capacity-bound with nowhere to move to.
         var sample = Sample(
             [Default],
-            Tree("t1", 900, partitions: (0, Default)));
-        var collector = Collector(new FakeSource(sample), walMaxRetainedBytes: 1000);
+            Tree("t1", 900, ceiling: 1000, partitions: (0, Default)));
+        var collector = Collector(new FakeSource(sample));
 
         var pressure = await collector.CollectAsync(CancellationToken.None);
 
@@ -192,9 +189,9 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("hot", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), (0, AcctA)),
-            Tree("full", 900, WalSaturationState.Healthy, default, (0, AcctB)));
-        var collector = Collector(new FakeSource(sample), walMaxRetainedBytes: 1000,
+            Tree("hot", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), ceiling: 1000, partitions: (0, AcctA)),
+            Tree("full", 900, WalSaturationState.Healthy, default, ceiling: 1000, partitions: (0, AcctB)));
+        var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.FromSeconds(30));
 
         var pressure = await collector.CollectAsync(CancellationToken.None);
@@ -216,7 +213,7 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("blip", 10, WalSaturationState.Saturated, TimeSpan.FromSeconds(5), (0, AcctA)));
+            Tree("blip", 10, WalSaturationState.Saturated, TimeSpan.FromSeconds(5), partitions: (0, AcctA)));
         var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.FromSeconds(30));
 
@@ -235,7 +232,7 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("hot", 10, WalSaturationState.Throttled, TimeSpan.Zero, (0, AcctA)));
+            Tree("hot", 10, WalSaturationState.Throttled, TimeSpan.Zero, partitions: (0, AcctA)));
         var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.Zero);
 
@@ -250,8 +247,8 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("hot-a", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), (0, AcctA)),
-            Tree("hot-b", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), (0, AcctB)));
+            Tree("hot-a", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), partitions: (0, AcctA)),
+            Tree("hot-b", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), partitions: (0, AcctB)));
         var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.FromSeconds(30));
 
@@ -271,7 +268,7 @@ public sealed class StoragePressureCollectorTests
         // acct-b backs no partition at all but is registered: it has full headroom.
         var sample = Sample(
             [AcctA, AcctB],
-            Tree("hot", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), (0, AcctA)));
+            Tree("hot", 10, WalSaturationState.Saturated, TimeSpan.FromMinutes(1), partitions: (0, AcctA)));
         var collector = Collector(new FakeSource(sample),
             configure: o => o.AccountSaturationWindow = TimeSpan.FromSeconds(30));
 
@@ -286,8 +283,8 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [Default],
-            Tree("t1", 900, partitions: (0, Default)));
-        var collector = Collector(new FakeSource(sample), walMaxRetainedBytes: 1000,
+            Tree("t1", 900, ceiling: 1000, partitions: (0, Default)));
+        var collector = Collector(new FakeSource(sample),
             configure: o => o.StorageRecommendationsEnabled = false);
 
         var pressure = await collector.CollectAsync(CancellationToken.None);
@@ -305,8 +302,8 @@ public sealed class StoragePressureCollectorTests
     {
         var sample = Sample(
             [Default],
-            Tree("t1", long.MaxValue / 2, partitions: (0, Default)));
-        var collector = Collector(new FakeSource(sample), walMaxRetainedBytes: null);
+            Tree("t1", long.MaxValue / 2, ceiling: null, partitions: (0, Default)));
+        var collector = Collector(new FakeSource(sample));
 
         var pressure = await collector.CollectAsync(CancellationToken.None);
 
@@ -323,11 +320,11 @@ public sealed class StoragePressureCollectorTests
     public async Task Advisory_ratio_scales_the_capacity_threshold()
     {
         // 700 bytes is under 0.8*1000=800 but over 0.5*1000=500.
-        var sample = Sample([Default], Tree("t1", 700, partitions: (0, Default)));
+        var sample = Sample([Default], Tree("t1", 700, ceiling: 1000, partitions: (0, Default)));
 
-        var lenient = await Collector(new FakeSource(sample), walMaxRetainedBytes: 1000)
+        var lenient = await Collector(new FakeSource(sample))
             .CollectAsync(CancellationToken.None);
-        var strict = await Collector(new FakeSource(sample), walMaxRetainedBytes: 1000,
+        var strict = await Collector(new FakeSource(sample),
                 configure: o => o.RetainedBytesAdvisoryRatio = 0.5)
             .CollectAsync(CancellationToken.None);
 
@@ -335,6 +332,134 @@ public sealed class StoragePressureCollectorTests
         {
             Assert.That(lenient.OverThreshold, Is.False);
             Assert.That(strict.OverThreshold, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Two_trees_with_different_ceilings_classify_independently()
+    {
+        // The regression for issue #3336. Two scopes, identical retained bytes,
+        // different ceilings:
+        //
+        //   tree "small" -> WalMaxRetainedBytes 1_000      on acct-a
+        //   tree "large" -> WalMaxRetainedBytes 1_000_000  on acct-b
+        //
+        // Both hold exactly 1_000 retained bytes, so the ONLY thing that can
+        // separate them is the ceiling each tree resolved for itself. A collector
+        // that reads one global ceiling gives both accounts the same threshold and
+        // therefore the same verdict, whichever value that global happens to be,
+        // so this assertion cannot pass without per-tree resolution.
+        //
+        // The ratio is pinned to 1.0 so the comparison is exact (bytes >= ceiling)
+        // and no sibling change to the advisory-ratio default can perturb it.
+        const long SmallCeiling = 1_000L;
+        const long LargeCeiling = 1_000_000L;
+        const long BytesEach = 1_000L;
+
+        var sample = Sample(
+            [AcctA, AcctB],
+            Tree("small", BytesEach, ceiling: SmallCeiling, partitions: (0, AcctA)),
+            Tree("large", BytesEach, ceiling: LargeCeiling, partitions: (0, AcctB)));
+        var collector = Collector(new FakeSource(sample),
+            configure: o => o.RetainedBytesAdvisoryRatio = 1d);
+
+        var pressure = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // acct-a: 1_000 retained against its own 1_000 ceiling -> at the bound.
+            Assert.That(Account(pressure, AcctA).OverThreshold, Is.True);
+            Assert.That(Account(pressure, AcctA).Classification,
+                Is.EqualTo(WalPressureClassification.CapacityBound));
+
+            // acct-b: the same 1_000 retained against its own 1_000_000 ceiling ->
+            // three orders of magnitude of headroom, so it makes no capacity claim.
+            Assert.That(Account(pressure, AcctB).OverThreshold, Is.False);
+            Assert.That(Account(pressure, AcctB).Classification,
+                Is.EqualTo(WalPressureClassification.None));
+
+            // The estate-wide figure sums both budgets, so 2_000 bytes against
+            // 1_001_000 of budget is nowhere near the aggregate bound.
+            Assert.That(pressure.OverThreshold, Is.False);
+            Assert.That(pressure.WalRetainedBytes, Is.EqualTo(BytesEach * 2));
+        });
+    }
+
+    [Test]
+    public async Task Ceiling_less_tree_does_not_spend_a_neighbours_budget()
+    {
+        // Both trees land on one account. The unbounded tree declares no ceiling,
+        // so its bytes are not charged against the bounded tree's budget - without
+        // that, 10_100 bytes would be compared to a 1_000 budget and the account
+        // would classify capacity-bound on behalf of a tree that is nowhere near
+        // its own ceiling. Retained bytes are still reported in full: the subtotal
+        // narrows the comparison, never the observability figure.
+        var sample = Sample(
+            [AcctA],
+            Tree("bounded", 100L, ceiling: 1_000L, partitions: (0, AcctA)),
+            Tree("unbounded", 10_000L, ceiling: null, partitions: (1, AcctA)));
+        var collector = Collector(new FakeSource(sample),
+            configure: o => o.RetainedBytesAdvisoryRatio = 1d);
+
+        var pressure = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Account(pressure, AcctA).OverThreshold, Is.False);
+            Assert.That(Account(pressure, AcctA).Classification,
+                Is.EqualTo(WalPressureClassification.None));
+            Assert.That(Account(pressure, AcctA).WalRetainedBytes, Is.EqualTo(10_100L));
+            Assert.That(pressure.OverThreshold, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task Tree_ceiling_is_attributed_across_its_partitions()
+    {
+        // One tree, one ceiling, two partitions on two accounts. Retained bytes are
+        // already split evenly across a tree's partitions; the ceiling follows the
+        // same rule, so each account is compared against the slice of the budget it
+        // actually backs rather than against the whole tree's ceiling.
+        var sample = Sample(
+            [AcctA, AcctB],
+            Tree("spread", 1_000L, ceiling: 1_000L, partitions: new[] { (0, AcctA), (1, AcctB) }));
+        var collector = Collector(new FakeSource(sample),
+            configure: o => o.RetainedBytesAdvisoryRatio = 1d);
+
+        var pressure = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Account(pressure, AcctA).WalRetainedBytes, Is.EqualTo(500L));
+            Assert.That(Account(pressure, AcctB).WalRetainedBytes, Is.EqualTo(500L));
+            // 500 bytes against a 500 slice of the budget on each side.
+            Assert.That(Account(pressure, AcctA).OverThreshold, Is.True);
+            Assert.That(Account(pressure, AcctB).OverThreshold, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Default_advisory_ratio_matches_its_documented_constant()
+    {
+        // Bind the expectation to the live default rather than to the literal, so a
+        // sibling change to the constant moves this test with it instead of
+        // breaking it.
+        var ratio = LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio;
+        const long Ceiling = 1_000_000L;
+        var justUnder = (long)(Ceiling * ratio) - 1L;
+        var atBound = (long)(Ceiling * ratio);
+
+        var under = await Collector(new FakeSource(
+                Sample([Default], Tree("t1", justUnder, ceiling: Ceiling, partitions: (0, Default)))))
+            .CollectAsync(CancellationToken.None);
+        var at = await Collector(new FakeSource(
+                Sample([Default], Tree("t1", atBound, ceiling: Ceiling, partitions: (0, Default)))))
+            .CollectAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(under.OverThreshold, Is.False);
+            Assert.That(at.OverThreshold, Is.True);
         });
     }
 

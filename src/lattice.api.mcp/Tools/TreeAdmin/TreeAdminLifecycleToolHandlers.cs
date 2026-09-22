@@ -410,10 +410,14 @@ internal static class TreeAdminLifecycleToolHandlers
         string treeId,
         [Description("The previous batch's resumeFrom token, passed back unaltered, or omitted to start a new pass. One call is one bounded batch: drive the pass until the report says complete=true, because until then an empty finding list describes only the part of the tree the batch reached.")]
         string? resumeFrom = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        [Description("Opt-in read-only census of every orphan key (up to the per-leaf safety bound). Default false stops at the first miss. Keep true on resumed survey batches. VerifiedKeyCount remains a prefix length; separate nullable survey counts report verified, missing and routing-contradicting keys.")]
+        bool survey = false)
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
-        return treeAdmin.AuditOrphanedLeavesAsync(treeId, resumeFrom, cancellationToken);
+        return survey
+            ? treeAdmin.SurveyOrphanedLeavesAsync(treeId, resumeFrom, cancellationToken)
+            : treeAdmin.AuditOrphanedLeavesAsync(treeId, resumeFrom, cancellationToken);
     }
 
     /// <summary>Repairs a tree's orphaned leaves by unsplicing every descent-unreachable leaf whose keys are all readable elsewhere.</summary>

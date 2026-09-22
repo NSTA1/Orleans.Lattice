@@ -88,7 +88,7 @@ public class BPlusTreeInsertionOrderTests
             await tree.SetAsync($"k{i:D4}", value);
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         var expected = Enumerable.Range(0, count)
@@ -168,9 +168,9 @@ public class BPlusTreeInsertionOrderTests
         for (int i = 5; i < 15; i++)
             Assert.That(await tree.GetAsync($"k{i:D4}"), Is.Null, $"k{i:D4} should be deleted");
 
-        // KeysAsync should exclude deleted keys.
+        // The recovering scan should exclude deleted keys.
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Has.Count.EqualTo(10));

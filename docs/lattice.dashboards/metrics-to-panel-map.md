@@ -165,6 +165,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.grain.call.outstanding_depth` | histogram (`{call}`) | `grain_type`, `tenant` | Overview | Outstanding calls per target activation, by grain type |
 | `orleans.lattice.grain.call.duration` | histogram (ms) | `grain_type`, `outcome`, `tenant` | Overview | Grain-call duration by grain type and outcome |
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
+| `orleans.lattice.shard_root.scan_page.chain_regressions` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.stalls` | counter | `tree`, `shard`, `phase`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.ceiling_outcomes` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Shard-root wedge guards (forward timeouts, scan-page stalls, scan resumptions, and flush suspensions) |
 | `orleans.lattice.shard_root.scan_page.leaf_read_outcomes` | counter | `tree`, `shard`, `outcome`, `tenant` | CommitPath | Scan-page leaf-read coalescing (issued, joined, served) |
@@ -352,6 +353,8 @@ The `orleans.lattice.tag_index.reconcile.*` family is emitted by the background 
 | `orleans.lattice.wal.compaction.eval.dead_bytes` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
 | `orleans.lattice.wal.compaction.eval.retained_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
 | `orleans.lattice.wal.compaction.eval.dead_entries` | histogram | `tree`, `shard`, `tenant` | WAL compaction |
+| `orleans.lattice.wal.recovery.torn_tail_bytes` | counter | `tree`, `shard`, `tenant` | WAL recovery discard |
+| `orleans.lattice.wal.recovery.torn_tail_records` | counter | `tree`, `shard`, `tenant` | WAL recovery discard |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter | `tree`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.dead_letter.removed` | counter | `tree`, `reason`, `tenant` | Dead-letter churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter | `tree`, `tenant` | Apply correctness violations |

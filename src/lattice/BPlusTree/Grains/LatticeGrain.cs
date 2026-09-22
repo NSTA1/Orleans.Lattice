@@ -936,10 +936,10 @@ internal sealed partial class LatticeGrain(
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
                     if (invalidOpRetried) throw;
-                    if (!TryInvalidateStaleAlias()) throw;
+                    if (!TryInvalidateStaleAlias(ex)) throw;
                     invalidOpRetried = true;
                 }
             }
@@ -1049,10 +1049,10 @@ internal sealed partial class LatticeGrain(
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
                     if (invalidOpRetried) throw;
-                    if (!TryInvalidateStaleAlias()) throw;
+                    if (!TryInvalidateStaleAlias(ex)) throw;
                     invalidOpRetried = true;
                 }
             }
@@ -1155,10 +1155,10 @@ internal sealed partial class LatticeGrain(
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
                     if (invalidOpRetried) throw;
-                    if (!TryInvalidateStaleAlias()) throw;
+                    if (!TryInvalidateStaleAlias(ex)) throw;
                     invalidOpRetried = true;
                 }
             }
@@ -1280,10 +1280,10 @@ internal sealed partial class LatticeGrain(
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
                     if (invalidOpRetried) throw;
-                    if (!TryInvalidateStaleAlias()) throw;
+                    if (!TryInvalidateStaleAlias(ex)) throw;
                     invalidOpRetried = true;
                 }
             }
@@ -1810,13 +1810,13 @@ internal sealed partial class LatticeGrain(
                         if (DateTime.UtcNow >= deadline) throw;
                         await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                     }
-                    catch (InvalidOperationException)
+                    catch (InvalidOperationException ex)
                     {
 #if LATTICE_DIAG
                         DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
 #endif
                         if (invalidOpRetried) throw;
-                        if (!TryInvalidateStaleAlias()) throw;
+                        if (!TryInvalidateStaleAlias(ex)) throw;
                         invalidOpRetried = true;
                     }
                 }
@@ -2975,7 +2975,7 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             return await CountAsyncCore(cancellationToken);
         }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        catch (InvalidOperationException ex) when (TryInvalidateStaleAlias(ex))
         {
             cancellationToken.ThrowIfCancellationRequested();
             return await CountAsyncCore(cancellationToken);
@@ -3004,7 +3004,7 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        catch (InvalidOperationException ex) when (TryInvalidateStaleAlias(ex))
         {
             cancellationToken.ThrowIfCancellationRequested();
             return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
@@ -3555,7 +3555,7 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             return await CountPerShardAsyncCore(cancellationToken);
         }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        catch (InvalidOperationException ex) when (TryInvalidateStaleAlias(ex))
         {
             cancellationToken.ThrowIfCancellationRequested();
             return await CountPerShardAsyncCore(cancellationToken);
@@ -4069,7 +4069,7 @@ internal sealed partial class LatticeGrain(
     /// <c>GetGrain&lt;IShardRootGrain&gt;(string)</c> materialisation cost on
     /// any repeat-shard hit, even when consecutive calls alternate across
     /// distinct shards. Cache invalidation is shared with
-    /// <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias"/>
+    /// <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias()"/>
     /// and <see cref="InvalidateShardMap"/> both null the array.
     /// </summary>
     private IShardRootGrain GetShardGrainByIndex(string physicalTreeId, int shardIndex)
@@ -4089,7 +4089,7 @@ internal sealed partial class LatticeGrain(
     /// Returns the routing context for this tree: the resolved physical tree
     /// ID and the effective <see cref="ShardMap"/>. Both are cached for the
     /// lifetime of this activation and invalidated together by
-    /// <see cref="TryInvalidateStaleAlias"/> when a downstream shard reports
+    /// <see cref="TryInvalidateStaleAlias()"/> when a downstream shard reports
     /// the tree as deleted.
     /// </summary>
     public ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
@@ -4234,6 +4234,33 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
+    /// The stale-alias overload used by the broad
+    /// <see cref="InvalidOperationException"/> catch clauses, which cannot name
+    /// the condition they mean. Those clauses exist to absorb the framework
+    /// <see cref="InvalidOperationException"/> raised when a cached alias points
+    /// at a deleted physical tree; a Lattice exception that merely happens to
+    /// derive from the same base is a different condition entirely, and
+    /// discarding the whole routing cache and re-fanning out is remediation
+    /// chosen for a fault that did not occur.
+    /// <para>
+    /// <see cref="LatticeSaturatedException"/> is the worked example: it reports
+    /// write-ahead-log back-pressure and asks the caller to slow down, so
+    /// absorbing it here converts one refused write into a full cache discard
+    /// plus a full re-fanout - amplification proportional to shard count, applied
+    /// at precisely the moment the tree is already saturated.
+    /// </para>
+    /// <para>
+    /// Returns <c>false</c> without touching cached routing state when
+    /// <paramref name="fault"/> carries <see cref="ILatticeDomainFault"/>, so the
+    /// exception propagates to the caller who can act on it. Dedicated clauses
+    /// that catch a domain exception <i>by its own type</i> are unaffected and
+    /// remain the correct way to handle one deliberately.
+    /// </para>
+    /// </summary>
+    private bool TryInvalidateStaleAlias(Exception fault) =>
+        fault is not ILatticeDomainFault && TryInvalidateStaleAlias();
+
+    /// <summary>
     /// Invalidates the cached <see cref="ShardMap"/> only (preserves the
     /// resolved physical tree ID). Used by <see cref="StaleShardRoutingException"/>
     /// catch clauses to force a fresh map fetch on retry after an adaptive
@@ -4336,10 +4363,10 @@ internal sealed partial class LatticeGrain(
                 if (DateTime.UtcNow >= deadline) throw;
                 await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
                 if (invalidOpRetried) throw;
-                if (!TryInvalidateStaleAlias()) throw;
+                if (!TryInvalidateStaleAlias(ex)) throw;
                 invalidOpRetried = true;
             }
         }
@@ -4397,10 +4424,10 @@ internal sealed partial class LatticeGrain(
                 if (DateTime.UtcNow >= deadline) throw;
                 await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
                 if (invalidOpRetried) throw;
-                if (!TryInvalidateStaleAlias()) throw;
+                if (!TryInvalidateStaleAlias(ex)) throw;
                 invalidOpRetried = true;
             }
         }

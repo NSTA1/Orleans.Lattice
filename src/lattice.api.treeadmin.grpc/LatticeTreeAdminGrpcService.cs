@@ -525,7 +525,9 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
 
     /// <inheritdoc />
     public override Task<TreeOrphanedLeafReport> AuditOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.AuditOrphanedLeavesAsync(req.TreeId, req.ResumeFrom, ct));
+        => InvokeAsync(request, context, static (control, req, ct) => req.Survey
+            ? control.SurveyOrphanedLeavesAsync(req.TreeId, req.ResumeFrom, ct)
+            : control.AuditOrphanedLeavesAsync(req.TreeId, req.ResumeFrom, ct));
 
     /// <inheritdoc />
     public override Task<TreeOrphanedLeafReport> RepairOrphanedLeaves(TreeAdminOrphanedLeafRequest request, ServerCallContext context)

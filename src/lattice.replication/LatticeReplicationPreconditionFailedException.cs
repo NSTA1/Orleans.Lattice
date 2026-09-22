@@ -20,14 +20,21 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ILatticeReplicationPreconditionValidator"/>.
 /// </para>
 /// <para>
-/// Derives from <see cref="System.InvalidOperationException"/> so existing
-/// handlers that match it continue to absorb the rejection; the typed slot lets
-/// the API facade surface the precondition failure explicitly.
+/// It derives from <see cref="System.InvalidOperationException"/> for
+/// backwards compatibility, but that inheritance is a hazard rather than a
+/// convenience: a broad <c>catch (InvalidOperationException)</c> absorbs the
+/// rejection and typically retries, which cannot succeed because the missing
+/// precondition (a non-empty local replica id) is host configuration and is
+/// unchanged by re-issuing the request. This type therefore implements
+/// <see cref="ILatticeDomainFault"/>, so a broad handler declines it with
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>.
+/// The typed slot lets the API facade surface the precondition failure
+/// explicitly, and catching this type by name remains correct.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(ReplicationTypeAliases.LatticeReplicationPreconditionFailedException)]
-public sealed class LatticeReplicationPreconditionFailedException : InvalidOperationException
+public sealed class LatticeReplicationPreconditionFailedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>
     /// The target tree id whose enable was rejected. Empty on the

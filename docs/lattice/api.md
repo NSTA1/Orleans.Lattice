@@ -569,6 +569,7 @@ The `TreeStorageUsageReport` fields are:
 | `Partial` | `bool` | `true` when a storage surface could not be accounted - a WAL provider without byte accounting, or a shard root / WAL partition that failed or timed out. The unaccounted surface contributes nothing rather than a zero, so the report is a flagged lower bound. |
 | `SampledAt` | `DateTimeOffset` | When the underlying fan-out was sampled. |
 | `LiveKeys` | `long` | Summed live (non-tombstone) key count across every shard - the figure per-tree admission control compares against `LatticeOptions.MaxLiveKeys`. Best-effort / eventually-consistent (see [Metrics - admission control](metrics.md#per-tree-admission-control)). A lower bound when `Partial` is `true` due to a shard that did not answer; a WAL-only cause of `Partial` leaves it exact. |
+| `WalMaxRetainedBytes` | `long?` | The *effective* retained-WAL ceiling for this tree - the registry runtime override if one is set, else the named `LatticeOptions` for the tree, else the silo-wide default - or `null` when no ceiling applies. A diagnostic echo of the resolved value; it never changes trim behaviour. Always exact, so `Partial` says nothing about it. Consumed by `Orleans.Lattice.Scaling`, which has no options monitor of its own and would otherwise have to read the silo-wide default for every tree. |
 
 For a cluster-wide roll-up across every registered tree, resolve the
 `ILatticeAdmin` grain (see [`ILatticeAdmin`](#ilatticeadmin)).
@@ -1106,9 +1107,38 @@ See [WAL Saturation Signal](wal-saturation-signal.md) for the full design includ
 
 In addition to application callers, the `Orleans.Lattice.Replication` package consumes this signal automatically: a receiver's `WalSaturationReceiverFlowControlPolicy` (registered by `AddLatticeReplication` by default) reads `IWalSaturationSignal.GetCurrentState(treeId)` after each applied push and translates the regime into the backoff hints carried on the `ReplicationAck`, so a saturated receiver asks the sender to ship smaller batches and pause before its local admission gate faults the apply. See [Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
 
+## Domain faults - `ILatticeDomainFault`
+
+Marker interface implemented by every public Lattice exception that derives from a BCL exception subclass (`InvalidOperationException`, `TimeoutException`, `UnauthorizedAccessException`) rather than directly from `Exception`. It declares no members and adds no state.
+
+Those base types were chosen for backwards compatibility, but the inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` written for some unrelated condition silently absorbs a Lattice domain fault and applies remediation calibrated for a different problem. `ILatticeDomainFault` gives such a handler a way to decline it:
+
+```csharp verify
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new("k1", new byte[] { 0x01 }),
+};
+
+try
+{
+    await lattice.SetManyAsync(entries);
+}
+catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
+{
+    // Genuine API misuse. A Lattice domain fault (saturation, quota,
+    // shutdown, fencing, ...) is declined here and falls through to a
+    // handler that understands it, instead of being absorbed.
+    Console.WriteLine(ex.Message);
+}
+```
+
+The marker does **not** mean "never handle this". Catching a domain fault *by its own type* remains the correct way to handle it and is unaffected - `catch (LatticeSaturatedException)` behaves exactly as documented below, and an internal retry loop that catches `ShardActivationTimeoutException` by name still absorbs and retries it. The marker constrains only a broad catch of the **base** type.
+
+A reflection gate in the core test suite enumerates the assembly at run time and fails if a public exception with a foreign base does not implement the marker, so the set cannot drift as exceptions are added.
+
 ## Shutdown back-pressure - `LatticeShuttingDownException`
 
-Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure).
+Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. The typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure). It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` absorbs the refusal and typically retries, which cannot succeed because the writer drain is a one-way transition. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name remains correct.
 
 Surfaces from three distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
 
@@ -1147,7 +1177,7 @@ During the host deactivation window the Orleans runtime emits a `Warning` per in
 
 ## Saturation back-pressure - `LatticeSaturatedException`
 
-Public typed exception thrown by the WAL writer admission gate and the atomic-write saga coordinator when an operation cannot complete because the per-tree `IWalSaturationSignal` reported `WalSaturationState.Saturated` for longer than the caller's configured wait budget. Distinct from [`LatticeShuttingDownException`](#shutdown-back-pressure---latticeshuttingdownexception): saturation is a *recoverable* steady-state regime (offered load is exceeding the storage layer's sustained drain rate), not a one-way silo shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the saturation regime explicitly distinguish it from genuine `InvalidOperationException` failures.
+Public typed exception thrown by the WAL writer admission gate and the atomic-write saga coordinator when an operation cannot complete because the per-tree `IWalSaturationSignal` reported `WalSaturationState.Saturated` for longer than the caller's configured wait budget. Distinct from [`LatticeShuttingDownException`](#shutdown-back-pressure---latticeshuttingdownexception): saturation is a *recoverable* steady-state regime (offered load is exceeding the storage layer's sustained drain rate), not a one-way silo shutdown. The typed slot lets callers that care about the saturation regime explicitly distinguish it from genuine `InvalidOperationException` failures. It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience, and this exception is the worked example: a broad `catch (InvalidOperationException)` elsewhere in the routing layer once absorbed this back-pressure signal, discarded the whole routing cache and re-fanned-out every shard, amplifying load on a tree that was already saturated in proportion to the shard count. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name and backing off remains the correct handling.
 
 Surfaces from two distinct saturation failure shapes that share the same operational meaning ("this tree's storage layer is back-pressured; the operation was refused"):
 
@@ -1187,7 +1217,7 @@ The writer-side admission refusal is also recorded on the `orleans.lattice.wal.w
 
 Public typed exception thrown by the `ILattice` write surface when a locally-authored write is refused because the target tree has reached a configured per-tree admission-control cap - either [`LatticeOptions.MaxLiveKeys`](configuration.md#maxlivekeys) (the `Dimension` property is `keys`) or [`LatticeOptions.MaxEstimatedBytes`](configuration.md#maxestimatedbytes) (the `Dimension` is `bytes`). Admission control is strictly **opt-in**: both caps default to `null` (unbounded), so a tree that has not configured a cap never sees this exception. Distinct from [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception): saturation is a transient storage-drain regime, whereas a quota breach persists until the tree's live footprint drops back under its cap.
 
-Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot carries `TreeId`, `Dimension`, `Current` (the observed value), and `Limit` (the configured cap) for caller-side attribution without parsing the message. The core per-tree caps report `keys` or `bytes`. With the optional [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) add-on registered the same exception also surfaces from this write surface for a per-tenant aggregate breach, adding the `memory`, `trees`, and `ops-per-second` dimensions; `ops-per-second` is a **transient** back-off signal (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds) rather than a condition that persists until a footprint drops.
+The typed slot carries `TreeId`, `Dimension`, `Current` (the observed value), and `Limit` (the configured cap) for caller-side attribution without parsing the message. It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` absorbs the refusal and retries, which cannot succeed until the tree falls back under its cap. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name remains correct. The core per-tree caps report `keys` or `bytes`. With the optional [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) add-on registered the same exception also surfaces from this write surface for a per-tenant aggregate breach, adding the `memory`, `trees`, and `ops-per-second` dimensions; `ops-per-second` is a **transient** back-off signal (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds) rather than a condition that persists until a footprint drops.
 
 Caller contract: treat as back-pressure. Either reduce the tree's live footprint (delete keys, let TTLs expire and compaction reap tombstones) or, if the ceiling is genuinely too low, raise the cap. The cap is evaluated against a cached, eventually-consistent per-tree aggregate, so it is **best-effort / approximate**: concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and enforcement **fails open** until the tree's first sample lands after activation. Replication and atomic-write-saga apply paths bypass admission control, so an incoming replicated write is never refused. Every rejection also increments the `orleans.lattice.admission.rejected` counter (tagged `tree`, `dimension`); see [Metrics - admission control](metrics.md#per-tree-admission-control) for the advisory-first-then-enforce adoption workflow.
 
@@ -1257,6 +1287,30 @@ the recommended monitoring shape for lag.
 
 ## Operator tooling: orphaned-leaf repair
 
+`VerifiedKeyCount` always means the verified **prefix length** before the first
+missing key or routing contradiction. The default audit and repair do not test
+later keys. Do not subtract this prefix from `KeyCount` to estimate damage.
+The opt-in `SurveyOrphanedLeavesAsync` preserves that field and the first failure
+in `UnverifiedKey`, and adds `SurveyVerifiedKeyCount`, `SurveyMissingKeyCount`
+and `SurveyRoutingContradictionKeyCount` on each finding. Together they account
+for every enumerated key; null means the leaf was not surveyed (for example,
+blocking state or the key limit), not zero. A missing routed copy is not proof
+of data loss. This is a live observation, not a consistent tree snapshot.
+
+Reports include `Survey`, `OrphanedLeafCount`, `RepairableCount` and the existing
+`RefusedCount`, with positions and dispositions in `Findings`. The nullable
+report `SurveyMissingKeyCount` totals this batch only, and is unknown if any
+reached region or orphan could not be surveyed. Collect every batch using the
+same survey verb and inspect `Gaps`; `IsComplete` alone does not make a complete
+census. Findings marked `Repairable` identify the repair's candidate scope;
+repair independently rechecks safety and still refuses every unverified leaf.
+
+The public `ILattice` and `ILatticeTreeAdmin` survey methods have default
+implementations for compatibility with older external implementations. Their
+default throws `NotSupportedException`: unsupported survey must not be mistaken
+for a zero-damage census. Lattice's grain and tree-admin facade implement the
+survey; older remote servers may not support it.
+
 An **orphaned leaf** is a leaf that is present in a shard's doubly
 linked sibling chain but is not reachable by descent from the shard
 root - no routing entry points at it. Such a leaf can only arise from
@@ -1272,14 +1326,15 @@ shadow copy of that range. The orphan's projection checkpoint then
 pins the WAL trim floor indefinitely, and because compaction is
 downstream of trim, the WAL grows without bound.
 
-Two `ILattice` methods provide the operator path.
+Three `ILattice` methods provide the operator path.
 
 | Method | Description |
 |--------|-------------|
 | `InspectOrphanedLeavesAsync(string?, CancellationToken)` | Dry run. Walks the sibling chain of every physical shard, reports each leaf that is not reachable by descent, and evaluates the same safety verification the repair uses - so a leaf reported `Repairable` here is one `RepairOrphanedLeavesAsync` would unsplice. Mutates nothing. Requires `LatticeOperation.Read`. |
+| `SurveyOrphanedLeavesAsync(string?, CancellationToken)` | Opt-in read-only census of all key outcomes per orphan, bounded at 100,000 keys per leaf. Costs O(KeyCount) descents/owner reads rather than O(first miss). Requires `LatticeOperation.Read`. |
 | `RepairOrphanedLeavesAsync(string?, CancellationToken)` | Performs the repair. For each descent-unreachable leaf it verifies every key the leaf holds is also held by the descent-reachable leaf that key routes to; only then does it unsplice the leaf (relinking its neighbours) and retire its projection state, releasing the pin. Requires `LatticeOperation.Admin`. |
 
-The leading `string?` on both is the **resume token** from the previous
+The leading `string?` on all three is the **resume token** from the previous
 call's report. Pass `null` (the default) to start a new pass; pass
 `report.ResumeFrom` back unaltered to continue one. See
 [Driving a pass to completion](#driving-a-pass-to-completion) below -
@@ -2373,5 +2428,4 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
   version. `DeleteAsync` rejects a startup-declared view (the declaration would
   re-create it); see
   [Materialised views](materialised-views.md#deleting-a-view).
-
 

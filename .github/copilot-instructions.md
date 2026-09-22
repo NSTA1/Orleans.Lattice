@@ -456,23 +456,47 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     This is the single most likely way bucketing goes wrong, and the cost of
     forgetting is a set of completed items left open with no signal anywhere
     that they were meant to close.
-    - **Only the member half is enforced.** The
-      `Guard - inert closing keywords` step in `.github/workflows/ci.yml` fails
-      a pull request whose base is not the default branch and whose body
-      carries a closing keyword GitHub would honour, so writing `Closes #N` on
-      a member pull request is now caught rather than merged. Its predicate
-      mirrors GitHub's own parser rather than approximating it: fenced blocks,
-      blockquotes, and inline code spans are stripped first, because GitHub
-      does not act on a reference inside them either - so a pull request that
-      *discusses* this trap is not a violation, and the way to discuss one is
-      to put it in backticks.
-    - **The other half is advice and nothing checks it.** That the bucket's own
-      pull request into the default branch carries every `Closes #N` its
-      members gave up is unenforced - no test, no gate, no report. It is the
-      half that actually closes the issues, and it remains yours to get right.
-      Stated explicitly because a gate covering one half of a convention is
-      easy to mistake for one covering both, which would turn "unchecked" into
-      "checked and clean" without changing anything that is known.
+    - **Both halves are now enforced, by two separate steps in
+      `.github/workflows/ci.yml`.** They are described separately because they
+      read different artefacts at different moments, and because for a long
+      time only the first existed - which is precisely the asymmetry that let
+      completed work sit open with no signal anywhere.
+    - **The member half.** The `Guard - inert closing keywords` step fails a
+      pull request whose base is not the default branch and whose body carries
+      a closing keyword GitHub would honour, so writing `Closes #N` on a member
+      pull request is caught rather than merged. Its predicate mirrors GitHub's
+      own parser rather than approximating it: fenced blocks, blockquotes, and
+      inline code spans are stripped first, because GitHub does not act on a
+      reference inside them either - so a pull request that *discusses* this
+      trap is not a violation, and the way to discuss one is to put it in
+      backticks.
+    - **A member records the deferral as `Refs #N`.** This is not decoration:
+      it is the only durable record that the member gave a closure up, and it
+      is what the bucket half reconciles against. A member that resolves an
+      issue and records nothing is invisible to the gate below, so its issue
+      can still be left open - by the member's own omission rather than by the
+      bucket's.
+    - **The bucket half.** The `Guard - bucket closing list` step runs on a
+      pull request whose base IS the default branch and whose head is an
+      `*/epic/**` branch. It enumerates the branch's merged member pull
+      requests, collects every `Refs #N` from their bodies, and reconciles that
+      claim set against the closing set **GitHub itself computes** for the
+      bucket (`closingIssuesReferences`), failing when an open issue a merged
+      member claimed is in neither that set nor an explicit
+      `## Deliberately held open` block with a stated reason. It reads the
+      computed set and never the body text, because an oversized body
+      truncates GitHub's parse to a clean prefix with no error - a
+      body-reading check and a computed-set check disagree on exactly the
+      cases that matter. Every artefact it reads exists while the pull request
+      is still open, so the check is decidable pre-merge; what it deliberately
+      does NOT assert is that the issues are closed, which is only true
+      afterwards and would block every bucket forever.
+    - **It fails loudly when it finds nothing.** Zero merged members, or
+      members that carry no `Refs` at all, is reported as a failure rather than
+      as a clean result: certifying an empty population silently is the defect
+      class the gate exists to catch, so a gate that did it would refute
+      itself. A bucket raised before its first member merges clears this as
+      soon as one does.
   - **Retarget, do not rename.** An already-raised pull request joins a bucket by
     changing its base (`gh pr edit <n> --base <bucket>`); its head branch keeps
     whatever name it has. The `<bucket-slug>-<item-slug>` head naming is for work

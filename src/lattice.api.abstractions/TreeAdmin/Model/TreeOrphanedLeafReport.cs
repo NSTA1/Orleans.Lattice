@@ -81,6 +81,48 @@ public sealed record TreeOrphanedLeafReport
     /// </summary>
     [Id(5)] public ImmutableArray<TreeOrphanedLeafGap> Gaps { get; init; } = [];
 
+    /// <summary>Whether this batch requested the opt-in, read-only full key census.</summary>
+    [Id(6)] public bool Survey { get; init; }
+
+    /// <summary>Number of orphaned leaves found in this batch, including refusals.</summary>
+    public int OrphanedLeafCount => Findings.IsDefaultOrEmpty ? 0 : Findings.Length;
+
+    /// <summary>Number of leaves this batch proved safe for repair, with their positions in Findings.</summary>
+    public int RepairableCount
+    {
+        get
+        {
+            var count = 0;
+            if (Findings.IsDefaultOrEmpty) return count;
+            foreach (var finding in Findings)
+                if (finding.Disposition == TreeOrphanedLeafDisposition.Repairable) count++;
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// Total missing keys in this batch's survey, or null when not requested or
+    /// any reached region or orphan could not be fully surveyed. Zero does not
+    /// rule out routing contradictions. Not a whole-tree total until all batches have
+    /// been collected; not evidence of data loss. Per-leaf counts and positions
+    /// remain in Findings even when this total is unknown.
+    /// </summary>
+    public long? SurveyMissingKeyCount
+    {
+        get
+        {
+            if (!Survey || !VerdictComplete) return null;
+            long count = 0;
+            if (Findings.IsDefaultOrEmpty) return count;
+            foreach (var finding in Findings)
+            {
+                if (finding.SurveyMissingKeyCount is not { } missing) return null;
+                count += missing;
+            }
+            return count;
+        }
+    }
+
     /// <summary>
     /// Whether the pass could establish a verdict over everything it reached, and
     /// so whether <see cref="Findings"/> may be read as a verdict over it.

@@ -162,15 +162,22 @@ public sealed class LatticeScalingSignalOptions
     public static readonly TimeSpan DefaultAccountSaturationWindow = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Fraction of <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/>
-    /// at or above which retained WAL bytes are treated as capacity pressure -
+    /// Fraction of a tree's <b>effective</b>
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> ceiling at
+    /// or above which retained WAL bytes are treated as capacity pressure -
     /// both for the aggregate <see cref="StoragePressure.OverThreshold"/> flag and
     /// for per-account <see cref="WalAccountPressure.OverThreshold"/> /
     /// <see cref="WalPressureClassification.CapacityBound"/> classification. Clamped
-    /// to the open-closed interval <c>(0, 1]</c> at evaluation time. Ignored when
-    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> is
-    /// <see langword="null"/> (no ceiling configured). Defaults to
-    /// <see cref="DefaultRetainedBytesAdvisoryRatio"/>.
+    /// to the open-closed interval <c>(0, 1]</c> at evaluation time.
+    /// <para>
+    /// The ceiling is resolved <b>per tree</b>, so a per-tree option value or
+    /// runtime override applies, not only the silo-wide default. An account's
+    /// threshold is this fraction of the summed ceilings of the trees whose
+    /// partitions sit on it; a tree whose ceiling is <see langword="null"/> makes
+    /// no capacity statement and contributes neither bytes nor budget. When no
+    /// tree anywhere declares a ceiling, capacity classification is inert.
+    /// </para>
+    /// Defaults to <see cref="DefaultRetainedBytesAdvisoryRatio"/>.
     /// </summary>
     public double RetainedBytesAdvisoryRatio { get; set; } = DefaultRetainedBytesAdvisoryRatio;
 

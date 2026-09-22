@@ -15,6 +15,19 @@ namespace Orleans.Lattice.Scaling;
 /// target key with headroom (or, when every registered key is hot, advising the
 /// operator to provision another account).
 /// <para>
+/// Capacity classification is <b>per tree</b>. Each tree carries its own effective
+/// retained-byte ceiling on the sample
+/// (<see cref="WalTreeSample.WalMaxRetainedBytes"/>, resolved through the same
+/// per-tree path the WAL garbage collector uses), and the collector attributes that
+/// ceiling across the tree's partitions by exactly the rule it uses for the tree's
+/// bytes. An account is therefore weighed against the summed budget of the trees
+/// that actually sit on it. A tree with no ceiling contributes neither bytes nor
+/// budget, so it cannot spend a budgeted neighbour's allowance. Reading the ceiling
+/// from the silo-wide <c>LatticeOptions</c> gave every tree the same answer, so a
+/// silo that configured ceilings only per tree saw no capacity classification at
+/// all (issue #3336).
+/// </para>
+/// <para>
 /// This is strictly report-only. The storage axis it produces is carried through
 /// the <see cref="ScalingSignalComputer"/> for observability but never inflates the
 /// compute scale value; adding storage accounts, not silo replicas, is what
@@ -26,12 +39,10 @@ namespace Orleans.Lattice.Scaling;
 internal sealed class StoragePressureCollector(
     IWalStorageStateSource source,
     IOptions<LatticeScalingSignalOptions> scalingOptions,
-    IOptions<LatticeOptions> latticeOptions,
     ILogger<StoragePressureCollector>? logger = null) : IStoragePressureCollector
 {
     private readonly IWalStorageStateSource _source = source;
     private readonly IOptions<LatticeScalingSignalOptions> _scalingOptions = scalingOptions;
-    private readonly IOptions<LatticeOptions> _latticeOptions = latticeOptions;
     private readonly ILogger _logger = logger ?? NullLogger<StoragePressureCollector>.Instance;
 
     /// <summary>
@@ -40,7 +51,23 @@ internal sealed class StoragePressureCollector(
     /// </summary>
     private struct Accumulator
     {
+        /// <summary>Every attributed retained byte on this account, ceiling or not.</summary>
         public long RetainedBytes;
+
+        /// <summary>
+        /// The subset of <see cref="RetainedBytes"/> attributed from trees that
+        /// declare a ceiling. Only this subtotal is weighed against
+        /// <see cref="CapacityBudget"/>, so a ceiling-less tree sharing the
+        /// account cannot spend a budgeted neighbour's allowance.
+        /// </summary>
+        public long BudgetedBytes;
+
+        /// <summary>
+        /// Summed per-tree ceilings attributed to this account, the denominator
+        /// of its capacity comparison.
+        /// </summary>
+        public long CapacityBudget;
+
         public WalSaturationState WorstSaturation;
         public TimeSpan MaxSaturatedFor;
     }
@@ -66,7 +93,7 @@ internal sealed class StoragePressureCollector(
         }
 
         var options = _scalingOptions.Value;
-        var capacityThreshold = ResolveCapacityThreshold(options, _latticeOptions.Value.WalMaxRetainedBytes);
+        var ratio = ResolveAdvisoryRatio(options);
         var window = options.AccountSaturationWindow;
 
         // Reduce per-tree slices into per-account accumulators and the aggregate
@@ -74,10 +101,24 @@ internal sealed class StoragePressureCollector(
         // and iterator allocations a GroupBy would incur on this timer path.
         var accumulators = new Dictionary<string, Accumulator>(StringComparer.Ordinal);
         var aggregateBytes = 0L;
+        var aggregateBudgetedBytes = 0L;
+        var aggregateBudget = 0L;
         for (var t = 0; t < trees.Count; t++)
         {
             var tree = trees[t];
             aggregateBytes += tree.WalRetainedBytes;
+
+            // The ceiling in effect for THIS tree. A null or non-positive value
+            // means the byte-pressure policy is off for it, so it makes no
+            // capacity statement at all and is excluded from both sides of the
+            // comparison rather than being charged against someone else's
+            // budget (issue #3336).
+            var ceiling = tree.WalMaxRetainedBytes is > 0 ? tree.WalMaxRetainedBytes.GetValueOrDefault() : 0L;
+            if (ceiling > 0)
+            {
+                aggregateBudgetedBytes += tree.WalRetainedBytes;
+                aggregateBudget += ceiling;
+            }
 
             var partitions = tree.Partitions;
             var count = partitions.Count;
@@ -88,6 +129,12 @@ internal sealed class StoragePressureCollector(
 
             var baseBytes = tree.WalRetainedBytes / count;
             var remainder = tree.WalRetainedBytes % count;
+
+            // The ceiling is attributed across the tree's partitions by exactly
+            // the same rule as its bytes, so each account's numerator and
+            // denominator describe the same slice of the same trees.
+            var baseCeiling = ceiling / count;
+            var ceilingRemainder = ceiling % count;
             for (var p = 0; p < count; p++)
             {
                 var partition = partitions[p];
@@ -96,6 +143,12 @@ internal sealed class StoragePressureCollector(
 
                 accumulators.TryGetValue(key, out var accum);
                 accum.RetainedBytes += slice;
+                if (ceiling > 0)
+                {
+                    accum.BudgetedBytes += slice;
+                    accum.CapacityBudget += baseCeiling + (p == 0 ? ceilingRemainder : 0);
+                }
+
                 if (tree.Saturation > accum.WorstSaturation)
                 {
                     accum.WorstSaturation = tree.Saturation;
@@ -110,9 +163,9 @@ internal sealed class StoragePressureCollector(
             }
         }
 
-        var accounts = BuildAccounts(accumulators, capacityThreshold, window);
+        var accounts = BuildAccounts(accumulators, ratio, window);
 
-        var overThreshold = capacityThreshold > 0 && aggregateBytes >= capacityThreshold;
+        var overThreshold = aggregateBudget > 0 && aggregateBudgetedBytes >= ApplyAdvisoryRatio(aggregateBudget, ratio);
 
         WalRebalanceRecommendation? recommendation = null;
         if (options.StorageRecommendationsEnabled)
@@ -129,31 +182,35 @@ internal sealed class StoragePressureCollector(
         };
     }
 
-    private static long ResolveCapacityThreshold(LatticeScalingSignalOptions options, long? configuredCeiling)
+    /// <summary>
+    /// Normalises the configured advisory fraction: a non-positive value falls
+    /// back to <see cref="LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio"/>
+    /// and anything above 1 is clamped to 1, so the effective ratio is always in
+    /// <c>(0, 1]</c>.
+    /// </summary>
+    private static double ResolveAdvisoryRatio(LatticeScalingSignalOptions options)
     {
-        // Threshold lives on core LatticeOptions; a null/zero ceiling means "no
-        // capacity classification". Ratio is clamped to (0, 1].
-        if (configuredCeiling is not > 0)
-        {
-            return 0L;
-        }
-
         var ratio = options.RetainedBytesAdvisoryRatio;
         if (ratio <= 0d)
         {
-            ratio = LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio;
-        }
-        else if (ratio > 1d)
-        {
-            ratio = 1d;
+            return LatticeScalingSignalOptions.DefaultRetainedBytesAdvisoryRatio;
         }
 
-        return (long)(configuredCeiling.Value * ratio);
+        return ratio > 1d ? 1d : ratio;
     }
+
+    /// <summary>
+    /// Scales a summed capacity budget by the normalised advisory fraction to
+    /// give the byte figure at which the budget's owner is reported over
+    /// threshold. A non-positive budget means "no capacity classification", and
+    /// yields a threshold of zero, which every comparison is guarded against.
+    /// </summary>
+    private static long ApplyAdvisoryRatio(long budget, double ratio)
+        => budget > 0 ? (long)(budget * ratio) : 0L;
 
     private WalAccountPressure[] BuildAccounts(
         Dictionary<string, Accumulator> accumulators,
-        long capacityThreshold,
+        double ratio,
         TimeSpan window)
     {
         if (accumulators.Count == 0)
@@ -166,7 +223,10 @@ internal sealed class StoragePressureCollector(
         foreach (var pair in accumulators)
         {
             var accum = pair.Value;
-            var overThreshold = capacityThreshold > 0 && accum.RetainedBytes >= capacityThreshold;
+            // Each account is weighed against the summed ceilings of the trees
+            // that actually sit on it, not against one globally-read ceiling.
+            var capacityThreshold = ApplyAdvisoryRatio(accum.CapacityBudget, ratio);
+            var overThreshold = capacityThreshold > 0 && accum.BudgetedBytes >= capacityThreshold;
             var classification = Classify(accum, overThreshold, window);
             accounts[i++] = new WalAccountPressure
             {
