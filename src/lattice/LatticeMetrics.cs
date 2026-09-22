@@ -5101,6 +5101,40 @@ public static class LatticeMetrics
         new(TagReason, "recheck_no_durable_checkpoint");
 
     /// <summary>
+    /// <see cref="TagReason"/> value for the coverage-lag timer finding this
+    /// leaf holding rows whose durable checkpoint HAS a value but has not
+    /// advanced across consecutive ticks, and routing it to the starvation
+    /// drive rather than declining (issue #3389).
+    /// <para>
+    /// Split out of <see cref="DriverDeclineRecheckNoDurableCheckpoint"/>
+    /// because the two populations are reached by opposite predicates and only
+    /// one of them was ever reachable. That arm requires
+    /// <c>checkpoint(p) &lt; 0</c> for EVERY partition, so it covers a leaf
+    /// that has never checkpointed. This arm covers a leaf that checkpointed
+    /// successfully and then STOPPED, which the older predicate excludes by
+    /// construction the moment any partition holds a non-negative offset.
+    /// </para>
+    /// <para>
+    /// The frozen leaf is the more dangerous of the two and the harder to see.
+    /// It hydrates cleanly on restart, satisfies every eligibility gate, and
+    /// reports <see cref="DriverDeclineRecheckCoverageCurrent"/> forever,
+    /// because coverage and checkpoint are frozen EQUAL and so
+    /// <c>checkpoint(p) &gt; covered(p)</c> is false. Writes accepted after the
+    /// freeze are acknowledged, served correctly from the live activation, and
+    /// lost on the next restart.
+    /// </para>
+    /// <para>
+    /// <b>Reading it.</b> Like the arm it was split from, a non-zero rate is
+    /// the timer working, not a fault. A rate that does not fall toward zero
+    /// means the drive is not advancing the checkpoint, which is the condition
+    /// this arm exists to make visible - previously it was indistinguishable
+    /// from the healthy majority.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckCheckpointStalled =
+        new(TagReason, "recheck_checkpoint_stalled");
+
+    /// <summary>
     /// Counter of leaf snapshot capture DRIVERS that declined to drive a capture,
     /// tagged <see cref="TagTree"/> and <see cref="TagReason"/> (issue #3185).
     /// <para>

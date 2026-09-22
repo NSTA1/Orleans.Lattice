@@ -171,12 +171,26 @@ public sealed class DashboardPanelTagDomainTests
             // retire, so the number would diverge while describing nothing. It
             // is charted on panel 160 on its own isolated target D, deliberately
             // not folded into that panel's collapsed benign target.
+            // recheck_checkpoint_stalled (issue #3389) is omitted here for the
+            // third time on the same structural grounds, and like the arm above
+            // it is a data-loss-risk arm rather than a benign one. It is the
+            // COMPLEMENT of recheck_no_durable_checkpoint: that arm is a leaf
+            // which never reached a checkpoint, this one is a leaf which reached
+            // one and then stopped advancing. Neither can enter this quotient,
+            // because both are discharged by the coverage-lag timer's starvation
+            // drive rather than by the WAL GC reactivation drive that forms this
+            // panel's denominator. Adding either would put a numerator term in
+            // the ratio the denominator can never retire, so the number would
+            // diverge while describing nothing. It is charted on panel 160 on
+            // its own isolated target E, deliberately not folded into that
+            // panel's collapsed benign target.
             ["CommitPath|161|orleans.lattice.leaf.snapshot.driver.declines|reason"] =
             [
                 "deactivate_unproven_coverage_current",
                 "deactivate_unproven_unclassified",
                 "recheck_cadence_not_reached",
                 "recheck_capture_in_flight",
+                "recheck_checkpoint_stalled",
                 "recheck_coverage_current",
                 "recheck_no_durable_checkpoint",
             ],
