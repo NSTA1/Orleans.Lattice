@@ -539,8 +539,20 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 new RepoContextWorkspaceGuard([]),
                 timeProvider ?? TimeProvider.System,
                 options ?? new RepoContextIndexingOptions(),
-                _loggerFactory.CreateLogger<RepoContextBootstrapService>());
+                _loggerFactory.CreateLogger<RepoContextBootstrapService>(),
+                // Named, because the reporter is the SECOND optional trailing
+                // parameter: positionally it would bind to sourceScanner and the
+                // harness would silently exercise a service with no verdict
+                // instrument at all - green, and blind to the one series #3340
+                // added.
+                coverageVerdictReporter: CoverageVerdictReporter);
         }
+
+        /// <summary>
+        /// The live verdict instrument the service under test charges, exposed so a
+        /// test can read the partition back without standing up a meter listener.
+        /// </summary>
+        internal RepoContextCoverageVerdictReporter CoverageVerdictReporter { get; } = new();
 
         internal string RepoRoot { get; }
 
@@ -653,6 +665,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
         public void Dispose()
         {
             Service.Dispose();
+            CoverageVerdictReporter.Dispose();
             _loggerFactory.Dispose();
             try
             {

@@ -187,6 +187,16 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // absent from the scrape - which the instrument itself would then be read as
         // reporting "no coverage resolution was ever reached".
         services.TryAddSingleton<RepoContextCoverageProbeReporter>();
+
+        // And once more for the bootstrap pass's coverage VERDICT, which is a
+        // different question from the probe outcomes above: the probe counter says
+        // whether each arm could resolve coverage, this one says what the pass then
+        // concluded about the repository and therefore what cadence the next pass
+        // runs at. The bootstrap service takes it as an OPTIONAL parameter, so an
+        // unregistered reporter would not fail startup - it would silently drop the
+        // one series that distinguishes "the gap scan stood down because the corpus
+        // is covered" from "because the pass could not measure it" (issue #3340).
+        services.TryAddSingleton<RepoContextCoverageVerdictReporter>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
 

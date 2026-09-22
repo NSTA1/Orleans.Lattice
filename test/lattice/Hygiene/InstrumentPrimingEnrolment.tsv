@@ -6,6 +6,7 @@ src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_res
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancellations	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	unresolved	reason=dimension (unread-tag-argument:phaseTag, LatticeTenantLabel.Platform): tag argument(s) phaseTag, LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Bootstrap/RepoContextCoverageVerdictReporter.cs#_verdicts	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=dimension (unread-tag-argument:LatticeTenantLabel.Platform): tag argument(s) LatticeTenantLabel.Platform are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	

@@ -411,6 +411,19 @@ public sealed class TenantMetricDimensionHygieneTests
         // observations - which is the entire point of an instrument whose subject is a
         // stand-down that is otherwise silent by design.
         "_probes",
+        // repocontext.bootstrap.coverage_verdict - what a bootstrap pass concluded about
+        // embedding coverage, partitioned by the reason convergence was or was not
+        // reached (converged / arm_failure / gap_found / probe_unmeasurable), issue
+        // #3340. Sentinel for the same reason as _probes directly above, whose outcomes
+        // this verdict is derived from: the pass resolves coverage over the one shared
+        // vector-index tree, so LatticeTenantLabel.ForTree would resolve to the same
+        // constant for every repository on the host. The reason tag carries the whole
+        // signal, and all four arms are pre-minted so that probe_unmeasurable reading
+        // zero is a measured absence rather than a series that was never registered -
+        // which is the instrument's entire purpose, since a pass that stands the gap
+        // scan down because it could not measure coverage is otherwise indistinguishable
+        // at the tree from one that stood it down because the corpus is covered.
+        "_verdicts",
         // lattice.repocontext.memory.restore - memory-archive restore attempts
         // partitioned by outcome (restored / partial / nothing_to_restore /
         // not_attempted / failed), issue #2641. The restore runs once per HOST PROCESS
