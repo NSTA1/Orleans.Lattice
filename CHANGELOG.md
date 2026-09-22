@@ -44,7 +44,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
-- **WAL - Offset allocation regressed beneath the trim floor, destroying later writes.** Two storage providers answered the WAL grain's next-offset source from their live entries rather than from a monotonic high-water mark, so a fully trimmed shard reported `-1` and allocation restarted at `0` beneath the shard's own durable trim floor. Every append after that committed, acknowledged and read back normally for the life of the process, then was classified as already-trimmed and discarded by the next activation-time recovery - on a path that increments no counter and writes no log line, so the operation that caused the loss also destroyed the evidence. On the file provider this was silent, permanent data loss across a graceful restart. The report is now a high-water mark that a trim never lowers, matching `AzureTableWalStorageProvider`, which was already correct and is now pinned as the reference by a shared cross-provider conformance suite. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`)
+- **WAL - In-memory provider reused offsets after a full trim.** `InMemoryWalStorageProvider` restarted allocation at `0` once a trim removed every live entry. It keeps no durable state, so offsets were reused rather than data lost. `IWalStorageProvider` now states the high-water-mark contract. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice`)
 
 - **WAL - An unreadable cursor registry released the durability hold.** A failed consumer-cursor registry read classified the tree's cursors as durable, which disabled the durability hold and let the collector trim WAL entries with no durability evidence at all. It was silent as well as wrong: the counter that reports such a release is gated on the same hold, so the fault switched off the instrument that would have announced it. An unreadable registry is now its own classification, engages the hold, and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice`)
 
@@ -109,6 +109,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ## Released
+
+## [2026-09-23]
+
+Patch release: `Orleans.Lattice.Storage.File` advances to `9.7.1`. No other package changes in this wave.
+
+### Fixed
+
+- **WAL - Offset allocation regressed beneath the trim floor.** `FileWalShard` took the next offset from live entries, so a fully trimmed shard restarted at `0` beneath its own watermark and the next recovery silently discarded every write made since. Azure Table was never affected. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice.Storage.File` 9.7.1)
 
 ## [2026-09-21]
 
