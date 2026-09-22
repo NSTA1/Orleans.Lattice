@@ -264,11 +264,29 @@ public interface IWalStorageProvider
     }
 
     /// <summary>
-    /// Returns the highest <see cref="WalEntry.Offset"/> currently
-    /// persisted for <paramref name="treeId"/> /
-    /// <paramref name="shardIndex"/>, or <c>-1</c> when the WAL is
-    /// empty. Used by the WAL grain on activation to recover its
-    /// next-offset counter without reading the whole log.
+    /// Returns the highest <see cref="WalEntry.Offset"/> ever assigned for
+    /// <paramref name="treeId"/> / <paramref name="shardIndex"/>, or <c>-1</c>
+    /// when the shard has never accepted an entry. Used by the WAL grain on
+    /// activation to recover its next-offset counter without reading the whole
+    /// log.
+    /// <para>
+    /// <b>This is a monotonic high-water mark, not a live-entry maximum, and
+    /// the distinction is load-bearing (issue #3366).</b> An implementation
+    /// that answers from its live entries regresses to <c>-1</c> once a trim
+    /// removes them all, so the grain restarts allocation at offset <c>0</c>
+    /// while the shard's durable trim watermark is still far above it. Every
+    /// entry appended after that point is born at or below the watermark, and
+    /// the next recovery classifies it as already-trimmed and discards it -
+    /// silently destroying acknowledged writes. A trim must therefore never
+    /// lower this value: after trimming through offset <c>N</c> an empty shard
+    /// must still answer <c>N</c>, so the next offset allocated is <c>N + 1</c>.
+    /// </para>
+    /// <para>
+    /// <c>AzureTableWalStorageProvider</c> is the reference shape - it
+    /// point-reads a dedicated persisted <c>TAIL</c> row that records the
+    /// highest committed offset independently of which entry rows still exist,
+    /// so a trim cannot drag it down.
+    /// </para>
     /// </summary>
     Task<long> GetHighestOffsetAsync(
         string treeId,

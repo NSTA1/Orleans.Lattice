@@ -199,10 +199,14 @@ internal sealed partial class LatticeAdminGrain
         var srcLowest = await srcProvider.GetLowestOffsetAsync(physicalTreeId, partition, cancellationToken);
         var srcHighest = await srcProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
         long entriesToCopy = 0;
-        if (srcHighest >= 0)
+        if (srcLowest >= 0 && srcHighest >= srcLowest)
         {
-            var floor = srcLowest < 0 ? 0 : srcLowest;
-            entriesToCopy = srcHighest - floor + 1;
+            // Count the LIVE range only. srcHighest is a monotonic high-water
+            // mark that survives a trim (see IWalStorageProvider.
+            // GetHighestOffsetAsync), so a fully-trimmed shard reports a
+            // positive tail with no retained entries; srcLowest is the
+            // authority on whether anything is actually there to copy.
+            entriesToCopy = srcHighest - srcLowest + 1;
         }
 
         return new WalMovePlan
@@ -390,12 +394,20 @@ internal sealed partial class LatticeAdminGrain
         }
 
         long dstHighest;
+
+        // True when the source actually holds live entries to copy. srcHighest
+        // is a monotonic high-water mark that survives a trim, so it is NOT a
+        // safe proxy: a fully-trimmed shard reports a positive tail with
+        // nothing retained. Gating the copy - and the post-copy verification -
+        // on the live range keeps a fully-trimmed partition movable instead of
+        // failing verification against a tail that no longer has entries.
+        var hasLiveRange = srcLowest >= 0 && srcHighest >= srcLowest;
         try
         {
             // 2. Copy the retained tail [srcLowest..srcHighest] to the target,
             //    preserving offsets and the source trim floor. Resumable: if a
             //    prior attempt copied a prefix, continue past the target's tail.
-            if (srcHighest >= 0)
+            if (hasLiveRange)
             {
                 var dstHighestBefore = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
                 if (!WalMoveResumeCore.IsTargetCleanPrefix(dstHighestBefore, srcHighest))
@@ -438,6 +450,7 @@ internal sealed partial class LatticeAdminGrain
                 // New appends landed on the source while copying: copy the delta.
                 await CopyRangeAsync(srcHighest, recheck.HighestOffsetInclusive);
                 srcHighest = recheck.HighestOffsetInclusive;
+                hasLiveRange = true;
             }
 
             // 4. Verify the target tail before the irreversible cutover. The
@@ -449,7 +462,7 @@ internal sealed partial class LatticeAdminGrain
                     $"WAL move of {physicalTreeId}/{partition} aborted: target highest offset {dstHighest} overshot "
                     + $"source highest {srcHighest} after copy.");
             }
-            if (opts.VerifyAfterCopy && srcHighest >= 0 && dstHighest != srcHighest)
+            if (opts.VerifyAfterCopy && hasLiveRange && dstHighest != srcHighest)
             {
                 throw new InvalidOperationException(
                     $"WAL move of {physicalTreeId}/{partition} failed verification: source highest offset {srcHighest} "

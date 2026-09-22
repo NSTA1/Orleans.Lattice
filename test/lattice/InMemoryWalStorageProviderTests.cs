@@ -39,6 +39,65 @@ public class InMemoryWalStorageProviderTests
         Assert.That(head, Is.EqualTo(-1L));
     }
 
+    /// <summary>
+    /// Regression for issue #3366. <c>GetHighestOffsetAsync</c> is the WAL
+    /// grain's next-offset source (<c>_nextOffset = highest + 1</c>), so it
+    /// must be a monotonic high-water mark rather than a live-entry maximum.
+    /// Answering from the live list returns -1 once a trim empties it, and the
+    /// reactivated grain then re-allocates offsets that shipping and
+    /// materialisation cursors have already consumed.
+    /// <c>AzureTableWalStorageProvider</c> is the reference shape: its
+    /// persisted TAIL row is never lowered by a trim.
+    /// </summary>
+    [Test]
+    public async Task GetHighestOffsetAsync_does_not_regress_when_every_entry_is_trimmed()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(
+            Tree, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        await sut.TrimAsync(Tree, 0, 2, CancellationToken.None);
+
+        var head = await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None);
+
+        Assert.That(
+            head,
+            Is.EqualTo(2L),
+            "A fully-trimmed shard must still report its high-water mark so the "
+            + "next allocated offset is 3; reporting -1 reuses offsets 0..2.");
+    }
+
+    /// <summary>
+    /// The high-water mark must survive a trim well enough that a subsequent
+    /// append lands above every offset the shard has ever issued, which is the
+    /// property the WAL grain actually depends on (issue #3366).
+    /// </summary>
+    [Test]
+    public async Task An_append_after_a_full_trim_does_not_reuse_a_consumed_offset()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(
+            Tree, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+        await sut.TrimAsync(Tree, 0, 1, CancellationToken.None);
+
+        // Model the grain's activation arithmetic against the trimmed shard.
+        var nextOffset = await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None) + 1;
+        await sut.AppendBatchAsync(
+            Tree, 0, new[] { Entry(nextOffset) }, CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(nextOffset, Is.EqualTo(2L), "Allocation must resume above the trim floor.");
+            Assert.That(
+                await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None),
+                Is.EqualTo(2L));
+            Assert.That(
+                await sut.GetLowestOffsetAsync(Tree, 0, CancellationToken.None),
+                Is.EqualTo(2L),
+                "The single live entry sits above the trimmed prefix.");
+        });
+    }
+
     [Test]
     public async Task GetLowestOffsetAsync_returns_minus_one_for_empty_shard()
     {
