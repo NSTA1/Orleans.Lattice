@@ -1033,10 +1033,10 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void SetManyFanOutBudget_default_is_thirty_seconds()
+    public void SetManyFanOutBudget_default_is_infinite()
     {
-        Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
-        Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
+        Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
     }
 
     [Test]

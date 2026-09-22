@@ -3866,17 +3866,27 @@ public class LatticeOptions
     /// a batch write is the slowest branch, which is unbounded.
     /// </para>
     /// <para>
-    /// <b>Sizing rule.</b> The budget should exceed the fan-out duration of a
-    /// healthy cluster at the widest shard count in use, so it never fires in
-    /// the regime it is not meant to police, and should sit below the caller's
-    /// own patience. The default
-    /// (<see cref="DefaultSetManyFanOutBudget"/>, 30 seconds) is set against
-    /// the measurements in #3348: a healthy four-silo fan-out there completed
-    /// in ~6.0 s with a 8.6 s branch p99, comfortably inside the budget, while
-    /// the collapsed eight-silo fan-out averaged 80.2 s and is capped by it. It
-    /// also matches <see cref="WalAppendDispatchTimeout"/>'s 30-second default,
-    /// so a fan-out branch may not outlive the outer bound on the single WAL
-    /// dispatch it is waiting for.
+    /// <b>The default is unbounded, and the bound is opt-in.</b>
+    /// <see cref="DefaultSetManyFanOutBudget"/> is
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, which is
+    /// exactly the historical behaviour, so upgrading an existing deployment
+    /// changes nothing and no conforming caller can regress. Enabling the
+    /// bound is a deliberate act. The default is expected to become finite in
+    /// the next major version, because an unbounded scatter-gather fan-out is
+    /// the defect rather than the contract (#3386).
+    /// </para>
+    /// <para>
+    /// <b>Sizing rule.</b> A finite budget should exceed the fan-out duration
+    /// of a healthy cluster at the widest shard count in use, so it never
+    /// fires in the regime it is not meant to police, and should sit below the
+    /// caller's own patience. Thirty seconds is the value the measurements in
+    /// #3348 support: a healthy four-silo fan-out there completed in ~6.0 s
+    /// with a 8.6 s branch p99, comfortably inside the budget, while the
+    /// collapsed eight-silo fan-out averaged 80.2 s and is capped by it. It
+    /// also matches <see cref="WalAppendDispatchTimeout"/>'s 30-second
+    /// default, so a fan-out branch may not outlive the outer bound on the
+    /// single WAL dispatch it is waiting for. Re-measure for your own cluster
+    /// rather than porting that figure blindly.
     /// </para>
     /// <para>
     /// <b>This refusal rolls nothing back.</b> A batch write is not atomic
@@ -3888,17 +3898,22 @@ public class LatticeOptions
     /// must use the atomic write surface, which is unaffected by this option.
     /// </para>
     /// <para>
-    /// Set to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
-    /// restore the historical unbounded wait (every branch is awaited however
-    /// long it takes). The registered options validator rejects zero and any
-    /// other negative value: zero would refuse every fan-out immediately, which
-    /// is never a useful configuration and is far more likely to be a mistake.
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default
+    /// and means every branch is awaited however long it takes. The registered
+    /// options validator rejects zero and any other negative value: zero would
+    /// refuse every fan-out immediately, which is never a useful configuration
+    /// and is far more likely to be a mistake.
     /// </para>
     /// </summary>
     public TimeSpan SetManyFanOutBudget { get; set; } = DefaultSetManyFanOutBudget;
 
-    /// <summary>Default value for <see cref="SetManyFanOutBudget"/> (30 seconds).</summary>
-    public static readonly TimeSpan DefaultSetManyFanOutBudget = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Default value for <see cref="SetManyFanOutBudget"/>
+    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the fan-out
+    /// is unbounded unless a finite budget is configured). Expected to become
+    /// finite in the next major version (#3386).
+    /// </summary>
+    public static readonly TimeSpan DefaultSetManyFanOutBudget = Timeout.InfiniteTimeSpan;
 
     /// <summary>
     /// Per-append pacing delay the WAL writer applies on the local admission

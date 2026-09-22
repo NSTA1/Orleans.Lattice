@@ -36,6 +36,14 @@
 //                           so parallel SetManyAsync flushes fan out across distinct
 //                           WAL grains and therefore distinct Azure Tables manifest
 //                           partitions.
+//   BENCH_SET_MANY_FANOUT_BUDGET_SEC
+//                           Seconds LatticeGrain.SetManyAsync may spend awaiting its
+//                           per-shard fan-out before refusing the call with
+//                           LatticeSaturatedException (SetManyFanOut). Defaults to 30,
+//                           which deliberately does NOT track the library default of
+//                           Timeout.InfiniteTimeSpan: an unbounded fan-out is the
+//                           #3348 collapse itself, so the rig opts in to the finite
+//                           budget to exercise the seam. Set 0 for infinite.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -247,6 +255,20 @@ var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.Defa
 // raises it, and the multi-silo document records that it does.
 var walReplayQueueDepth = ReadIntAllowZero(
     "BENCH_WAL_REPLAY_QUEUE_DEPTH", LatticeOptions.DefaultWalReplayPermitQueueDepthPerPermit);
+// BENCH_SET_MANY_FANOUT_BUDGET_SEC: the only knob here that deliberately does
+// NOT inherit the library default, and the deviation is the whole point. The
+// library defaults LatticeOptions.SetManyFanOutBudget to
+// Timeout.InfiniteTimeSpan so that enabling the bound is opt-in on the released
+// 9.x line (see #3386). An infinite budget makes the seam this rig exists to
+// measure inert: #3348 is a scatter-gather tail-amplification collapse, and an
+// unbounded fan-out is precisely the behaviour that produces it. So the rig
+// opts in to the recommended finite value by default, which is what "measured
+// against the corrected configuration" means here. Set the env-var to 0 to
+// restore the library default (infinite) and reproduce the pre-#3348 shape.
+var setManyFanOutBudgetSec = ReadIntAllowZero("BENCH_SET_MANY_FANOUT_BUDGET_SEC", 30);
+var setManyFanOutBudget = setManyFanOutBudgetSec <= 0
+    ? Timeout.InfiniteTimeSpan
+    : TimeSpan.FromSeconds(setManyFanOutBudgetSec);
 // Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
 // a ';'-delimited list of additional storage-account table endpoints wired in
 // by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
@@ -452,7 +474,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -639,6 +661,11 @@ builder.UseOrleans(silo =>
         // unconditionally because the default IS the library default, so
         // the single-silo path is byte-for-byte unchanged.
         o.WalReplayPermitQueueDepthPerPermit = walReplayQueueDepth;
+        // See the BENCH_SET_MANY_FANOUT_BUDGET_SEC block above. Unlike the
+        // knobs around it this one does NOT track the library default, which
+        // is Timeout.InfiniteTimeSpan; the rig opts in to the finite budget so
+        // the #3348 fan-out seam is actually exercised.
+        o.SetManyFanOutBudget = setManyFanOutBudget;
     });
 
     // Storage-usage poller cadence is left at the library default (15s).

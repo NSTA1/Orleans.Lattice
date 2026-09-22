@@ -491,7 +491,7 @@ if (options.SetManyFanOutBudget <= TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.SetManyFanOutBudget)} must be greater than zero or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(how long a batch write's per-shard fan-out may run before it is refused with LatticeSaturatedException; "
-        + "infinite restores the historical unbounded wait on the slowest branch, while zero would refuse every "
+        + "infinite is the default and awaits the slowest branch however long it takes, while zero would refuse every "
         + "fan-out immediately and is never a useful configuration).");
 }
 
