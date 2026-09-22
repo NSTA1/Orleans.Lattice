@@ -419,6 +419,12 @@ benchmark/diagnostic-report.pilot.md
 # Local machine-specific RepoContext deploy overrides (REPO_PATH etc.)
 samples/RepoContextContainer/.env
 
+# Dated backups the local deployment playbook writes beside that override. The
+# rule above is an exact path, so a `.env.bak-20260919` escapes it and lands in
+# the working tree untracked, where the next `git add -A` sweeps it into an
+# unrelated commit - which is how it was found.
+samples/RepoContextContainer/.env.bak-*
+
 # The compose override layer is legitimate and expected: it is how a local
 # deployment supplies machine-specific settings. It is declared here, next to
 # the .env override it sits beside, rather than in .git/info/exclude, because

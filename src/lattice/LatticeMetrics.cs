@@ -2200,6 +2200,19 @@ public static class LatticeMetrics
         new(TagReason, "pin_regressed");
 
     /// <summary>
+    /// <see cref="TagReason"/> = <c>cursor_unreadable</c> - the durability hold
+    /// engaged because the cursor registry could not be read, so what is
+    /// watching the tree is unknown (issue #3366). Distinct from the two arms
+    /// above because it is not a statement about the pin history: the
+    /// classification did not run, so neither of those arms has been measured.
+    /// A non-zero value here means the WAL is being retained on absent evidence
+    /// rather than on observed evidence, and the repair is to the registry
+    /// read path - not to a materialiser.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> ReasonHoldEngagedCursorUnreadable =
+        new(TagReason, "cursor_unreadable");
+
+    /// <summary>
     /// <see cref="TagStatus"/> = <c>advanced</c> (the durable materialiser offset
     /// floor moved on this pass).
     /// </summary>

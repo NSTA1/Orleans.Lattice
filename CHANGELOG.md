@@ -36,6 +36,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - An unreadable cursor registry released the durability hold.** A failed consumer-cursor registry read classified the tree's cursors as durable, which disabled the durability hold and let the collector trim WAL entries with no durability evidence at all. It was silent as well as wrong: the counter that reports such a release is gated on the same hold, so the fault switched off the instrument that would have announced it. An unreadable registry is now its own classification, engages the hold, and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice`)
+
 - **WAL - Purged tree resurrection.** A WAL shard activating after its tree was purged resolved options through the lazy seeding path, re-creating the registry row and resurrecting the tree. The activation now uses the pure fast path, which never mutates the registry. ([#3343](https://github.com/NSTA1/Orleans.Lattice/issues/3343)) (`Orleans.Lattice`)
 
 - **Replay - Latched admission gate.** A cold-replay storm drove the process-wide smoothed permit queue wait above the refusal bound, and refused arrivals never sample, so nothing could fold it back: the gate shed activations for the rest of the process lifetime. A stale mean is now discarded. ([#3306](https://github.com/NSTA1/Orleans.Lattice/issues/3306)) (`Orleans.Lattice`)
