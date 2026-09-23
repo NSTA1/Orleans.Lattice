@@ -2419,6 +2419,37 @@ public static class LatticeMetrics
             description: "WAL GC passes that could not compute the durable offset floor because the pin store was unreachable, tagged by tree.");
 
     /// <summary>
+    /// Counter of durable-pin consumers found on a WAL GC pass that the durable
+    /// offset floor does not speak for because they never reported an offset at
+    /// all, tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// The offset floor is a minimum over the consumers that <em>reported</em> an
+    /// offset, not over the consumers that <em>owe</em> WAL entries (issue
+    /// #2314). A consumer present in the durable pin dictionary but in neither
+    /// the covered set nor the abstained set has told us nothing, which is a
+    /// different state from reporting the "-1" no-dependency sentinel, and a
+    /// floor minimised without it is too high. The pass fails closed by blocking
+    /// the partitions that consumer holds, so the effect is bounded
+    /// over-retention rather than a lost WAL prefix.
+    /// </para>
+    /// <para>
+    /// Distinct from <see cref="WalGcOffsetFloorUnavailable"/>, which counts the
+    /// adjacent case where the pin-store read itself threw. This counter ticks
+    /// when the read SUCCEEDED and the two planes disagree about the population.
+    /// </para>
+    /// <para>
+    /// Expected to sit at zero: <c>WalMaterialiserPinGrain.Merge</c> writes the
+    /// pin and the offset in lockstep, so a healthy store cannot produce a gap.
+    /// A non-zero value means state persisted by a build predating the offsets
+    /// plane, a swallowed birth seed, or a partially-upgraded population, and
+    /// the incremented amount is the number of such consumers on that pass.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcOffsetFloorPopulationGap =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.offset_floor_population_gap", unit: "{consumer}",
+            description: "Durable-pin consumers the WAL GC offset floor does not speak for because they never reported an offset, tagged by tree.");
+
+    /// <summary>
     /// Counter of WAL GC per-shard trim scans, tagged with <see cref="TagTree"/>,
     /// with <see cref="TagShard"/> carrying the partition the scan covered, and
     /// with <see cref="TagReason"/> carrying the

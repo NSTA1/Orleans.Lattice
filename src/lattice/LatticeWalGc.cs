@@ -296,7 +296,8 @@ public sealed class LatticeWalGc(
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
         var floorResult = await ApplyDurableMaterialiserFloorAsync(
-            treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds, cancellationToken).ConfigureAwait(false);
+            treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds,
+            offsetCoverage.AbstainedConsumerIds, cancellationToken).ConfigureAwait(false);
         var cursorBlocked = floorResult.Blocked;
         var blockingConsumerId = floorResult.BlockingConsumerId;
         var blockingConsumerIds = floorResult.BlockingConsumerIds;
@@ -792,6 +793,7 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? registryMin,
         int partitions,
         IReadOnlySet<string>? coveredConsumerIds,
+        IReadOnlySet<string>? abstainedConsumerIds,
         CancellationToken cancellationToken)
     {
         var factory = GrainFactory;
@@ -817,6 +819,102 @@ public sealed class LatticeWalGc(
         if (pins.Count == 0)
         {
             return DurableMaterialiserFloor.Unblocked(registryMin);
+        }
+
+        // ISSUE #2314: cross-check the offset-plane population against the pin
+        // plane before trusting the floor computed from it.
+        //
+        // The durable offset floor is a minimum over the consumers that
+        // REPORTED an offset, not over the consumers that OWE WAL entries. The
+        // pin dictionary in hand here IS the independent census that
+        // distinguishes those two populations: WalMaterialiserPinGrain.Merge
+        // writes the pin and the offset in lockstep on every report, so a
+        // consumer present here but in neither the coverage set nor the
+        // abstained set never reported an offset at all. It has told us nothing,
+        // and "nothing" was previously rendered byte-identically to a reported
+        // "-1", which means "I owe nothing" and is a real answer.
+        //
+        // Why this must stop the CURSOR axis and not merely withhold offset
+        // admission: the floor is a MINIMUM, so omitting a consumer can only
+        // raise it, and the offset floor only ever REFUSES - TrimShardAsync
+        // vetoes entries ABOVE it and grants nothing. A floor that is too high
+        // therefore refuses fewer entries than it must and hands the decision
+        // back to the HLC cursor axis, which will happily trim a low-HLC reap
+        // sitting at a high offset: precisely the loss the offset floor exists
+        // to prevent. Withholding admission alone would leave that untouched.
+        //
+        // Blocking the partitions the unreported consumer holds is the same
+        // verdict the block-pin clause below reaches for a pin carrying no
+        // usable frontier, arrived at from the offset plane instead: when the
+        // floor demonstrably does not speak for a consumer, its partitions are
+        // not trimmed. The cost is bounded over-retention that clears itself the
+        // moment that consumer reports, never data loss, and the blocking ids
+        // are carried out so the scheduler's blocked-leaf remedy can act.
+        //
+        // Gated on the offsets plane having reported SOMETHING on this pass -
+        // a real offset (covered) or the "-1" sentinel (abstained). When it
+        // reported nothing at all there is no partial floor to be misled by and
+        // the tree collects on the HLC axis exactly as it did before the offset
+        // plane existed; blocking there would stall every pre-offset deployment,
+        // and every pass whose pin-store read threw (which the adjacent
+        // offset_floor_unavailable counter already reports), for no safety gain.
+        // Note the gate must NOT be conditioned on a real floor existing: a
+        // population where every reporter abstained still proves the plane is
+        // live, so a consumer missing from it is a genuine gap.
+        if (coveredConsumerIds is not null || abstainedConsumerIds is not null)
+        {
+            bool[]? gapPartitions = null;
+            string? firstUnreported = null;
+            List<string>? unreportedConsumerIds = null;
+            var unreportedCount = 0;
+
+            foreach (var (consumerId, _) in pins)
+            {
+                if ((coveredConsumerIds is not null && coveredConsumerIds.Contains(consumerId))
+                    || (abstainedConsumerIds is not null && abstainedConsumerIds.Contains(consumerId)))
+                {
+                    continue;
+                }
+
+                unreportedCount++;
+                gapPartitions ??= new bool[partitions];
+                firstUnreported ??= consumerId;
+                unreportedConsumerIds ??= new List<string>(MaxReportedBlockingConsumers);
+                if (unreportedConsumerIds.Count < MaxReportedBlockingConsumers)
+                {
+                    unreportedConsumerIds.Add(consumerId);
+                }
+
+                if (TryResolvePinPartition(consumerId, partitions) is { } gapPartition)
+                {
+                    gapPartitions[gapPartition] = true;
+                }
+                else
+                {
+                    // Unattributable: fail closed onto every partition, which is
+                    // the same whole-tree block the block-pin clause takes.
+                    for (var p = 0; p < partitions; p++)
+                    {
+                        gapPartitions[p] = true;
+                    }
+                }
+            }
+
+            if (unreportedCount > 0)
+            {
+                LatticeMetrics.WalGcOffsetFloorPopulationGap.Add(
+                    unreportedCount,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                    LatticeTenantLabel.ForTree(treeName));
+
+                // Reported as NOT computed for the same reason the "every
+                // partition blocked" early return below does: the uncovered fold
+                // is abandoned, and saying "not computed" keeps the refusal of
+                // offset admission true by construction rather than by
+                // coincidence.
+                return new DurableMaterialiserFloor(
+                    null, gapPartitions, true, firstUnreported, unreportedConsumerIds, null, false);
+            }
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -1465,6 +1563,9 @@ public sealed class LatticeWalGc(
             // the end rather than being dropped.
             Dictionary<int, long>? byPartition = null;
             long? unattributed = null;
+            // Issue #2314: the consumers that reported the "-1" no-dependency
+            // sentinel, carried out rather than merely skipped.
+            HashSet<string>? abstained = null;
 
             foreach (var (consumerId, offset) in offsets)
             {
@@ -1491,6 +1592,16 @@ public sealed class LatticeWalGc(
                 // predicate, not an oversight about empty partitions in general.
                 if (offset < 0)
                 {
+                    // ISSUE #2314: carry the abstainers OUT rather than merely
+                    // skipping them. Skipping made "this consumer told us it
+                    // owes nothing" byte-identical to "this consumer never told
+                    // us anything": both were simply absent from the coverage
+                    // set. Only the second is a population gap, and only the
+                    // second may stop a pass - conflating them forces a choice
+                    // between blocking every legitimately empty partition
+                    // forever and admitting a genuine gap in silence.
+                    abstained ??= new HashSet<string>(StringComparer.Ordinal);
+                    abstained.Add(consumerId);
                     continue;
                 }
 
@@ -1536,7 +1647,7 @@ public sealed class LatticeWalGc(
                 }
             }
 
-            return new MaterialiserOffsetCoverage(floor, covered, byPartition);
+            return new MaterialiserOffsetCoverage(floor, covered, abstained, byPartition);
         }
         catch
         {
@@ -1554,24 +1665,33 @@ public sealed class LatticeWalGc(
             // which return null WITHOUT reaching here). It changes no trim
             // behaviour - it only makes the swallowed failure observable.
             //
-            // Note the deeper population caveat this counter deliberately does
-            // NOT try to fix (also #2314): the floor below is a minimum over the
-            // leaves that REPORTED an offset, not over the leaves that OWE
-            // entries. A leaf absent from the pin set does not constrain the
-            // floor at all, and absence is NOT the same state as a reported -1:
-            // a reported -1 comes from a participating leaf that has told us it
-            // owes nothing, and is covered either by a paired Zero HLC block pin
-            // (the data-bearing, not-durably-recoverable case) or by there being
-            // no committed prefix to lose at all (the genuinely-empty case,
-            // which ResolveDurablePinForPartition reports with the leaf's REAL
-            // frontier and so with no block pin - it does not need one). An
-            // absent leaf - one whose birth block-pin seed was swallowed, or
-            // that predates the durable pin store being wired - has told us
-            // nothing and carries neither cover. Making absence constrain the
-            // floor conservatively (e.g. treating absence as offset 0) would pin
-            // the WAL forever for any permanently-departed leaf, so it is NOT
-            // done here; distinguishing absent from reported -1 needs an
-            // independent owner census this seam does not have.
+            // The deeper population caveat this counter does not cover is now
+            // handled on the pin plane instead (issue #2314). The floor below
+            // is a minimum over the leaves that REPORTED an offset, not over the
+            // leaves that OWE entries, so a leaf absent from the offsets plane
+            // does not constrain it at all - and absence is NOT the same state
+            // as a reported -1. A reported -1 comes from a participating leaf
+            // that has told us it owes nothing, and is covered either by a
+            // paired Zero HLC block pin (the data-bearing, not-durably-
+            // recoverable case) or by there being no committed prefix to lose at
+            // all (the genuinely-empty case, which ResolveDurablePinForPartition
+            // reports with the leaf's REAL frontier and so with no block pin -
+            // it does not need one). An absent leaf - one whose birth block-pin
+            // seed was swallowed, or whose state predates the offsets plane -
+            // has told us nothing and carries neither cover.
+            //
+            // The two are now structurally separable: a reported -1 lands in
+            // AbstainedConsumerIds, so absence from BOTH that set and the
+            // coverage set means "never reported", and nothing else. The census
+            // that distinguishes them is the durable PIN dictionary, which
+            // WalMaterialiserPinGrain.Merge writes in lockstep with the offsets
+            // dictionary on every report - so it enumerates every consumer the
+            // store knows about, and ApplyDurableMaterialiserFloorAsync already
+            // holds it. Treating absence as offset 0 is still NOT done, because
+            // it would pin the WAL forever for a permanently-departed leaf;
+            // ApplyDurableMaterialiserFloorAsync blocks the affected partitions
+            // instead, which is bounded over-retention that clears itself the
+            // moment the consumer reports.
             LatticeMetrics.WalGcOffsetFloorUnavailable.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
@@ -1597,16 +1717,27 @@ public sealed class LatticeWalGc(
     /// consumers the floor is evidence about; every other WAL consumer must still
     /// be protected by its HLC cursor.
     /// </param>
+    /// <param name="AbstainedConsumerIds">
+    /// The consumers that reported the "-1" no-WAL-replay-dependency sentinel,
+    /// or <see langword="null"/> when none did. They are deliberately absent
+    /// from <paramref name="CoveredConsumerIds"/> - the floor is not evidence
+    /// about them - but they are NOT unknown: they participated and told us they
+    /// owe nothing. Carrying them makes absence from BOTH sets mean exactly one
+    /// thing, "this consumer never reported an offset at all", which is the
+    /// population gap issue #2314 is about and which was previously
+    /// indistinguishable from a reported "-1".
+    /// </param>
     private readonly record struct MaterialiserOffsetCoverage(
         long? Floor,
         IReadOnlySet<string>? CoveredConsumerIds,
+        IReadOnlySet<string>? AbstainedConsumerIds = null,
         IReadOnlyDictionary<int, long>? FloorsByPartition = null)
     {
         /// <summary>
         /// No offset floor on this pass, and therefore no consumer covered by
         /// one. The fail-closed value.
         /// </summary>
-        public static MaterialiserOffsetCoverage None => new(null, null, null);
+        public static MaterialiserOffsetCoverage None => new(null, null, null, null);
 
         /// <summary>
         /// The offset floor WAL partition <paramref name="partition"/> trims

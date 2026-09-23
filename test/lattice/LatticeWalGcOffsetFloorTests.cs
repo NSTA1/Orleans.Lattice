@@ -34,6 +34,13 @@ public sealed class LatticeWalGcOffsetFloorTests
     private const string Tree = "tree";
     private const string LeafConsumer = "_lattice_materialiser_tree_leaf-1";
 
+    /// <summary>
+    /// A second leaf holding a durable HLC pin. Issue #2314 turns on whether this
+    /// leaf appears in the OFFSETS plane at all, so the tests below vary only its
+    /// offset-plane presence while holding its pin and cursor constant.
+    /// </summary>
+    private const string SilentConsumer = "_lattice_materialiser_tree_leaf-2";
+
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
@@ -353,12 +360,20 @@ public sealed class LatticeWalGcOffsetFloorTests
     [Test]
     public async Task RunOnceAsync_a_consumer_absent_from_the_pin_set_does_not_constrain_the_floor()
     {
-        // The other half of the corrected contract: the floor is a minimum over
-        // the leaves that REPORTED, not over the leaves that OWE. A leaf present
-        // in the HLC pin set but absent from the offset set contributes nothing,
-        // so the floor comes only from the one leaf that reported an offset.
-        // Absence is deliberately NOT read as offset 0 - that would be a floor
-        // over a population the pin grain never measured.
+        // Half of the corrected contract, and STILL true: the floor is computed
+        // as a minimum over the leaves that REPORTED, so a leaf present in the
+        // HLC pin set but absent from the offset set does not drag the floor to
+        // 0. Absence is deliberately not read as offset 0 - that would be a
+        // floor over a population the pin grain never measured, and would pin
+        // the WAL forever for a leaf that has departed.
+        //
+        // ISSUE #2314 CHANGED WHAT THE PASS DOES WITH THAT FACT. Excluding the
+        // silent leaf from the floor is sound arithmetic and unsound licence:
+        // the resulting floor provably does not speak for it, so the pass no
+        // longer trims on it. This test's assertion therefore moved from
+        // "trims 2" to "trims 0"; the floor arithmetic it was written to pin is
+        // unchanged and is asserted directly below, since a blocked pass would
+        // otherwise hide a regression that DID drag the floor to 0.
         var provider = await SeededProviderAsync();
         var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
@@ -377,10 +392,215 @@ public sealed class LatticeWalGcOffsetFloorTests
 
         var report = await sut.RunOnceAsync(Tree);
 
-        Assert.That(report.EntriesTrimmed, Is.EqualTo(2),
-            "The silent leaf must not drag the floor to 0 - only reported offsets constrain it.");
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0),
+            "The floor cannot speak for the silent leaf, so the pass blocks rather than trimming on it.");
 
         var survivors = await SurvivingOffsetsAsync(provider);
-        Assert.That(survivors, Is.EqualTo(new[] { 2L, 3L }));
+        Assert.That(survivors, Is.EqualTo(new[] { 0L, 1L, 2L, 3L }),
+            "Blocked, not trimmed-to-floor-0: had absence been read as offset 0 the entry at "
+            + "offset 0 would have been trimmed, leaving three survivors.");
+    }
+
+    // ---------------------------------------------------------------------
+    // ISSUE #2314: the floor is a minimum over the leaves that REPORTED, not
+    // over the leaves that OWE entries, and an absent leaf used to be
+    // indistinguishable from one reporting -1. These tests pin both halves:
+    // an absent leaf now blocks the pass, and an abstaining leaf still does not.
+    // ---------------------------------------------------------------------
+
+    [Test]
+    public async Task RunOnceAsync_pinned_consumer_absent_from_the_offsets_plane_blocks_the_trim()
+    {
+        // THE DEFECT, IN THE SHAPE THAT LOSES DATA. Two leaves hold durable
+        // pins. leaf-1 has durably applied everything (offset 3). leaf-2 is in
+        // the pin set and has never reported an offset - it has genuinely
+        // applied only offset 1 and still owes the reaps at 2 and 3.
+        //
+        // Pre-fix the floor is min over REPORTERS = 3, which refuses nothing.
+        // Because the offset floor can only ever REFUSE, a floor that is too
+        // high hands the decision back to the HLC cursor axis, and the reaps at
+        // offsets 2/3 carry HLCs 5/6 - below the HLC floor of 20 - so the axis
+        // admits them and all four entries are trimmed. leaf-2 loses two
+        // committed entries it had not applied.
+        //
+        // Post-fix the population gap is detected and the pass blocks, so the
+        // WAL is retained until leaf-2 reports.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+        await registry.ReportCursorAsync(Tree, SilentConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            [SilentConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0),
+            "A floor computed without leaf-2 must not license a trim past what leaf-2 owes.");
+
+        var survivors = await SurvivingOffsetsAsync(provider);
+        Assert.That(survivors, Is.EqualTo(new[] { 0L, 1L, 2L, 3L }),
+            "The low-HLC reaps leaf-2 has not applied must survive - pre-fix they were trimmed.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_pinned_consumer_reporting_minus_one_does_not_block_the_trim()
+    {
+        // THE DISCRIMINATING CONTROL, and the half of issue #2314 that makes the
+        // gate safe to ship. Identical to the test above in every respect except
+        // that leaf-2 REPORTS -1 instead of being absent. A reported -1 is a real
+        // answer from a participating leaf - "I hold no WAL-replay dependency" -
+        // and is covered either by a paired zero-HLC block pin or by there being
+        // no committed prefix to lose. It must therefore leave the tree
+        // collecting exactly as before.
+        //
+        // Were absence and a reported -1 still rendered identically, this test
+        // and the one above could not both pass: that is precisely the
+        // indistinguishability issue #2314 reports.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+        await registry.ReportCursorAsync(Tree, SilentConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            [SilentConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+            [SilentConsumer] = -1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(4),
+            "An abstaining leaf is a reporting leaf: it must not be mistaken for a population gap.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_every_pinned_consumer_reporting_leaves_the_trim_at_the_real_floor()
+    {
+        // The healthy control. leaf-2 reports a real, lagging checkpoint, so the
+        // floor is the minimum over both (1) and the pass trims the applied
+        // prefix and stops - the pre-#2314 behaviour of a fully-reported
+        // population, unchanged. This is what makes the block above mean "a
+        // consumer is missing" rather than "a second consumer exists".
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+        await registry.ReportCursorAsync(Tree, SilentConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            [SilentConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+            [SilentConsumer] = 1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(2));
+
+        var survivors = await SurvivingOffsetsAsync(provider);
+        Assert.That(survivors, Is.EqualTo(new[] { 2L, 3L }),
+            "The lagging leaf's real checkpoint holds the reaps down, without blocking the pass.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_offset_population_gap_increments_the_population_gap_counter()
+    {
+        // The instrument's positive control, and its ARITY: the counter is
+        // charged the number of unreported CONSUMERS, not a pass count, so two
+        // silent leaves add two.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            [SilentConsumer] = Hlc(20),
+            ["_lattice_materialiser_tree_leaf-3"] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        long observed = 0;
+        string? observedTree = null;
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalGcOffsetFloorPopulationGap,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
+            {
+                observed += measurement;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagTree)
+                    {
+                        observedTree = tag.Value as string;
+                    }
+                }
+            }));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(observed, Is.EqualTo(2),
+            "The counter records how many pinned consumers never reported, not how many passes saw a gap.");
+        Assert.That(observedTree, Is.EqualTo(Tree), "The measurement must be tagged with the tree.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_fully_reported_population_leaves_the_population_gap_counter_flat()
+    {
+        // Denominator companion. Without this, a counter that ticked on every
+        // pass would pass the positive control above and mean nothing.
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, LeafConsumer, Hlc(20));
+
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(20),
+            [SilentConsumer] = Hlc(20),
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+            [SilentConsumer] = -1,
+        };
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+
+        long observed = 0;
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalGcOffsetFloorPopulationGap,
+            l => l.SetMeasurementEventCallback<long>((_, measurement, _, _) => observed += measurement));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(observed, Is.EqualTo(0),
+            "A population in which every pinned consumer reported - including by abstaining - has no gap.");
     }
 }
