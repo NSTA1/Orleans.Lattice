@@ -122,7 +122,8 @@ public partial class BPlusLeafGrainTests
             long[]? existingCoverage = null,
             Exception? saveFailure = null,
             int walPartitions = 1,
-            string? treeId = null)
+            string? treeId = null,
+            Func<FallOffLogDecision>? detectorDecision = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -170,15 +171,17 @@ public partial class BPlusLeafGrainTests
         coord.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
 
-        // TailReplay throughout: the fall-off-log advisory must NOT be the thing
-        // that drives any capture observed here. That is the whole point - the
-        // advisory is the driver that provably does not fire for this
-        // population, so leaving it off isolates the repair path.
+        // TailReplay throughout by default: the fall-off-log advisory must NOT be
+        // the thing that drives any capture observed here. That is the whole
+        // point - the advisory is the driver that provably does not fire for
+        // this population, so leaving it off isolates the repair path. The
+        // stale-projection fixtures supply a decision to put the detector on
+        // the path that throws LeafProjectionStaleException.
         var detector = Substitute.For<ILatticeFallOffLogDetector>();
         detector.ClassifyAsync(
                 Arg.Any<string>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<TimeSpan>(),
                 Arg.Any<ResolvedLatticeOptions>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(FallOffLogDecision.TailReplay));
+            .Returns(_ => Task.FromResult(detectorDecision?.Invoke() ?? FallOffLogDecision.TailReplay));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
