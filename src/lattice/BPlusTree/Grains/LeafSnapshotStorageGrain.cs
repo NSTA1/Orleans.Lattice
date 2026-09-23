@@ -544,6 +544,15 @@ internal sealed class LeafSnapshotStorageGrain(
     /// <paramref name="incoming"/> verbatim so a normal save stays a plain
     /// overwrite; the row-merging slow path runs only when a partition would
     /// otherwise regress.
+    /// <para>
+    /// The slow path declines outright - keeping <paramref name="existing"/>
+    /// verbatim - when <paramref name="incoming"/> does not carry every key the
+    /// stored blob holds. A row union is a join only while an absence means
+    /// "bottom"; once tombstone compaction has reaped a delete marker, absence
+    /// instead means "deleted, and the evidence is gone", and retaining the
+    /// stored row while advancing coverage past the delete resurrects the key
+    /// permanently (issue #2436). See the decline below for the full argument.
+    /// </para>
     /// </summary>
     private static LeafSnapshotBlob MergeMonotone(LeafSnapshotBlob existing, LeafSnapshotBlob incoming)
     {
@@ -606,27 +615,66 @@ internal sealed class LeafSnapshotStorageGrain(
         // Ordinal-sorted so the merged row set carries the same ascending key
         // order a capture produces, which is what the binary frame's index
         // table is required to be in for a key-range seek to be meaningful.
+        //
+        // Seeded from the INCOMING rows rather than the stored ones. The union
+        // is identical either way - the per-key fold below keeps the same
+        // (stored, incoming) argument order and the same incoming-wins-on-equal
+        // tiebreak - but seeding this way makes a STORED-ONLY key observable as
+        // a lookup miss, which the seed-from-existing shape could not see at
+        // all.
         var mergedRows = new SortedDictionary<string, LeafSnapshotRow>(StringComparer.Ordinal);
-        foreach (var row in existing.EnumerateRows())
+        foreach (var row in incoming.EnumerateRows())
         {
             mergedRows[row.Key] = row;
         }
-        foreach (var row in incoming.EnumerateRows())
+        foreach (var row in existing.EnumerateRows())
         {
-            if (mergedRows.TryGetValue(row.Key, out var prior))
+            if (!mergedRows.TryGetValue(row.Key, out var fresh))
             {
-                // LWW.Merge returns one of its two arguments verbatim, so the
-                // winning row is the one whose value the merge kept - preserving
-                // that row's per-key MergeMode discriminator alongside its value.
-                var winner = LwwValue<byte[]>.Merge(prior.Value, row.Value);
-                mergedRows[row.Key] = EqualityComparer<LwwValue<byte[]>>.Default.Equals(winner, row.Value)
-                    ? row
-                    : prior;
+                // Issue #2436 - the resurrection shape, and the reason this
+                // union is not a join.
+                //
+                // A row union treats an absence as the bottom element: "this
+                // side never saw the key, so keep the other side's". That
+                // reading is only true while every delete is still represented
+                // by a tombstone row. CompactTombstonesAsync PHYSICALLY REMOVES
+                // a tombstone once it is older than the grace period, so after
+                // a reap the deleted key is simply absent from every later
+                // capture, and absence now means "deleted, and the marker that
+                // said so is gone" - a value strictly ABOVE the stored live
+                // row in the lattice, not below it.
+                //
+                // Retaining the stored row is therefore not conservative, it is
+                // a resurrection, and the merged coverage is what makes it
+                // permanent: the element-wise max claims the incoming capture's
+                // higher offset for the partitions it advanced, so the replay
+                // that would have re-applied the delete now starts PAST it. The
+                // key is live in the snapshot and there is nothing left in the
+                // WAL to contradict it, on every subsequent cold restart.
+                //
+                // Nothing here can tell the two absences apart. The blob
+                // records no per-key WAL partition, and re-deriving one would
+                // need the partition count the leaf hashed with, which the blob
+                // does not carry either - guessing it wrong would drop a live
+                // row, which is worse than the defect. So decline the write and
+                // keep the stored snapshot verbatim, exactly as the segmented
+                // case above does: coverage cannot regress (it is unchanged),
+                // no row is lost, and the stored blob's own coverage still
+                // predates the delete, so a rehydrate replays it and the key
+                // dies again. The incoming capture is dropped - a capture is a
+                // bonus, never a correctness requirement - and the next
+                // non-regressing capture supersedes the blob outright via the
+                // fast path.
+                return existing;
             }
-            else
-            {
-                mergedRows[row.Key] = row;
-            }
+
+            // LWW.Merge returns one of its two arguments verbatim, so the
+            // winning row is the one whose value the merge kept - preserving
+            // that row's per-key MergeMode discriminator alongside its value.
+            var winner = LwwValue<byte[]>.Merge(row.Value, fresh.Value);
+            mergedRows[row.Key] = EqualityComparer<LwwValue<byte[]>>.Default.Equals(winner, fresh.Value)
+                ? fresh
+                : row;
         }
 
         var rows = new LeafSnapshotRow[mergedRows.Count];
