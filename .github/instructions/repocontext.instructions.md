@@ -823,7 +823,11 @@ anywhere to explain it.
   lighter-consent operation (no memory is destroyed) but is still destructive
   and fail-closed like every other write tool, so do not call it speculatively -
   reach for it when the index is actually degraded and the memory is worth
-  preserving. `remove_repo` remains the only verb that drops a repository from
+  preserving. Its sweep outlives the call: if `reset_index` times out or the
+  connection drops, the reset keeps running, so poll `index_status` (`Running`
+  in phase `Resetting`, then `Completed` or `Failed`) rather than re-running it.
+  Only a host restart interrupts a reset, leaving it `Running`/`Resetting`;
+  re-running it then is safe and idempotent. `remove_repo` remains the only verb that drops a repository from
   the listing entirely.
 
 ## Freshness and re-ingest

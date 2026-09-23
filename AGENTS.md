@@ -142,7 +142,9 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   `System.Exception` but not for its BCL subclasses, so an exception deriving from
   `InvalidOperationException`/`TimeoutException`/etc. otherwise fails a co-located
   grain-result copy with an opaque `KeyNotFoundException`. The
-  `SerializableExceptionDeepCopyContractTests` guard audits this per package.
+  `SerializableExceptionDeepCopyContractTests` guard audits this per package, and
+  `SerializableExceptionDeepCopyGateEnrolmentTests` fails CI when a package that
+  declares such an exception has no enrolled guard.
 - Public API parameters validate with `ArgumentNullException.ThrowIfNull`.
 - Keep XML `<summary>` docs on all public types and members; they ship in the
   NuGet packages.

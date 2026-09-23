@@ -123,6 +123,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts every raw IAsyncEnumerable enumeration in src is wrapped or justified, not instrument declarations",
             ["SecurityInstructionsCoverageTests"] =
                 "asserts the security instructions cover the packages they claim, not instruments",
+            ["SerializableExceptionDeepCopyGateEnrolmentTests"] =
+                "asserts every package records its exception deep-copy contract enrolment, not instrument declarations",
             ["UnslicedPackageHygieneCoverageTests"] =
                 "asserts every package is enrolled in slice hygiene, not instrument declarations",
         };

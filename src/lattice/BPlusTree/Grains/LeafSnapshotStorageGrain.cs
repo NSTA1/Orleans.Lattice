@@ -174,7 +174,7 @@ internal sealed class LeafSnapshotStorageGrain(
     }
 
     /// <inheritdoc />
-    public async Task SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
+    public async Task<LeafSnapshotSaveOutcome> SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(blob);
         cancellationToken.ThrowIfCancellationRequested();
@@ -207,17 +207,36 @@ internal sealed class LeafSnapshotStorageGrain(
         // unreadable incoming blob can only be a caller bug, and dropping the
         // write leaves the last known-good snapshot in place for the next
         // capture to supersede.
+        //
+        // Both refusals below are reported as Declined rather than returned
+        // silently (issue #3421). The caller records the offered coverage as
+        // durable - the figure that sets its WAL materialiser pin - only on
+        // Kept, so a silent refusal made the leaf claim coverage no durable
+        // snapshot reproduces, and the GC trimmed the only copy of that prefix.
         if (!blob.ValidateRowPayload())
         {
-            return;
+            return LeafSnapshotSaveOutcome.Declined;
         }
 
         var previousSegmentCount = state.State.SegmentCount;
         var merged = MergeMonotone(state.State, blob);
-        if (!ReferenceEquals(merged, state.State))
+
+        // MergeMonotone returns the stored blob itself exactly when it declines
+        // (a segmented stored snapshot, or a stored key the offer omits). Every
+        // other answer is the offer verbatim or an element-wise-max merge, and
+        // both cover the offer in every partition. The offer can only BE the
+        // stored instance when a caller re-offers the very object it saved
+        // without a serialization boundary between (an in-process caller); that
+        // is already held, so it is kept with nothing to write.
+        if (ReferenceEquals(merged, state.State))
         {
-            await PersistAsync(merged, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+            return ReferenceEquals(merged, blob)
+                ? LeafSnapshotSaveOutcome.Kept
+                : LeafSnapshotSaveOutcome.Declined;
         }
+
+        await PersistAsync(merged, previousSegmentCount, cancellationToken).ConfigureAwait(true);
+        return LeafSnapshotSaveOutcome.Kept;
     }
 
     /// <summary>

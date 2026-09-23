@@ -918,24 +918,37 @@ public sealed class LatticeWalGc(
         }
 
         var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
+        // Consumers whose registry cursor is a real (> Zero) frontier, and so
+        // was folded into registryMin. Only these may have their durable pin
+        // skipped by the pins loop below.
         var present = new HashSet<string>(snapshot.Count, StringComparer.Ordinal);
         // The lowest cursor held by a registry consumer the offset floor does
-        // not speak for (issue #3172). Zero-cursor consumers are skipped for
-        // exactly the reason GetMinCursorAsync skips them: a Zero cursor is a
-        // block-pin-only registration, which the block-pin clause guards
-        // independently and which would otherwise pin this minimum at Zero and
-        // refuse every entry.
+        // not speak for (issue #3172).
         HybridLogicalClock? uncovered = null;
         for (var i = 0; i < snapshot.Count; i++)
         {
             var entry = snapshot[i];
-            present.Add(entry.ConsumerId);
-            if (coveredConsumerIds is not null && coveredConsumerIds.Contains(entry.ConsumerId))
+
+            // A Zero cursor is a block-pin-only registration: GetMinCursorAsync
+            // skips it, so nothing was folded into registryMin for it, and
+            // folding it here would pin this minimum at Zero and refuse every
+            // entry. It is therefore NOT recorded as present either (issue
+            // #3416). That is what makes the skip sound: the pins loop then reads
+            // the consumer's durable pin exactly as it reads a registry-absent
+            // consumer's - the block-pin clause for a Zero pin, the floor and
+            // uncovered folds for a real one. Recording it as present, as this
+            // loop once did, excluded it from BOTH guards, so the offset axis
+            // admitted WAL a live, registered consumer still owed. A
+            // non-materialiser Zero-cursor consumer holds no durable pin, so for
+            // it this changes nothing: its buffer pin stays guarded by the
+            // blocked-floor clause, as before.
+            if (entry.Cursor <= HybridLogicalClock.Zero)
             {
                 continue;
             }
 
-            if (entry.Cursor <= HybridLogicalClock.Zero)
+            present.Add(entry.ConsumerId);
+            if (coveredConsumerIds is not null && coveredConsumerIds.Contains(entry.ConsumerId))
             {
                 continue;
             }
@@ -956,7 +969,9 @@ public sealed class LatticeWalGc(
         {
             // A consumer present in the in-memory registry has a fresher
             // (>=) cursor already folded into registryMin; its durable pin
-            // (possibly staler) must not raise the floor.
+            // (possibly staler) must not raise the floor. "Present" means a
+            // real cursor: a Zero-cursor registration is not in this set
+            // (issue #3416), so its pin is read below like an absent one's.
             if (present.Contains(consumerId))
             {
                 continue;

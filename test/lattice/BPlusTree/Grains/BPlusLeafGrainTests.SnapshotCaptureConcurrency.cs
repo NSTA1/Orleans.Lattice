@@ -50,6 +50,7 @@ public partial class BPlusLeafGrainTests
             {
                 entered.TrySetResult();
                 await release.Task;
+                return LeafSnapshotSaveOutcome.Kept;
             });
 
         return (grain, entered, release);

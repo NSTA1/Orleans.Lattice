@@ -97,8 +97,8 @@ public partial class BPlusLeafGrainTests
             .Returns(Task.FromResult(snapshot));
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
             .Returns(_ => snapshotStoreFails
-                ? Task.FromException(new InvalidOperationException("snapshot store unavailable"))
-                : Task.CompletedTask);
+                ? Task.FromException<LeafSnapshotSaveOutcome>(new InvalidOperationException("snapshot store unavailable"))
+                : Task.FromResult(LeafSnapshotSaveOutcome.Kept));
 
         // The WAL head sits at the persisted checkpoint and the slice read is
         // empty, so the activation replay applies nothing and `advanced` stays

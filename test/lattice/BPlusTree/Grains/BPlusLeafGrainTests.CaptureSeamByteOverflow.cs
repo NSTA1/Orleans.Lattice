@@ -124,7 +124,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             .Returns(ci =>
             {
                 saved.Add(ci.Arg<LeafSnapshotBlob>());
-                return Task.CompletedTask;
+                return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
             });
 
         // A split hands entries to a real sibling reference, so the stub needs a

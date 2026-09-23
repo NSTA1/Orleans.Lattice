@@ -116,4 +116,6 @@ disagree with the master file, the master file wins.
   keeping, reach for `reset_index` instead - it drops the code index and its
   vectors but preserves the memory tree, and the repository stays in
   `list_repos` with a null `lastIngested` / `fileCount` / `indexedCommit` until
-  it is re-onboarded, so the preserved memory stays discoverable.
+  it is re-onboarded, so the preserved memory stays discoverable. A reset whose
+  call times out keeps running: poll `index_status` (phase `Resetting`, then
+  `Completed` / `Failed`) instead of re-running it.

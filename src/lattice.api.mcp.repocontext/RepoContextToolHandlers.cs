@@ -1064,10 +1064,19 @@ internal static class RepoContextToolHandlers
     /// finished, rather than being forced to re-run a destructive verb because
     /// still-working and wedged looked identical.
     /// </para>
+    /// <para>
+    /// The sweep runs on a background task bound to the host lifetime, not to this
+    /// request, so cancelling the request - or losing the connection - abandons only
+    /// the wait for the result: the reset keeps running under the caller's
+    /// credential and still reaches <c>Completed</c> (or <c>Failed</c>) on the
+    /// status surface. Only a host shutdown interrupts it, leaving it
+    /// <c>Running</c>/<c>Resetting</c> and never complete; re-running the reset,
+    /// which is idempotent, finishes it.
+    /// </para>
     /// </summary>
-    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="context">The MCP request context, used to resolve the reset launcher.</param>
     /// <param name="repoId">The repository identity whose code index to reset.</param>
-    /// <param name="cancellationToken">Cancels the reset.</param>
+    /// <param name="cancellationToken">Cancels the caller's wait for the result; never the reset itself.</param>
     /// <returns>The repository id and the number of code-index entries dropped.</returns>
     /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
     public static Task<RepoContextIndexResetResult> ResetIndexAsync(
@@ -1081,7 +1090,10 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
-        return ResolveStore(context).ResetIndexAsync(repoId, cancellationToken);
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context tool cannot resolve its reset launcher.");
+        return services.GetRequiredService<RepoIndexResetLauncher>().ResetAsync(repoId, cancellationToken);
     }
 
     /// <summary>

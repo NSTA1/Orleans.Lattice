@@ -147,4 +147,49 @@ public sealed class ShardRootStateStorageRoundTripTests
                 + "is what the activation repair in ShardRootGrain performs.");
         });
     }
+
+    /// <summary>
+    /// Issue #2207: the record of leaves still owed a state clear is the only
+    /// reference to a leaf that has been taken out of the tree, so it must survive
+    /// the grain-storage round trip in order and in full.
+    /// </summary>
+    [Test]
+    public void PendingLeafClears_survives_the_storage_round_trip()
+    {
+        var serializer = CreateStorageSerializer();
+        var owed = InternalRootedState();
+        var first = GrainId.Create("bplusleaf", "owed-1");
+        var second = GrainId.Create("bplusleaf", "owed-2");
+        owed.PendingLeafClears.Add(first);
+        owed.PendingLeafClears.Add(second);
+
+        var reloaded = serializer.Deserialize<ShardRootState>(serializer.Serialize(owed));
+
+        Assert.That(reloaded.PendingLeafClears, Is.EqualTo(new[] { first, second }));
+    }
+
+    /// <summary>
+    /// A blob written before the record existed carries no such member and must
+    /// reconstruct as an empty, non-null list, so every existing shard root loads
+    /// owing nothing.
+    /// </summary>
+    [Test]
+    public void A_blob_without_PendingLeafClears_reconstructs_an_empty_record()
+    {
+        var serializer = CreateStorageSerializer();
+        var json = serializer.Serialize(InternalRootedState()).ToString();
+        var blob = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        Assert.That(blob.Remove("PendingLeafClears"), Is.True,
+            "the current serializer must write the member, or removing it proves nothing");
+        var legacy = blob.ToJsonString();
+
+        var reloaded = serializer.Deserialize<ShardRootState>(BinaryData.FromString(legacy));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reloaded.PendingLeafClears, Is.Not.Null.And.Empty);
+            Assert.That(reloaded.IsRegistered, Is.True,
+                "Vacuousness guard: the edited blob must still deserialize the members it kept.");
+        });
+    }
 }

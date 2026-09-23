@@ -163,7 +163,7 @@ public partial class BPlusLeafGrainTests
             .Returns(_ =>
             {
                 failedSaves++;
-                return Task.FromException(
+                return Task.FromException<LeafSnapshotSaveOutcome>(
                     new InvalidOperationException("simulated snapshot storage failure"));
             });
         SeedOneCaptureRow(failedGrain);
@@ -366,13 +366,13 @@ public partial class BPlusLeafGrainTests
             {
                 if (!armed)
                 {
-                    return Task.CompletedTask;
+                    return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
                 }
 
                 // Orleans' deactivation deadline fires while the blob write is
                 // in flight - the shape the real overrun takes.
                 deadline.Cancel();
-                return Task.FromException(new OperationCanceledException(deadline.Token));
+                return Task.FromException<LeafSnapshotSaveOutcome>(new OperationCanceledException(deadline.Token));
             });
 
         var (leaf, _, _, _, _) =
@@ -571,6 +571,7 @@ public partial class BPlusLeafGrainTests
             {
                 entered.TrySetResult();
                 await release.Task;
+                return LeafSnapshotSaveOutcome.Kept;
             });
 
         var reasons = CaptureSnapshotDeclineObservations(treeId, out var listener);

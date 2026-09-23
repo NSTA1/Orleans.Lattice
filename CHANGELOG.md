@@ -44,7 +44,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
-- **WAL - Trim ran on a pinned consumer that never reported an offset.** The retention floor folded only leaves that reported an offset, so one absent from the offsets plane was indistinguishable from one abstaining with -1, and a reap could trim entries it owed. Such a pin now blocks its partition. ([#2314](https://github.com/NSTA1/Orleans.Lattice/issues/2314)) (`Orleans.Lattice`)
+- **WAL - Trim ran past a pinned consumer the floor misread.** The retention floor read a leaf absent from the offsets plane as abstaining, and a consumer registered only with a zero cursor as covered, so a reap could trim entries either still owed. Both now guard their partition. ([#2314](https://github.com/NSTA1/Orleans.Lattice/issues/2314), [#3416](https://github.com/NSTA1/Orleans.Lattice/issues/3416)) (`Orleans.Lattice`)
 
 - **Leaf - Compacted tombstone resurrected by a monotone merge.** MergeMonotone folded a stored-only key back into the leaf after tombstone compaction had removed it, resurrecting a deleted key. The merge now declines a key the leaf no longer declares. ([#2436](https://github.com/NSTA1/Orleans.Lattice/issues/2436)) (`Orleans.Lattice`)
 
@@ -58,7 +58,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Dashboards - Conditionally emitted instruments were zero-filled.** A series published only under some conditions rendered as a measured zero rather than as absent, so a panel could not tell "nothing happened" from "nothing was reported". A committed gate re-derives that population from source. ([#2520](https://github.com/NSTA1/Orleans.Lattice/issues/2520)) (`Orleans.Lattice.Dashboards`)
 
-- **Gates - Two metric gates could not detect what they claimed.** The priming enrolment recorded none - an affirmative claim of no bounded tag dimension - for observable instruments whose tags its parser could not reach, and a description arity claim naming no tag could never be falsified. ([#3202](https://github.com/NSTA1/Orleans.Lattice/issues/3202), [#3318](https://github.com/NSTA1/Orleans.Lattice/issues/3318)) (`Orleans.Lattice`)
+- **Gates - Metric gates that could not detect what they claimed.** The priming enrolment recorded none for tags its parser could not reach and conflated open-by-nature dimensions with unread tags, and a description arity claim naming no tag could never be falsified. ([#3202](https://github.com/NSTA1/Orleans.Lattice/issues/3202), [#3231](https://github.com/NSTA1/Orleans.Lattice/issues/3231), [#3318](https://github.com/NSTA1/Orleans.Lattice/issues/3318)) (`Orleans.Lattice`)
 
 - **Backlog - An unrecognised state tag read as no state at all.** The ready-set computation recognised only state:complete and state:parked, so any other value - four were in use - got the verdict an untagged item gets, offering finished work as claimable. The vocabulary is closed and fails safe. ([#2468](https://github.com/NSTA1/Orleans.Lattice/issues/2468)) (`repository-wide`)
 
@@ -125,6 +125,20 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Memory - Recovery.** A partial restore is distinguishable from a populated store, and a decode failure names the key so a lapse can retire an undecodable record. ([#2374](https://github.com/NSTA1/Orleans.Lattice/issues/2374), [#2641](https://github.com/NSTA1/Orleans.Lattice/issues/2641), [#2787](https://github.com/NSTA1/Orleans.Lattice/issues/2787), [#2882](https://github.com/NSTA1/Orleans.Lattice/issues/2882)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Explorer - Console repairs.** Dim text meets the WCAG AA contrast minimum in both themes, the console mounts under a non-root base path, and a tenant-quota bar rounds an exact midpoint as the tenant's own gauge does. ([#1801](https://github.com/NSTA1/Orleans.Lattice/issues/1801), [#1915](https://github.com/NSTA1/Orleans.Lattice/pull/1915), [#1961](https://github.com/NSTA1/Orleans.Lattice/issues/1961)) (`Orleans.Lattice.Explorer`)
+
+- **Leaf - A declined snapshot capture advanced durable coverage.** When the snapshot store declined a capture, the leaf still recorded its coverage as durable, licensing WAL GC to trim past anything a snapshot can reproduce. Coverage now advances only when the store keeps the capture. ([#3421](https://github.com/NSTA1/Orleans.Lattice/issues/3421)) (`Orleans.Lattice`)
+
+- **Shard - A removed leaf's failed state clear was never retried.** Reclaim swallowed a failed clear of a removed leaf's grain state, orphaning it for good. The owed clear is now recorded durably and retried by later reclaim passes, orphan repair and purge. ([#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)) (`Orleans.Lattice`)
+
+- **Leaf - Tombstone ratio minted a series per leaf.** `orleans.lattice.leaf.tombstone.ratio` was tagged with the leaf grain id, so its cardinality grew with the tree. It now carries only tree and tenant: one series per tree. ([#2518](https://github.com/NSTA1/Orleans.Lattice/issues/2518)) (`Orleans.Lattice`)
+
+- **Indexing - A dropped call aborted its reset_index sweep.** The sweep ran on the request token, so a timed-out or disconnected caller left the job Resetting forever. It now runs on a host-lifetime task; the request token ends only the caller's wait, and a fault fails the job. ([#2642](https://github.com/NSTA1/Orleans.Lattice/issues/2642)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Observability - Series-ceiling saturation was silent.** The repository-context metrics collector reported drops as a level with no onset, so no historical absence could be trusted. Each ceiling now logs one `MetricsCeilingReached` warning the moment it first refuses a series. ([#2519](https://github.com/NSTA1/Orleans.Lattice/issues/2519)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Backlog - Protocol gaps that hid stuck work.** A claim drawn without a marker read as never attempted, and an item could wait forever on a parked blocker. Attempts are now cross-checked against the fencing token, and parked blockers are rejected, reported as stalled and routed to a ruling owner. ([#2466](https://github.com/NSTA1/Orleans.Lattice/issues/2466), [#2529](https://github.com/NSTA1/Orleans.Lattice/issues/2529)) (`repository-wide`)
+
+- **Gates - Deep-copy contract enrolment was unchecked.** Nothing required a package declaring a serializable exception to enrol the same-silo deep-copy guard, and one had not. Every package must now enrol the guard or be verified exempt from source. ([#2448](https://github.com/NSTA1/Orleans.Lattice/issues/2448)) (`repository-wide`)
 
 ### Security
 

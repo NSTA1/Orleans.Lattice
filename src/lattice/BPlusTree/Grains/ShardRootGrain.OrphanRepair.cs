@@ -156,12 +156,36 @@ internal sealed partial class ShardRootGrain
             var startTimestamp = LeafWalkBudget.StartClock();
 
             await PrepareForOperationAsync();
-            return await RepairOrphanedLeavesCoreAsync(
-                resumeFromInclusive,
-                dryRun,
-                survey,
-                startTimestamp,
-                cancellationToken);
+
+            if (dryRun)
+            {
+                return await RepairOrphanedLeavesCoreAsync(
+                    resumeFromInclusive,
+                    dryRun,
+                    survey,
+                    startTimestamp,
+                    cancellationToken);
+            }
+
+            // A repairing pass also settles clears owed by earlier removals -
+            // its own unsplices and reclaim's folds alike. Those leaves are off
+            // the chain, so no walk reaches them again. Skipped on a dry run,
+            // which mutates nothing.
+            await RetryPendingLeafClearsAsync();
+
+            try
+            {
+                return await RepairOrphanedLeavesCoreAsync(
+                    resumeFromInclusive,
+                    dryRun,
+                    survey,
+                    startTimestamp,
+                    cancellationToken);
+            }
+            finally
+            {
+                await FlushPendingLeafClearsAsync();
+            }
         }
         finally
         {
@@ -805,33 +829,41 @@ internal sealed partial class ShardRootGrain
 
         // Past the swap the unsplice has committed: the leaf is out of the
         // chain and nothing that follows can be undone, so a failure in it must
-        // not be reported as a refusal. Each step is idempotent and a re-run
-        // finishes the job.
-        try
+        // not be reported as a refusal.
+        if (currentProbe.NextSibling is { } nextId)
         {
-            if (currentProbe.NextSibling is { } nextId)
+            try
             {
                 await ResolveLeafGrain(nextId).SetPrevSiblingAsync(prevId);
             }
+            catch (Exception ex)
+            {
+                // Nothing reads the back pointer to route, and the successor is
+                // still on the chain, so the reclaim walk's back-pointer repair
+                // re-points it on a later pass.
+                logger.LogWarning(
+                    ex,
+                    "Shard {ShardIndex} of tree '{TreeId}' unspliced orphaned leaf {LeafId} but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; a later pass repairs the back pointer.",
+                    MyShardIndex,
+                    TreeId,
+                    currentId,
+                    nextId,
+                    prevId);
+            }
+        }
 
-            // This is the step that actually recovers the WAL. Clearing the
-            // state retires the replay barrier and unregisters the leaf's
-            // materialiser pins, and it is the only caller that does - which is
-            // why the pass is not finished when the leaf leaves the chain. A
-            // leaf unspliced but not cleared still pins the trim floor, so the
-            // whole point of the exercise is in this one call.
-            await leaf.ClearGrainStateAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Shard {ShardIndex} of tree '{TreeId}' unspliced orphaned leaf {LeafId} but could not finish retiring it; "
-                + "its materialiser pin may still gate the WAL trim floor, and a re-run will finish the job.",
-                MyShardIndex,
-                TreeId,
-                currentId);
-        }
+        // This is the step that actually recovers the WAL. Clearing the state
+        // retires the replay barrier and unregisters the leaf's materialiser
+        // pins, and it is the only caller that does - which is why the pass is
+        // not finished when the leaf leaves the chain. A leaf unspliced but not
+        // cleared still pins the trim floor, so the whole point of the exercise
+        // is in this one call.
+        //
+        // And the unspliced leaf is on no chain now, so a re-run of this pass
+        // cannot rediscover it: issue #2207. The clear is recorded durably as
+        // owed before it is attempted, and a failure is retried from that
+        // record rather than promised to a re-run that could never find it.
+        await ClearRemovedLeafAsync(currentId, "unspliced orphaned");
 
         _leafGrains.TryRemove(currentId, out _);
 

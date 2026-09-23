@@ -64,7 +64,7 @@ public partial class BPlusLeafGrainTests
                     Latest = call.ArgAt<LeafSnapshotBlob>(0);
                     SaveCount++;
                     SavedOffsets.Add(Latest.ScalarOffsetOrSentinel());
-                    return Task.CompletedTask;
+                    return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
                 });
             Stub.LoadAsync(Arg.Any<CancellationToken>())
                 .Returns(_ => Task.FromResult(Latest));

@@ -70,7 +70,7 @@ public partial class BPlusLeafGrainTests
 
         internal int InlineSaves { get; private set; }
 
-        public Task SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
+        public Task<LeafSnapshotSaveOutcome> SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
         {
             InlineSaves++;
             if (blob.EncodedRows is { Length: > 0 } frame)
