@@ -320,7 +320,7 @@ reasoning that produced it.
 lapsed item that other items declare `blockedBy` starves its dependents
 invisibly, with no event anywhere to explain it. Retire an item deliberately
 with `forget`. This is a hard exception to the "coordination state is time-boxed"
-rule in [Coordination](#coordination---memory-as-a-cross-session-bus): a backlog
+rule in [Coordination](../../../.github/instructions/repocontext.instructions.md#coordination---memory-as-a-cross-session-bus): a backlog
 item is a ledger entry, not a handoff.
 
 **Recording `baseBranch:` on the item is what makes a retry land correctly.**
@@ -333,7 +333,7 @@ silently accepted.
 ## Relation vocabulary - the backlog extension
 
 These extend the small, stable
-[knowledge-linking vocabulary](#knowledge-linking---typed-edges-between-memory-entries)
+[knowledge-linking vocabulary](../../../.github/instructions/repocontext.instructions.md#knowledge-linking---typed-edges-between-memory-entries)
 rather than competing with it. `partOf` and `related` are the documented
 relations used unchanged, and the four additions follow the same discipline:
 few, stable, one direction authored, named for what they assert.
