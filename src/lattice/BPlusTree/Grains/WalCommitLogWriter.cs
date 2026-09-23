@@ -901,10 +901,16 @@ internal sealed class WalCommitLogWriter(
             return Array.Empty<long>();
         }
 
-        // Fast path: single entry collapses to the per-entry overload
-        // so the per-call allocation cost matches AppendAsync for the
-        // dominant SetMany([single]) case.
-        if (count == 1)
+        // Single entry historically collapsed to the per-entry overload so
+        // the per-call allocation cost matched AppendAsync for the dominant
+        // SetMany([single]) case. That overload takes an exclusive grain
+        // turn, which serialises the whole partition behind one provider
+        // round trip under a wide fan-out, so
+        // WalBatchedSingleEntryAppends routes it through the interleaving
+        // batched path instead. The saving being given up is one small list
+        // per append, which is not measurable against the round trip the
+        // exclusive turn was holding.
+        if (count == 1 && !options.Get(entries[0].TreeId).WalBatchedSingleEntryAppends)
         {
             var offset = await AppendAsync(entries[0], cancellationToken);
             return new[] { offset };

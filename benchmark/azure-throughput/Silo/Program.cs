@@ -65,6 +65,18 @@
 //                           unconditional kick - use it as the control arm of a
 //                           sweep. The shipping default was chosen on the
 //                           fan-out arithmetic (#3396) and needs measuring.
+//   BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS
+//                           Routes a bulk WAL append carrying exactly one entry
+//                           through the interleaving batched grain method rather
+//                           than the exclusive-turn singular overload (defaults
+//                           to LatticeOptions.DefaultWalBatchedSingleEntryAppends,
+//                           i.e. false / historical behaviour). Under a wide
+//                           fan-out the per-leaf slice is one entry, so the
+//                           exclusive turn holds the partition for a whole
+//                           provider round trip and pins batch occupancy at 1,
+//                           which also makes the coalescing threshold above
+//                           unreachable. Set to 1 for the fix arm of the #3408
+//                           A/B; leave unset for the control arm.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -252,6 +264,7 @@ var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
+var walBatchedSingleEntryAppends = ReadBool("BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS", LatticeOptions.DefaultWalBatchedSingleEntryAppends);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
 // the shape the replay admission gate is sized to refuse, and refusing it here
 // is a measurement artefact rather than a finding.
@@ -521,7 +534,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -693,6 +706,11 @@ builder.UseOrleans(silo =>
         // vary it without a redeploy - the default itself was chosen on
         // the fan-out arithmetic and needs measuring, not asserting.
         o.WalAppendCoalescingInFlightThreshold = walAppendCoalescing;
+        // Routes a one-entry bulk append onto the interleaving batched
+        // grain method instead of the exclusive-turn singular one, so
+        // a wide fan-out of single-entry leaf slices stops serialising
+        // the partition behind one provider round trip (#3408).
+        o.WalBatchedSingleEntryAppends = walBatchedSingleEntryAppends;
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library

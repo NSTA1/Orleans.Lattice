@@ -209,6 +209,12 @@ param(
 	# This is the knob the #3396 arms differ in: -1/4 is the shipped
 	# behaviour, 0 is the control arm that reproduces pre-#3396 main.
 	[int] $WalAppendCoalescingInFlightThreshold = -1,
+
+	# Routes a one-entry bulk WAL append through the interleaving batched grain
+	# method instead of the exclusive-turn singular overload (#3408). -1 leaves
+	# the silo on its shipping default (off); 0 and 1 pin the control and fix
+	# arms explicitly so a cohort's arm is never implicit.
+	[int] $WalBatchedSingleEntryAppends = -1,
 	# (#3402) Paced release of parked WAL-admission waiters on partition
 	# recovery. 0 is MEANINGFUL here too - it is the pre-#3402 "release the
 	# whole parked herd in one pass" behaviour, which is the control arm -
@@ -294,6 +300,10 @@ $siloEnv = @(
 # passes 0 to reproduce pre-#3396 behaviour.
 if ($WalAppendCoalescingInFlightThreshold -ge 0) {
 	$siloEnv += "BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=$WalAppendCoalescingInFlightThreshold"
+}
+
+if ($WalBatchedSingleEntryAppends -ge 0) {
+	$siloEnv += "BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS=$WalBatchedSingleEntryAppends"
 }
 
 # (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
