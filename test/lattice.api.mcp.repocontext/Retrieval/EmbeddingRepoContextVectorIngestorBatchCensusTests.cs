@@ -167,8 +167,11 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchCensusTests
         var logger = new LoggerFactory(new[] { (ILoggerProvider)capture })
             .CreateLogger<EmbeddingRepoContextVectorIngestor>();
 
+        // The durable vector write batches, so a source's metadata lands in one
+        // SetManyAsync and no SetAsync is ever issued. Faulting the single-key setter
+        // would inject nothing and leave this census asserting over a clean pass.
         var (options, injector) = FaultingOptions(
-            RepoContextTrees.VectorMetadata, nameof(ILattice.SetAsync), failFirst: 1);
+            RepoContextTrees.VectorMetadata, nameof(ILattice.SetManyAsync), failFirst: 1);
         await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
 
         var keys = await SeedSymbolsAsync(
