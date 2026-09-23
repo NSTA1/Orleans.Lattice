@@ -12,7 +12,9 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <summary>
 /// Isolates the three hash-probe reductions made to the reshard coordinator's
 /// slot histogram, the tenancy record's CRDT merge, and the WAL GC's durable-pin
-/// union, so the per-operation time and byte deltas are measurable in the clear.
+/// union, so the per-operation time and byte deltas are measurable in the clear,
+/// plus a fourth lane measuring the allocation floor of the WAL GC's
+/// offset-plane population census.
 /// <para>
 /// These are CPU wins first, so the column to read is <c>Mean</c>. The
 /// tenancy merge is byte-identical in allocation - collapsing two hash
@@ -56,6 +58,19 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// shapes exactly rather than driving a silo.
 /// </para>
 /// <para>
+/// (4) the WAL GC's offset-plane population census
+/// (<c>LatticeWalGc.ApplyDurableMaterialiserFloorAsync</c>), added for issue
+/// #2314, which walks the unioned pin map once per GC pass to find consumers
+/// that hold a durable pin but never reported an offset. This lane is not a
+/// before/after pair - the work is new - so the column to read is
+/// <c>Allocated</c>, and the claim it exists to substantiate is that the
+/// steady state costs <c>0 B</c>: every gap-bookkeeping allocation is lazy
+/// behind the first unreported consumer, so a healthy tree walks the map and
+/// allocates nothing. The gap arm shows the bounded cost paid only by a tree
+/// that is already mis-reporting. Same privacy constraint as lane (3), so the
+/// loop shape is mirrored rather than invoked.
+/// </para>
+/// <para>
 /// Run it via <c>BENCH_MICROBENCH_SUITE=reshardfolds</c> (or
 /// <c>--suite reshardfolds</c>); see <c>Program.cs</c>. The suite has no Orleans
 /// silo dependency, so it is fast to run at <c>BENCH_MICROBENCH_FIDELITY=full</c>
@@ -84,6 +99,14 @@ public class ReshardMergeAndPinFoldBenchmarks
     // ---- (3) the per-shard durable-pin dictionaries a GC sweep unions ----
     private IReadOnlyDictionary<string, HybridLogicalClock>[] _pinShards = null!;
     private IReadOnlyDictionary<string, long>[] _offsetShards = null!;
+
+    // ---- (4) the issue #2314 offset-plane population census: the unioned pin
+    //      map, plus the coverage set the offset plane reported. The steady
+    //      state is every pinned consumer reporting; the gap case is one
+    //      consumer pinned but absent from the plane. ----
+    private Dictionary<string, HybridLogicalClock> _censusPins = null!;
+    private HashSet<string> _censusFullyReported = null!;
+    private HashSet<string> _censusWithGap = null!;
 
     /// <summary>Builds the inputs shared by the benchmark pairs.</summary>
     [GlobalSetup]
@@ -126,7 +149,26 @@ public class ReshardMergeAndPinFoldBenchmarks
 
         _pinShards = pins;
         _offsetShards = offsets;
+
+        // (4) The census walks the UNIONED pin map once per GC pass. Consumer
+        // ids carry the "_<partition>" suffix the production router emits, so
+        // the attributable branch of TryResolvePinPartition is the one measured
+        // - the unattributable fallback is a bare loop over the partition flags
+        // and allocates nothing extra.
+        _censusPins = new Dictionary<string, HybridLogicalClock>(consumers, StringComparer.Ordinal);
+        _censusFullyReported = new HashSet<string>(consumers, StringComparer.Ordinal);
+        _censusWithGap = new HashSet<string>(consumers, StringComparer.Ordinal);
+        for (var c = 0; c < consumers; c++)
+        {
+            var consumerId = "_lattice_materialiser_tree_leaf-" + c.ToString("D3") + "_" + (c % CensusPartitions);
+            _censusPins[consumerId] = Clock(1000 + c);
+            _censusFullyReported.Add(consumerId);
+            // One consumer pinned but never reported an offset: the #2314 gap.
+            if (c != 0) _censusWithGap.Add(consumerId);
+        }
     }
+
+    private const int CensusPartitions = 8;
 
     private static TenantRecord BuildTenantRecord(string writer, long baseTicks, int offset)
     {
@@ -376,6 +418,110 @@ public class ReshardMergeAndPinFoldBenchmarks
         }
 
         return pins.Count + offsets.Count;
+    }
+
+    // ========================================================================
+    // (4) WAL GC offset-plane population census (issue #2314)
+    // ========================================================================
+
+    /// <summary>
+    /// The steady state, and the only shape that runs on a healthy tree: every
+    /// consumer holding a durable pin also reported an offset, so the census
+    /// walks the pin map, finds every id in the coverage set, and returns
+    /// having allocated nothing at all. This is the arm whose
+    /// <c>Allocated</c> column must read <c>0 B</c> - the gap bookkeeping is
+    /// lazily allocated behind the first miss, so a tree with no gap never pays
+    /// for it.
+    /// </summary>
+    [Benchmark]
+    public int MaterialiserCensus_SteadyState_EveryConsumerReported()
+        => CensusGapCount(_censusPins, _censusFullyReported, CensusPartitions);
+
+    /// <summary>
+    /// The gap case: one consumer holds a durable pin but never reported an
+    /// offset, so the census allocates the partition-flag array and the capped
+    /// blocking-id list exactly once and blocks that consumer's partition. The
+    /// allocation is bounded by the partition count and
+    /// <c>MaxReportedBlockingConsumers</c>, not by the consumer population, and
+    /// it is only reached on a tree that is already mis-reporting.
+    /// </summary>
+    [Benchmark]
+    public int MaterialiserCensus_PopulationGap_BlocksPartitions()
+        => CensusGapCount(_censusPins, _censusWithGap, CensusPartitions);
+
+    /// <summary>
+    /// Reproduces the census pre-pass added to
+    /// <c>LatticeWalGc.ApplyDurableMaterialiserFloorAsync</c> for issue #2314.
+    /// The production method is private and async over grain calls, so - as
+    /// with lane (3) above - this mirrors the loop shape exactly rather than
+    /// driving a silo.
+    /// </summary>
+    private static int CensusGapCount(
+        Dictionary<string, HybridLogicalClock> pins,
+        HashSet<string> reported,
+        int partitions)
+    {
+        const int maxReportedBlockingConsumers = 8;
+
+        bool[]? gapPartitions = null;
+        string? firstUnreported = null;
+        List<string>? unreportedConsumerIds = null;
+        var unreportedCount = 0;
+
+        foreach (var (consumerId, _) in pins)
+        {
+            if (reported.Contains(consumerId))
+            {
+                continue;
+            }
+
+            unreportedCount++;
+            gapPartitions ??= new bool[partitions];
+            firstUnreported ??= consumerId;
+            unreportedConsumerIds ??= new List<string>(maxReportedBlockingConsumers);
+            if (unreportedConsumerIds.Count < maxReportedBlockingConsumers)
+            {
+                unreportedConsumerIds.Add(consumerId);
+            }
+
+            if (TryResolveCensusPartition(consumerId, partitions) is { } gapPartition)
+            {
+                gapPartitions[gapPartition] = true;
+            }
+            else
+            {
+                for (var p = 0; p < partitions; p++)
+                {
+                    gapPartitions[p] = true;
+                }
+            }
+        }
+
+        return unreportedCount;
+    }
+
+    private static int? TryResolveCensusPartition(string consumerId, int partitions)
+    {
+        if (partitions <= 1)
+        {
+            return null;
+        }
+
+        var separator = consumerId.LastIndexOf('_');
+        if (separator <= 0 || separator == consumerId.Length - 1)
+        {
+            return null;
+        }
+
+        return int.TryParse(
+                consumerId.AsSpan(separator + 1),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var partition)
+            && partition >= 0
+            && partition < partitions
+            ? partition
+            : null;
     }
 
     private static int WidestCount<TValue>(IReadOnlyDictionary<string, TValue>?[] results)

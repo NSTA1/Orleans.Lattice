@@ -128,10 +128,17 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     /// Absence is <b>not</b> the same state as a reported <c>-1</c>: a reported
     /// <c>-1</c> comes from a leaf that is participating and has told us it owes
     /// nothing, whereas an absent leaf has told us nothing at all and carries no
-    /// HLC cover from this seam. Absence is deliberately left non-constraining -
-    /// treating it as offset <c>0</c> would pin the WAL forever for any
-    /// permanently-departed leaf - which is a known limitation of the floor
-    /// (issue #2314), not a property to rely on.
+    /// HLC cover from this seam. Absence is still deliberately left
+    /// non-constraining on the floor itself - treating it as offset <c>0</c>
+    /// would pin the WAL forever for any permanently-departed leaf - but it is
+    /// no longer silent (issue #2314). The GC cross-checks this plane's
+    /// population against <see cref="GetPinsAsync"/>, which
+    /// <c>WalMaterialiserPinGrain.Merge</c> writes in lockstep with it, so a
+    /// consumer that has a pin but never reported an offset is detected and its
+    /// partitions are blocked for that pass rather than trimmed on a floor that
+    /// does not speak for it. A healthy store cannot produce that gap; it
+    /// indicates state predating this plane, a swallowed birth seed, or a
+    /// partially-upgraded population.
     /// </para>
     /// </summary>
     Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync();
