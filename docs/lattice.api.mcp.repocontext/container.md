@@ -495,6 +495,16 @@ Three properties are worth knowing when reading a scrape:
   | `lattice_metrics_dropped_measurements_total` | Measurements dropped since start because a ceiling was reached. |
   | `lattice_metrics_dropped_measurements_by_family_total` | The same drops attributed to the metric family that caused them, labelled `family`. |
 
+  The counters say *that* a ceiling was reached, but not *when*. That instant is what decides which historical absences can be read: before it, an absent series is a real absence, and after it, the series may simply have been refused. So the collector also logs the transition itself (issue #2519). The first time each ceiling refuses a series, it writes exactly one `Warning` with event id `1` / `MetricsCeilingReached` under the `Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextMetricsCollector` category. The record carries these fields:
+
+  - `Ceiling`: `family` or `global`.
+  - `Limit`: the ceiling's value.
+  - `SaturatedAtUtc`: the instant of the first refusal.
+  - `Family`: the refused family.
+  - `FamilySeries` and `TotalSeries`: the series counts at that moment.
+
+  The per-family ceiling announces once per family, and the global backstop announces once per process. A crossing that happens during startup, before logging is wired up, is written as soon as the logger is attached, still stamped with its original instant. To find the boundary, search the log for `MetricsCeilingReached`: absences in that family (or in every family, for `global`) are unambiguous only before its `SaturatedAtUtc`.
+
 ## Graceful shutdown
 
 On `SIGTERM` (a `docker stop` or `restart`) the host flips readiness to not-ready first, then drains: the silo deactivates and the WAL commit-log flushes buffered records before exit, so an in-flight write is durable after restart.
