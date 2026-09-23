@@ -623,7 +623,12 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "register it. This is a "
                     + "lighter-consent operation than 'repocontext_remove_repo': it does not destroy "
                     + "store-of-record memory, and 'repocontext_remove_repo' remains the verb for that - and "
-                    + "remains the only verb that drops a repository from the listing. Fails "
+                    + "remains the only verb that drops a repository from the listing. The reset reports its "
+                    + "own lifecycle through 'repocontext_index_status' (Running in phase Resetting while it "
+                    + "sweeps, then Completed or Failed), and its sweep is bound to the host, not to this call: "
+                    + "if the call times out or the connection drops, the reset keeps running, so poll "
+                    + "'repocontext_index_status' rather than re-running it. Only a host restart interrupts it, "
+                    + "leaving it Running/Resetting; re-running the reset, which is idempotent, finishes it. Fails "
                     + "closed: offered only to a caller who cleared the authorization gate and for whom the "
                     + "host opted writes in. Destructive.",
                 ReadOnly = false,
