@@ -23,6 +23,12 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// here rather than in production.
 /// </para>
 /// <para>
+/// It is also the provider the reconcile half of the suite was written against:
+/// its pipelined phase-2 commit is what makes a post-failure reconcile
+/// non-quiescent, and issue #3348 found its reconcile rolling back live batches
+/// and lowering TAIL there.
+/// </para>
+/// <para>
 /// Emulator-gated exactly like the other Azure fixtures. Note that when Azurite
 /// is absent these tests report neither pass nor fail - only a lower
 /// <c>Total</c> - so a green run is not evidence this provider was covered.
@@ -125,6 +131,23 @@ public sealed class AzureTableWalOffsetAllocationContractTests : WalOffsetAlloca
                 .ConfigureAwait(false);
             await _provider.FlushPhaseTwoAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        /// <summary>
+        /// The provider's own acknowledgement: phase 1 is durable and the
+        /// previous slot's phase 2 has been observed, but this batch's manifest
+        /// row and TAIL may still be queued in the phase-2 worker. That pending
+        /// commit is exactly what the post-failure resync must not mistake for
+        /// an orphan (#3348).
+        /// </summary>
+        public Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(offsets);
+            var entries = offsets.Select(Entry).ToArray();
+            return _provider.AppendBatchAsync(TreeId, ShardIndex, entries, cancellationToken);
+        }
+
+        public Task ReconcileAsync(CancellationToken cancellationToken) =>
+            _provider.ReconcileAsync(TreeId, ShardIndex, cancellationToken);
 
         public Task TrimAsync(long throughOffsetInclusive, CancellationToken cancellationToken) =>
             _provider.TrimAsync(TreeId, ShardIndex, throughOffsetInclusive, cancellationToken);

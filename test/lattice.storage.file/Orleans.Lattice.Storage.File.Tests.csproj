@@ -27,4 +27,9 @@
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- One provider-to-probe adapter shared by every WAL provider's contract fixture. -->
+    <Compile Include="..\lattice\ContractProbes\WalStorageProviderContractProbe.cs" Link="Shared\WalStorageProviderContractProbe.cs" />
+  </ItemGroup>
+
 </Project>

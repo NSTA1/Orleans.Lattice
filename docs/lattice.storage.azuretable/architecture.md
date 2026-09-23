@@ -69,13 +69,25 @@ A caller that genuinely needs read-after-write - a controlled hand-off, an opera
 
 `PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely.
 
+### Overlap rejection
+
+Every batch is stored in its own partition, keyed by its first offset, so storage on its own would accept a batch that starts inside one already written, and a read would then return the shared offsets twice. The provider rejects that batch with `InvalidOperationException` before writing anything, as the `IWalStorageProvider` contract requires.
+
+The check costs nothing on the steady-state path. The provider keeps, per shard, an upper bound on the offsets that may be written, and an append starting above it is admitted with no storage call; the core WAL grain always appends above it. Any other append, such as an out-of-order arrival or a retry, is checked against the batches in motion on this instance and then with one query over the few partitions that could hold an overlapping entry. The first append on a shard reads the bound from the stored tail and any uncommitted batches above it. Reconciliation re-establishes it.
+
+A re-append that starts at the same offset as a written batch is not rejected here: it collides on the batch's own rows and is resolved by the idempotent-replay check, which accepts an identical retry and fails anything else. The bound is only trusted while this instance is the shard's single writer, which the WAL grain's single activation provides, so a batch another process writes after this instance read the bound is not detected until the next reconciliation.
+
 ## Recovery and downgrade safety
 
-On activation, the core WAL grain calls the provider reconciliation hook. The provider compares the committed tail with interrupted append evidence and applies these rules:
+On activation, and again after a failed flush, the core WAL grain calls the provider reconciliation hook. The provider compares the committed tail with interrupted append evidence and applies these rules:
 
 - If an interrupted batch contiguously extends the committed tail, reconciliation completes it and advances the tail.
 - If an interrupted batch is below the tail or above a gap, reconciliation removes it so the next append can use the correct next offset.
+- A batch whose manifest row already exists is committed, even when the stored tail has not caught up with it. Reconciliation keeps it and re-anchors the tail on it; it never rolls a committed batch back.
+- Reconciliation never lowers the stored tail. The tail write is conditional on the tail it read, so a concurrent commit makes the pass retry rather than overwrite.
 - Reconciliation is idempotent: a clean shard has no work to do.
+
+The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per shard and first waits for that shard's in-motion appends and queued completions on this provider instance to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
 
 When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both the legacy recovery-marker shape and the newer discoverable-batch shape. Upgrading from the legacy setting to the default setting is safe. Before downgrading back to the legacy setting, drain pending appends and allow reconciliation to complete on a deployment that still has the default setting enabled.
 

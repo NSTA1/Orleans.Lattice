@@ -73,4 +73,26 @@ internal interface IWalPartitionSaturationSignal
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="treeId"/> is <c>null</c>.</exception>
     /// <exception cref="OperationCanceledException">Thrown if <paramref name="cancellationToken"/> is cancelled before recovery.</exception>
     Task WaitForHealthyAsync(string treeId, int partition, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// (#3348) Asynchronously waits until a single WAL partition of
+    /// <paramref name="treeId"/> is no longer
+    /// <see cref="WalSaturationState.Saturated"/> - that is, until it reads
+    /// <see cref="WalSaturationState.Healthy"/> or
+    /// <see cref="WalSaturationState.Throttled"/>. This is the condition under
+    /// which a fresh caller passes the writer's admission gate without waiting,
+    /// so a caller already parked there resumes on the same condition instead
+    /// of being held through the recovery window's Throttled hysteresis.
+    /// Used by the gate only when
+    /// <see cref="LatticeOptions.WalSaturationAcuteOnly"/> is set.
+    /// </summary>
+    /// <param name="treeId">The logical tree id to wait on.</param>
+    /// <param name="partition">The WAL writer partition to wait on.</param>
+    /// <param name="cancellationToken">Cancels the wait. A cancelled
+    /// wait throws <see cref="OperationCanceledException"/>.</param>
+    /// <returns>A task that completes when the partition is observed not
+    /// <see cref="WalSaturationState.Saturated"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="treeId"/> is <c>null</c>.</exception>
+    /// <exception cref="OperationCanceledException">Thrown if <paramref name="cancellationToken"/> is cancelled before recovery.</exception>
+    Task WaitForNotSaturatedAsync(string treeId, int partition, CancellationToken cancellationToken = default);
 }

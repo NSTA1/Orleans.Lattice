@@ -50,6 +50,12 @@ Recovery is not only a question of *when* a partition is declared `Healthy` but 
 
 The default equals `WalMaxPendingBatches`, admitting exactly one pipeline-fill per tick - about 80 admissions per second per partition at the default 200 ms sample interval. Set it to `0` to release every parked waiter at once (the original behaviour).
 
+### Acute-only classification (opt-in)
+
+By default an admission semaphore at its cap is a `Saturated` input. That makes ordinary pipelining - a partition running at the cap it was sized for - close the writer's admission gate, and a parked caller then waits for `Healthy`, which the recovery window and the paced release both defer, while a newcomer arriving during the same `Throttled` window passes straight through.
+
+`WalSaturationAcuteOnly` (default `true`) narrows `Saturated` to acute causes: dispatch-timeout trips, provider failures, and sustained flush latency. A partition at its cap falls through to the depth-ratio test and reads `Throttled` (the semaphore still enforces the cap itself), and a caller parked at the gate resumes as soon as its partition leaves `Saturated`. Set it to `false` to restore the historical classification, in which an at-cap partition reads `Saturated` to every consumer of the signal. See [`WalSaturationAcuteOnly`](configuration.md#walsaturationacuteonly).
+
 ### Flush-latency classifier input (opt-in)
 
 The first three Saturated inputs (admission depth at cap, dispatch-timeout trips, provider-failure trips) all require the WAL writer to have *already* shed work: callers parked on the admission semaphore, dispatch tasks tripped on their per-shard timeout, or the storage provider returned an error. The classifier therefore has a **small-batch blind spot** - a workload whose every flush calls into the provider just *slowly* (provider getting close to capacity, but not yet erroring or throttling enough to back up admission depth) can sail past all three inputs and never register as `Saturated`, even when steady-state flush latency has crept up by an order of magnitude.

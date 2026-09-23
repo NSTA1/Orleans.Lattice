@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using NUnit.Framework;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Testing;
 using Orleans.Serialization;
@@ -107,6 +108,14 @@ public sealed class FileWalOffsetAllocationContractTests : WalOffsetAllocationCo
 
             return offsets;
         }
+
+        // The provider completes an append before it returns, so its own
+        // acknowledgement and AppendAsync are the same point.
+        public Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken) =>
+            AppendAsync(offsets, cancellationToken);
+
+        public Task ReconcileAsync(CancellationToken cancellationToken) =>
+            _provider.ReconcileAsync(TreeId, ShardIndex, cancellationToken);
 
         /// <summary>
         /// Drops the provider entirely and rebuilds it over the same directory,

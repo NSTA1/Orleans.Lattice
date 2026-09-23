@@ -161,8 +161,9 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Cheap pre-scan for the batched set path: reports whether any entry falls
-    /// outside this leaf's declared range, so the caller can divert the whole
-    /// batch to the per-key loop (which forwards through
+    /// outside this leaf's declared range, so the caller can route the batch
+    /// through <see cref="SetManyAdmittingSpanAsync"/> (or, for saga and
+    /// observer writes, the per-key loop that forwards through
     /// <c>SetCoreAsync</c>) instead of committing it wholesale through
     /// <c>CommitSetManyAsync</c>, which has no per-key admission step.
     /// </summary>
@@ -294,10 +295,10 @@ internal sealed partial class BPlusLeafGrain
     /// are retained locally, matching the fail-open rule documented on this
     /// class.
     /// <para>
-    /// This exists because the conditional path cannot reuse the per-key
-    /// fallback the unconditional <c>SetManyAsync</c> diverts to: the guard has
-    /// to be evaluated where the value lives, and <c>SetAsync</c> carries no
-    /// guard. Without it, a key whose row a split moved to a sibling probes
+    /// This exists because the conditional path cannot reuse the unconditional
+    /// <c>SetManyAsync</c> forward: the guard has to be evaluated where the
+    /// value lives, and <c>SetManyAsync</c> carries no guard. Without it, a key
+    /// whose row a split moved to a sibling probes
     /// absent in this leaf's cache and is read as a guard miss, so a matching
     /// key is silently dropped from the written set (issue #2663).
     /// </para>
@@ -374,6 +375,100 @@ internal sealed partial class BPlusLeafGrain
         {
             WrittenKeys = MergeSpanForwardedWrittenKeys(entries, localResult.WrittenKeys, forwardWritten),
         };
+    }
+
+    /// <summary>
+    /// The unconditional-bulk-write counterpart of
+    /// <see cref="ForwardOutOfSpanMergeAsync"/>, used by <c>SetManyAsync</c>
+    /// when a foreground batch arrives on a leaf that is mid-split or whose
+    /// declared range excludes some of its keys.
+    /// <para>
+    /// An in-progress split is completed first, once for the whole batch,
+    /// through the same gated recovery <c>SetCoreAsync</c> runs per key. That
+    /// narrows this leaf's high bound to the split key, and <c>BeginSplit</c>
+    /// has already pointed <c>NextSibling</c> at the new sibling, so declared
+    /// span admission then routes every key exactly where the per-key recovery
+    /// would have: a key at or above the split key goes to the sibling, and the
+    /// rest stays here. The batch is then split by declared span, each
+    /// out-of-span group is forwarded as one <c>SetManyAsync</c> to the leaf
+    /// that declares it, and the remainder commits locally through
+    /// <c>CommitSetManyAsync</c>. Entries that are out of span but have no
+    /// resolvable forward target are retained locally, matching the fail-open
+    /// rule documented on this class.
+    /// </para>
+    /// <para>
+    /// This replaced the per-key <c>SetAsync</c> loop for foreground batches
+    /// (issue #3348). That loop paid one full, serial WAL admission and commit
+    /// per key, so under WAL saturation a single mid-split or straddling leaf
+    /// call ran for minutes. The loop and the fan-out budget above it are
+    /// all-or-nothing, so that one slow branch turned an otherwise-written batch
+    /// into a refused one. Saga-prepared, atomic-batch, and merge-observer
+    /// writes still take the per-key loop: their per-key semantics are what
+    /// their own suites prove, and none of them is on the bulk foreground path.
+    /// </para>
+    /// <para>
+    /// The forwards and the local commit run concurrently. They touch disjoint
+    /// keys on distinct grains, and <see cref="Task.WhenAll(Task[])"/> observes
+    /// every fault, so a failure in one never leaves another unobserved. As with
+    /// the per-key loop, a fault after one part has committed leaves the batch
+    /// partially applied; a retry is idempotent under LWW.
+    /// </para>
+    /// </summary>
+    private async Task<SplitResult?> SetManyAdmittingSpanAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        SplitResult? recovered = null;
+        if (HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
+        var local = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        Dictionary<GrainId, List<KeyValuePair<string, byte[]>>>? buckets = null;
+
+        foreach (var entry in entries)
+        {
+            if (!TryResolveSpanForwardTarget(entry.Key, out var target))
+            {
+                local.Add(entry);
+                continue;
+            }
+
+            buckets ??= new Dictionary<GrainId, List<KeyValuePair<string, byte[]>>>();
+            if (!buckets.TryGetValue(target, out var bucket))
+            {
+                buckets[target] = bucket = new List<KeyValuePair<string, byte[]>>();
+            }
+
+            bucket.Add(entry);
+        }
+
+        var localCommit = local.Count > 0
+            ? CommitSetManyAsync(local)
+            : Task.FromResult<SplitResult?>(null);
+
+        if (buckets is not null)
+        {
+            var parts = new Task[buckets.Count + 1];
+            var i = 0;
+            foreach (var (target, bucket) in buckets)
+            {
+                // Shadow markers are not transferred, for the reason the
+                // conditional forward gives: a set forwards a caller's
+                // proposed value for a row this leaf does not hold, which is
+                // the shape SetCoreAsync's span forward takes. The sibling's
+                // SplitResult is discarded for the reason given in
+                // ForwardOutOfSpanMergeAsync.
+                parts[i++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).SetManyAsync(bucket);
+            }
+
+            parts[i] = localCommit;
+            await Task.WhenAll(parts);
+        }
+
+        // Mirrors the per-key loop, which returned the last non-null result:
+        // a split this batch's own commit triggered takes precedence over the
+        // recovered one.
+        return await localCommit ?? recovered;
     }
 
     /// <summary>

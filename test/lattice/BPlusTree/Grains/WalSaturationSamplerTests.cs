@@ -95,6 +95,12 @@ public class WalSaturationSamplerTests
         var effective = options ?? new LatticeOptions();
         effective.WalSaturationRecoveryWindow = TimeSpan.Zero;
 
+        // These tests drive Saturated by seeding a partition at its admission
+        // cap, which is the historical classification. WalSaturationAcuteOnly
+        // (default on, #3348) reads that as Throttled, so pin it off here;
+        // WalSaturationAcuteOnlyTests covers both settings.
+        effective.WalSaturationAcuteOnly = false;
+
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(effective);
 
@@ -700,6 +706,8 @@ public class WalSaturationSamplerTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
         {
             WalSaturationRecoveryWindow = recoveryWindow,
+            // At-cap seeding is the Saturated trigger; see CreateSampler.
+            WalSaturationAcuteOnly = false,
         });
         var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
         var sampler = new WalSaturationSampler(

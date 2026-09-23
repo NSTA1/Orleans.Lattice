@@ -3686,6 +3686,58 @@ public class LatticeOptions
     public const int DefaultWalSaturationRecoveryReleaseBatch = 16;
 
     /// <summary>
+    /// (#3348) When <see langword="true"/>, only <em>acute</em> causes -
+    /// dispatch-timeout trips, provider failures, and sustained flush latency -
+    /// classify a WAL partition as
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>. A partition
+    /// whose admission semaphore is merely at its cap then reads
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>, and a caller
+    /// parked at the writer's admission gate resumes as soon as its partition
+    /// leaves Saturated rather than waiting for it to read Healthy.
+    /// <para>
+    /// <b>Why.</b> At-cap is the steady state of a well-pipelined partition,
+    /// not a fault: the admission semaphore already bounds in-flight work at
+    /// the cap, which is the back-pressure. Classifying it Saturated closes the
+    /// admission gate on healthy traffic, and the gate then holds each parked
+    /// append until Healthy, which the
+    /// <see cref="WalSaturationRecoveryWindow"/> hysteresis and the paced
+    /// <see cref="WalSaturationRecoveryReleaseBatch"/> release both defer. On
+    /// the multi-silo <c>set-many</c> rig this gate wait, not the WAL hop, was
+    /// the dominant per-append cost (654 ms of an 812 ms mean at eight silos),
+    /// and a caller arriving during the same Throttled window passed straight
+    /// through, so the parked caller was held on a stricter condition than the
+    /// one that admits a newcomer.
+    /// </para>
+    /// <para>
+    /// <b>Default is <see langword="true"/>.</b> The historical at-cap
+    /// classification is the #3348 defect, so the corrected verdict is the
+    /// default. It changes when
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal"/> reports Saturated to
+    /// every consumer - replication flow control, the atomic-write quiesce,
+    /// cursors, view back-pressure, scaling pressure and the
+    /// <c>UnhealthyOnWalSaturated</c> health check, dashboards - which now see
+    /// an at-cap partition as Throttled. It only ever reports Saturated less
+    /// often, so callers observe
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> less often,
+    /// never in a new place. Set it to <see langword="false"/> to restore the
+    /// historical classification exactly.
+    /// </para>
+    /// <para>
+    /// The sampler reads this value silo-wide (from the unnamed options
+    /// instance), like the other <c>WalSaturation*</c> classifier options, so
+    /// set it globally rather than per tree.
+    /// </para>
+    /// </summary>
+    public bool WalSaturationAcuteOnly { get; set; } = DefaultWalSaturationAcuteOnly;
+
+    /// <summary>
+    /// Default value for <see cref="WalSaturationAcuteOnly"/>
+    /// (<see langword="true"/> - an admission semaphore at its cap classifies
+    /// Throttled; only acute causes classify Saturated).
+    /// </summary>
+    public const bool DefaultWalSaturationAcuteOnly = true;
+
+    /// <summary>
     /// Optional per-flush latency threshold that, when crossed for
     /// <see cref="WalSaturationFlushLatencySampleWindows"/> consecutive
     /// sampler ticks, escalates the affected tree to

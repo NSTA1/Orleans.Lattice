@@ -235,6 +235,9 @@ param(
 	# whole parked herd in one pass" behaviour, which is the control arm -
 	# so -1 is the inherit sentinel meaning "do not set the env var".
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
+	# (#3348) 1/0 forces LatticeOptions.WalSaturationAcuteOnly on/off; -1 keeps
+	# the rig default (on - see BENCH_WAL_SATURATION_ACUTE_ONLY in Silo/Program.cs).
+	[int] $WalSaturationAcuteOnly = -1,
 	# Extra silo env vars as "NAME=value" strings, appended last so they win.
 	# For one-off diagnostic arms that do not warrant a dedicated parameter.
 	[string[]] $ExtraSiloEnv = @(),
@@ -332,6 +335,9 @@ if ($WalBatchedSingleEntryAppends -ge 0) {
 
 # (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
 # pre-#3402 release-everything control arm.
+if ($WalSaturationAcuteOnly -ge 0) {
+	$siloEnv += "BENCH_WAL_SATURATION_ACUTE_ONLY=$WalSaturationAcuteOnly"
+}
 if ($WalSaturationRecoveryReleaseBatch -ge 0) {
 	$siloEnv += "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH=$WalSaturationRecoveryReleaseBatch"
 }

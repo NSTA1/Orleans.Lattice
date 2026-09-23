@@ -477,6 +477,10 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var providerFailureThreshold = opts.WalSaturationProviderFailureRateThreshold;
         var throttledRatio = opts.WalSaturationThrottledRatio;
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
+        // (#3348) Whether an admission semaphore merely at its cap is an acute
+        // (Saturated) input or a back-pressure (Throttled) one. See
+        // LatticeOptions.WalSaturationAcuteOnly.
+        var parkedCallersSaturate = !opts.WalSaturationAcuteOnly;
         // (#3402) How many parked admission-gate callers a single tick may
         // release once a partition reads Healthy. Paces the recovery so the
         // released herd cannot instantly re-saturate the partition it was
@@ -758,7 +762,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 drainLagConsecutiveWindows,
                 drainLagEnabled ? drainLagSampleWindows : 0,
                 pinLatencyConsecutiveWindows,
-                pinLatencyEnabled ? pinLatencySampleWindows : 0);
+                pinLatencyEnabled ? pinLatencySampleWindows : 0,
+                parkedCallersSaturate);
 
             var cause = AttributeCause(
                 acc,
@@ -857,7 +862,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         drainLagConsecutiveWindows,
                         drainLagEnabled ? drainLagSampleWindows : 0,
                         pinLatencyConsecutiveWindows,
-                        pinLatencyEnabled ? pinLatencySampleWindows : 0);
+                        pinLatencyEnabled ? pinLatencySampleWindows : 0,
+                        parkedCallersSaturate);
 
                     // A partition never reads healthier than a tree the
                     // *recovery window* is holding at Throttled: that
@@ -982,6 +988,15 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
     /// is <c>null</c>).
     /// </para>
+    /// <para>
+    /// (#3348) The admission-semaphore-at-cap input is an acute trigger only
+    /// when <paramref name="parkedCallersSaturate"/> is <see langword="true"/>
+    /// (<see cref="LatticeOptions.WalSaturationAcuteOnly"/> disabled). When the
+    /// option is enabled (the default) it is cleared, and a partition at its cap falls through to the depth-ratio
+    /// test below and reads Throttled: the semaphore already applies that
+    /// back-pressure itself, so treating ordinary pipelining at the cap as a
+    /// fault only closes the admission gate on healthy traffic.
+    /// </para>
     /// </summary>
     private static WalSaturationState Classify(
         TreeAccumulator acc,
@@ -993,7 +1008,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         int drainLagConsecutiveWindows,
         int drainLagSampleWindows,
         int pinLatencyConsecutiveWindows,
-        int pinLatencySampleWindows)
+        int pinLatencySampleWindows,
+        bool parkedCallersSaturate = true)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
         // provider-failure threshold crossed (when enabled) OR
@@ -1002,7 +1018,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold
             || (providerFailureThreshold > 0 && acc.ProviderFailureDeltaInWindow >= providerFailureThreshold)
             || (flushLatencySampleWindows > 0 && flushLatencyConsecutiveWindows >= flushLatencySampleWindows)
-            || acc.HasParkedCallers)
+            || (parkedCallersSaturate && acc.HasParkedCallers))
         {
             return WalSaturationState.Saturated;
         }
