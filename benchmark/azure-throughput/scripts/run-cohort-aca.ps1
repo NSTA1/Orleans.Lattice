@@ -196,6 +196,24 @@ param(
 	# ninth ~17-45 regardless of table). Treat only the first cohort after a
 	# deployment as a trustworthy absolute number.
 	[string] $WalTable = "OrleansLatticeWal",
+	# Grain-state table for leaf/internal/atomic/registry state
+	# (BENCH_LEAF_STORAGE_TABLE). Rotated per cohort alongside $WalTable when
+	# -ResetStorage is on; see below.
+	[string] $GrainStateTable = "OrleansLatticeGrainState",
+	# (#3458) Start every cohort against EMPTY storage. While the silos are
+	# parked, delete every table in the rig's storage account except the
+	# clustering table, then point this cohort at freshly-named WAL and
+	# grain-state tables. Rotating the tree id alone isolates cohorts
+	# logically, but every earlier tree's registry entry and grain state stays
+	# in the shared tables. Each new cluster enumerates those trees and runs
+	# background work against them (WAL GC floor retries, the storage-usage
+	# fan-out) inside the measured window. On rg-p3411, 17-19 accumulated
+	# trees correlated with 5-25 s zero-throughput stalls. The fresh names
+	# sidestep Azure Tables' TableBeingDeleted refusal to recreate a
+	# just-deleted name. An explicitly supplied -WalTable / -GrainStateTable
+	# is honoured unchanged. Pass -ResetStorage:$false to keep the old
+	# accumulate-across-cohorts behaviour, e.g. to reproduce #3458.
+	[bool] $ResetStorage = $true,
 	# (#3348) The two saturation budgets the rig deliberately sets rather than
 	# inheriting. Both default to Timeout.InfiniteTimeSpan in the library so
 	# the bounds are opt-in on the released 9.x line (#3386, #3390), and both
@@ -278,6 +296,18 @@ $ClientCount = [Math]::Min(64, $ClientsPerSilo * $SiloCount)
 Write-Host "[cohort] n=$SiloCount workload=$WorkloadMode duration=${DurationSec}s tree=$TreeId" -ForegroundColor Cyan
 Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleCount * $TickHz) keys/s) shards=$ShardCount flushConcurrency=$FlushConcurrency clients=$ClientCount" -ForegroundColor DarkGray
 
+if ($ResetStorage) {
+	# Parking first is what makes the delete safe: no live silo may hold a
+	# table open. Idempotent when the previous cohort's finally already
+	# parked the app.
+	Set-AcaSiloCount -Context $ctx -Count 0 -TimeoutSec 300 | Out-Null
+	Reset-AcaBenchTables -Context $ctx -Keep @('OrleansSiloInstances') | Out-Null
+	$tableStamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
+	if (-not $PSBoundParameters.ContainsKey('WalTable')) { $WalTable = "Wal$tableStamp" }
+	if (-not $PSBoundParameters.ContainsKey('GrainStateTable')) { $GrainStateTable = "Gs$tableStamp" }
+}
+Write-Host "[cohort] walTable=$WalTable grainStateTable=$GrainStateTable resetStorage=$ResetStorage" -ForegroundColor DarkGray
+
 # Per-cell silo configuration. BENCH_SHARD_COUNT stays 0 on every silo: in a
 # multi-replica cluster all N would race the grow-only reshard, the first
 # would win, and the rest would take the ArgumentOutOfRangeException as fatal
@@ -286,6 +316,7 @@ Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleC
 $siloEnv = @(
 	"BENCH_TREE_ID=$TreeId",
 	"BENCH_WAL_TABLE=$WalTable",
+	"BENCH_LEAF_STORAGE_TABLE=$GrainStateTable",
 	"BENCH_WORKLOAD_MODE=$WorkloadMode",
 	"BENCH_BATCH_SIZE=$BatchSize",
 	"BENCH_FLUSH_MS=$FlushMs",
@@ -426,6 +457,17 @@ try {
 	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300
 	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec
 	Write-Host "[cohort] execution finished: $state" -ForegroundColor DarkGray
+
+	# Park the silos BEFORE harvesting. The producer has exited, so nothing
+	# the silos do from here on is measured, while the harvest below waits on
+	# Log Analytics ingestion for up to seven minutes. Waiting with N replicas
+	# still up made that ingestion lag the single largest line in a sweep's
+	# compute bill. The lines already written to stdout are shipped by the
+	# platform's log agent whether or not the replica is still alive, and the
+	# harvest is pinned to $siloRevision, so parking early loses nothing. The
+	# finally below still parks unconditionally for the failure paths.
+	try { Set-AcaSiloCount -Context $ctx -Count 0 -TimeoutSec 300 | Out-Null }
+	catch { Write-Warning "[cohort] early park failed ($_); the finally block will retry" }
 
 	# A failed producer never prints its DONE marker, so the harvest would
 	# poll to its full deadline waiting for a line that cannot arrive - with
