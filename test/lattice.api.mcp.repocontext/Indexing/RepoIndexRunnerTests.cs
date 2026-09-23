@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Indexing;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoIndexRunnerTests
+public sealed partial class RepoIndexRunnerTests
 {
     [Test]
     public async Task StartIndexAsync_and_GetProgressAsync_delegate_to_the_job_grain()

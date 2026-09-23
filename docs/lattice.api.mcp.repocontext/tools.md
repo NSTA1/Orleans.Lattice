@@ -75,6 +75,20 @@ Onboarding a repository (`repocontext_bootstrap`, or `repocontext_add_repo` in w
 
 Because the run is decoupled from the request, a dropped MCP stream or client disconnect can no longer abort an index. Each job is anchored by an Orleans reminder: while a run is in flight the reminder beats as a single-flight heartbeat, and after a host restart it re-fires, reactivates the job, and re-enqueues the persisted request so the interrupted pass resumes from where it left off (the bootstrap pass is idempotent, so already-committed files are skipped by digest). The `attempt` counter on the status snapshot is a cumulative tally of index runs *started* for the repository - the initial onboarding plus every re-drive (each periodic reconcile that picks up edits and deletions, each gap back-fill, each re-drive of a failed run, and each reminder-driven resume) - so it rises steadily on a healthy, actively-maintained repository and a high value is normal, not a sign of failure or interruption. A durable grain-storage provider and the Orleans reminder service must therefore be configured on the host; the bundled container image wires both.
 
+### Adaptive pacing
+
+While a run is `Running`, the `repocontext_index_status` snapshot carries a `pacing` object read live from the silo's indexing pacer (it is absent once the run completes or fails, and on a host with pacing switched off by `LATTICE_REPOCONTEXT_PACING=false` it reports `Disabled`). It explains why an embedding pass is going slower than the hardware could, so a deliberately slowed job reads as slowed rather than as stalled:
+
+| Field | Meaning |
+|---|---|
+| `state` | `Idle` (no batch recently), `Pacing` (full rate), `Backoff` (a congestion signal raised the inter-batch delay), `Waiting` (a vector tree is saturated, bounded at 30 s), `Resting` (the rest between work slices), `Yielding` (a search or context call is in flight, bounded at 2 s), or `Disabled`. |
+| `reason` | A human-readable cause for the current state, for example `an embedding batch failed`. |
+| `batchDelayMilliseconds` | The current congestion-driven delay before each batch; `0` at the full rate. |
+| `since` | When the pacer entered its current state; absent while `Idle`. |
+| `foregroundRequests` | How many search or context calls are in flight on this silo right now. |
+
+A `Backoff`, `Waiting`, `Resting`, or `Yielding` state with `filesEmbedded` or `symbolsEmbedded` still advancing between polls is a healthy, paced job. The pacer never skips or fails a batch, so a paced pass lands exactly what an unpaced one would, only spread over more wall-clock time. The variables that tune it are listed under [container configuration](container.md).
+
 ## Staying fully indexed: the self-index grain
 
 Onboarding a repository does more than complete once: a per-repository **self-index grain**, keyed by `repoId`, owns that repository's "reach and stay fully indexed" guarantee for as long as the repository is registered. The same onboarding call that starts the first pass (`repocontext_bootstrap`, or `repocontext_add_repo` in workspace mode) arms this grain; removing the repository (`repocontext_remove_repo`) tears it down. Onboarding and self-heal recovery therefore funnel through exactly one path and cannot drift.

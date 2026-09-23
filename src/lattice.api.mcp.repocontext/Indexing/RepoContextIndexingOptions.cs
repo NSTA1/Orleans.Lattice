@@ -60,6 +60,18 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="AnnSweepInterval"/> (in seconds).</summary>
     public const string AnnSweepIntervalSecondsKey = "LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS";
 
+    /// <summary>The environment variable that switches the adaptive indexing pacer on or off (<see cref="Pacing"/>).</summary>
+    public const string PacingKey = "LATTICE_REPOCONTEXT_PACING";
+
+    /// <summary>The environment variable holding the pacer's work-slice length, in seconds (<see cref="PacingSliceDuration"/>).</summary>
+    public const string PacingSliceSecondsKey = "LATTICE_REPOCONTEXT_PACING_SLICE_SECONDS";
+
+    /// <summary>The environment variable holding the pacer's rest between work slices, in seconds (<see cref="PacingSliceRest"/>).</summary>
+    public const string PacingRestSecondsKey = "LATTICE_REPOCONTEXT_PACING_REST_SECONDS";
+
+    /// <summary>The environment variable holding the pacer's inter-batch delay ceiling, in seconds (<see cref="PacingMaxBatchDelay"/>).</summary>
+    public const string PacingMaxDelaySecondsKey = "LATTICE_REPOCONTEXT_PACING_MAX_DELAY_SECONDS";
+
     /// <summary>The <see cref="SemanticRetrieval"/> value selecting the persisted approximate index (the default).</summary>
     public const string SemanticRetrievalApproximate = "approximate";
 
@@ -465,6 +477,38 @@ internal sealed class RepoContextIndexingOptions
     public bool AnnSweepIntervalIsFloored => AnnSweepInterval <= MinimumAnnSweepInterval;
 
     /// <summary>
+    /// Whether the adaptive indexing pacer shapes the embedding drain loop (issue
+    /// #3447). On by default. When off, <see cref="RepoContextIndexingPacer"/> is
+    /// inert: every batch runs back to back exactly as it did before the pacer
+    /// existed, nothing yields to search, background maintenance is never deferred,
+    /// and <c>index_status</c> reports the pacer as
+    /// <see cref="RepoIndexPaceState.Disabled"/>. Resolved from
+    /// <see cref="PacingKey"/>.
+    /// </summary>
+    public bool Pacing { get; init; } = true;
+
+    /// <summary>
+    /// How long the drain loop works before it rests (the duty cycle's "on" half).
+    /// Resolved from <see cref="PacingSliceSecondsKey"/>. Zero disables the duty
+    /// cycle while leaving the rest of the pacer on.
+    /// </summary>
+    public TimeSpan PacingSliceDuration { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long the drain loop rests between work slices (the duty cycle's "off"
+    /// half). Resolved from <see cref="PacingRestSecondsKey"/>. Zero disables the
+    /// duty cycle while leaving the rest of the pacer on.
+    /// </summary>
+    public TimeSpan PacingSliceRest { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The ceiling on the delay the pacer inserts before an embedding batch while it
+    /// backs off a congested vector plane. Resolved from
+    /// <see cref="PacingMaxDelaySecondsKey"/>.
+    /// </summary>
+    public TimeSpan PacingMaxBatchDelay { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -489,6 +533,10 @@ internal sealed class RepoContextIndexingOptions
             AnnIndexScheduling = ReadBoolean(AnnIndexSchedulingKey, defaults.AnnIndexScheduling),
             AnnIndexReclamation = ReadBoolean(AnnIndexReclamationKey, defaults.AnnIndexReclamation),
             AnnSweepInterval = ReadSeconds(AnnSweepIntervalSecondsKey, defaults.AnnSweepInterval),
+            Pacing = ReadBoolean(PacingKey, defaults.Pacing),
+            PacingSliceDuration = ReadSeconds(PacingSliceSecondsKey, defaults.PacingSliceDuration),
+            PacingSliceRest = ReadSeconds(PacingRestSecondsKey, defaults.PacingSliceRest),
+            PacingMaxBatchDelay = ReadSeconds(PacingMaxDelaySecondsKey, defaults.PacingMaxBatchDelay),
         };
     }
 

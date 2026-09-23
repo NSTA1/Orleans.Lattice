@@ -62,6 +62,10 @@ public static class RepoContextEnvironmentVariables
         RepoContextIndexingOptions.AnnIndexSchedulingKey,
         RepoContextIndexingOptions.AnnIndexReclamationKey,
         RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
+        RepoContextIndexingOptions.PacingKey,
+        RepoContextIndexingOptions.PacingSliceSecondsKey,
+        RepoContextIndexingOptions.PacingRestSecondsKey,
+        RepoContextIndexingOptions.PacingMaxDelaySecondsKey,
     ];
 
     /// <summary>
@@ -202,6 +206,22 @@ public static class RepoContextEnvironmentVariables
                 RepoContextIndexingOptions.AnnSweepIntervalSecondsKey,
                 Seconds(resolved.EffectiveAnnSweepInterval),
                 Seconds(defaults.EffectiveAnnSweepInterval)),
+            Snapshot(
+                RepoContextIndexingOptions.PacingKey,
+                resolved.Pacing.ToString(),
+                defaults.Pacing.ToString()),
+            Snapshot(
+                RepoContextIndexingOptions.PacingSliceSecondsKey,
+                Seconds(resolved.PacingSliceDuration),
+                Seconds(defaults.PacingSliceDuration)),
+            Snapshot(
+                RepoContextIndexingOptions.PacingRestSecondsKey,
+                Seconds(resolved.PacingSliceRest),
+                Seconds(defaults.PacingSliceRest)),
+            Snapshot(
+                RepoContextIndexingOptions.PacingMaxDelaySecondsKey,
+                Seconds(resolved.PacingMaxBatchDelay),
+                Seconds(defaults.PacingMaxBatchDelay)),
 
             // Reported as the resolved repository count rather than the raw list: the
             // list is the opt-in, and how many repositories it actually parsed to is the

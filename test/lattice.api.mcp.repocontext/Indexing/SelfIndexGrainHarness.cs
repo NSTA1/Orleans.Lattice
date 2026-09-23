@@ -154,6 +154,9 @@ internal sealed class SelfIndexGrainHarness
     /// </summary>
     internal Func<CancellationToken, Task>? TimerCallback { get; private set; }
 
+    /// <summary>The indexing pacer the grain consults before its coverage audit, or <see langword="null"/> for none.</summary>
+    internal RepoContextIndexingPacer? Pacer { get; set; }
+
     /// <summary>An embedding provider, set to make the approximate-index scheduler do real work.</summary>
     internal IEmbeddingProvider? Embedder { get; set; }
 
@@ -183,7 +186,8 @@ internal sealed class SelfIndexGrainHarness
                 GrainFactory, Options, NullLogger<RepoContextAnnIndexScheduler>.Instance, Embedder),
             Harness.RepoContextSourceTestDoubles.MountedOnlyGate(),
             NullLogger<RepoContextSelfIndexGrain>.Instance,
-            State);
+            State,
+            Pacer);
     }
 
     /// <summary>A well-formed onboarding request for this harness's repository.</summary>

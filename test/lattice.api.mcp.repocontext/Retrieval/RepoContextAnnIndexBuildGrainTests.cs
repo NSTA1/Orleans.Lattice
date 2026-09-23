@@ -101,6 +101,9 @@ public sealed partial class RepoContextAnnIndexBuildGrainTests
 
         public RepoContextIndexingOptions Indexing { get; init; } = new();
 
+        /// <summary>The indexing pacer each activation is built with, or <see langword="null"/> for none.</summary>
+        public RepoContextIndexingPacer? Pacer { get; init; }
+
         /// <summary>Starts a new process over the same durable state.</summary>
         public Activation Start()
         {
@@ -133,7 +136,8 @@ public sealed partial class RepoContextAnnIndexBuildGrainTests
                 corpusReporter,
                 sliceReporter,
                 NullLogger<RepoContextAnnIndexBuildGrain>.Instance,
-                State);
+                State,
+                Pacer);
 
             return new Activation
             {

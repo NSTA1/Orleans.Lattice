@@ -726,7 +726,9 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'query' parameter is required and must be a non-empty query string.");
         }
 
-        return ResolveSearchService(context).SearchAsync(repoId, query, k, cancellationToken);
+        var search = ResolveSearchService(context);
+        return RunInForegroundAsync(
+            context, () => search.SearchAsync(repoId, query, k, cancellationToken));
     }
 
     /// <summary>
@@ -792,8 +794,11 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'task' parameter is required and must be a non-empty task description.");
         }
 
-        return ResolveBundleService(context)
-            .BuildAsync(repoId, task, top, responseBudgetTokens, ParseDetail(detail), seen, known, session, cancellationToken);
+        var bundle = ResolveBundleService(context);
+        var parsedDetail = ParseDetail(detail);
+        return RunInForegroundAsync(
+            context,
+            () => bundle.BuildAsync(repoId, task, top, responseBudgetTokens, parsedDetail, seen, known, session, cancellationToken));
     }
 
     /// <summary>
@@ -1273,6 +1278,18 @@ internal static class RepoContextToolHandlers
     /// </summary>
     /// <param name="context">The MCP request context.</param>
     /// <returns>The resolved search service.</returns>
+    internal static async Task<T> RunInForegroundAsync<T>(
+        RequestContext<CallToolRequestParams> context, Func<Task<T>> operation)
+    {
+        // An agent waiting on a search or a context bundle is the latency that
+        // matters, so the indexing pacer yields its next embedding batch, bounded,
+        // while the request is in flight (issue #3447). The lease is taken here, at
+        // the tool seam, and not inside the search service, because the service is
+        // also called by the background warmup, which must not look like foreground.
+        using var lease = context.Services?.GetService<RepoContextIndexingPacer>()?.EnterForeground();
+        return await operation().ConfigureAwait(false);
+    }
+
     private static RepoContextSearchService ResolveSearchService(RequestContext<CallToolRequestParams> context)
     {
         var services = context.Services

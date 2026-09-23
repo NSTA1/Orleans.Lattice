@@ -929,6 +929,11 @@ sum against a single term is what made a working index look dead.
     and embedding symbols or memory, not files. Do not re-onboard on this
     reading; see "Freshness and re-ingest" above for the two-reading check that
     distinguishes it from a real stall.
+  - **Paced, not stalled:** a `Running` snapshot's `pacing.state` of
+    `Backoff`, `Waiting`, `Resting`, or `Yielding` means the adaptive indexing
+    pacer is deliberately spacing embedding batches (congestion, a saturated
+    vector tree, the duty-cycle rest, or an in-flight search). The counters
+    advance more slowly but they advance; it is never grounds to re-onboard.
   - **Stale content projection (body-text ranking only):** the per-file content
     projection is a separate, rebuildable tree from the vector index. If it is
     terminally stale (its leaf checkpoint fell off the write-ahead log awaiting an

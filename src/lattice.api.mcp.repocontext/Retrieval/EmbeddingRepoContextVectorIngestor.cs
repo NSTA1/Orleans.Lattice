@@ -139,6 +139,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
     private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
     private readonly RepoContextSymbolWalkReporter? _symbolWalkReporter;
+    private readonly RepoContextIndexingPacer? _pacer;
 
     /// <summary>
     /// The symbol arm's in-progress range walk, per repository, carried across
@@ -292,6 +293,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then degrades to keyword recall).</param>
     /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing ingestion coverage down, or <see langword="null"/> in a host that registered none.</param>
     /// <param name="symbolWalkReporter">Meters whether the symbol arm's range walk completed, resumed banked progress, or banked and stood down, or <see langword="null"/> in a host that registered none.</param>
+    /// <param name="pacer">The silo's shared indexing pacer, consulted before and fed after every embedding batch, or <see langword="null"/> to run batches back to back unpaced.</param>
     /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
@@ -300,7 +302,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         ILogger<EmbeddingRepoContextVectorIngestor> logger,
         IEmbeddingProvider? embeddingProvider = null,
         RepoContextCoverageProbeReporter? coverageProbeReporter = null,
-        RepoContextSymbolWalkReporter? symbolWalkReporter = null)
+        RepoContextSymbolWalkReporter? symbolWalkReporter = null,
+        RepoContextIndexingPacer? pacer = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -313,6 +316,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         _embeddingProvider = embeddingProvider;
         _coverageProbeReporter = coverageProbeReporter;
         _symbolWalkReporter = symbolWalkReporter;
+        _pacer = pacer;
     }
 
     /// <inheritdoc />
@@ -1955,6 +1959,18 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Paced, not back to back (issue #3447). The pacer decides WHEN this
+            // batch runs - after a bounded wait on a saturated vector tree, a bounded
+            // yield to in-flight searches, a duty-cycle rest, and the current
+            // congestion delay - and never WHETHER it runs, so every outcome below is
+            // classified exactly as it was. It also turns the three-strike break
+            // further down into a last resort: each failure doubles the delay before
+            // the next attempt, so the strikes are spread over a backoff rather than
+            // spent in a burst against a store that is already failing.
+            var batchStartedAt = _pacer is null
+                ? 0L
+                : await _pacer.PaceAsync(cancellationToken).ConfigureAwait(false);
             var count = Math.Min(EmbedBatchSize, unitTexts.Count - start);
             var batchTexts = unitTexts.GetRange(start, count);
             attemptedBatches++;
@@ -1975,6 +1991,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // that did land suppress the arm's "no embedding batch succeeded" line
                 // and leave a healthy-looking outcome behind (issue #2272).
                 var failedSources = NameBatchSources(start, count);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
                 failedBatches++;
                 embedFailedBatches++;
                 strandedSources += failedSources.Count;
@@ -2066,6 +2083,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
                 embedded += batchEmbedded;
                 consecutiveBatchFailures = 0;
+                _pacer?.RecordBatch(batchStartedAt, succeeded: true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2075,6 +2093,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // repair, which is what makes continuing safe rather than merely
                 // convenient.
                 firstBatchFailure ??= ex;
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
                 failedBatches++;
                 if (stage == "record")
                 {

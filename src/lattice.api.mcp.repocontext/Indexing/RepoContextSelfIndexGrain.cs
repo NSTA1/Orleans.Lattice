@@ -42,8 +42,24 @@ internal sealed class RepoContextSelfIndexGrain(
     RepoContextIndexSourceGate sourceGate,
     ILogger<RepoContextSelfIndexGrain> logger,
     [PersistentState("repoContextSelfIndex", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
-    IPersistentState<RepoContextSelfIndexState> state) : IRepoContextSelfIndexGrain, IRemindable, IGrainBase
+    IPersistentState<RepoContextSelfIndexState> state,
+    RepoContextIndexingPacer? pacer = null) : IRepoContextSelfIndexGrain, IRemindable, IGrainBase
 {
+    /// <summary>
+    /// The most consecutive sweeps a due coverage-digest audit is postponed for the
+    /// indexing pacer (issue #3447) before it runs regardless. At the five-minute
+    /// scan cooldown this is about an hour - short against the audit's own
+    /// multi-hour cadence, so the audit is slowed, never starved.
+    /// </summary>
+    internal const int MaxCoverageAuditPostponements = 12;
+
+    /// <summary>
+    /// Consecutive sweeps the due audit has been postponed. Activation-local on
+    /// purpose: a reactivation forgetting the count can only make the audit run
+    /// sooner, which is the safe direction.
+    /// </summary>
+    private int _auditPostponements;
+
     /// <summary>
     /// The keep-alive reminder name. Never rename it: a rename would orphan the
     /// reminders already registered for live repositories.
@@ -298,8 +314,29 @@ internal sealed class RepoContextSelfIndexGrain(
         // against the freshly re-derived digest rather than the stale one it replaced.
         // This is the only O(sources) membership read left on the coverage path, which
         // is exactly why it is paced in hours while detection runs every sweep.
-        if (nowTicks >= state.State.NextCoverageAuditAfterTicks)
+        var auditDue = nowTicks >= state.State.NextCoverageAuditAfterTicks;
+        if (auditDue
+            && pacer is not null
+            && _auditPostponements < MaxCoverageAuditPostponements
+            && pacer.ShouldDeferBackground(out var postponeReason))
         {
+            // The audit is the one O(sources) membership read on this path, so it
+            // is the maintenance most worth moving out of the way of a foreground
+            // query or a congested drain (issue #3447). The due time is left as it
+            // is, so the next sweep simply asks again.
+            _auditPostponements++;
+            auditDue = false;
+            logger.LogInformation(
+                "Repo {RepoId}: coverage-digest audit postponed ({Count} of at most {Max}): {Reason}.",
+                RepoId,
+                _auditPostponements,
+                MaxCoverageAuditPostponements,
+                postponeReason);
+        }
+
+        if (auditDue)
+        {
+            _auditPostponements = 0;
             try
             {
                 var audited = await gapScanner
