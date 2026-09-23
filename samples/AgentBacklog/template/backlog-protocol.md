@@ -403,6 +403,31 @@ exactly the case the epic branch exists to avoid. An item that is `partOf` an
 epic and carries `baseBranch:main` is a **defect**, reported rather than
 silently accepted.
 
+### Cross-checking `attempts` against the fencing token
+
+The claim-marker count is only as good as the workers who post markers, and a
+missing marker produces no signal: an item drawn six times with no marker reads
+`attempts = 0`, exactly like an item never drawn, so the poison threshold is
+unreachable. Every sweep that derives `attempts` therefore also reads the item's
+`fencingToken` from `repocontext_claim_status`. The claim grant itself advances
+it, so it cannot be forgotten; it is absent until the first grant.
+
+The token is an **upper bound, not an attempt count**. A same-owner re-claim
+after a lease lapse advances it without being a new attempt (see
+[Detecting and picking up a dropped lease](#detecting-and-picking-up-a-dropped-lease)), and a renew that omits
+`leaseSeconds` makes such lapses common. So it cross-checks the marker count and
+never replaces it:
+
+| `fencingToken` | Claim markers | Reading | Action |
+|---|---|---|---|
+| absent or 0 | 0 | never claimed | none - `attempts` is 0 |
+| > 0 | 0 | claimed but unmarked | defect - report it; `attempts` is unknown, not zero |
+| = markers | > 0 | consistent | use the marker count as `attempts` |
+| > markers | > 0 | token ahead of the trail | use the marker count as `attempts`, and report the gap: markers were dropped, or claims lapsed |
+| < markers | > 0 | trail ahead of the token | defect - report it; a marker with no grant behind it |
+
+A sweep never reports `attempts = 0` for an item whose token is above zero.
+
 ## Relation vocabulary - the backlog extension
 
 These extend the small, stable
@@ -723,6 +748,10 @@ These are reported, never silently absorbed:
   deleted item silently releases work that was deliberately gated on it.
 - **Stale item.** An `anchoredTo` target drifted, so `recall` reports the item
   `stale`. Re-validate the spec before spending a run on it.
+- **Claimed but unmarked.** A `fencingToken` above zero with no claim marker, or
+  a token that disagrees with the marker count in either direction. With no
+  marker, `attempts` is unknown, not zero, so the item is not fresh. See [Cross-checking `attempts` against the fencing
+  token](#cross-checking-attempts-against-the-fencing-token).
 - **Duplicate attribute tag.** Two tags sharing a `key:` prefix means two
   concurrent authors. Reconcile; never pick one arbitrarily.
 - **Unrecognised `state:` value.** A `state:`-prefixed tag whose value is

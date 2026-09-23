@@ -345,6 +345,11 @@ The default threshold is **three**. An item already at or over it is poison: ski
 it. Burning one agent session per scheduled tick on an item that has failed three
 times is the exact waste the guard exists to prevent.
 
+A zero count is not proof the item is fresh, because a marker can be omitted.
+Cross-check it against the item's fencing token per
+[`backlog-protocol.md`](backlog-protocol.md#cross-checking-attempts-against-the-fencing-token),
+and report an item that is claimed but unmarked.
+
 ### Disjointness
 
 Compute each candidate's **blast radius** and compare it against the radii of the
