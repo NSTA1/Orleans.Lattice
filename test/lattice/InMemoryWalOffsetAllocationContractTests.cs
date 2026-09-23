@@ -65,21 +65,13 @@ public sealed class InMemoryWalOffsetAllocationContractTests : WalOffsetAllocati
             return offsets;
         }
 
-        // TODO(#3448): enrol this provider in the reconcile half of the contract.
-        // Stubbed out of the #3348 change's scope; until it lands the reconcile
-        // contract tests report Ignored for this provider rather than passing.
-        public Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken)
-        {
-            Assert.Ignore("TODO(#3448): reconcile contract not yet enrolled for this provider.");
-            return Task.CompletedTask;
-        }
+        // The provider completes an append before it returns, so its own
+        // acknowledgement and AppendAsync are the same point.
+        public Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken) =>
+            AppendAsync(offsets, cancellationToken);
 
-        // TODO(#3448): see AppendAcknowledgedAsync.
-        public Task ReconcileAsync(CancellationToken cancellationToken)
-        {
-            Assert.Ignore("TODO(#3448): reconcile contract not yet enrolled for this provider.");
-            return Task.CompletedTask;
-        }
+        public Task ReconcileAsync(CancellationToken cancellationToken) =>
+            ((IWalStorageProvider)_provider).ReconcileAsync(TreeId, ShardIndex, cancellationToken);
 
         public Task ReopenAsync(CancellationToken cancellationToken)
         {
