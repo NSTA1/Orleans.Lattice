@@ -743,7 +743,11 @@ builder.UseOrleans(silo =>
         // sweeps. The signal is silo-scoped per F-085, so per-tree
         // overrides here only affect the sampler's classification of
         // *this* tree - aligned with the bench's single-tree topology.
-        o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(saturationSampleMs);
+        // 0 means "sampler disabled"; the library spells that InfiniteTimeSpan
+        // and rejects TimeSpan.Zero at options validation.
+        o.WalSaturationSampleInterval = saturationSampleMs == 0
+            ? Timeout.InfiniteTimeSpan
+            : TimeSpan.FromMilliseconds(saturationSampleMs);
         o.WalSaturationThrottledRatio = saturationThrottledRatio;
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
         o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;

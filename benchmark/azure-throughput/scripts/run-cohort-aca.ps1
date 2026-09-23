@@ -235,6 +235,9 @@ param(
 	# whole parked herd in one pass" behaviour, which is the control arm -
 	# so -1 is the inherit sentinel meaning "do not set the env var".
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
+	# Extra silo env vars as "NAME=value" strings, appended last so they win.
+	# For one-off diagnostic arms that do not warrant a dedicated parameter.
+	[string[]] $ExtraSiloEnv = @(),
 	[int] $SettleSec = 30
 )
 
@@ -331,6 +334,11 @@ if ($WalBatchedSingleEntryAppends -ge 0) {
 # pre-#3402 release-everything control arm.
 if ($WalSaturationRecoveryReleaseBatch -ge 0) {
 	$siloEnv += "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH=$WalSaturationRecoveryReleaseBatch"
+}
+
+foreach ($kv in $ExtraSiloEnv) {
+	if ($kv -notmatch '^[A-Z0-9_]+=') { throw "ExtraSiloEnv entry '$kv' is not NAME=value." }
+	$siloEnv += $kv
 }
 
 $startedUtc = (Get-Date).ToUniversalTime()
