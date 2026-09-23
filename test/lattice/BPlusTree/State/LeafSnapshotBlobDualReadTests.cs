@@ -405,6 +405,13 @@ public sealed class LeafSnapshotBlobDualReadTests
         // The coverage-regression merge path must not silently downgrade a
         // frame-encoded blob back to the legacy row graph, and the merged rows
         // must stay ordinal-sorted so the frame's index table remains seekable.
+        //
+        // The regressing capture below deliberately carries every key the stored
+        // blob holds. A capture that omitted one would take the issue #2436
+        // decline instead (a stored-only key is indistinguishable from a delete
+        // whose tombstone compaction already reaped), the merge would return the
+        // stored blob verbatim, and the union this test exists to exercise would
+        // never run. Keep both keys in the incoming capture.
         var store = CreateStore(out _);
 
         await store.SaveAsync(
@@ -428,6 +435,8 @@ public sealed class LeafSnapshotBlobDualReadTests
                 {
                     new LeafSnapshotRow("alpha", LwwValue<byte[]>.Create(
                         Encoding.UTF8.GetBytes("new"), new HybridLogicalClock { WallClockTicks = 100L })),
+                    new LeafSnapshotRow("zeta", LwwValue<byte[]>.Create(
+                        Encoding.UTF8.GetBytes("stale"), new HybridLogicalClock { WallClockTicks = 400L })),
                 }),
                 SnapshotOffsetsByPartition = [-1L, 2L],
             },
@@ -441,5 +450,7 @@ public sealed class LeafSnapshotBlobDualReadTests
         var merged = Materialize(loaded);
         Assert.That(merged.Select(r => r.Key).ToArray(), Is.EqualTo(new[] { "alpha", "zeta" }).AsCollection,
             "merged rows must stay in ascending ordinal key order so the frame index table remains seekable");
+        Assert.That(Encoding.UTF8.GetString(merged.Single(r => r.Key == "zeta").Value.Value!), Is.EqualTo("high"),
+            "the union must fold each shared key by last-writer-wins rather than taking the incoming row wholesale");
     }
 }
