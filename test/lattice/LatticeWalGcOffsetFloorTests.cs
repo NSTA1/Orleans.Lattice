@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Tests;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class LatticeWalGcOffsetFloorTests
+public sealed partial class LatticeWalGcOffsetFloorTests
 {
     private const string Tree = "tree";
     private const string LeafConsumer = "_lattice_materialiser_tree_leaf-1";
