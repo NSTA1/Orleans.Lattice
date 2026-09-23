@@ -171,4 +171,97 @@ public sealed class RepoContextSnapshotFormatTests
             Assert.That(reader.FormatVersion, Is.EqualTo(RepoContextSnapshotFormat.CurrentVersion));
         });
     }
+
+    [Test]
+    public void Format_version_two_carries_expiry_and_still_reads_version_one()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                RepoContextSnapshotFormat.CurrentVersion,
+                Is.EqualTo(2),
+                "Version 2 is the revision that captures entry expiry (issue #2825). Bumping it is what "
+                + "makes an older build refuse the stream loudly rather than silently drop every TTL.");
+            Assert.That(
+                RepoContextSnapshotFormat.MinReadableVersion,
+                Is.EqualTo(1),
+                "Version-1 snapshots stay readable; they simply carry no expiry to reinstate.");
+        });
+    }
+
+    [Test]
+    public async Task ReadHeaderAsync_accepts_a_version_one_header()
+    {
+        using var stream = new MemoryStream();
+        await RepoContextSnapshotFormat.WriteHeaderAsync(
+            stream, 1, TestContext.CurrentContext.CancellationToken);
+        stream.Position = 0;
+
+        var version = await RepoContextSnapshotFormat.ReadHeaderAsync(
+            stream, TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(version, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Records_decoded_from_a_version_one_stream_report_no_expiry()
+    {
+        using var stream = new MemoryStream();
+        await RepoContextSnapshotFormat.WriteHeaderAsync(
+            stream, 1, TestContext.CurrentContext.CancellationToken);
+        // A version-1 producer never wrote the expiry member, so the encoding is
+        // exactly that of a record whose expiry is at its default.
+        await RepoContextSnapshotFormat.WriteFrameAsync(
+            stream,
+            _serializer.SerializeToArray(
+                new RepoContextSnapshotRecord { Key = "repo/acme/file/a.cs", Value = [1, 2, 3] }),
+            TestContext.CurrentContext.CancellationToken);
+
+        stream.Position = 0;
+        var reader = new RepoContextSnapshotReader(stream, _serializer);
+        var readBack = new List<RepoContextSnapshotRecord>();
+        await foreach (var record in reader.ReadAsync(TestContext.CurrentContext.CancellationToken))
+        {
+            readBack.Add(record);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.FormatVersion, Is.EqualTo(1));
+            Assert.That(readBack, Has.Count.EqualTo(1));
+            Assert.That(
+                readBack[0].ExpiresAtTicks,
+                Is.Zero,
+                "A stream that never captured an expiry can only honestly decode as durable.");
+        });
+    }
+
+    [Test]
+    public async Task Writer_then_reader_round_trips_an_expiry_instant()
+    {
+        var record = new RepoContextSnapshotRecord
+        {
+            Key = "repo/acme/file/a.cs",
+            Value = [1, 2, 3],
+            ExpiresAtTicks = 637_000_000_000_000_000L,
+        };
+
+        using var stream = new MemoryStream();
+        var writer = new RepoContextSnapshotWriter(stream, _serializer);
+        await writer.WriteRecordAsync(record, TestContext.CurrentContext.CancellationToken);
+
+        stream.Position = 0;
+        var reader = new RepoContextSnapshotReader(stream, _serializer);
+        var readBack = new List<RepoContextSnapshotRecord>();
+        await foreach (var decoded in reader.ReadAsync(TestContext.CurrentContext.CancellationToken))
+        {
+            readBack.Add(decoded);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(readBack, Has.Count.EqualTo(1));
+            Assert.That(readBack[0].ExpiresAtTicks, Is.EqualTo(637_000_000_000_000_000L));
+        });
+    }
 }

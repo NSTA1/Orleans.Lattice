@@ -227,7 +227,7 @@
     {
       "id": 4,
       "title": "Dependency wait p95 (ms) - causal-consistency staging",
-      "description": "Wait time for entries parked in the causal-apply buffer awaiting dependency satisfaction. Only emits samples when causal staging is enabled AND at least one entry parks. Flat-zero (no series) is the healthy steady state - the 'or vector(0)' guard renders zero rather than 'No data'.",
+      "description": "Wait time for entries parked in the causal-apply buffer awaiting dependency satisfaction. Only emits samples when causal staging is enabled AND at least one entry parks. Conditionally-emitted series here (replication.apply.dependency_wait) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -248,7 +248,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
           "legendFormat": "p95"
         }
       ]
@@ -323,7 +323,7 @@
     {
       "id": 7,
       "title": "Apply correctness violations (rate)",
-      "description": "FIFO and causal-violation counters. A sustained nonzero rate indicates a real correctness regression. Flat-zero is required for a healthy cluster.",
+      "description": "FIFO and causal-violation counters. A sustained nonzero rate indicates a real correctness regression. Flat-zero is required for a healthy cluster. Conditionally-emitted series here (replication.apply.fifo_violations) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -357,7 +357,7 @@
       "targets": [
         {
           "refId": "F",
-          "expr": "sum(rate(orleans_lattice_replication_apply_fifo_violations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum(rate(orleans_lattice_replication_apply_fifo_violations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "fifo violations"
         },
         {
@@ -1084,13 +1084,13 @@
     {
       "id": 35,
       "title": "Fall-off-log suppressed events (rate)",
-      "description": "Rate of fall-off-log detections suppressed as duplicates (orleans.lattice.replication.peer.fell_off_log_suppressed), by tree. Pairs with the peer.fell_off_log panel: a high suppressed-to-raised ratio means the detector is correctly de-duplicating repeated signals for the same gap.",
+      "description": "Rate of fall-off-log detections suppressed as duplicates (orleans.lattice.replication.peer.fell_off_log_suppressed), by tree. Pairs with the peer.fell_off_log panel: a high suppressed-to-raised ratio means the detector is correctly de-duplicating repeated signals for the same gap. Conditionally-emitted series here (replication.peer.fell_off_log_suppressed) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 113 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_peer_fell_off_log_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_peer_fell_off_log_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}" }
       ]
     },
     {
@@ -1231,7 +1231,7 @@
     {
       "id": 48,
       "title": "Shared-dictionary compression ratio",
-      "description": "Achieved shared-dictionary Zstandard compression ratio on the framing encode path (FramingCompression = ZstdDictionary with a non-zero FramingCompressionDictionaryId). 'ratio' is compressed-out over uncompressed-in (lower is better; 1.0 means no saving); 'in bytes/s' and 'out bytes/s' are the before/after byte rates. Flat-zero unless shared-dictionary compression is opted into and a dictionary resolves on this silo.",
+      "description": "Achieved shared-dictionary Zstandard compression ratio on the framing encode path (FramingCompression = ZstdDictionary with a non-zero FramingCompressionDictionaryId). 'ratio' is compressed-out over uncompressed-in (lower is better; 1.0 means no saving); 'in bytes/s' and 'out bytes/s' are the before/after byte rates. Flat-zero unless shared-dictionary compression is opted into and a dictionary resolves on this silo. Conditionally-emitted series here (replication.compress.dictionary.bytes_in, replication.compress.dictionary.bytes_out) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1294,12 +1294,12 @@
         },
         {
           "refId": "IN",
-          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_in_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_in_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "in bytes/s {{tree}}"
         },
         {
           "refId": "OUT",
-          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_out_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_out_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "out bytes/s {{tree}}"
         }
       ]
@@ -1397,37 +1397,37 @@
     {
       "id": 56,
       "title": "Receiver content entries elided (rate)",
-      "description": "Rate of manifest entries the receiver reported it already holds byte-identical content for (orleans.lattice.replication.receiver.content_entries_elided) - the entries the receiver told the sender it does not need shipped. Pairs with the sender-side content-hash payload elision panel: the two track the same elided entries from each end of the round trip. Flat-zero unless the receiver's applied-content index is populated (ContentHashDedupEnabled) and a peer advertises the exchange.",
+      "description": "Rate of manifest entries the receiver reported it already holds byte-identical content for (orleans.lattice.replication.receiver.content_entries_elided) - the entries the receiver told the sender it does not need shipped. Pairs with the sender-side content-hash payload elision panel: the two track the same elided entries from each end of the round trip. Flat-zero unless the receiver's applied-content index is populated (ContentHashDedupEnabled) and a peer advertises the exchange. Conditionally-emitted series here (replication.receiver.content_entries_elided) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 176 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_entries_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_entries_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{peer}} -> {{tree}}" }
       ]
     },
     {
       "id": 57,
       "title": "Receiver metadata-only HWM advances (rate)",
-      "description": "Rate of metadata-only per-origin high-water-mark advances the receiver performed during a content-hash exchange (orleans.lattice.replication.receiver.content_hwm_advances) - the identical-content-newer-clock idempotent re-set case where the high-water-mark advances without the payload travelling. Flat-zero unless idempotent upstream retry re-sends byte-identical content with a newer clock and the receiver already holds it.",
+      "description": "Rate of metadata-only per-origin high-water-mark advances the receiver performed during a content-hash exchange (orleans.lattice.replication.receiver.content_hwm_advances) - the identical-content-newer-clock idempotent re-set case where the high-water-mark advances without the payload travelling. Flat-zero unless idempotent upstream retry re-sends byte-identical content with a newer clock and the receiver already holds it. Conditionally-emitted series here (replication.receiver.content_hwm_advances) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 183 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_hwm_advances_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_hwm_advances_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{peer}} -> {{tree}}" }
       ]
     },
     {
       "id": 58,
       "title": "Shared-dictionary convergence pulls (rate)",
-      "description": "Rate of shared-dictionary convergence byte-pulls a sender performed against an advertising peer (orleans.lattice.replication.ship.dictionary_convergence), tagged by outcome. installed = the peer served the advertised dictionary bytes and the sender installed them (fingerprint-verified); rejected = the peer served bytes whose fingerprint did not match the advertisement, so they were discarded; unavailable = the peer or transport did not serve the bytes (un-upgraded peer, transport fallback). Opt-in via AddLatticeAutoSharedDictionary; flat-zero unless the self-distributing auto-dictionary feature is enabled and a peer advertises a dictionary this sender does not yet hold.",
+      "description": "Rate of shared-dictionary convergence byte-pulls a sender performed against an advertising peer (orleans.lattice.replication.ship.dictionary_convergence), tagged by outcome. installed = the peer served the advertised dictionary bytes and the sender installed them (fingerprint-verified); rejected = the peer served bytes whose fingerprint did not match the advertisement, so they were discarded; unavailable = the peer or transport did not serve the bytes (un-upgraded peer, transport fallback). Opt-in via AddLatticeAutoSharedDictionary; flat-zero unless the self-distributing auto-dictionary feature is enabled and a peer advertises a dictionary this sender does not yet hold. Conditionally-emitted series here (replication.ship.dictionary_convergence) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 183 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_convergence_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
+        { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_convergence_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
       ]
     },
     {
@@ -1445,20 +1445,20 @@
     {
       "id": 60,
       "title": "Log-tailing producer: leaf WAL append vs ship rate (ops/s)",
-      "description": "Throughput of the log-first replication producer. appended = entries committed to the leaf write-ahead log by WalCommitLogWriter (orleans.lattice.wal.shard.dispatch.entries), which is now the sole appender; the replication sink no longer performs a redundant second WAL append. shipped = entries the shipper drained from that same WAL and sent to peers (orleans.lattice.replication.wal.entries_shipped). In steady state the two series track each other; a sustained gap (appended outpacing shipped) is the log-tailing producer falling behind the WAL it tails - cross-check with per-peer entries-behind and fell-off-log.",
+      "description": "Throughput of the log-first replication producer. appended = entries committed to the leaf write-ahead log by WalCommitLogWriter (orleans.lattice.wal.shard.dispatch.entries), which is now the sole appender; the replication sink no longer performs a redundant second WAL append. shipped = entries the shipper drained from that same WAL and sent to peers (orleans.lattice.replication.wal.entries_shipped). In steady state the two series track each other; a sustained gap (appended outpacing shipped) is the log-tailing producer falling behind the WAL it tails - cross-check with per-peer entries-behind and fell-off-log. Conditionally-emitted series here (replication.wal.entries_shipped) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 190 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum(rate(orleans_lattice_wal_shard_dispatch_entries_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "appended (leaf WAL)" },
-        { "refId": "S", "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "shipped" }
+        { "refId": "S", "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "shipped" }
       ]
     },
     {
       "id": 61,
       "title": "Shipper doorbell coalescing (rate)",
-      "description": "Rate of commit-time shipper-doorbell rings, split by whether each ring reached the shipper or was coalesced at the source. 'rung/s' (orleans.lattice.replication.doorbell.rung) counts rings actually dispatched to the non-reentrant shipper activation (the in-flight ring plus any trailing follow-up); 'coalesced/s' (orleans.lattice.replication.doorbell.coalesced) counts per-commit ring requests folded into the single pending follow-up because a ring for the same (tree, peer) was already in flight. Both fire when ShipDoorbellEnabled is true (the default). Under a sustained write burst 'coalesced/s' dominates while 'rung/s' stays near the small constant the shipper needs to stay awake - a high coalesced-to-rung ratio is the storm the coalescer is absorbing, keeping the shipper's turn queue from blowing up. A near-zero coalesced/s with rung/s tracking the commit rate means writes arrive slower than the shipper drains - no storm to absorb.",
+      "description": "Rate of commit-time shipper-doorbell rings, split by whether each ring reached the shipper or was coalesced at the source. 'rung/s' (orleans.lattice.replication.doorbell.rung) counts rings actually dispatched to the non-reentrant shipper activation (the in-flight ring plus any trailing follow-up); 'coalesced/s' (orleans.lattice.replication.doorbell.coalesced) counts per-commit ring requests folded into the single pending follow-up because a ring for the same (tree, peer) was already in flight. Both fire when ShipDoorbellEnabled is true (the default). Under a sustained write burst 'coalesced/s' dominates while 'rung/s' stays near the small constant the shipper needs to stay awake - a high coalesced-to-rung ratio is the storm the coalescer is absorbing, keeping the shipper's turn queue from blowing up. A near-zero coalesced/s with rung/s tracking the commit rate means writes arrive slower than the shipper drains - no storm to absorb. Conditionally-emitted series here (replication.doorbell.coalesced, replication.doorbell.rung) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1486,12 +1486,12 @@
       "targets": [
         {
           "refId": "RUNG",
-          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_rung_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_rung_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "rung/s {{tree}}/{{peer}}"
         },
         {
           "refId": "COALESCED",
-          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_coalesced_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_coalesced_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "coalesced/s {{tree}}/{{peer}}"
         }
       ]
@@ -1499,14 +1499,14 @@
     {
       "id": 62,
       "title": "Coordinated restore: saga phase and write-fence durations (p95, ms)",
-      "description": "95th-percentile duration of coordinated multi-cluster restore saga phases and per-tree write-fence windows. 'phase p95' (orleans.lattice.replication.saga.phase.duration, split by phase = prepare/commit/abort) separates the long unfenced prepare (shadow build) window from the short fenced cutover. 'fence p95' (orleans.lattice.replication.saga.fence.duration, per tree) measures only the write-blocking cutover window (engage to lift), NOT the longer globally-gated shipping pause - so a fence duration that grows toward the whole build window is the operator-actionable signal that a cutover is not staying bounded.",
+      "description": "95th-percentile duration of coordinated multi-cluster restore saga phases and per-tree write-fence windows. 'phase p95' (orleans.lattice.replication.saga.phase.duration, split by phase = prepare/commit/abort) separates the long unfenced prepare (shadow build) window from the short fenced cutover. 'fence p95' (orleans.lattice.replication.saga.fence.duration, per tree) measures only the write-blocking cutover window (engage to lift), NOT the longer globally-gated shipping pause - so a fence duration that grows toward the whole build window is the operator-actionable signal that a cutover is not staying bounded. Conditionally-emitted series here (replication.saga.fence.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 204 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(orleans_lattice_replication_saga_phase_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "phase p95 {{phase}}" },
-        { "refId": "F", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_replication_saga_fence_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "fence p95 {{tree}}" }
+        { "refId": "F", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_replication_saga_fence_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "fence p95 {{tree}}" }
       ]
     },
     {
@@ -1587,13 +1587,13 @@
     {
       "id": 68,
       "title": "WAL GC offset floor unavailable (ops/s)",
-      "description": "Rate of WAL garbage-collection passes that could not compute the durable leaf-materialiser offset floor because the pin-store read threw, so the pass fell back to no offset floor (orleans.lattice.wal.gc.offset_floor_unavailable). The fallback is safe for a single pass because the HLC floor still constrains the trim, but the failure was otherwise silent (issue #2314): a persistently unreachable pin store removes the offset floor on every pass indefinitely, indistinguishable from a tree that legitimately has no offset floor. The healthy no-floor outcomes - no durable pin store wired, or a reachable store reporting no offsets - do not reach this catch and do not increment the counter, so a sustained non-zero rate here means the offset floor is not being applied and the low-HLC/high-offset reap class it retains is protected only by the HLC floor until the store recovers. Read against the pass-outcome panel: a tree collecting normally but ticking this series is losing its offset floor.",
+      "description": "Rate of WAL garbage-collection passes that could not compute the durable leaf-materialiser offset floor because the pin-store read threw, so the pass fell back to no offset floor (orleans.lattice.wal.gc.offset_floor_unavailable). The fallback is safe for a single pass because the HLC floor still constrains the trim, but the failure was otherwise silent (issue #2314): a persistently unreachable pin store removes the offset floor on every pass indefinitely, indistinguishable from a tree that legitimately has no offset floor. The healthy no-floor outcomes - no durable pin store wired, or a reachable store reporting no offsets - do not reach this catch and do not increment the counter, so a sustained non-zero rate here means the offset floor is not being applied and the low-HLC/high-offset reap class it retains is protected only by the HLC floor until the store recovers. Read against the pass-outcome panel: a tree collecting normally but ticking this series is losing its offset floor. Conditionally-emitted series here (wal.gc.offset_floor_unavailable) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 225 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_offset_floor_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_offset_floor_unavailable_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}" }
       ]
     },
     {
@@ -1719,7 +1719,7 @@
     {
       "id": 30605,
       "title": "WAL GC scheduler selected wait versus actual pass duration (p95) - issue #3060",
-      "description": "The two halves of the scheduler's cadence, charted together because NEITHER IS INTERPRETABLE ALONE. orleans.lattice.wal.gc.scheduler.wait is the interval the loop CHOSE before its next pass, observed once per pass at the delay site so it is recorded even when the pass reached no tree. orleans.lattice.wal.gc.scheduler.pass_duration is how long a pass ACTUALLY took, recorded in a finally so a pass that faults, is cancelled, or is abandoned at a bound is measured too - that population's duration is itself the diagnosis, and siting the record on the success path would discard exactly the sample worth having. WHY BOTH: the wait is sited on the scheduler's DECISION and therefore cannot observe anything that happens AFTER the decision. A silo whose per-tree touches all end at the Orleans default 30 s response timeout selects the interval floor on every pass while the wall period is twice that, so the wait reads a flat, healthy-looking floor throughout and the stretch is invisible on it. DIVERGENCE BETWEEN THE TWO SERIES IS THE SIGNATURE of a loop whose passes are being stretched by something the cadence policy never saw. Read the wait's own shape as well: the adaptive cadence returns to the configured minimum ONLY after a fully successful pass, so every other exit relaxes geometrically toward the ceiling, and that climbing ladder is the one POSITIVE signature an alive-but-failing loop emits - every other series such a loop touches is frozen exactly as a stopped loop leaves them. Neither histogram is zero-primed, deliberately: the empty state of a duration distribution is UNDEFINED rather than zero, and a primed 0 s sample would corrupt every quantile on this panel. Their liveness is anchored instead to the pass heartbeat, with exactly one observation per started pass asserted by fixture - and that anchor is checkable directly from a scrape, because the _count series is emitted even where bucket series are not. THE MEAN TARGETS ARE THE ONES THAT RENDER EVERYWHERE. Measured against the deployment scrape this issue was raised from: that exporter emits NO histogram bucket series at all (zero _bucket series and zero histogram TYPE declarations across 16089 scraped lines), so every quantile target in this bundle is empty there and only the _sum over _count mean is readable. The p95 targets are kept for deployments whose exporter does emit buckets, and are labelled so an empty line is not misread as a dead instrument.",
+      "description": "The two halves of the scheduler's cadence, charted together because NEITHER IS INTERPRETABLE ALONE. orleans.lattice.wal.gc.scheduler.wait is the interval the loop CHOSE before its next pass, observed once per pass at the delay site so it is recorded even when the pass reached no tree. orleans.lattice.wal.gc.scheduler.pass_duration is how long a pass ACTUALLY took, recorded in a finally so a pass that faults, is cancelled, or is abandoned at a bound is measured too - that population's duration is itself the diagnosis, and siting the record on the success path would discard exactly the sample worth having. WHY BOTH: the wait is sited on the scheduler's DECISION and therefore cannot observe anything that happens AFTER the decision. A silo whose per-tree touches all end at the Orleans default 30 s response timeout selects the interval floor on every pass while the wall period is twice that, so the wait reads a flat, healthy-looking floor throughout and the stretch is invisible on it. DIVERGENCE BETWEEN THE TWO SERIES IS THE SIGNATURE of a loop whose passes are being stretched by something the cadence policy never saw. Read the wait's own shape as well: the adaptive cadence returns to the configured minimum ONLY after a fully successful pass, so every other exit relaxes geometrically toward the ceiling, and that climbing ladder is the one POSITIVE signature an alive-but-failing loop emits - every other series such a loop touches is frozen exactly as a stopped loop leaves them. Neither histogram is zero-primed, deliberately: the empty state of a duration distribution is UNDEFINED rather than zero, and a primed 0 s sample would corrupt every quantile on this panel. Their liveness is anchored instead to the pass heartbeat, with exactly one observation per started pass asserted by fixture - and that anchor is checkable directly from a scrape, because the _count series is emitted even where bucket series are not. THE MEAN TARGETS ARE THE ONES THAT RENDER EVERYWHERE. Measured against the deployment scrape this issue was raised from: that exporter emits NO histogram bucket series at all (zero _bucket series and zero histogram TYPE declarations across 16089 scraped lines), so every quantile target in this bundle is empty there and only the _sum over _count mean is readable. The p95 targets are kept for deployments whose exporter does emit buckets, and are labelled so an empty line is not misread as a dead instrument. Conditionally-emitted series here (wal.gc.scheduler.wait) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 281 },
@@ -1727,7 +1727,7 @@
       "targets": [
         { "refId": "A", "expr": "sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_wait_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_wait_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "selected wait mean" },
         { "refId": "C", "expr": "sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (instance) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "actual pass duration mean" },
-        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_gc_scheduler_wait_seconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "selected wait p95 (bucket exporters only)" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_gc_scheduler_wait_seconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "selected wait p95 (bucket exporters only)" },
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_gc_scheduler_pass_duration_seconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "actual pass duration p95 (bucket exporters only)" }
       ]
     },
@@ -1996,6 +1996,18 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 358 },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, status) (increase(orleans_lattice_wal_gc_floor_holder_offset_admission_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",status=~\"at_floor|above_floor\"}[$__range]))", "legendFormat": "{{tree}} {{status}}" }
+      ]
+    },
+    {
+      "id": 23141,
+      "title": "WAL GC offset floor population gap (consumers) - issue #2314",
+      "description": "Totals (not a rate) of orleans.lattice.wal.gc.offset_floor_population_gap over the selected range, per tree (issue #2314). THE QUESTION THIS ANSWERS: does this tree's durable offset floor actually speak for every consumer that owes WAL entries, or only for the ones that happened to report? THE FLOOR IS A MINIMUM OVER THE CONSUMERS THAT REPORTED AN OFFSET, NOT OVER THE CONSUMERS THAT OWE ENTRIES. A consumer holding a durable pin but absent from the offsets plane does not constrain the floor at all, so the floor comes out HIGHER than it should - and because the offset floor only ever REFUSES entries above itself, a floor that is too high refuses too FEW and hands the decision back to the HLC cursor axis, which will trim a low-HLC tombstone reap sitting at a high offset. That is exactly the loss the offset floor exists to prevent. ABSENCE IS NOT THE SAME STATE AS A REPORTED -1, AND THE COUNTER EXISTS BECAUSE THE TWO USED TO RENDER IDENTICALLY. A reported -1 is a real answer from a participating leaf that has told us it owes nothing, and is covered either by a paired zero-HLC block pin or by there being no committed prefix to lose. An absent leaf has told us nothing and carries neither cover. Since this counter, the two are separable: abstainers are carried out of the floor computation explicitly, so absence from BOTH the covered set and the abstained set means never reported, and nothing else. DISTINCT FROM orleans.lattice.wal.gc.offset_floor_unavailable BESIDE IT, which counts the adjacent case where the pin-store read THREW. This series ticks when the read SUCCEEDED and the two planes disagree about who exists. Reading either as a proxy for the other will mislead: an unreachable store loses the floor entirely, whereas a population gap keeps a floor that is quietly wrong. EXPECTED TO SIT AT EXACTLY ZERO on a healthy deployment, because WalMaterialiserPinGrain.Merge writes the pin and the offset in lockstep on every report, including for the -1 sentinel - so a correctly-wired store cannot produce a gap. A NON-ZERO READING therefore means one of three things, all of them real: durable state persisted by a build predating the offsets plane, a birth seed that was swallowed, or a partially-upgraded population mid rolling upgrade - which is precisely when trimming past a not-yet-upgraded leaf destroys its data. THE AMOUNT ADDED IS THE NUMBER OF SUCH CONSUMERS on that pass, not a pass count, so a tree with four unreported leaves adds four. THE RESPONSE IS FAIL-CLOSED AND BOUNDED: the pass blocks the partitions the unreported consumer holds rather than trimming on a floor that does not speak for it, so the cost is over-retention that clears itself the moment that consumer reports, never a lost WAL prefix. READ IT WITH THE BLOCKED-PASSES PANEL: a tree appearing on both is being held by this gate, and the blocking consumer id is named on the paired warning log so the leaf can be identified directly. THIS PANEL DELIBERATELY DOES NOT ZERO-FILL, AND ABSENCE IS THE HEALTHY READING: there is no 'or vector(0)' on the query, because this counter is emitted only on a pass that actually detects a gap, so an empty result means no pass has ever found one - not a measured zero. Filling it would manufacture a confident reading for something never measured, and would make the healthy state indistinguishable from a scrape outage. spanNulls is false for the same reason, so a scraping gap draws as a break rather than as a continuous line (issue #2520).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "spanNulls": false } }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 372 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_wal_gc_offset_floor_population_gap_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
       ]
     }
   ]

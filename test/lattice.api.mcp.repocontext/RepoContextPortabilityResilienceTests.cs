@@ -104,6 +104,28 @@ public sealed class RepoContextPortabilityResilienceTests
         });
     }
 
+    [Test]
+    public async Task EnumerateAsync_does_not_read_expiry_and_leaves_records_durable()
+    {
+        var tree = Substitute.For<ILattice>();
+        tree.EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ScriptedEntries(new[] { (Prefix + "a", "1"), (Prefix + "b", "2") }, abortAfter: int.MaxValue));
+
+        var page = await RepoContextPortability.EnumerateAsync(
+            tree, Prefix, continuationToken: null, pageSize: 10, vectorExport: null, CancellationToken.None);
+
+        // Expiry capture costs an extra point read per record, so it is opt-in and
+        // reserved for export. This primitive is the package's general paging
+        // primitive - search, vector ingest, and the archive all page through it -
+        // and none of them may be made to pay for it.
+        await tree.DidNotReceive().GetWithVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        Assert.That(
+            page.Records.Select(r => r.ExpiresAtTicks),
+            Is.EqualTo(new[] { 0L, 0L }),
+            "Without the opt-in, records come back with no expiry captured.");
+    }
+
     private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScriptedEntries(
         (string Key, string Value)[] entries, int abortAfter)
     {

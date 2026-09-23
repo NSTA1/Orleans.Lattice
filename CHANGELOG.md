@@ -44,6 +44,24 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **WAL - Trim ran on a pinned consumer that never reported an offset.** The retention floor folded only leaves that reported an offset, so one absent from the offsets plane was indistinguishable from one abstaining with -1, and a reap could trim entries it owed. Such a pin now blocks its partition. ([#2314](https://github.com/NSTA1/Orleans.Lattice/issues/2314)) (`Orleans.Lattice`)
+
+- **Leaf - Compacted tombstone resurrected by a monotone merge.** MergeMonotone folded a stored-only key back into the leaf after tombstone compaction had removed it, resurrecting a deleted key. The merge now declines a key the leaf no longer declares. ([#2436](https://github.com/NSTA1/Orleans.Lattice/issues/2436)) (`Orleans.Lattice`)
+
+- **Vector - A fully resident search still allocated an async frame.** A resident SearchAsync never suspends, yet entered an async state machine anyway - heap-allocated in a debug build, 168 bytes a call. The resident case is now answered before any async frame is entered, with probes on the stack. ([#2450](https://github.com/NSTA1/Orleans.Lattice/issues/2450)) (`Orleans.Lattice.Vector`)
+
+- **Replication - Deactivation flush could outlive its deadline.** The hook wrote its cursor even when its token began cancelled, and awaited a tokenless state write that could outrun the deactivation deadline. It now honours the token, and coverage drives it through Orleans rather than by hand. ([#2544](https://github.com/NSTA1/Orleans.Lattice/issues/2544)) (`Orleans.Lattice.Replication`)
+
+- **Memory - Entry expiry was lost across a snapshot round trip.** A repository-context snapshot carried no expiry, so a restore revived entries that had already lapsed and left durable and expiring entries indistinguishable. The record now carries an absolute expiry and the format version advances. ([#2825](https://github.com/NSTA1/Orleans.Lattice/issues/2825)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Indexing - Gap back-fill evidence outlived the index that produced it.** Evidence gathered before a reset_index was still honoured after it, so a rebuilt index could stand a coverage pass down on evidence about a corpus that no longer existed. Evidence is now scoped to its index incarnation. ([#2826](https://github.com/NSTA1/Orleans.Lattice/issues/2826)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Dashboards - Conditionally emitted instruments were zero-filled.** A series published only under some conditions rendered as a measured zero rather than as absent, so a panel could not tell "nothing happened" from "nothing was reported". A committed gate re-derives that population from source. ([#2520](https://github.com/NSTA1/Orleans.Lattice/issues/2520)) (`Orleans.Lattice.Dashboards`)
+
+- **Gates - Two metric gates could not detect what they claimed.** The priming enrolment recorded none - an affirmative claim of no bounded tag dimension - for observable instruments whose tags its parser could not reach, and a description arity claim naming no tag could never be falsified. ([#3202](https://github.com/NSTA1/Orleans.Lattice/issues/3202), [#3318](https://github.com/NSTA1/Orleans.Lattice/issues/3318)) (`Orleans.Lattice`)
+
+- **Backlog - An unrecognised state tag read as no state at all.** The ready-set computation recognised only state:complete and state:parked, so any other value - four were in use - got the verdict an untagged item gets, offering finished work as claimable. The vocabulary is closed and fails safe. ([#2468](https://github.com/NSTA1/Orleans.Lattice/issues/2468)) (`repository-wide`)
+
 - **WAL - Saturation recovery released every parked caller at once.** A recovered partition completed its whole parked population in one pass, which re-saturated it before any drain and left the gate flapping with no net progress. Release is now paced, oldest-first, and level-triggered. ([#3402](https://github.com/NSTA1/Orleans.Lattice/issues/3402)) (`Orleans.Lattice`)
 
 - **Docs - Link check reported a count it never read.** docfx colours its summary line on CI, defeating the anchored pattern parsing it, so the count kept its `0` default and `-MaxWarnings 0` passed while two broken anchors shipped. It now reads stripped output, and an unreadable count fails. ([#3406](https://github.com/NSTA1/Orleans.Lattice/issues/3406)) (`repository-wide`)

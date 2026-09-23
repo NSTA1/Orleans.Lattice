@@ -93,7 +93,7 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 | `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker, and it never carries execution state - a `phase:complete` or `phase:review` tag is a defect, not a status. |
 | `homeRegion:<region>` | The region in which claims for this item are taken. **Verify this is enforced before relying on it.** The intent is that a claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped - but that is a property of the deployment, not of the tag. On a single-region deployment `lattice_list_regions` reports only `current`, claims report region `local`, and a geographic value such as `uksouth` is **not enforced at all**: a claim from anywhere succeeds. Treat a value the cluster does not route as a **defect in the binding**, and note the failure is worse than a no-op - an unenforced safety assumption that the protocol documents as enforced is more dangerous than an absent one, because it is relied upon. |
 | `baseBranch:<branch>` | The branch this item's pull request targets. For an item in a grouping this is the **epic branch**, never `main`. |
-| `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. Absent means the item is live. See [Recording completion](#recording-completion). |
+| `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. The vocabulary is **closed**: those two values are the whole of it, absent means the item is live, and any other `state:` value is a defect that quarantines the item out of the ready set rather than leaving it claimable. [The `state:` tag vocabulary](#the-state-tag-vocabulary) is the single definition of the enumerated set and of the verdict for an unrecognised value; [Recording completion](#recording-completion) says when the terminal tag may be written. |
 | `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. **The `resource:` prefix is what makes the constraint load-bearing**, because step 8 of the ready set matches on it. A bare descriptive tag asserting the same requirement - `needs-box-exclusive`, say - is read by no step and excludes nothing, however plainly it reads to a human. |
 
 **Five tags are mandatory on every item**: `backlog`, `priority:`, `phase:`,
@@ -121,6 +121,79 @@ That is why *per-run* execution state - attempts, claims, leases, review rounds 
 is deliberately not a tag (see below). The one exception is the terminal
 `state:` tag, which is written at most once in an item's life and so costs a
 single dot.
+
+### The `state:` tag vocabulary
+
+**This section is the single definition of the `state:` vocabulary.** Both
+agent prompts point here rather than restating the values, so there is one
+place to change and the two cannot drift apart.
+
+| Value | Recognised | Meaning | Ready-set verdict |
+|-------|------------|---------|-------------------|
+| *(no `state:` tag)* | yes | The item is live. | **Admitted**, subject to the remaining narrowing steps. |
+| `state:complete` | yes | Terminal. The pull request is merged into its `baseBranch`, or the equivalent durable act has happened. See [Recording completion](#recording-completion). | **Dropped** at step 2, silently. That is what the tag is for. |
+| `state:parked` | yes | Terminal until a human re-admits it. See [Parking an item](#parking-an-item---both-sides-and-not-only-on-exhaustion). | **Dropped** at step 2, silently. |
+| any other `state:<value>` | **no** | Undefined. The item's real condition is unknown. | **Dropped at step 2 and reported as a defect.** Never admitted. |
+
+**Match on the prefix `state:`, never on the two literals.** A computation that
+drops exactly the strings `state:complete` and `state:parked` does not treat an
+unrecognised value as an unknown state. It treats it as **no state at all** -
+byte-for-byte the same verdict it reaches for an item carrying no `state:` tag
+whatsoever. The tag is then inert: the item reads live and is offered as
+claimable, exactly as if nothing had been written. So the ready set partitions
+every `state:`-prefixed tag into recognised and unrecognised, and **both
+partitions exclude**. Only the reporting differs.
+
+**The unrecognised verdict fails safe, and the asymmetry is the whole reason**
+the choice is not a judgement call. Excluding an item that is really live costs
+one missed candidate, it is named in the defect report, and it is repaired by a
+single write. Admitting an item that is really finished costs a worker an entire
+session redoing merged work, and it is silent: nothing in the store
+distinguishes a finished item read as live from one nobody has started. The two
+errors are not comparable, so the direction of failure is fixed here in advance
+rather than decided per reader.
+
+**It is reported, never silently absorbed.** A quarantined item is named in the
+ready-set defect report together with its offending value, because an exclusion
+nobody sees is starvation - which is the failure the fail-safe verdict would
+otherwise trade into. The project manager reconciles the item to a recognised
+value - under a claim, like any other write - or removes the tag if the item is
+genuinely live.
+
+**The invented values already seen in practice.** All four predate this section,
+and the earlier two-literal computation ignored every one of them:
+
+| Invented value | What its author meant | How a two-literal computation reads it |
+|---|---|---|
+| `state:delivered` | the work is merged | live and claimable |
+| `state:done` | the work is finished | live and claimable |
+| `state:in-review` | a pull request is open and under review | live and claimable |
+| `state:ready` | the item is live | live and claimable |
+
+Three of the four assert that the work is finished or nearly so, and every one
+of them read as work nobody had started. `state:ready` happened to fail safe -
+it means live and was read as live - and that accident is precisely why an audit
+that counts **presence** proves nothing. Presence looked healthy; validity did
+not. Only the enumeration of **distinct** values answers the question that has
+any bearing on behaviour.
+
+**A non-terminal condition is expressed by holding the claim, not by a tag.**
+This is the redirect for anyone reaching for a status value that is not in the
+table above, and it is what lets the vocabulary stay closed at two. A live
+fenced claim already means exactly "someone is working on this", and the ready
+set already drops claimed items at step 2; attempts and review rounds are
+carried by the claim markers. `state:delivered` and `state:in-review` are
+attempts to record a real and meaningful condition that is **already**
+representable - so hold the claim, or release honestly and write the resume
+block. Do not invent a tag: the store accepts any string, so the invention
+succeeds at the moment of writing and then does nothing.
+
+**Audit the vocabulary by enumerating distinct values, not by counting
+presence.** One scan of the `backlog` topic, project every `state:`-prefixed tag
+to its distinct set, and diff that set against the two recognised values. It is
+cheap, and it is the only form of the check that discriminates: a count of how
+many items carry *a* `state:` tag is satisfied equally by a recognised value and
+by an invented one.
 
 ### Recording completion
 
@@ -581,10 +654,17 @@ The computation:
    item is already in hand, and this is the only step that sees all of them - so
    an item malformed in a way that hides it from the later narrowing steps is
    caught here or not at all.
-2. Drop items tagged `state:complete` or `state:parked`, and items held under a
-   live fenced claim (`repocontext_claim_status`). Completeness is read from the
-   tag and from nothing else - never from prose in `body`, and never from a
-   merged-looking pull request.
+2. **Match every `state:`-prefixed tag against the closed vocabulary in [The
+   `state:` tag vocabulary](#the-state-tag-vocabulary), and drop the item on
+   both outcomes.** A recognised terminal value - `state:complete` or
+   `state:parked` - drops it silently, because that is what the tag is for.
+   **Any other `state:` value drops it too, and is reported as a defect**: it is
+   an unknown state, not an absent one, and admitting it is how a finished item
+   gets offered to a second worker. Do not match on the two literals alone -
+   that reads an unrecognised value as no state at all and admits it. Also drop
+   items held under a live fenced claim (`repocontext_claim_status`).
+   Completeness is read from the tag and from nothing else - never from prose in
+   `body`, and never from a merged-looking pull request.
 3. **Drop grouping records.** A grouping (an epic, or any item that other items
    declare themselves `partOf`) is a container, not a unit of work. It is
    completed by its integration item, never claimed directly. Omitting this step
@@ -645,6 +725,13 @@ These are reported, never silently absorbed:
   `stale`. Re-validate the spec before spending a run on it.
 - **Duplicate attribute tag.** Two tags sharing a `key:` prefix means two
   concurrent authors. Reconcile; never pick one arbitrarily.
+- **Unrecognised `state:` value.** A `state:`-prefixed tag whose value is
+  neither `complete` nor `parked`. Step 2 quarantines the item out of the ready
+  set and names it here with its offending value, because the tag asserts a
+  condition the protocol cannot interpret, and the safe reading of an
+  uninterpretable assertion is not "live". Reconcile it to a recognised value
+  under a claim, or remove the tag if the item really is live. See [The `state:`
+  tag vocabulary](#the-state-tag-vocabulary).
 - **Execution state on a `phase:` tag.** `phase:` carries the authored phase and
   nothing else, so `phase:complete` or `phase:review` means a worker wrote a
   status into a reserved attribute - and, because add-wins never replaces, the
@@ -675,6 +762,8 @@ stateDiagram-v2
   Gated --> Ready: admitted (human, or human-authored at source)
   Ready --> Blocked: a blockedBy target is incomplete
   Blocked --> Ready: every blocker completes
+  Ready --> Quarantined: an unrecognised state tag value is present
+  Quarantined --> Ready: reconciled to a recognised value, under a claim
   Ready --> Claimed: fenced claim acquired (homeRegion only)
   Claimed --> Ready: lease expires, or the worker releases
   Claimed --> Complete: PR merged into the base branch, or equivalent durable act

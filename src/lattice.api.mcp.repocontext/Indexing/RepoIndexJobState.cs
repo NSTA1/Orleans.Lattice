@@ -122,6 +122,30 @@ internal sealed class RepoIndexJobState
     public int EntriesDeleted { get; set; }
 
     /// <summary>
+    /// An opaque token naming the repository's current <b>index incarnation</b> -
+    /// the generation of derived state every index-derived record belongs to. It is
+    /// minted once on first use and re-minted whenever the derived planes are
+    /// discarded: a reset re-mints it in <c>BeginResetAsync</c>, and a removal
+    /// clears this whole state, so the next re-add mints a fresh one.
+    /// <para>
+    /// It exists so that in-memory evidence about the derived state - the vector
+    /// ingestor's per-repository gap-back-fill caches in particular - can be scoped
+    /// to the incarnation it was gathered under. Without it, evidence that a gap was
+    /// already served outlives the operation whose whole purpose was to discard the
+    /// derived state, and the back-fill for the NEW index stands itself down on the
+    /// PREVIOUS incarnation's evidence, silently reporting a hole as convergence
+    /// (issue #2826).
+    /// </para>
+    /// <para>
+    /// Null or empty means "never minted", which is indistinguishable from a
+    /// never-onboarded repository and is exactly the right reading: there is no
+    /// derived state for evidence to be about yet.
+    /// </para>
+    /// </summary>
+    [Id(21)]
+    public string? IndexIncarnation { get; set; }
+
+    /// <summary>
     /// Projects the durable state into the immutable snapshot returned to callers.
     /// </summary>
     /// <param name="repoId">The repository identity carried in the grain key.</param>

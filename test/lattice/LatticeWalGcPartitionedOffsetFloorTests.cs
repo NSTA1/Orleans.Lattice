@@ -208,9 +208,17 @@ public sealed class LatticeWalGcPartitionedOffsetFloorTests
         // keep constraining the whole tree. If it were dropped once any
         // suffixed pin existed, this would be a relaxation the change does not
         // intend and cannot justify.
+        //
+        // DrainedPartitionConsumer keeps an offsets entry even though this case
+        // is about the legacy pin, because the shared harness pins it and issue
+        // #2314 blocks the trim outright for any pinned consumer that reported
+        // no offset. Omitting it would exercise the population gap rather than
+        // legacy attribution. Its 5 is confined to partition 0 by its own
+        // suffix, so it does not touch the partition 1 floor asserted below.
         var provider = await SeededProviderAsync();
         var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
         {
+            [DrainedPartitionConsumer] = 5,
             ["_lattice_materialiser_tree_leaf-legacy"] = 10,
             [LivePartitionConsumer] = 12,
         };

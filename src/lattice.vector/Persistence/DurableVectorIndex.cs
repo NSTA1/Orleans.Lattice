@@ -362,6 +362,17 @@ public sealed partial class DurableVectorIndex
     /// resident. In <see cref="VectorIndexLoadMode.Full"/> nothing is ever
     /// missing, so this completes synchronously and matches
     /// <see cref="Search"/> exactly.
+    /// <para>
+    /// In <see cref="VectorIndexLoadMode.Lazy"/> it also completes synchronously
+    /// once every cell the query probes is resident, which is the steady state a
+    /// warm index sits in. That case is answered without entering an
+    /// asynchronous frame at all, so it allocates nothing in <i>any</i> build:
+    /// Roslyn emits an async method's state machine as a struct under
+    /// <c>&lt;Optimize&gt;</c> and as a class without it, so a frame that is
+    /// merely never suspended is still heap-allocated per call in an unoptimized
+    /// build. Answering before the frame is entered removes that cost rather
+    /// than relying on the compiler to elide it - see issue #2450.
+    /// </para>
     /// </summary>
     /// <param name="query">The query vector, of exactly the index's dimensionality.</param>
     /// <param name="results">The caller-owned buffer the ranked hits are written into.</param>
@@ -379,7 +390,60 @@ public sealed partial class DurableVectorIndex
             return new ValueTask<VectorSearchOutcome>(new VectorSearchOutcome(found, mode));
         }
 
+        if (TrySearchResident(query.Span, results.Span, out var outcome))
+        {
+            return new ValueTask<VectorSearchOutcome>(outcome);
+        }
+
         return SearchLazyAsync(query, results, cancellationToken);
+    }
+
+    /// <summary>
+    /// The probe count this will select into stack space. A query wanting more
+    /// declines the fast path rather than renting, which costs nothing in
+    /// correctness: declining simply takes the asynchronous path, which is what
+    /// every query did before this fast path existed.
+    /// </summary>
+    private const int ResidentProbeStackLimit = 64;
+
+    /// <summary>
+    /// Answers a lazy search synchronously when the query probes no cell that
+    /// still needs fetching. This is deliberately a conservative test: a false
+    /// negative costs only the asynchronous path, whereas a false positive would
+    /// answer from an incomplete index.
+    /// </summary>
+    /// <param name="query">The query vector.</param>
+    /// <param name="results">The caller-owned buffer ranked hits are written into.</param>
+    /// <param name="outcome">The completed outcome when this returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when the search was answered without any fetch.</returns>
+    private bool TrySearchResident(
+        ReadOnlySpan<float> query, Span<VectorSearchResult> results, out VectorSearchOutcome outcome)
+    {
+        var wanted = Math.Min(_index.Probes, _index.PartitionCount);
+        if (wanted > ResidentProbeStackLimit)
+        {
+            outcome = default;
+            return false;
+        }
+
+        Span<int> probes = stackalloc int[ResidentProbeStackLimit];
+        var selected = _index.SelectPartitions(query, probes[..wanted]);
+        for (var i = 0; i < selected; i++)
+        {
+            if (!_resident[probes[i]])
+            {
+                outcome = default;
+                return false;
+            }
+        }
+
+        // Matches what the asynchronous path does once every probed cell is
+        // resident: its fetch loop finds nothing to do, so neither the
+        // retirement replay nor the residency write runs, and the search is
+        // exactly this.
+        var found = _index.Search(query, results, out var mode);
+        outcome = new VectorSearchOutcome(found, mode);
+        return true;
     }
 
     /// <summary>

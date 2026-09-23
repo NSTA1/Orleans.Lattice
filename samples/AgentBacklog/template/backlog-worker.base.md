@@ -260,12 +260,24 @@ topic scan plus per-candidate depth-1 checks, and **never** one graph query:
 over memory links, so "who is blocked by me?" cannot be asked. Do not design
 around a lookup this surface cannot serve.
 
-In outline: scan the `backlog` topic paging on the continuation token; drop items
-tagged `state:complete` or `state:parked` and items under a live claim; run one
-depth-1 `neighbors` call on `blockedBy` per surviving candidate and keep only
-those whose every target carries `state:complete`; drop candidates whose mirrored
-issue is not admitted; then order and select. Completeness is that tag and
-nothing else - not prose in `body`, and not your reading of a pull request.
+In outline: scan the `backlog` topic paging on the continuation token; match
+every `state:`-prefixed tag against the closed vocabulary and drop the item on
+both outcomes, a recognised terminal value (`state:complete`, `state:parked`)
+silently and **any unrecognised value as a reported defect**; drop items under a
+live claim; run one depth-1 `neighbors` call on `blockedBy` per surviving
+candidate and keep only those whose every target carries `state:complete`; drop
+candidates whose mirrored issue is not admitted; then order and select.
+Completeness is that tag and nothing else - not prose in `body`, and not your
+reading of a pull request.
+
+**Do not match on the two literals.** The recognised values are defined in one
+place, [The `state:` tag
+vocabulary](backlog-protocol.md#the-state-tag-vocabulary) in the instructions
+file, and that section is authoritative over this outline. A computation that
+drops exactly `state:complete` and `state:parked` reads every other `state:`
+value as *no state at all*, so an item tagged `state:delivered`, `state:done` or
+`state:in-review` is offered to you as live and claimable and you redo merged
+work. Exclude the unrecognised value and report it; never treat it as live.
 
 Two properties of the scan matter to you specifically:
 
@@ -288,6 +300,7 @@ Each of these is a required check, and each one is **surfaced**, never absorbed.
 | `recall` reports the candidate `stale` (an `anchoredTo` target drifted) | **Re-validate before spending a run.** Read the drifted anchor and the mirrored issue, and decide whether the specification still holds. If it does, refresh nothing and proceed, noting the drift. If it does not, skip the item and report it for respecification. |
 | Two tags share a `key:` prefix (for example two `priority:` tags) | **Defect.** It means two authors wrote concurrently and add-wins made the collision visible. Report it; never pick one arbitrarily. |
 | A `phase:` tag carries execution state (`phase:complete`, `phase:review`) | **Defect.** `phase:` is authored and add-wins never replaces it, so the item's real phase is now lost or duplicated. Report it; the project manager reconciles. |
+| A `state:` tag whose value is neither `complete` nor `parked` | **Defect.** An unrecognised value is an unknown state, not an absent one. Exclude the item from the ready set and report it with its offending value; never treat it as live, because every value invented so far (`state:delivered`, `state:done`, `state:in-review`) asserts finished work. The closed vocabulary is [The `state:` tag vocabulary](backlog-protocol.md#the-state-tag-vocabulary). |
 | An item tagged `state:complete` whose pull request is still open | **Defect.** Completion was claimed before the merge that defines it. Report it; the merge is outstanding work, and the item is not a satisfied `blockedBy` target. |
 | A green, mergeable pull request on an item with no live claim and no `state:complete` | The previous attempt died between CI and the merge. This is the **cheapest possible resume** - prefer it over starting a fresh item. |
 | The item is `partOf` an epic but carries `baseBranch:main` | **Defect.** Report it and skip the item. Do not guess the epic branch: guessing produces a pull request into `main` that looks perfectly normal. |
@@ -739,6 +752,14 @@ row at completion; that is its artefact, not yours. Verify before reporting, wit
    for a reader who was not there: the next holder will re-decide from it, and a
    note that only makes sense with your conversation in hand is worse than none.
    Do **not** write `state:complete`; the item stays live for the next holder.
+   Do **not** invent a `state:` value for the condition you are in either -
+   `state:delivered`, `state:in-review` and `state:done` have all been written
+   here before. The vocabulary is closed at `complete` and `parked` (see [The
+   `state:` tag vocabulary](backlog-protocol.md#the-state-tag-vocabulary)), the
+   store accepts any string so the invention succeeds silently, and the next
+   ready set then quarantines the item and reports it as a defect rather than
+   acting on what you meant. A non-terminal condition is expressed by holding
+   the claim, or by the resume block once you have released it.
 2. Post the `outcome` comment. It carries `result=released` when the item stays
    live for the next holder, and `result=parked` when you are parking it under
    step 3 - one comment either way, never both.

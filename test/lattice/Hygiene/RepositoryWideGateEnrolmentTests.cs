@@ -36,8 +36,9 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <b>There are two mechanisms for "repository-wide", and conflating them is what made
 /// the original sentence false.</b> Most of these gates resolve the repository root and
 /// enumerate all of <c>src/</c>. <see cref="RecordedNonScanningDocumentedGates"/> names
-/// the exception: <c>DashboardJsonTests</c> is repository-wide by <i>reflection</i> over
-/// the live meters and contains no <c>src</c> path at all. A gate that computed only
+/// the exceptions: <c>DashboardJsonTests</c> and <c>MetricDocArmArityTests</c> are
+/// repository-wide by <i>reflection</i> over
+/// the live meters and contain no <c>src</c> path at all. A gate that computed only
 /// source scanners and compared that set to the table would report it as missing on
 /// every run, forever. It is therefore recorded rather than detected, and the record is
 /// itself checked below.
@@ -136,6 +137,8 @@ public sealed class RepositoryWideGateEnrolmentTests
         {
             ["DashboardJsonTests"] =
                 "repository-wide by reflection over the live meters; contains no src path at all",
+            ["MetricDocArmArityTests"] =
+                "repository-wide by reflection over the live meters' published descriptions; contains no src path at all",
         };
 
     /// <summary>

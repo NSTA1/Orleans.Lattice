@@ -743,6 +743,9 @@ internal sealed class ReplicationShipperGrain(
     /// failure during the flush must not block deactivation; the
     /// pending advance is recovered on the next activation by
     /// re-shipping from the last durable cursor.
+    /// An expired deadline skips the attempt. Otherwise the deadline bounds
+    /// waiting for both persistence and the registry report, not the tokenless
+    /// storage operation itself, which may still finish after deactivation.
     /// </summary>
     protected override async Task OnDeactivateCoreAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
@@ -752,7 +755,15 @@ internal sealed class ReplicationShipperGrain(
         }
         try
         {
-            await FlushCursorAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await FlushCursorAsync(cancellationToken).WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogWarning(ex,
+                "Cursor flush deadline expired during deactivation of {Context}; "
+                + "an in-flight write may still complete; recovery resumes from the last durable cursor.",
+                LogContext);
         }
         catch (Exception ex)
         {
