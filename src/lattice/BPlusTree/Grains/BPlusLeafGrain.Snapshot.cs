@@ -2668,7 +2668,7 @@ internal sealed partial class BPlusLeafGrain
             // here rather than falling through is what keeps that a single
             // evaluation on the post-replay state instead of two, the second of
             // which would re-decline on the pre-replay reading.
-            await DriveStarvedCheckpointAsync();
+            await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);
             return;
         }
 
@@ -2687,11 +2687,13 @@ internal sealed partial class BPlusLeafGrain
         // that has stopped advancing. Nothing is relaxed - the drive banks only
         // offsets it actually read - and the stall counter re-arms rather than
         // latches, so a leaf that stays frozen is re-driven once per threshold
-        // rather than on every tick.
+        // rather than on every tick. The one exception is a drive that found the
+        // projection stale: that verdict cannot clear by replay, so the drive is
+        // skipped until a persisted checkpoint moves (issue #3450).
         if (IsCheckpointStalledBehindLiveData(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
-            await DriveStarvedCheckpointAsync();
+            await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);
             return;
         }
 

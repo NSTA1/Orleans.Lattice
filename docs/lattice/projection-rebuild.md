@@ -521,6 +521,45 @@ the leaf does once a trigger fires:
 > `checkpoint + 1`). A replay-budget or projection-age overrun against an
 > intact WAL never consults it - see the trigger list above.
 
+### A live leaf whose projection has gone stale
+
+A leaf can find its projection stale while it is still activated. Its
+in-memory cache was built before the WAL was trimmed, so it keeps
+serving reads and taking writes, but its *persisted* checkpoint needs
+an offset the trim removed. Nothing automatic repairs that leaf: the
+recovery paths the policy table marks as not yet integrated are the
+only ones that could, and replaying from the persisted checkpoint can
+never succeed, because the WAL tail only moves forward.
+
+Two drivers still reach such a leaf: the coverage-lag timer, which
+drives a leaf whose checkpoint has stopped advancing, and the WAL GC's
+blocked-leaf sweep. The first starvation drive that finds the
+projection stale logs one `Error` naming the leaf and tree, and latches
+that verdict for the activation (issue #3450). While the
+persisted checkpoints are unchanged:
+
+- the timer skips the drive entirely, so a stale leaf no longer takes
+  a replay permit or raises a timer fault once per stall window;
+- a direct drive from the WAL GC sweep still receives
+  `LeafProjectionStaleException`, without another replay, so the sweep
+  classifies the leaf exactly as before.
+
+Any change to a persisted checkpoint clears the latch, and a new
+activation starts without it. The leaf keeps its WAL retention pin.
+
+Treat the `Error` as data at risk rather than as noise. The live
+activation may hold the only copy of writes in the trimmed range. Once
+it is recycled or the silo restarts, the next cold activation refuses
+the leaf with the same exception. `RebuildLeafProjectionAsync` does not
+recover those writes: it resets the checkpoint and replays only the WAL
+that survives. So, before the activation is lost:
+
+1. Capture a logical backup or export of the tree while the leaf is
+   still serving.
+2. Deploy a build that fixes the cause of the over-trim.
+3. Restore the tree from that backup. For a tree that is derived from
+   another source, delete it and re-derive it instead.
+
 ### Configuration
 
 ```csharp verify

@@ -1566,6 +1566,122 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private bool _starvationDriveInFlight;
 
+    /// <summary>
+    /// The stale-projection verdict a starvation drive on this activation last
+    /// reached, or <see langword="null"/> when no drive has found the projection
+    /// stale (issue #3450).
+    /// <para>
+    /// A drive replays from the PERSISTED checkpoint. When the WAL has been
+    /// trimmed past an offset that checkpoint still needs and no snapshot covers
+    /// the gap, the replay throws <see cref="LeafProjectionStaleException"/>, and
+    /// nothing a later drive can do changes that: the WAL tail only moves
+    /// forward, so replaying the same checkpoint against it throws again, every
+    /// time. Before this latch the coverage-lag timer re-drove such a leaf once
+    /// per stall window for the life of the activation, and the WAL GC's
+    /// blocked-leaf sweep re-drove it on its own cadence. Each drive took a
+    /// replay permit from the per-silo gate, and each timer drive surfaced the
+    /// fault twice through Orleans' timer logging. One deployment logged about
+    /// 10,000 such faults in four hours from roughly 200 leaf partitions while
+    /// interactive activations were being refused replay admission.
+    /// </para>
+    /// <para>
+    /// This is a latch on a verdict that cannot clear by itself, not a latch on
+    /// a repair that might yet succeed, so it does not reopen the non-convergence
+    /// the #3389 re-arm exists to prevent. It is keyed on the persisted
+    /// checkpoint signature, and it clears the moment any partition's persisted
+    /// checkpoint changes, which is the only thing that can change the verdict.
+    /// It is also per activation, so an operator rebuild, which deactivates the
+    /// leaf, always starts from a clean slate.
+    /// </para>
+    /// </summary>
+    private LeafProjectionStaleDriveLatch? _projectionStaleDriveLatch;
+
+    /// <summary>
+    /// The verdict <see cref="_projectionStaleDriveLatch"/> holds: the persisted
+    /// checkpoint signature the stale fault was observed at, and the fault itself.
+    /// </summary>
+    private sealed record LeafProjectionStaleDriveLatch(
+        long PersistedCheckpointSignature,
+        LeafProjectionStaleException Fault);
+
+    /// <summary>
+    /// Sum of the per-partition persisted checkpoints. Persisted checkpoints are
+    /// monotonic except across an operator reset, and any change in either
+    /// direction changes the sum, so an unchanged sum means no partition moved.
+    /// </summary>
+    private long ComputePersistedCheckpointSignature(int partitionCount)
+    {
+        long signature = 0;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            signature += GetPersistedCheckpointForPartition(p);
+        }
+
+        return signature;
+    }
+
+    /// <summary>
+    /// Whether a starvation drive on this activation has already found the
+    /// projection stale at the persisted checkpoints it holds now, so another
+    /// drive cannot do anything but reach the same verdict (issue #3450).
+    /// </summary>
+    internal bool IsProjectionStaleDriveLatched(int partitionCount)
+        => _projectionStaleDriveLatch is { } latch
+            && latch.PersistedCheckpointSignature == ComputePersistedCheckpointSignature(partitionCount);
+
+    /// <summary>
+    /// Records a stale verdict from a starvation drive and logs it once per
+    /// verdict. The log is the operator's signal: the timer path swallows the
+    /// fault after this point, so this line is what names the leaf and the
+    /// remedy.
+    /// </summary>
+    private void LatchProjectionStaleDrive(int partitionCount, LeafProjectionStaleException fault)
+    {
+        var signature = ComputePersistedCheckpointSignature(partitionCount);
+        if (_projectionStaleDriveLatch is { } existing
+            && existing.PersistedCheckpointSignature == signature)
+        {
+            return;
+        }
+
+        _projectionStaleDriveLatch = new LeafProjectionStaleDriveLatch(signature, fault);
+        ResolveLogger()?.LogError(
+            fault,
+            "Leaf {Leaf} on tree {Tree} cannot advance its durable projection checkpoint: the WAL has been trimmed past an offset its persisted checkpoint still needs and no snapshot covers the gap. Replaying that checkpoint cannot converge, so further starvation drives on this activation are suppressed until a persisted checkpoint changes. This leaf keeps its WAL retention pin and nothing automatic will repair it. The live activation may hold the only copy of writes in the trimmed range: capture a logical backup or export of the tree BEFORE this activation is recycled or the silo restarts, then rebuild or restore the tree. See docs/lattice/projection-rebuild.md.",
+            context.GrainId,
+            state.State.TreeId);
+    }
+
+    /// <summary>
+    /// Runs the starvation drive from the coverage-lag timer, absorbing a stale
+    /// projection verdict instead of throwing it out of the timer callback
+    /// (issue #3450).
+    /// <para>
+    /// The WAL GC's blocked-leaf sweep still receives the fault from
+    /// <see cref="DriveStarvedCheckpointAsync"/> and classifies it as it always
+    /// has. Only the timer, which has no caller to act on the fault and whose
+    /// runtime logs every escaping exception, absorbs it. The fault has already
+    /// been logged once by <see cref="LatchProjectionStaleDrive"/>. A leaf
+    /// already latched is not driven at all, so a stale leaf costs a timer tick
+    /// nothing beyond the signature comparison.
+    /// </para>
+    /// </summary>
+    private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount)
+    {
+        if (IsProjectionStaleDriveLatched(partitionCount))
+        {
+            return;
+        }
+
+        try
+        {
+            await DriveStarvedCheckpointAsync();
+        }
+        catch (LeafProjectionStaleException)
+        {
+        }
+    }
+
     /// <inheritdoc />
     public async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync()
     {
@@ -1588,6 +1704,17 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var budget = options.StarvationDriveBudget;
         var partitionCount = Math.Max(1, options.WalPartitions);
+
+        // A drive that already found this projection stale at these persisted
+        // checkpoints cannot reach any other verdict, so the replay is not run
+        // again and no permit is taken for it. The caller still receives the
+        // typed fault, so the WAL GC sweep classifies the leaf exactly as a real
+        // replay would have made it (issue #3450).
+        if (IsProjectionStaleDriveLatched(partitionCount)
+            && _projectionStaleDriveLatch is { } latch)
+        {
+            throw new LeafProjectionStaleException(latch.Fault.Message, latch.Fault);
+        }
 
         // The check-and-set is only safe because it is adjacent - see the
         // remarks on _starvationDriveInFlight. The resolve above introduced an
@@ -1679,6 +1806,11 @@ internal sealed partial class BPlusLeafGrain
                 replayPermit is null ? "never acquired" : "released");
 
             return LeafStarvationDriveOutcome.TimedOut;
+        }
+        catch (LeafProjectionStaleException ex)
+        {
+            LatchProjectionStaleDrive(partitionCount, ex);
+            throw;
         }
         catch (Exception ex) when (IsReadMemoryPressure(ex))
         {

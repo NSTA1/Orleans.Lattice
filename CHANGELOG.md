@@ -128,6 +128,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Leaf - A declined snapshot capture advanced durable coverage.** When the snapshot store declined a capture, the leaf still recorded its coverage as durable, licensing WAL GC to trim past anything a snapshot can reproduce. Coverage now advances only when the store keeps the capture. ([#3421](https://github.com/NSTA1/Orleans.Lattice/issues/3421)) (`Orleans.Lattice`)
 
+- **Leaf - A stale projection was re-driven forever.** A leaf trimmed past its checkpoint with no covering snapshot was re-driven every stall window, spending replay permits and flooding logs. The verdict now latches per activation, logs one Error naming the remedy, and clears when a checkpoint moves. ([#3450](https://github.com/NSTA1/Orleans.Lattice/issues/3450)) (`Orleans.Lattice`)
+
 - **Shard - A removed leaf's failed state clear was never retried.** Reclaim swallowed a failed clear of a removed leaf's grain state, orphaning it for good. The owed clear is now recorded durably and retried by later reclaim passes, orphan repair and purge. ([#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)) (`Orleans.Lattice`)
 
 - **Leaf - Tombstone ratio minted a series per leaf.** `orleans.lattice.leaf.tombstone.ratio` was tagged with the leaf grain id, so its cardinality grew with the tree. It now carries only tree and tenant: one series per tree. ([#2518](https://github.com/NSTA1/Orleans.Lattice/issues/2518)) (`Orleans.Lattice`)
