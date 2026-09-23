@@ -41,7 +41,7 @@ Because the evaluation is threshold-gated it is self-limiting, and so needs no f
 
 ### Activation-time recovery (`ReconcileAsync`)
 
-`ReconcileAsync` is the optional activation-time recovery seam for providers whose commit protocol can leave the durable state inconsistent across crash boundaries. The WAL grain calls it in `OnActivateAsync` before reading the highest offset, so the activation hook runs while the grain is quiescent. The default interface implementation is a no-op, suitable for backends whose append is atomic in a single operation (`InMemoryWalStorageProvider` inherits the default). The Azure Tables provider overrides it to repair phase-1/phase-2 orphans (see *Crash recovery* below).
+`ReconcileAsync` is the optional activation-time recovery seam for providers whose commit protocol can leave the durable state inconsistent across crash boundaries. The WAL grain calls it in `OnActivateAsync` before reading the highest offset, so the activation hook runs while the grain is quiescent. It also calls it from the post-failure resync after a flush fails, when the grain's own flush chain has drained but the provider may still hold work the grain has already been told about (for example a pipelined phase-2 commit), so an override must tolerate writes to the same shard that are still settling - the Azure Tables provider waits them out before scanning. The default interface implementation is a no-op, suitable for backends whose append is atomic in a single operation (`InMemoryWalStorageProvider` inherits the default). The Azure Tables provider overrides it to repair phase-1/phase-2 orphans (see *Crash recovery* below).
 
 ### Zero-copy append (`AppendEncodedBatchAsync`)
 

@@ -276,6 +276,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     internal readonly ConcurrentDictionary<string, Task> _pipelinedPhaseTwoTasks =
         new(StringComparer.Ordinal);
 
+    // Per-shard count of AppendBatchAsync / AppendEncodedBatchAsync
+    // calls in motion, plus the lock that serialises ReconcileAsync
+    // against itself. ReconcileAsync drains the count (and the shard's
+    // phase-2 worker) before it scans, so it never mistakes a live
+    // batch for an orphan (#3348). Keyed by manifest partition key.
+    internal readonly ConcurrentDictionary<string, WalShardActivity> _shardActivity =
+        new(StringComparer.Ordinal);
+
     private TableClient? _tableClient;
     private int _tableInitialised;
     private int _disposed;
@@ -429,38 +437,48 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath
         // for the soundness argument.
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
-        var candidateTask = eliminateCandidateRow
-            ? Task.CompletedTask
-            : WriteCandidateRowAsync(
-                table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+        var activity = GetShardActivity(manifestPartitionKey);
+        activity.Writes.Enter();
+        try
+        {
+            var candidateTask = eliminateCandidateRow
+                ? Task.CompletedTask
+                : WriteCandidateRowAsync(
+                    table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
 
-        // Phase 1: write the entry rows into the batch's own partition
-        // in a single transaction. Each batch hits a distinct Azure
-        // Tables partition server so concurrent batches against the
-        // same shard get true parallelism.
-        var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
-        var phaseOneActions = new List<TableTransactionAction>(entries.Count);
-        EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions, out var compressionStats);
-        var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
+            // Phase 1: write the entry rows into the batch's own partition
+            // in a single transaction. Each batch hits a distinct Azure
+            // Tables partition server so concurrent batches against the
+            // same shard get true parallelism.
+            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
+            var phaseOneActions = new List<TableTransactionAction>(entries.Count);
+            EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions, out var compressionStats);
+            var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
 
-        // Await both before enqueueing phase 2 so a failure in either
-        // surfaces synchronously to the caller and the worker never
-        // sees a phase-2 commit whose phase 1 or phase 0 didn't land.
-        await candidateTask.ConfigureAwait(false);
-        await phaseOneTask.ConfigureAwait(false);
+            // Await both before enqueueing phase 2 so a failure in either
+            // surfaces synchronously to the caller and the worker never
+            // sees a phase-2 commit whose phase 1 or phase 0 didn't land.
+            // A candidate-row write still running when phase 1 faults is
+            // awaited too, so the tracker never releases while it can land.
+            await AwaitBothAsync(candidateTask, phaseOneTask).ConfigureAwait(false);
 
-        // The phase-1 rows have landed, so the batch's payload bytes are
-        // now durable; attribute the compression savings to the tree.
-        RecordWalCompressionMetrics(treeId, in compressionStats);
+            // The phase-1 rows have landed, so the batch's payload bytes are
+            // now durable; attribute the compression savings to the tree.
+            RecordWalCompressionMetrics(treeId, in compressionStats);
 
-        // Phase 2: hand the (startOffset, endOffsetInclusive) pair to
-        // the per-shard worker. The worker batches up to 49 phase-2
-        // commits (each contributing 1 C-delete + 1 M-insert action,
-        // plus the shared TAIL upsert, fitting under the 100-action
-        // Azure Tables transaction cap) into one manifest-partition
-        // transaction in strict ascending start-offset order, then
-        // upserts TAIL to the group's highest endOffsetInclusive.
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            // Phase 2: hand the (startOffset, endOffsetInclusive) pair to
+            // the per-shard worker. The worker batches up to 49 phase-2
+            // commits (each contributing 1 C-delete + 1 M-insert action,
+            // plus the shared TAIL upsert, fitting under the 100-action
+            // Azure Tables transaction cap) into one manifest-partition
+            // transaction in strict ascending start-offset order, then
+            // upserts TAIL to the group's highest endOffsetInclusive.
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            activity.Writes.Exit();
+        }
     }
 
     /// <inheritdoc />
@@ -513,18 +531,63 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // and monotonic-TAIL rationale.
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
         var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
-        var candidateTask = eliminateCandidateRow
-            ? Task.CompletedTask
-            : WriteCandidateRowAsync(
-                table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
-        var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
-        await candidateTask.ConfigureAwait(false);
-        await phaseOneTask.ConfigureAwait(false);
+        var activity = GetShardActivity(manifestPartitionKey);
+        activity.Writes.Enter();
+        try
+        {
+            var candidateTask = eliminateCandidateRow
+                ? Task.CompletedTask
+                : WriteCandidateRowAsync(
+                    table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+            var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
+            await AwaitBothAsync(candidateTask, phaseOneTask).ConfigureAwait(false);
 
-        RecordWalCompressionMetrics(treeId, in compressionStats);
+            RecordWalCompressionMetrics(treeId, in compressionStats);
 
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            activity.Writes.Exit();
+        }
     }
+
+    /// <summary>
+    /// Awaits the phase-0 candidate-row write and the phase-1 entry
+    /// transaction, surfacing the candidate-row fault first as before,
+    /// but never returning while either is still running.
+    /// </summary>
+    private static async Task AwaitBothAsync(Task candidateTask, Task phaseOneTask)
+    {
+        try
+        {
+            await candidateTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            try
+            {
+                await phaseOneTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // The candidate-row fault is the one surfaced.
+            }
+
+            throw;
+        }
+
+        await phaseOneTask.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the per-shard write-activity record for
+    /// <paramref name="manifestPartitionKey"/>, creating it on first use.
+    /// </summary>
+    internal WalShardActivity GetShardActivity(string manifestPartitionKey) =>
+        _shardActivity.TryGetValue(manifestPartitionKey, out var existing)
+            ? existing
+            : _shardActivity.GetOrAdd(manifestPartitionKey, static _ => new WalShardActivity());
 
     /// <summary>
     /// Submits a phase-1 transaction against the batch partition and

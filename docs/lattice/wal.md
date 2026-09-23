@@ -522,13 +522,18 @@ A flush failure is fail-fast for every affected caller:
 4. Every TCS in the *currently-accumulating* pending batch is faulted -
    those entries had been assigned offsets above the failed window, so
    their offsets are logically orphaned.
-5. Once the chain drains, the grain re-reads
+5. Once the chain drains, the grain calls
+   `IWalStorageProvider.ReconcileAsync` and then re-reads
    `IWalStorageProvider.GetHighestOffsetAsync` to recover the provider's
    real tail. Concurrent later flushes may have already committed
    against now-orphaned offset windows; the resync restores the dense-
    offset invariant against the provider rather than against the failed
    window's start. The sticky-failure latch is then cleared and new
    appends resume.
+6. If the resync itself fails (or exceeds `WalFlushTimeout`), the latch
+   stays set and the grain requests its own deactivation, so the next
+   activation re-runs the activation-time reconcile instead of the shard
+   refusing every append until the silo restarts.
 
 This contract makes WAL-append failures observable inline at the
 originating writer rather than being silently coalesced into a later

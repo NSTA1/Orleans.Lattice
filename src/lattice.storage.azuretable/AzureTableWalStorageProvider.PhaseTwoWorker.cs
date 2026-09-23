@@ -302,6 +302,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // queued. A batch that failed to enqueue is faulted above
             // and must never be vouched for.
             _acceptedRanges[startOffset] = endOffsetInclusive;
+            OutstandingCommits.Enter();
         }
 
         return tcs.Task;
@@ -420,6 +421,32 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         lock (_acceptedGate)
         {
             _acceptedRanges.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Commits accepted by <see cref="EnqueueAsync"/> whose completion
+    /// has not yet been settled.
+    /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> drains
+    /// it before scanning, so no commit of this worker can land an M-row
+    /// over a batch reconciliation is rolling back, or race it for the
+    /// same M-row (#3348).
+    /// </summary>
+    internal WalShardWriteTracker OutstandingCommits { get; } = new();
+
+    private void SettleSuccess(in PhaseTwoCommit commit)
+    {
+        if (commit.Completion.TrySetResult())
+        {
+            OutstandingCommits.Exit();
+        }
+    }
+
+    private void SettleFault(in PhaseTwoCommit commit, Exception ex)
+    {
+        if (commit.Completion.TrySetException(ex))
+        {
+            OutstandingCommits.Exit();
         }
     }
 
@@ -564,8 +591,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // Fault any commits still pending at shutdown.
             foreach (var leftover in _pending)
             {
-                leftover.Completion.TrySetException(
-                    new ObjectDisposedException(nameof(PhaseTwoWorker)));
+                SettleFault(leftover, new ObjectDisposedException(nameof(PhaseTwoWorker)));
             }
             _pending.Clear();
         }
@@ -722,7 +748,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             PruneAcceptedRanges(tailToPersist);
             for (var i = 0; i < commits.Count; i++)
             {
-                commits[i].Completion.TrySetResult();
+                SettleSuccess(commits[i]);
             }
         }
         catch (Exception ex)
@@ -761,11 +787,11 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // see.
             for (var i = 0; i < commits.Count; i++)
             {
-                commits[i].Completion.TrySetException(ex);
+                SettleFault(commits[i], ex);
             }
             foreach (var pending in _pending)
             {
-                pending.Completion.TrySetException(ex);
+                SettleFault(pending, ex);
             }
             _pending.Clear();
             LatticeMetrics.ProviderRetryExhausted.Add(

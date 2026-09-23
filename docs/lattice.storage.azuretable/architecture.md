@@ -71,11 +71,15 @@ A caller that genuinely needs read-after-write - a controlled hand-off, an opera
 
 ## Recovery and downgrade safety
 
-On activation, the core WAL grain calls the provider reconciliation hook. The provider compares the committed tail with interrupted append evidence and applies these rules:
+On activation, and again after a failed flush, the core WAL grain calls the provider reconciliation hook. The provider compares the committed tail with interrupted append evidence and applies these rules:
 
 - If an interrupted batch contiguously extends the committed tail, reconciliation completes it and advances the tail.
 - If an interrupted batch is below the tail or above a gap, reconciliation removes it so the next append can use the correct next offset.
+- A batch whose manifest row already exists is committed, even when the stored tail has not caught up with it. Reconciliation keeps it and re-anchors the tail on it; it never rolls a committed batch back.
+- Reconciliation never lowers the stored tail. The tail write is conditional on the tail it read, so a concurrent commit makes the pass retry rather than overwrite.
 - Reconciliation is idempotent: a clean shard has no work to do.
+
+The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per shard and first waits for that shard's in-motion appends and queued completions on this provider instance to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
 
 When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both the legacy recovery-marker shape and the newer discoverable-batch shape. Upgrading from the legacy setting to the default setting is safe. Before downgrading back to the legacy setting, drain pending appends and allow reconciliation to complete on a deployment that still has the default setting enabled.
 
