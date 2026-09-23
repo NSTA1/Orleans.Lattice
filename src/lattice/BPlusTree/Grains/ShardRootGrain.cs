@@ -15,6 +15,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// handles root splits by creating a new internal root above the old one.
 /// Key format: <c>{treeId}/{shardIndex}</c>.
 /// </summary>
+/// <remarks>
+/// Pinned to random placement rather than the Orleans default
+/// (resource-optimised placement). A tree's shard roots are activated in one
+/// burst from whichever silo hosts the caller's <c>[StatelessWorker]</c>
+/// <see cref="LatticeGrain"/>, faster than silo load statistics refresh, so
+/// every silo scores alike and the default's local-silo preference places the
+/// whole burst on that one silo. Nothing migrates the activations afterwards,
+/// so the shard roots stay concentrated there for the tree's life. Random
+/// placement spreads them regardless of how stale the statistics are
+/// (#3348). <see cref="WalShardGrain"/> is pinned for the same reason.
+/// </remarks>
+[Orleans.Placement.RandomPlacement]
 internal sealed partial class ShardRootGrain(
     IGrainContext context,
     [PersistentState("shardroot", LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,

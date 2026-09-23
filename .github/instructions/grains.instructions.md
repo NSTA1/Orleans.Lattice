@@ -121,3 +121,7 @@ private LatticeOptions Options => optionsMonitor.Get(TreeId);
 ## StatelessWorker
 
 `LatticeGrain` is annotated `[StatelessWorker]` - it holds no persistent state and routes requests to the correct `IShardRootGrain` via `LatticeSharding`.
+
+## Placement
+
+Orleans defaults to resource-optimised placement, which prefers the calling silo when silo scores are close and never migrates a long-lived grain afterwards. A grain burst-activated from one silo - every shard root and WAL shard is first reached through the `[StatelessWorker]` `LatticeGrain` on the gateway silo - therefore lands entirely on that silo and stays there (#3348). Hot per-tree singletons that are fanned out to (`ShardRootGrain`, `WalShardGrain`) carry `[Orleans.Placement.RandomPlacement]`; write it fully qualified, because the bare `[RandomPlacement]` resolves to the strategy class and fails with CS0616. `HotGrainPlacementSpreadTests` guards the spread.
