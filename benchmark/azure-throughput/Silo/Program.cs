@@ -714,6 +714,23 @@ builder.UseOrleans(silo =>
     // partition can have multiple appends in flight against Azure
     // Tables (offset assignment is still serialised under the grain
     // turn; only the AppendBatchAsync RPCs overlap).
+    // F-086: the saturation sampler cadence and thresholds. These MUST be
+    // global: WalSaturationSampler reads every one of them from the unnamed
+    // options (Get(string.Empty)), so a per-tree assignment is silently
+    // ignored. Before this moved here every BENCH_SATURATION_* and
+    // BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH override ran on library
+    // defaults (#3348). 0 means "sampler disabled"; the library spells that
+    // InfiniteTimeSpan and rejects TimeSpan.Zero at options validation.
+    silo.ConfigureLattice(o =>
+    {
+        o.WalSaturationSampleInterval = saturationSampleMs == 0
+            ? Timeout.InfiniteTimeSpan
+            : TimeSpan.FromMilliseconds(saturationSampleMs);
+        o.WalSaturationThrottledRatio = saturationThrottledRatio;
+        o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
+        o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
+    });
+
     silo.ConfigureLattice(treeId, o =>
     {
         o.WalPartitions = walPartitions;
@@ -736,21 +753,6 @@ builder.UseOrleans(silo =>
         // read-your-own-digest-after-write invariant integration tests
         // pin); the bench has no such consumer.
         o.DigestCoalescingWindowMs = digestCoalescingMs;
-        // F-086: pin the F-085 saturation sampler cadence + thresholds
-        // for this tree. Defaults are the library shipping defaults so
-        // a cohort with no env-vars set reproduces the out-of-the-box
-        // behaviour exactly; the env-vars exist for per-cohort A/B
-        // sweeps. The signal is silo-scoped per F-085, so per-tree
-        // overrides here only affect the sampler's classification of
-        // *this* tree - aligned with the bench's single-tree topology.
-        // 0 means "sampler disabled"; the library spells that InfiniteTimeSpan
-        // and rejects TimeSpan.Zero at options validation.
-        o.WalSaturationSampleInterval = saturationSampleMs == 0
-            ? Timeout.InfiniteTimeSpan
-            : TimeSpan.FromMilliseconds(saturationSampleMs);
-        o.WalSaturationThrottledRatio = saturationThrottledRatio;
-        o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
-        o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
         // See the BENCH_WAL_REPLAY_QUEUE_DEPTH block above. Assigned
         // unconditionally because the default IS the library default, so
         // the single-silo path is byte-for-byte unchanged.
