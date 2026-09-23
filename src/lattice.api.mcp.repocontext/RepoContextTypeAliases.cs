@@ -93,4 +93,10 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoContextSessionRecord"/>.</summary>
     internal const string SessionRecord = "ol.rcw";
+
+    /// <summary>Alias for <see cref="RepoContext.RepoIndexPacing"/>.</summary>
+    internal const string RepoIndexPacing = "ol.rcv";
+
+    /// <summary>Alias for <see cref="RepoContext.RepoIndexPaceState"/>.</summary>
+    internal const string RepoIndexPaceState = "ol.rca";
 }

@@ -58,7 +58,8 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     RepoContextAnnBuildSliceReporter sliceReporter,
     ILogger<RepoContextAnnIndexBuildGrain> logger,
     [PersistentState("repoContextAnnIndexBuild", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
-    IPersistentState<RepoContextAnnIndexBuildState> state)
+    IPersistentState<RepoContextAnnIndexBuildState> state,
+    RepoContextIndexingPacer? pacer = null)
     : CoordinatorGrain<RepoContextAnnIndexBuildGrain>(grainContext, reminderRegistry, logger),
       IRepoContextAnnIndexBuildGrain
 {
@@ -102,6 +103,15 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     internal const int MaxDenialSkipTicks = 149;
 
     /// <summary>
+    /// The most consecutive phase ticks the coordinator stands aside for the
+    /// indexing pacer (issue #3447) before it takes a step regardless. At the
+    /// two-second phase period this is about thirty seconds, so a steady stream of
+    /// foreground queries or a long congested back-fill slows the approximate
+    /// build down and never stops it.
+    /// </summary>
+    internal const int MaxConsecutivePacerDeferrals = 15;
+
+    /// <summary>
     /// Whether this activation has completed at least one build step. It is what
     /// makes a converged coordinator still do a single pass when it is reactivated:
     /// the durable index is shared, but the in-memory index the registry serves
@@ -128,6 +138,13 @@ internal sealed class RepoContextAnnIndexBuildGrain(
 
     /// <summary>Whether the current denial episode has already been announced.</summary>
     private bool _announcedDenial;
+
+    /// <summary>
+    /// Consecutive phase ticks skipped because the indexing pacer asked background
+    /// maintenance to stand aside. Reset by every step taken, so the bound in
+    /// <see cref="MaxConsecutivePacerDeferrals"/> is on a run of deferrals.
+    /// </summary>
+    private int _pacerDeferrals;
 
     /// <summary>Whether the current denial episode has already been counted as terminal.</summary>
     private bool _announcedTerminal;
@@ -617,6 +634,33 @@ internal sealed class RepoContextAnnIndexBuildGrain(
             _denialSkipTicks--;
             return;
         }
+
+        // Pacer deferral (issue #3447). A build slice reads the whole vector
+        // corpus, so it competes directly with a foreground search and with an
+        // embedding drain that is already backing off a congested vector plane.
+        // Standing aside costs one comparison, and is bounded so the build is
+        // slowed, never starved. The first step of an activation is never deferred:
+        // it is the one that opens the in-memory index the registry serves queries
+        // from, so deferring it would slow the very queries the deferral protects.
+        if (_advancedThisActivation
+            && pacer is not null
+            && _pacerDeferrals < MaxConsecutivePacerDeferrals
+            && pacer.ShouldDeferBackground(out var deferReason))
+        {
+            if (_pacerDeferrals == 0)
+            {
+                Logger.LogDebug(
+                    "Approximate-index build for repository {RepoId} is standing aside for up to {Ticks} phase ticks: {Reason}.",
+                    RepoId,
+                    MaxConsecutivePacerDeferrals,
+                    deferReason);
+            }
+
+            _pacerDeferrals++;
+            return;
+        }
+
+        _pacerDeferrals = 0;
 
         var repoId = RepoId;
         var space = state.State.Space;

@@ -19,6 +19,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     private readonly IHostApplicationLifetime _lifetime;
     private readonly IRepoIndexRunAuthority _runAuthority;
     private readonly ILogger<RepoIndexRunner> _logger;
+    private readonly RepoContextIndexingPacer? _pacer;
 
     /// <summary>Live runs keyed by repository id. The value carries the run's cancellation source and a completion signal.</summary>
     private readonly ConcurrentDictionary<string, RunHandle> _runs =
@@ -30,13 +31,15 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     /// <param name="lifetime">The host lifetime whose stopping token bounds every run. Must not be <see langword="null"/>.</param>
     /// <param name="runAuthority">Resolves the fixed credential every run assumes so a reminder-driven resume writes under the same subject as the original pass. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    /// <param name="pacer">The silo's indexing pacer, whose reading is overlaid on the progress of a running job, or <see langword="null"/> when the host registers none.</param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="pacer"/> is null.</exception>
     public RepoIndexRunner(
         RepoContextBootstrapService bootstrap,
         IGrainFactory grainFactory,
         IHostApplicationLifetime lifetime,
         IRepoIndexRunAuthority runAuthority,
-        ILogger<RepoIndexRunner> logger)
+        ILogger<RepoIndexRunner> logger,
+        RepoContextIndexingPacer? pacer = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -48,6 +51,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
         _lifetime = lifetime;
         _runAuthority = runAuthority;
         _logger = logger;
+        _pacer = pacer;
     }
 
     /// <inheritdoc />
@@ -58,10 +62,20 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     }
 
     /// <inheritdoc />
-    public Task<RepoIndexProgress> GetProgressAsync(string repoId)
+    public async Task<RepoIndexProgress> GetProgressAsync(string repoId)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        return _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId).GetProgressAsync();
+        var progress = await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
+            .GetProgressAsync()
+            .ConfigureAwait(false);
+
+        // The pacer is silo-local, live state, so it is read here at query time
+        // rather than persisted on the job grain: a stored reading would be stale by
+        // the time anyone read it. It is attached only to a running job, since a
+        // finished or failed job is not being paced (issue #3447).
+        return _pacer is not null && progress.Status == RepoIndexStatus.Running
+            ? progress with { Pacing = _pacer.Snapshot() }
+            : progress;
     }
 
     /// <inheritdoc />

@@ -18,6 +18,10 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
         RepoContextIndexingOptions.SemanticRetrievalKey,
+        RepoContextIndexingOptions.PacingKey,
+        RepoContextIndexingOptions.PacingSliceSecondsKey,
+        RepoContextIndexingOptions.PacingRestSecondsKey,
+        RepoContextIndexingOptions.PacingMaxDelaySecondsKey,
     ];
 
     [SetUp]
@@ -65,6 +69,64 @@ public sealed class RepoContextIndexingOptionsTests
             Assert.That(options.ReconcileIntervalJitter, Is.EqualTo(TimeSpan.Zero));
             Assert.That(options.FullWalkInterval, Is.EqualTo(TimeSpan.FromSeconds(120)));
             Assert.That(options.EmbeddingGapScanInterval, Is.EqualTo(TimeSpan.FromSeconds(600)));
+        });
+    }
+
+    // --- The adaptive indexing pacer (issue #3447) ---
+
+    [Test]
+    public void Pacing_defaults_are_on_with_a_minute_slice_a_short_rest_and_a_five_second_ceiling()
+    {
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Pacing, Is.True, "The pacer is on by default; it only ever slows a congested drain.");
+            Assert.That(options.PacingSliceDuration, Is.EqualTo(TimeSpan.FromSeconds(60)));
+            Assert.That(options.PacingSliceRest, Is.EqualTo(TimeSpan.FromSeconds(5)));
+            Assert.That(options.PacingMaxBatchDelay, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        });
+    }
+
+    [Test]
+    public void FromEnvironment_reads_each_pacing_variable()
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingKey, "off");
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingSliceSecondsKey, "0");
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingRestSecondsKey, "12");
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingMaxDelaySecondsKey, "30");
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Pacing, Is.False);
+            Assert.That(options.PacingSliceDuration, Is.EqualTo(TimeSpan.Zero),
+                "Zero is a legal slice: it switches the duty cycle off rather than being rejected.");
+            Assert.That(options.PacingSliceRest, Is.EqualTo(TimeSpan.FromSeconds(12)));
+            Assert.That(options.PacingMaxBatchDelay, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        });
+    }
+
+    [Test]
+    [TestCase("maybe")]
+    [TestCase("-5")]
+    public void FromEnvironment_malformed_pacing_variables_fall_back_to_the_defaults(string raw)
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingKey, raw);
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingSliceSecondsKey, raw);
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingRestSecondsKey, raw);
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.PacingMaxDelaySecondsKey, raw);
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        var defaults = new RepoContextIndexingOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Pacing, Is.EqualTo(defaults.Pacing));
+            Assert.That(options.PacingSliceDuration, Is.EqualTo(defaults.PacingSliceDuration));
+            Assert.That(options.PacingSliceRest, Is.EqualTo(defaults.PacingSliceRest));
+            Assert.That(options.PacingMaxBatchDelay, Is.EqualTo(defaults.PacingMaxBatchDelay));
         });
     }
 

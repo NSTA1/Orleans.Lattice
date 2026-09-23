@@ -160,4 +160,19 @@ public sealed record RepoIndexProgress
     /// </summary>
     [Id(20)]
     public int EntriesDeleted { get; init; }
+
+    /// <summary>
+    /// What the silo's shared indexing pacer is doing to this job's embedding
+    /// batches, attached only while <see cref="Status"/> is
+    /// <see cref="RepoIndexStatus.Running"/>; null otherwise, and null on a host
+    /// that registers no pacer.
+    /// <para>
+    /// It exists so a job the pacer has deliberately slowed - resting between work
+    /// slices, backing off a congested vector plane, or yielding to a search - is
+    /// not read as a stalled one. It is a live reading from the silo that answered,
+    /// not durable job state.
+    /// </para>
+    /// </summary>
+    [Id(21)]
+    public RepoIndexPacing? Pacing { get; init; }
 }

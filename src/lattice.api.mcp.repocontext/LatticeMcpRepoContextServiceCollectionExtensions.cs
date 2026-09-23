@@ -151,6 +151,11 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // trees, so the search tool can find them. The ingestor resolves an
         // IEmbeddingProvider only if the host bound one; absent (or unavailable) it
         // fails closed and search degrades to keyword recall.
+        services.TryAddSingleton(sp => new RepoContextIndexingPacer(
+            sp.GetRequiredService<RepoContextIndexingOptions>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetRequiredService<ILogger<RepoContextIndexingPacer>>(),
+            sp.GetService<IWalSaturationSignal>()));
         services.TryAddSingleton<IRepoContextVectorIngestor>(sp =>
             new EmbeddingRepoContextVectorIngestor(
                 sp.GetRequiredService<RepoContextVectorWriter>(),
@@ -159,7 +164,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetRequiredService<RepoContextCoverageProbeReporter>(),
-                sp.GetRequiredService<RepoContextSymbolWalkReporter>()));
+                sp.GetRequiredService<RepoContextSymbolWalkReporter>(),
+                sp.GetRequiredService<RepoContextIndexingPacer>()));
         services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
             sp.GetRequiredService<IGrainFactory>(),

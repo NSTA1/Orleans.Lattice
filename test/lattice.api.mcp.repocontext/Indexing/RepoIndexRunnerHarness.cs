@@ -79,12 +79,18 @@ internal sealed class RepoIndexRunnerHarness : IDisposable
 
     /// <summary>Builds the runner under test over this harness's collaborators.</summary>
     /// <returns>A freshly constructed runner.</returns>
-    internal RepoIndexRunner CreateRunner() => new(
+    internal RepoIndexRunner CreateRunner() => CreateRunner(pacer: null);
+
+    /// <summary>Builds the runner under test with an indexing pacer registered alongside it.</summary>
+    /// <param name="pacer">The pacer whose live snapshot the runner overlays, or <see langword="null"/>.</param>
+    /// <returns>A freshly constructed runner.</returns>
+    internal RepoIndexRunner CreateRunner(RepoContextIndexingPacer? pacer) => new(
         CreateBootstrapService(),
         GrainFactory,
         Lifetime,
         RunAuthority,
-        NullLogger<RepoIndexRunner>.Instance);
+        NullLogger<RepoIndexRunner>.Instance,
+        pacer);
 
     /// <summary>A well-formed job request pointing at this harness's empty working tree.</summary>
     /// <returns>The request a run is enqueued with.</returns>

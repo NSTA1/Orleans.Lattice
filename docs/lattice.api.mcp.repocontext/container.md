@@ -116,6 +116,15 @@ Two further variables tune the indexing role and per-file token counting, and tw
 | `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL` | `approximate` | Which semantic retrieval path is bound: `approximate` routes semantic search through the persisted approximate nearest-neighbour index (bounded recall, sub-linear query cost, survives a restart), and `exact` routes it through the complete-recall brute-force scan instead, whose cost is proportional to the corpus. An absent or unrecognised value falls back to `approximate`. A host set to `exact` maintains no approximate index at all, so the build coordinator below is inert for it. Documented in full under [Semantic search](semantic-search.md#the-two-paths). |
 | `LATTICE_VECTOR_CACHE_TTL_SECONDS` | `30` | How long (in seconds) a warm decoded-vector candidate set is trusted before it is re-gathered from the store; `0` disables the cache. |
 
+Four variables govern the **adaptive indexing pacer** (issue #3447), the silo-wide controller that smooths the embedding drain so a large pass no longer lands as one sustained spike. It sits in front of every embedding batch and never changes what a pass embeds, only when each batch runs: a failed or slow batch (over 250 ms and over 2.5x the learned latency baseline), a throttled vector tree, or GC memory load at its high-load threshold doubles an inter-batch delay from 250 ms up to the ceiling, and each clean batch walks it back down. A saturated vector tree holds the next batch for up to 30 seconds, an in-flight `repocontext_search` or `repocontext_context` call holds it for up to 2 seconds, and after each work slice the drain rests. While a foreground request is open or the drain is backing off, the approximate-index build defers its slices (at most 15 phase ticks in a row) and the self-index grain postpones a due coverage-digest audit (at most 12 sweeps in a row), so both are slowed and never starved. What the pacer is doing is reported as `pacing` on `repocontext_index_status`; see [Adaptive pacing](tools.md#adaptive-pacing).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATTICE_REPOCONTEXT_PACING` | `true` | Whether the pacer is on. `false` restores back-to-back batches with no delay, yield, rest, or deferral. An absent or unrecognised value falls back to `true`. |
+| `LATTICE_REPOCONTEXT_PACING_SLICE_SECONDS` | `60` | How long the drain works before it rests. `0` switches the duty cycle off (batches are still delayed under congestion). |
+| `LATTICE_REPOCONTEXT_PACING_REST_SECONDS` | `5` | How long the drain rests after each work slice. `0` switches the duty cycle off. |
+| `LATTICE_REPOCONTEXT_PACING_MAX_DELAY_SECONDS` | `5` | The ceiling on the congestion-driven inter-batch delay. |
+
 Two further variables are the kill switches for the approximate index's own housekeeping. Both default on, and both are documented in full under [Scheduling the approximate index build](semantic-search.md#scheduling-the-approximate-index-build):
 
 | Variable | Default | Purpose |
