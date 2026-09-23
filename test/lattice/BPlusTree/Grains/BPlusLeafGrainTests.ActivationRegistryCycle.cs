@@ -53,7 +53,7 @@ public partial class BPlusLeafGrainTests
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(LeafSnapshotSaveOutcome.Kept));
 
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));

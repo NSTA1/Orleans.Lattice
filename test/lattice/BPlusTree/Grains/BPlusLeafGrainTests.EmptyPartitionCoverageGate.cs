@@ -317,7 +317,7 @@ public partial class BPlusLeafGrainTests
         // TryCaptureSnapshotForAdvisoryAsync swallows the failure by design, so
         // coverage stays at the sentinel and no offset claim is ever earned.
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromException(new InvalidOperationException("snapshot store unavailable")));
+            .Returns(_ => Task.FromException<LeafSnapshotSaveOutcome>(new InvalidOperationException("snapshot store unavailable")));
 
         var projection = AsProjection(warm);
         var (dataKey, dataPartition) = FirstKeyInNonZeroPartition(partitions);
@@ -380,7 +380,7 @@ public partial class BPlusLeafGrainTests
 
         // The capture attempt at the checkpoint boundary crashes before it lands.
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
-            .Returns<Task>(_ => throw new InvalidOperationException("crash before the snapshot durably lands"));
+            .Returns<Task<LeafSnapshotSaveOutcome>>(_ => throw new InvalidOperationException("crash before the snapshot durably lands"));
 
         projection.Apply(BuildSet(dataKey, Encoding.UTF8.GetBytes("v"), hlcPhysical: 100, treeId: ResidualTreeId));
         using (LatticeApplyOffsetContext.BeginScope(dataPartition, 0))

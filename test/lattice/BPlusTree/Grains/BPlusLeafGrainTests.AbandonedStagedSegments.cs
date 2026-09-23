@@ -105,7 +105,7 @@ public partial class BPlusLeafGrainTests
         public Task<bool> CommitStagedSnapshotAsync(LeafSnapshotBlob manifest, CancellationToken cancellationToken)
             => inner.CommitStagedSnapshotAsync(manifest, cancellationToken);
 
-        public Task SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
+        public Task<LeafSnapshotSaveOutcome> SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
         {
             InlineSaves++;
             return inner.SaveAsync(blob, cancellationToken);

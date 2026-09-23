@@ -308,6 +308,8 @@ public partial class BPlusLeafGrainTests
                     // into the first conjunct of the guard.
                     await ((ILeafProjection)grain).SetCheckpointOffsetAsync(9, CancellationToken.None);
                 }
+
+                return LeafSnapshotSaveOutcome.Kept;
             });
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);

@@ -93,7 +93,7 @@ public partial class BPlusLeafGrainTests
                     saved.Add(ci.Arg<LeafSnapshotBlob>());
                 }
 
-                return Task.CompletedTask;
+                return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
             });
 
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
