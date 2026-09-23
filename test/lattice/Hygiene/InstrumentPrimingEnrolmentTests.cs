@@ -144,7 +144,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </remarks>
 [TestFixture]
 [Category("Hygiene")]
-public sealed class InstrumentPrimingEnrolmentTests
+public sealed partial class InstrumentPrimingEnrolmentTests
 {
     /// <summary>Enrolment categories. Every one of these is falsifiable by the parser.</summary>
     public enum Enrolment
@@ -157,6 +157,14 @@ public sealed class InstrumentPrimingEnrolmentTests
 
         /// <summary>A tag dimension is present but its domain is not resolvable from source. Named, not hidden.</summary>
         Unresolved,
+
+        /// <summary>
+        /// Every dimension the parser could not enumerate is OPEN BY NATURE - a runtime-valued
+        /// tree, tenant, shard or similar - so there is no finite domain to enrol. A resolved
+        /// answer, kept apart from <see cref="Unresolved"/> because the two are opposite findings.
+        /// Falsifiable: any dimension the parser could not read, or any bounded one, contradicts it.
+        /// </summary>
+        Open,
 
         /// <summary>No bounded tag dimension. A claim about content, contradicted by resolving one.</summary>
         None,
@@ -180,7 +188,16 @@ public sealed class InstrumentPrimingEnrolmentTests
         IReadOnlyDictionary<string, DomainResult> Dimensions);
 
     /// <summary>The outcome of resolving one tag key's value domain.</summary>
-    public sealed record DomainResult(IReadOnlyList<string> Values, bool Ambiguous, string? Note);
+    /// <param name="Values">The literal values resolved for the dimension.</param>
+    /// <param name="Ambiguous">Whether the domain is not a closed, resolved set.</param>
+    /// <param name="Note">Why the domain is ambiguous, or what kind of resolved answer it is.</param>
+    /// <param name="Via">
+    /// The tag argument the dimension was read THROUGH when it was not a literal pair at the
+    /// emission site (a pre-built tag variable, a tag helper, a label factory), else
+    /// <see langword="null"/>. Records that the residue analysis did the reading.
+    /// </param>
+    public sealed record DomainResult(
+        IReadOnlyList<string> Values, bool Ambiguous, string? Note, string? Via = null);
 
     /// <summary>One row of the checked-in enrolment file.</summary>
     public sealed record EnrolmentRow(string Key, Enrolment Enrolment, string Detail);
@@ -193,9 +210,13 @@ public sealed class InstrumentPrimingEnrolmentTests
 
     // A floor on the named-blind-spot population, for the same reason as the floor above. The
     // measured value when this landed was 140 of the 212 rows that had previously claimed no
-    // dimension; the floor sits well below that so ordinary churn does not trip it, and well
-    // above zero so the marker silently ceasing to be emitted cannot read as green.
-    private const int MinimumNamedBlindSpots = 100;
+    // dimension. Issue #3231 taught the resolver to follow tag variables, members, and label
+    // factories, which moved 53 of those declarations out of the blind spot and left 87; the
+    // floor sits well below that so ordinary churn does not trip it, and well above zero so the
+    // marker silently ceasing to be emitted cannot read as green. A FALL in this count is the
+    // expected direction as reach improves - the coverage-floor ratchet in the enrolment file is
+    // what guards against the opposite, reach eroding - so lowering it for that reason is sound.
+    private const int MinimumNamedBlindSpots = 60;
 
     private const string EnrolmentFileName = "InstrumentPrimingEnrolment.tsv";
 
@@ -204,6 +225,28 @@ public sealed class InstrumentPrimingEnrolmentTests
     /// the generator that writes the line and the gate that reads it back agree by construction.
     /// </summary>
     private const string VocabularyPrefix = "# enrolment:";
+
+    /// <summary>
+    /// The literal that opens the header line stating what the status column does and does not
+    /// assert. Issue #3231 records the column being over-read in BOTH directions within an hour:
+    /// a row's presence taken as proof of priming, and the unresolved count taken as proof that
+    /// most of the estate emits no zeros. Neither is a claim this analyser can make.
+    /// </summary>
+    private const string ReachPrefix = "# reach:";
+
+    /// <summary>The reach statement as the generator writes it and the gate reads it back.</summary>
+    private const string ReachHeaderLine =
+        ReachPrefix + " every status records what this static analyser could READ from source, never "
+        + "what a running process emits. unresolved = a dimension it could not read, or read but not "
+        + "yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence "
+        + "about runtime priming either way - query a live metrics endpoint for present-at-zero.";
+
+    /// <summary>
+    /// The literal that opens the coverage ratchet line: the recorded floor on the number of
+    /// declarations the analyser reads in full. Regeneration may raise it and never lowers it,
+    /// so a fall in the tool's reach is a visible, reviewed edit rather than silent erosion.
+    /// </summary>
+    private const string CoverageFloorPrefix = "# coverage-floor:";
 
     private static readonly string[] FactoryNames =
     {
@@ -1081,7 +1124,8 @@ public sealed class InstrumentPrimingEnrolmentTests
                 Is.GreaterThanOrEqualTo(MinimumNamedBlindSpots),
                 $"Only {named} instrument declaration(s) carry a named unread tag argument, below "
                 + $"the floor of {MinimumNamedBlindSpots}. The blind spot is not hypothetical - it "
-                + "covered 140 of the 212 rows that previously claimed no dimension - so a count "
+                + "covered 140 of the 212 rows that previously claimed no dimension, and 87 "
+                + "declarations after #3231 extended the resolver's reach - so a count "
                 + "near zero means the marker stopped being emitted and every `none` row is once "
                 + "again unfalsifiable, not that the repository got tidier.");
 
@@ -1220,61 +1264,152 @@ public sealed class InstrumentPrimingEnrolmentTests
         }
 
         var existing = ReadEnrolmentFile(out _).ToDictionary(r => r.Key, StringComparer.Ordinal);
+        var floor = Math.Max(ReadCoverageFloor(path) ?? 0, CoveredDeclarationCount(declarations));
         var builder = new StringBuilder();
         builder.AppendLine("# Instrument priming enrolment. One row per instrument declaration under src/.");
         builder.AppendLine("# key<TAB>enrolment<TAB>detail");
         builder.AppendLine(VocabularyHeaderLine);
+        builder.AppendLine(ReachHeaderLine);
+        builder.AppendLine(
+            $"{CoverageFloorPrefix} {floor.ToString(CultureInfo.InvariantCulture)} declarations whose every tag "
+            + "dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.");
         builder.AppendLine("# Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.");
 
         foreach (var declaration in declarations.OrderBy(d => d.Key, StringComparer.Ordinal))
         {
-            // Preserve a curated row, EXCEPT a None row the parser now contradicts. None is a
-            // claim that the instrument carries no tag dimension; once a dimension is visible
-            // the row is a stale negative claim, and preserving it would let the regeneration
-            // path quietly re-assert something the gate already knows to be false.
+            // Preserve a curated row, EXCEPT a None row the parser now contradicts, or a row the
+            // generator itself wrote. None is a claim that the instrument carries no tag
+            // dimension; once a dimension is visible the row is a stale negative claim, and
+            // preserving it would let the regeneration path quietly re-assert something the gate
+            // already knows to be false. A generated row is re-seeded so an improvement in the
+            // analyser's reach reaches the file instead of freezing its first answer forever.
             var hasDimension = declaration.Dimensions.Count > 0;
             if (existing.TryGetValue(declaration.Key, out var row)
-                && !(row.Enrolment == Enrolment.None && hasDimension))
+                && !(row.Enrolment == Enrolment.None && hasDimension)
+                && !IsGeneratedRow(row))
             {
                 builder.AppendLine($"{row.Key}\t{Render(row.Enrolment)}\t{row.Detail}");
                 continue;
             }
 
-            var bounded = declaration.Dimensions
-                .Where(d => !d.Value.Ambiguous && d.Value.Values.Count > 1)
-                .ToList();
-            var single = declaration.Dimensions
-                .Where(d => !d.Value.Ambiguous && d.Value.Values.Count == 1)
-                .ToList();
-            var ambiguous = declaration.Dimensions.Where(d => d.Value.Ambiguous).ToList();
-
-            if (bounded.Count > 0)
-            {
-                builder.AppendLine(
-                    $"{declaration.Key}\tunresolved\treason=bounded domain found, enrolment not yet chosen");
-            }
-            else if (single.Count > 0)
-            {
-                // A tag key resolving to exactly one literal is far likelier to be an
-                // under-resolved dimension than a genuine constant, so it is seeded as a
-                // named blind spot rather than as a negative claim.
-                builder.AppendLine(
-                    $"{declaration.Key}\tunresolved\treason=single-value domain {single[0].Key} -> "
-                    + $"[{string.Join(", ", single[0].Value.Values)}]; likely under-resolved, not a constant");
-            }
-            else if (ambiguous.Count > 0)
-            {
-                builder.AppendLine(
-                    $"{declaration.Key}\tunresolved\treason=dimension {ambiguous[0].Key}: "
-                    + $"{ambiguous[0].Value.Note ?? "domain not resolvable"}");
-            }
-            else
-            {
-                builder.AppendLine($"{declaration.Key}\tnone\t");
-            }
+            var (enrolment, detail) = Seed(declaration);
+            builder.AppendLine($"{declaration.Key}\t{Render(enrolment)}\t{detail}");
         }
 
         File.WriteAllText(path, builder.ToString());
+    }
+
+    /// <summary>Detail prefixes only the generator writes. A row carrying one was never curated.</summary>
+    private static readonly string[] GeneratedReasonPrefixes =
+    {
+        "reason=bounded domain found",
+        "reason=dimension ",
+        "reason=single-value domain ",
+        "reason=constant tag ",
+    };
+
+    /// <summary>Whether <paramref name="row"/> is one the generator wrote rather than a curated one.</summary>
+    private static bool IsGeneratedRow(EnrolmentRow row) =>
+        row.Enrolment == Enrolment.Open
+        || (row.Enrolment == Enrolment.Unresolved
+            && GeneratedReasonPrefixes.Any(p => row.Detail.StartsWith(p, StringComparison.Ordinal)));
+
+    /// <summary>
+    /// The enrolment the generator seeds for <paramref name="declaration"/>, in priority order:
+    /// a bounded domain still owes a priming decision; an unread dimension is a named blind spot;
+    /// a lone literal from a non-static source is likely under-resolved; a set made only of open
+    /// and constant dimensions is <see cref="Enrolment.Open"/>; constant tags alone are read but
+    /// not yet enrolled; nothing at all is <see cref="Enrolment.None"/>.
+    /// </summary>
+    private static (Enrolment Enrolment, string Detail) Seed(Declaration declaration)
+    {
+        var dims = declaration.Dimensions;
+
+        var bounded = dims.FirstOrDefault(d => !d.Value.Ambiguous && d.Value.Values.Count > 1);
+        if (bounded.Key is not null)
+        {
+            return (Enrolment.Unresolved, "reason=bounded domain found, enrolment not yet chosen");
+        }
+
+        var unread = dims.FirstOrDefault(d => d.Value.Ambiguous && !SourceCorpus.IsOpenDimension(d.Value));
+        if (unread.Key is not null)
+        {
+            return (Enrolment.Unresolved,
+                $"reason=dimension {unread.Key}: {unread.Value.Note ?? "domain not resolvable"}");
+        }
+
+        var single = dims.FirstOrDefault(d =>
+            !d.Value.Ambiguous && d.Value.Values.Count == 1 && !IsConstantTag(d.Value));
+        if (single.Key is not null)
+        {
+            // A tag key resolving to exactly one literal is far likelier to be an
+            // under-resolved dimension than a genuine constant, so it is seeded as a
+            // named blind spot rather than as a negative claim.
+            return (Enrolment.Unresolved,
+                $"reason=single-value domain {single.Key} -> [{string.Join(", ", single.Value.Values)}]; "
+                + "likely under-resolved, not a constant");
+        }
+
+        var open = dims.Where(d => SourceCorpus.IsOpenDimension(d.Value)).ToList();
+        if (open.Count > 0)
+        {
+            return (Enrolment.Open,
+                $"open={string.Join(", ", open.Select(d => d.Key).OrderBy(k => k, StringComparer.Ordinal))}; "
+                + open[0].Value.Note);
+        }
+
+        var constant = dims.FirstOrDefault(d => IsConstantTag(d.Value));
+        if (constant.Key is not null)
+        {
+            return (Enrolment.Unresolved,
+                $"reason=constant tag {constant.Key} -> [{string.Join(", ", constant.Value.Values)}]; "
+                + "read from a static member, enrolment not yet chosen");
+        }
+
+        return (Enrolment.None, string.Empty);
+    }
+
+    private static bool IsConstantTag(DomainResult domain) =>
+        !domain.Ambiguous
+        && domain.Values.Count == 1
+        && domain.Note is { } note
+        && note.StartsWith(SourceCorpus.ConstantTagNotePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The analyser's REACH, as the ratchet counts it: declarations that carry at least one tag
+    /// dimension and had every one of them read. Tagless declarations are excluded because they
+    /// are read trivially and would dilute the number into a statement about the estate's shape.
+    /// </summary>
+    private static int CoveredDeclarationCount(IEnumerable<Declaration> declarations) =>
+        declarations.Count(d => d.Dimensions.Count > 0 && SourceCorpus.IsFullyRead(d));
+
+    /// <summary>The recorded coverage floor, or <see langword="null"/> when the file has no ratchet line.</summary>
+    private static int? ReadCoverageFloor(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        foreach (var raw in File.ReadLines(path))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith(CoverageFloorPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var rest = line[CoverageFloorPrefix.Length..].TrimStart();
+            var end = 0;
+            while (end < rest.Length && char.IsDigit(rest[end]))
+            {
+                end++;
+            }
+
+            return end > 0 ? int.Parse(rest[..end], CultureInfo.InvariantCulture) : null;
+        }
+
+        return null;
     }
 
     private static string Render(Enrolment enrolment) => enrolment switch
@@ -1283,6 +1418,7 @@ public sealed class InstrumentPrimingEnrolmentTests
         Enrolment.Primed => "primed",
         Enrolment.Anchored => "anchored",
         Enrolment.Unprimed => "unprimed",
+        Enrolment.Open => "open",
         _ => "unresolved",
     };
 
@@ -1307,6 +1443,44 @@ public sealed class InstrumentPrimingEnrolmentTests
         /// </summary>
         public const string ObservableBlindSpotPrefix = "(unread-observable-callback:";
 
+        /// <summary>
+        /// Prefix of the note carried by a dimension that is OPEN BY NATURE: its key names a
+        /// runtime-valued identity (a tree, a tenant, a shard) and its value is a runtime
+        /// expression, so there is no finite domain to enrol. The dimension stays ambiguous, so
+        /// no priming check ever acts on it, but it is a resolved answer rather than a failure
+        /// to read, and it is reported apart from one.
+        /// </summary>
+        public const string OpenDimensionNotePrefix = "open dimension:";
+
+        /// <summary>
+        /// Prefix of the note carried by a single-valued dimension read from a static member,
+        /// such as <c>LatticeTenantLabel.Platform</c>. A static binding cannot be reassigned per
+        /// call, so the single value is a constant tag rather than an under-resolved domain.
+        /// </summary>
+        public const string ConstantTagNotePrefix = "constant tag:";
+
+        /// <summary>
+        /// Whether <paramref name="domain"/> is an open-by-nature dimension: ambiguous, and
+        /// ambiguous because its domain is runtime-valued rather than because it went unread.
+        /// </summary>
+        /// <param name="domain">The resolved dimension.</param>
+        /// <returns><see langword="true"/> for an open-by-nature dimension.</returns>
+        public static bool IsOpenDimension(DomainResult domain) =>
+            domain.Ambiguous
+            && domain.Note is { } note
+            && note.StartsWith(OpenDimensionNotePrefix, StringComparison.Ordinal);
+
+        /// <summary>
+        /// Whether the analyser READ every dimension of <paramref name="declaration"/>: each is
+        /// either resolved to literals or open by nature, and none is a named blind spot. This is
+        /// a statement about the tool's reach and never about what a running process emits.
+        /// </summary>
+        /// <param name="declaration">The instrument declaration.</param>
+        /// <returns><see langword="true"/> when no dimension went unread.</returns>
+        public static bool IsFullyRead(Declaration declaration) =>
+            declaration.Dimensions.All(d =>
+                !d.Key.StartsWith('(') && (!d.Value.Ambiguous || IsOpenDimension(d.Value)));
+
         private static readonly Regex ConstStringPattern = new(
             @"\bconst\s+string\s+(\w+)\s*=\s*""([^""]*)""", RegexOptions.Compiled);
 
@@ -1320,7 +1494,86 @@ public sealed class InstrumentPrimingEnrolmentTests
         private static readonly Regex MeasurementConstructionPattern = new(
             @"new\s+Measurement\s*<[^<>]*>\s*\(", RegexOptions.Compiled);
 
+        /// <summary>The tag pair type as it is spelled in source. Shared by every tag pattern below.</summary>
+        private const string KvpType = @"KeyValuePair\s*<\s*string\s*,\s*object\??\s*>";
+
+        /// <summary>A literal tag pair at an emission site, explicit or target-typed.</summary>
+        private static readonly Regex KvpConstructionPattern = new(
+            @"new\s+" + KvpType + @"\s*\(", RegexOptions.Compiled);
+
+        /// <summary>A whole expression that IS one tag-pair construction, explicit or target-typed.</summary>
+        private static readonly Regex KvpExpressionPattern = new(
+            @"^new\s*(?:" + KvpType + @"\s*)?\(", RegexOptions.Compiled);
+
+        /// <summary><c>var name =</c>, <c>KeyValuePair&lt;string, object?&gt; name =</c>, or <c>... name =&gt;</c>.</summary>
+        private static readonly Regex TagVariablePattern = new(
+            @"(?:\bvar|" + KvpType + @")\s+(\w+)\s*(?:=>|=(?![=>]))", RegexOptions.Compiled);
+
+        /// <summary>An expression-bodied method returning a tag pair: <c>KeyValuePair&lt;...&gt; Name(args) =&gt;</c>.</summary>
+        private static readonly Regex TagMethodPattern = new(
+            KvpType + @"\s+(\w+)\s*\([^()]*\)\s*=>", RegexOptions.Compiled);
+
+        /// <summary>An assignment whose right-hand side is an explicit tag-pair construction.</summary>
+        private static readonly Regex TagAssignmentPattern = new(
+            @"\b(\w+)\s*=\s*(?=new\s+" + KvpType + @"\s*\()", RegexOptions.Compiled);
+
+        /// <summary>A tag-pair field declared with no initialiser; its assignments are indexed separately.</summary>
+        private static readonly Regex BareTagFieldPattern = new(
+            KvpType + @"\s+(\w+)\s*;", RegexOptions.Compiled);
+
+        /// <summary>A block-bodied tag-pair property getter; its <c>return</c> expressions are indexed.</summary>
+        private static readonly Regex TagGetterPattern = new(
+            KvpType + @"\s+(\w+)\s*\{\s*get\s*\{", RegexOptions.Compiled);
+
+        private static readonly Regex AssignmentPattern = new(@"\b(\w+)\s*=(?![=>])", RegexOptions.Compiled);
+
+        private static readonly Regex ReturnPattern = new(@"\breturn\s+", RegexOptions.Compiled);
+
+        /// <summary>A tag argument naming a variable, member, or call: <c>treeTag</c>, <c>Labels.Platform</c>, <c>LeafTreeTag()</c>.</summary>
+        private static readonly Regex TagReferencePattern = new(
+            @"^(?:(?<qualifier>[\w\.]+)\.)?(?<name>\w+)\s*(?<call>\(.*\))?$",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        private static readonly Regex TagSwitchPattern = new(@"^[\w\.]+\s+switch\s*\{", RegexOptions.Compiled);
+
+        /// <summary>A collection of tag arguments: a <c>TagList</c> initialiser, an array, or a collection expression.</summary>
+        private static readonly Regex TagCollectionPattern = new(
+            @"^(?:new\s+(?:System\.Diagnostics\.)?TagList\s*(?:\(\s*\))?\s*|new\s*(?:" + KvpType + @")?\s*\[\s*\]\s*)\{(?<items>.*)\}$|^\[(?<items>.*)\]$",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        /// <summary>
+        /// How many indirections a tag argument is followed through: an alias, a property, the
+        /// field it caches, the construction. Deep enough for the estate's longest real chain
+        /// (a local aliasing a lazily-cached property), shallow enough that a cycle ends fast.
+        /// </summary>
+        private const int MaxTagIndirection = 4;
+
+        /// <summary>
+        /// Tag keys whose value is an IDENTIFIER by nature - a tree, tenant, shard, WAL
+        /// partition, or replication cluster (<c>peer</c>, <c>origin</c>) that exists only at
+        /// runtime. A non-literal value under one of these keys is
+        /// an open dimension, never a named blind spot. Deliberately a short, reviewed list: a
+        /// key outside it whose value does not resolve (an <c>outcome</c> passed as a parameter)
+        /// stays unread, because its domain is a bounded taxonomy the analyser failed to read,
+        /// and calling it open would launder that failure into a finding.
+        /// </summary>
+        public static readonly IReadOnlyCollection<string> OpenDimensionKeys =
+            new HashSet<string>(StringComparer.Ordinal) { "tree", "tenant", "shard", "partition", "peer", "origin" };
+
+        /// <summary>
+        /// Tag factories whose value is a runtime identifier BY CONSTRUCTION, with the declaring
+        /// type and the constant naming the key they emit. Their bodies are block-bodied cache
+        /// lookups the index cannot follow, so they are named here rather than guessed at.
+        /// </summary>
+        public static readonly IReadOnlyList<(string Type, string Method, string KeyConstant)> LabelFactories =
+            new[]
+            {
+                ("LatticeTenantLabel", "ForTree", "TagTenant"),
+                ("LatticeTenantLabel", "ForTenant", "TagTenant"),
+            };
+
         private readonly Dictionary<string, string> _files;
+        private readonly Dictionary<string, List<(string File, string Expression)>> _tagVariables = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<(string File, List<string> Values)>> _describeHelpers = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<(string File, string Value)>> _consts = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<(string Path, string Body)>> _methodBodies = new(StringComparer.Ordinal);
@@ -1354,9 +1607,132 @@ public sealed class InstrumentPrimingEnrolmentTests
 
                     list.Add((path, values));
                 }
+
+                IndexTagVariables(path, text);
             }
 
             Declarations = BuildDeclarations();
+        }
+
+        /// <summary>
+        /// Records every place <paramref name="text"/> binds a name to a tag-pair expression, so a
+        /// tag argument passed BY NAME can be read through to the pair it holds. One pass of static
+        /// compiled patterns per file; nothing here runs per declaration.
+        /// </summary>
+        private void IndexTagVariables(string path, string text)
+        {
+            foreach (Match m in TagVariablePattern.Matches(text))
+            {
+                AddTagVariable(m.Groups[1].Value, path, ReadExpression(text, m.Index + m.Length));
+            }
+
+            foreach (Match m in TagMethodPattern.Matches(text))
+            {
+                AddTagVariable(m.Groups[1].Value, path, ReadExpression(text, m.Index + m.Length));
+            }
+
+            foreach (Match m in TagAssignmentPattern.Matches(text))
+            {
+                AddTagVariable(m.Groups[1].Value, path, ReadExpression(text, m.Index + m.Length));
+            }
+
+            HashSet<string>? bareFields = null;
+            foreach (Match m in BareTagFieldPattern.Matches(text))
+            {
+                (bareFields ??= new HashSet<string>(StringComparer.Ordinal)).Add(m.Groups[1].Value);
+            }
+
+            if (bareFields is not null)
+            {
+                foreach (Match m in AssignmentPattern.Matches(text))
+                {
+                    if (bareFields.Contains(m.Groups[1].Value))
+                    {
+                        AddTagVariable(m.Groups[1].Value, path, ReadExpression(text, m.Index + m.Length));
+                    }
+                }
+            }
+
+            foreach (Match m in TagGetterPattern.Matches(text))
+            {
+                var bodyEnd = ArgumentListEnd(text, m.Index + m.Length);
+                var body = text[(m.Index + m.Length)..Math.Min(bodyEnd, text.Length)];
+                foreach (Match r in ReturnPattern.Matches(body))
+                {
+                    AddTagVariable(m.Groups[1].Value, path, ReadExpression(body, r.Index + r.Length));
+                }
+            }
+        }
+
+        private void AddTagVariable(string name, string path, string? expression)
+        {
+            if (expression is null || expression.Length == 0)
+            {
+                return;
+            }
+
+            if (!_tagVariables.TryGetValue(name, out var list))
+            {
+                list = new List<(string, string)>(1);
+                _tagVariables[name] = list;
+            }
+
+            var collapsed = Collapse(expression);
+            foreach (var (file, existing) in list)
+            {
+                if (string.Equals(file, path, StringComparison.Ordinal)
+                    && string.Equals(existing, collapsed, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            list.Add((path, collapsed));
+        }
+
+        /// <summary>Longest right-hand side the index reads before giving up on a binding.</summary>
+        private const int MaxIndexedExpression = 1000;
+
+        /// <summary>
+        /// The expression starting at <paramref name="start"/>, up to the statement's top-level
+        /// <c>;</c>, or <see langword="null"/> when none is found within <see cref="MaxIndexedExpression"/>.
+        /// </summary>
+        private static string? ReadExpression(string text, int start)
+        {
+            var depth = 0;
+            var limit = Math.Min(text.Length, start + MaxIndexedExpression);
+
+            for (var i = start; i < limit; i++)
+            {
+                var c = text[i];
+                if (c is '(' or '[' or '{')
+                {
+                    depth++;
+                }
+                else if (c is ')' or ']' or '}')
+                {
+                    if (--depth < 0)
+                    {
+                        return null;
+                    }
+                }
+                else if (c == '"')
+                {
+                    var j = i + 1;
+                    while (j < text.Length && !(text[j] == '"' && text[j - 1] != '\\'))
+                    {
+                        j++;
+                    }
+
+                    i = j;
+                }
+                else if (c == ';' && depth == 0)
+                {
+                    return text[start..i].Trim();
+                }
+            }
+
+            return null;
         }
 
         /// <summary>Every source file scanned, keyed by repo-relative path.</summary>
@@ -1598,7 +1974,34 @@ public sealed class InstrumentPrimingEnrolmentTests
                 .ToList();
             var ambiguous = existing.Ambiguous || domain.Ambiguous;
             dimensions[key] = new DomainResult(
-                merged, ambiguous, ambiguous ? existing.Note ?? domain.Note : null);
+                merged, ambiguous, MergedNote(existing, domain, ambiguous, merged.Count), existing.Via ?? domain.Via);
+        }
+
+        /// <summary>
+        /// The note a merged dimension carries. An OPEN site merged with a literal site of the
+        /// same key stays open (a tree tag is a tree id whether one site passes a sentinel or
+        /// not), but an open site merged with an UNREAD one takes the unread note, so a merge can
+        /// never promote a blind spot into a resolved answer. A constant-tag note survives only
+        /// while every site agrees on the one value.
+        /// </summary>
+        private static string? MergedNote(DomainResult existing, DomainResult domain, bool ambiguous, int count)
+        {
+            if (!ambiguous)
+            {
+                return count == 1 && string.Equals(existing.Note, domain.Note, StringComparison.Ordinal)
+                    ? existing.Note
+                    : null;
+            }
+
+            var unread = existing.Ambiguous && !IsOpenDimension(existing) ? existing
+                : domain.Ambiguous && !IsOpenDimension(domain) ? domain
+                : null;
+            if (unread is not null)
+            {
+                return unread.Note ?? "domain not resolvable";
+            }
+
+            return IsOpenDimension(existing) ? existing.Note : domain.Note;
         }
 
         /// <summary>
@@ -1872,16 +2275,13 @@ public sealed class InstrumentPrimingEnrolmentTests
 
         private IEnumerable<(string Key, DomainResult Domain)> ExtractTagPairs(string blob, string path)
         {
-            var pattern = new Regex(
-                @"new\s+KeyValuePair\s*<\s*string\s*,\s*object\??\s*>\s*\(", RegexOptions.Compiled);
-
             // Every region of the blob consumed by a literal KeyValuePair construction. What is
             // left over after removing them is tag text this parser never read, and it is the
             // difference between "there was nothing to find" and "I found nothing". See the
             // residue check below.
             var consumed = new List<(int Start, int End)>();
 
-            foreach (Match m in pattern.Matches(blob))
+            foreach (Match m in KvpConstructionPattern.Matches(blob))
             {
                 var args = SplitArguments(blob, m.Index + m.Length);
                 consumed.Add((m.Index, ArgumentListEnd(blob, m.Index + m.Length)));
@@ -1914,7 +2314,7 @@ public sealed class InstrumentPrimingEnrolmentTests
                     continue;
                 }
 
-                yield return (key, ResolveDomain(args[1], path));
+                yield return (key, ClassifyValue(key, args[1], path, via: null));
             }
 
             // The residue: tag text outside every literal KeyValuePair construction. An earlier
@@ -1951,9 +2351,47 @@ public sealed class InstrumentPrimingEnrolmentTests
             // The claim being made is deliberately weak - "there is tag text here I did not
             // read" - because a parser that cannot read the text equally cannot count how many
             // dimensions it holds. Asserting a number would be a second invented measurement.
+            //
+            // Before a residue token is reported unread it is READ THROUGH, one binding at a
+            // time: a tag variable, a tag-returning member, a label factory, a TagList or array
+            // of those (issue #3231). Only a token that bottoms out at a literal pair or a named
+            // factory is resolved; anything else - an undeclared name, a name bound twice to
+            // different expressions, a name bound only in an unrelated file - stays in the marker.
             var residue = Collapse(Remove(blob, consumed)).Trim().Trim(',').Trim();
             if (residue.Length > 0 && residue.Any(char.IsLetterOrDigit))
             {
+                var unread = new List<string>();
+                var read = new List<(string Key, DomainResult Domain)>();
+                foreach (var raw in SplitTopLevel(residue))
+                {
+                    var token = raw.Trim();
+                    if (token.Length == 0 || !token.Any(char.IsLetterOrDigit))
+                    {
+                        continue;
+                    }
+
+                    var pairs = ResolveTagArgument(token, path);
+                    if (pairs is null)
+                    {
+                        unread.Add(token);
+                    }
+                    else
+                    {
+                        read.AddRange(pairs);
+                    }
+                }
+
+                foreach (var pair in read)
+                {
+                    yield return pair;
+                }
+
+                if (unread.Count == 0)
+                {
+                    yield break;
+                }
+
+                residue = string.Join(", ", unread);
                 var rendered = residue.Length <= ResidueRenderLimit
                     ? residue
                     : residue[..ResidueRenderLimit] + " (truncated)";
@@ -1970,6 +2408,313 @@ public sealed class InstrumentPrimingEnrolmentTests
 
         /// <summary>Longest residue rendered verbatim into a marker key. Keeps enrolment rows readable.</summary>
         private const int ResidueRenderLimit = 120;
+
+        /// <summary>
+        /// The tag pairs one residue token denotes, or <see langword="null"/> when any part of it
+        /// could not be read. A collection is all-or-nothing: a TagList with one unread element
+        /// stays unread as a whole rather than reporting the part that happened to resolve.
+        /// </summary>
+        private List<(string Key, DomainResult Domain)>? ResolveTagArgument(string token, string path)
+        {
+            var collection = TagCollectionPattern.Match(token);
+            if (collection.Success)
+            {
+                var pairs = new List<(string Key, DomainResult Domain)>();
+                foreach (var raw in SplitTopLevel(collection.Groups["items"].Value))
+                {
+                    var item = raw.Trim();
+                    if (item.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    // A TagList collection initialiser element: { key, value }.
+                    var resolved = item.StartsWith('{') && item.EndsWith('}')
+                        ? ResolvePair(SplitTopLevel(item[1..^1]), path, Collapse(token))
+                        : ResolveTagToken(item, path, 0, Collapse(item));
+                    if (resolved is null)
+                    {
+                        return null;
+                    }
+
+                    pairs.Add(resolved.Value);
+                }
+
+                return pairs.Count == 0 ? null : pairs;
+            }
+
+            var single = ResolveTagToken(token, path, 0, Collapse(token));
+            return single is null ? null : new List<(string Key, DomainResult Domain)>(1) { single.Value };
+        }
+
+        /// <summary>
+        /// Reads one tag argument through to the pair it holds, following at most
+        /// <see cref="MaxTagIndirection"/> bindings. <paramref name="via"/> is the argument as it
+        /// was written at the emission site, recorded on the result.
+        /// </summary>
+        private (string Key, DomainResult Domain)? ResolveTagToken(string token, string path, int depth, string via)
+        {
+            if (depth > MaxTagIndirection)
+            {
+                return null;
+            }
+
+            var e = token.Trim().TrimEnd('!').Trim();
+            if (e.StartsWith('(') && e.EndsWith(')') && ArgumentListEnd(e, 1) == e.Length)
+            {
+                e = e[1..^1].Trim();
+            }
+
+            if (e.StartsWith("this.", StringComparison.Ordinal))
+            {
+                e = e[5..];
+            }
+
+            var construction = KvpExpressionPattern.Match(e);
+            if (construction.Success)
+            {
+                var start = construction.Index + construction.Length;
+                return ArgumentListEnd(e, start) == e.Length
+                    ? ResolvePair(SplitArguments(e, start), path, via)
+                    : null;
+            }
+
+            var ternary = SplitTernary(e);
+            if (ternary is not null)
+            {
+                return CombineArms(new[]
+                {
+                    ResolveTagToken(ternary.Value.WhenTrue, path, depth + 1, via),
+                    ResolveTagToken(ternary.Value.WhenFalse, path, depth + 1, via),
+                });
+            }
+
+            var switchMatch = TagSwitchPattern.Match(e);
+            if (switchMatch.Success)
+            {
+                var arms = ExtractSwitchArms(e, switchMatch.Length - 1)
+                    .Where(a => !a.StartsWith("throw ", StringComparison.Ordinal))
+                    .ToList();
+                return arms.Count == 0
+                    ? null
+                    : CombineArms(arms.Select(a => ResolveTagToken(a, path, depth + 1, via)).ToList());
+            }
+
+            var reference = TagReferencePattern.Match(e);
+            if (!reference.Success)
+            {
+                return null;
+            }
+
+            var qualifierText = reference.Groups["qualifier"].Success ? reference.Groups["qualifier"].Value : null;
+            var qualifier = qualifierText?.Split('.')[^1];
+            var name = reference.Groups["name"].Value;
+
+            if (reference.Groups["call"].Success && ResolveLabelFactory(qualifier, name, path, via) is { } factory)
+            {
+                return factory;
+            }
+
+            var target = ChooseTagBinding(name, qualifier, path);
+            return target is null
+                ? null
+                : ResolveTagToken(target.Value.Expression, target.Value.File, depth + 1, via);
+        }
+
+        /// <summary>
+        /// The one binding <paramref name="name"/> can mean from <paramref name="path"/>, or
+        /// <see langword="null"/>. A qualified name narrows to the file whose stem is the
+        /// qualifier (one top-level type per file). An unqualified name is file-local first, then
+        /// widens only to the other parts of the same partial type. Two distinct bindings in the
+        /// chosen scope are never picked between: that is exactly the guess the analyser must
+        /// not make.
+        /// </summary>
+        private (string File, string Expression)? ChooseTagBinding(string name, string? qualifier, string path)
+        {
+            if (!_tagVariables.TryGetValue(name, out var candidates))
+            {
+                return null;
+            }
+
+            List<(string File, string Expression)> scope;
+            if (qualifier is not null)
+            {
+                scope = candidates.Where(c => string.Equals(FileStem(c.File), qualifier, StringComparison.Ordinal)).ToList();
+            }
+            else
+            {
+                scope = candidates.Where(c => string.Equals(c.File, path, StringComparison.Ordinal)).ToList();
+                if (scope.Count == 0)
+                {
+                    var stem = FileStem(path);
+                    scope = candidates.Where(c => string.Equals(FileStem(c.File), stem, StringComparison.Ordinal)).ToList();
+                }
+            }
+
+            return scope.Count == 1 ? scope[0] : null;
+        }
+
+        /// <summary>The file name up to its first dot: the type a partial-class file belongs to.</summary>
+        private static string FileStem(string path)
+        {
+            var name = Path.GetFileName(path);
+            var dot = name.IndexOf('.');
+            return dot < 0 ? name : name[..dot];
+        }
+
+        private (string Key, DomainResult Domain)? ResolveLabelFactory(
+            string? qualifier, string name, string path, string via)
+        {
+            foreach (var (type, method, keyConstant) in LabelFactories)
+            {
+                if (!string.Equals(name, method, StringComparison.Ordinal)
+                    || !string.Equals(qualifier ?? FileStem(path), type, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var key = ResolveConstant(keyConstant, path, type);
+                if (key.Ambiguous || key.Values.Count != 1)
+                {
+                    return null;
+                }
+
+                return (key.Values[0], new DomainResult(
+                    Array.Empty<string>(),
+                    true,
+                    $"{OpenDimensionNotePrefix} {key.Values[0]} is derived at runtime by {type}.{method}",
+                    via));
+            }
+
+            return null;
+        }
+
+        /// <summary>A key/value argument pair read as one tag, or <see langword="null"/> when the key does not resolve.</summary>
+        private (string Key, DomainResult Domain)? ResolvePair(List<string> args, string path, string? via)
+        {
+            if (args.Count != 2)
+            {
+                return null;
+            }
+
+            var key = ResolveSingle(args[0], path);
+            return key is null ? null : (key, ClassifyValue(key, args[1], path, via));
+        }
+
+        /// <summary>
+        /// Resolves a tag's value, then says what KIND of answer it is. A literal set is returned
+        /// as-is; a single literal read through a binding is a constant tag; an unresolvable value
+        /// under an <see cref="OpenDimensionKeys"/> key is an open dimension; anything else keeps
+        /// the resolver's own reason, because it is a value the analyser failed to read.
+        /// </summary>
+        private DomainResult ClassifyValue(string key, string valueExpression, string path, string? via)
+        {
+            var domain = ResolveDomain(valueExpression, path);
+            if (!domain.Ambiguous)
+            {
+                return via is not null && domain.Values.Count == 1
+                    ? new DomainResult(
+                        domain.Values,
+                        false,
+                        $"{ConstantTagNotePrefix} {key}={domain.Values[0]} read through {Truncate(via)}",
+                        via)
+                    : domain with { Via = via };
+            }
+
+            // A value that names a constant the resolver could not disambiguate is a failed read
+            // of a constant, not a runtime identifier, even under an open key.
+            var constantCollision = domain.Note?.Contains(" is declared in ", StringComparison.Ordinal) == true;
+            if (OpenDimensionKeys.Contains(key) && !constantCollision)
+            {
+                return new DomainResult(
+                    Array.Empty<string>(),
+                    true,
+                    $"{OpenDimensionNotePrefix} {key} carries a runtime identifier ({Truncate(Collapse(valueExpression))})",
+                    via);
+            }
+
+            return domain with { Via = via };
+        }
+
+        /// <summary>Arms of a ternary or switch: one key across every arm, or <see langword="null"/>.</summary>
+        private static (string Key, DomainResult Domain)? CombineArms(IReadOnlyList<(string Key, DomainResult Domain)?> arms)
+        {
+            if (arms.Count == 0 || arms.Any(a => a is null))
+            {
+                return null;
+            }
+
+            var key = arms[0]!.Value.Key;
+            var combined = arms[0]!.Value.Domain;
+            for (var i = 1; i < arms.Count; i++)
+            {
+                var (armKey, domain) = arms[i]!.Value;
+                if (!string.Equals(armKey, key, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                var values = combined.Values.Union(domain.Values, StringComparer.Ordinal)
+                    .OrderBy(v => v, StringComparer.Ordinal).ToList();
+                var ambiguous = combined.Ambiguous || domain.Ambiguous;
+                combined = new DomainResult(
+                    values, ambiguous, MergedNote(combined, domain, ambiguous, values.Count), combined.Via ?? domain.Via);
+            }
+
+            return (key, combined);
+        }
+
+        /// <summary>
+        /// Splits <paramref name="text"/> on its top-level commas. Brackets and strings nest; a
+        /// <c>&lt;</c> nests only when it opens a generic argument list (glued to an identifier),
+        /// so <c>KeyValuePair&lt;string, object?&gt;</c> is not split while <c>a &lt; b</c> is untouched.
+        /// </summary>
+        private static List<string> SplitTopLevel(string text)
+        {
+            var parts = new List<string>();
+            var depth = 0;
+            var angle = 0;
+            var from = 0;
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (c is '(' or '[' or '{')
+                {
+                    depth++;
+                }
+                else if (c is ')' or ']' or '}')
+                {
+                    depth--;
+                }
+                else if (c == '<' && i > 0 && char.IsLetterOrDigit(text[i - 1]))
+                {
+                    angle++;
+                }
+                else if (c == '>' && angle > 0)
+                {
+                    angle--;
+                }
+                else if (c == '"')
+                {
+                    var j = i + 1;
+                    while (j < text.Length && !(text[j] == '"' && text[j - 1] != '\\'))
+                    {
+                        j++;
+                    }
+
+                    i = j;
+                }
+                else if (c == ',' && depth == 0 && angle == 0)
+                {
+                    parts.Add(text[from..i]);
+                    from = i + 1;
+                }
+            }
+
+            parts.Add(text[from..]);
+            return parts;
+        }
 
         /// <summary>Index just past the argument list whose contents start at <paramref name="start"/>.</summary>
         private static int ArgumentListEnd(string text, int start)
