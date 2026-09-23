@@ -852,6 +852,12 @@ normal, not a contradiction (embeddings also require a healthy vector projection
 - see "Health and degraded mode"). A still-`Running` job whose `filesEmbedded` or
 `updatedAt` keeps advancing is healthy.
 
+Within the embedding phase the arms run in a fixed order on every pass:
+**memory first, then files, then symbols**. Memory is small, so after an
+onboard or a `reset_index` captured notes become semantically searchable within
+the first pass, while file and symbol coverage is still filling in - a memory
+`search` hit early in an ingest does not mean code coverage is complete.
+
 **A stalled `updatedAt` is NOT on its own grounds to give up, and treating it as
 such prescribes a destructive action against a healthy index.** An earlier
 revision of this file said a stalled `updatedAt` or `status: Failed` warranted

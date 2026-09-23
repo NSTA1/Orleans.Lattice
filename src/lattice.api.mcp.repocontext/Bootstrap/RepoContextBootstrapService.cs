@@ -815,6 +815,73 @@ internal sealed class RepoContextBootstrapService : IDisposable
                     Math.Max(0, _options.PassesPerEmbeddingGapScan - (passesSinceGapScan + 1)));
             }
 
+            // The memory arm's fault is held aside rather than banked into armFailure
+            // straight away. The gap-scan block below classifies coverage from the
+            // failures banked so far, and a memory fault says nothing about whether
+            // the file corpus is embedded (issue #3340); it joins armFailure once that
+            // classification has been made.
+            Exception? memoryArmFailure = null;
+
+            // Embed the durable agent-memory entries as their own passages, so a
+            // natural-language search ranks captured decisions, gotchas and
+            // conventions alongside code instead of silently omitting them
+            // (issue #1878). Like the other arms, this runs even when the structural
+            // plan was a no-op, and back-fills any entry lacking a live
+            // embedding - which is what converts a store captured entirely
+            // before memory embedding existed, with no re-walk.
+            //
+            // ORDER: memory runs FIRST, ahead of the file and symbol arms. It is the
+            // smallest arm (hundreds to low thousands of entries against tens of
+            // thousands of files and symbols) and the highest-value per vector, so
+            // on a fresh onboard or after reset_index it becomes searchable within
+            // the first pass instead of waiting out the whole file and symbol
+            // back-fill. Running first also puts its marker scan ahead of the file
+            // and symbol gap sweeps, which load the same membership tree and are
+            // the writes that time out under pressure.
+            //
+            // Memory is written through the tools rather than the walk, so the
+            // ingestor gets no per-pass changed set. The change signal instead
+            // comes from the write side: RepoContextStore retires an entry's
+            // vector on every remember, update, and forget (both the hard delete
+            // and the lapse), so a revised entry looks un-embedded and this
+            // back-fill re-embeds it from its current text on the next reconcile.
+            // That needs no digest and no dirty-set.
+            //
+            // RESIDUAL, stated rather than hidden: an entry that expires by its
+            // own TTL rather than through an explicit forget - a coordination
+            // handoff written with ttlSeconds, say - vanishes from the tree with
+            // no code path observing it, so its vector is never retired. That is
+            // fail-safe: the semantic path drops a hit that no longer hydrates
+            // via its !entry.Exists guard, so the cost is an inflated membership
+            // tally and an occasional wasted ranking slot, never a dead key
+            // returned to a caller. A prune IS possible - VectorMetadataRecord
+            // keeps each vector's SourceKey - but not free: memory source ids
+            // are not separable from file and symbol ids in the membership set,
+            // so it would take a full metadata scan on a path that otherwise
+            // touches only what changed. Left for a deliberate sweep rather than
+            // paid on every reconcile.
+            try
+            {
+                var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
+                    repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
+                    .ConfigureAwait(false);
+                if (memoryEmbedded > 0)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                memoryArmFailure = ex;
+                RecordArmFault(repoId, "ingest-memory", ex);
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: memory vectorisation did not complete this pass; continuing with the "
+                    + "remaining embedding arms and retrying it on the next reconcile.",
+                    repoId);
+            }
+
             var lastVectorisingHeartbeat = 0;
 
             // Elapsed time reported by the heartbeat below is measured from the
@@ -924,10 +991,11 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 // Classified here from the arm failures banked SO FAR, and that is
                 // deliberate rather than an oversight repeated: the file arm is the one
                 // that measures embedding coverage, and it - with the retirement arm
-                // above it - has already had its turn by this line. A symbol- or
-                // memory-arm fault below says nothing about whether the file corpus is
-                // embedded, so spending it as a withdrawal of a measurement the file arm
-                // genuinely made would re-arm the every-pass sweep on exactly the
+                // above it - has already had its turn by this line. A symbol-arm fault
+                // below, or a memory-arm fault above (held aside in memoryArmFailure
+                // until after this block), says nothing about whether the file corpus
+                // is embedded, so spending it as a withdrawal of a measurement the file
+                // arm genuinely made would re-arm the every-pass sweep on exactly the
                 // saturated store issue #3340 stood it down for.
                 var measurement = RepoContextCoverageVerdictReporter.Classify(armFailure is not null, fileIngest);
 
@@ -971,6 +1039,11 @@ internal sealed class RepoContextBootstrapService : IDisposable
                         _options.PassesPerEmbeddingGapScan);
                 }
             }
+
+            // The coverage classification above has been made, so the memory arm's
+            // fault can now join the pass's outcome: it still fails the run and is
+            // still seen by the coverage_verdict charge below the last arm (#3354).
+            armFailure ??= memoryArmFailure;
 
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
                 .ConfigureAwait(false);
@@ -1061,58 +1134,7 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 RecordArmFault(repoId, "ingest-symbols", ex);
                 _logger.LogWarning(
                     ex,
-                    "Repo {RepoId}: symbol vectorisation did not complete this pass; continuing with the "
-                    + "remaining embedding arms and retrying it on the next reconcile.",
-                    repoId);
-            }
-
-            // Embed the durable agent-memory entries as their own passages, so a
-            // natural-language search ranks captured decisions, gotchas and
-            // conventions alongside code instead of silently omitting them
-            // (issue #1878). Like symbols, this runs even when the structural
-            // plan was a no-op, and back-fills any entry lacking a live
-            // embedding - which is what converts a store captured entirely
-            // before memory embedding existed, with no re-walk.
-            //
-            // Memory is written through the tools rather than the walk, so the
-            // ingestor gets no per-pass changed set. The change signal instead
-            // comes from the write side: RepoContextStore retires an entry's
-            // vector on every remember, update, and forget (both the hard delete
-            // and the lapse), so a revised entry looks un-embedded and this
-            // back-fill re-embeds it from its current text on the next reconcile.
-            // That needs no digest and no dirty-set.
-            //
-            // RESIDUAL, stated rather than hidden: an entry that expires by its
-            // own TTL rather than through an explicit forget - a coordination
-            // handoff written with ttlSeconds, say - vanishes from the tree with
-            // no code path observing it, so its vector is never retired. That is
-            // fail-safe: the semantic path drops a hit that no longer hydrates
-            // via its !entry.Exists guard, so the cost is an inflated membership
-            // tally and an occasional wasted ranking slot, never a dead key
-            // returned to a caller. A prune IS possible - VectorMetadataRecord
-            // keeps each vector's SourceKey - but not free: memory source ids
-            // are not separable from file and symbol ids in the membership set,
-            // so it would take a full metadata scan on a path that otherwise
-            // touches only what changed. Left for a deliberate sweep rather than
-            // paid on every reconcile.
-            try
-            {
-                var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
-                    repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
-                    .ConfigureAwait(false);
-                if (memoryEmbedded > 0)
-                {
-                    _logger.LogInformation(
-                        "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                armFailure ??= ex;
-                RecordArmFault(repoId, "ingest-memory", ex);
-                _logger.LogWarning(
-                    ex,
-                    "Repo {RepoId}: memory vectorisation did not complete this pass; it will be retried on "
+                    "Repo {RepoId}: symbol vectorisation did not complete this pass; it will be retried on "
                     + "the next reconcile.",
                     repoId);
             }
