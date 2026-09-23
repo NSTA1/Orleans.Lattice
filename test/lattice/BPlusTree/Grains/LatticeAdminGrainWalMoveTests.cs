@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class LatticeAdminGrainWalMoveTests
+public sealed partial class LatticeAdminGrainWalMoveTests
 {
     private const string TreeId = "wal-move-tree";
     private const string SecondaryKey = "secondary";
@@ -37,13 +37,27 @@ public sealed class LatticeAdminGrainWalMoveTests
     /// (rather than through real records) because the copy phases reason purely
     /// about offset ranges, and a scripted <see cref="HighestOverrides"/> queue
     /// lets a test present the tail values that provoke each abort arm.
+    /// <para>
+    /// <see cref="GetHighestOffsetAsync"/> honours the provider contract: it is a
+    /// monotonic high-water mark that a trim never lowers (issue #3366). A fake
+    /// answering from its live offsets instead cannot reach the move defects
+    /// that only a trimmed shard exposes.
+    /// </para>
     /// </summary>
     private sealed class ScriptedWalProvider : IWalStorageProvider
     {
         private readonly SortedSet<long> _offsets = new();
+        private long _highWater = -1;
 
         /// <summary>Highest-offset answers to serve before falling back to the real tail.</summary>
         public Queue<long> HighestOverrides { get; } = new();
+
+        /// <summary>
+        /// When set, a trim reserved beyond the tail raises the high-water mark, as
+        /// the file provider does; when clear it does not, as the Azure Table and
+        /// in-memory providers do.
+        /// </summary>
+        public bool TrimRaisesHighWaterMark { get; init; }
 
         /// <summary>Trim floors requested on this provider, in call order.</summary>
         public List<long> Trims { get; } = new();
@@ -53,7 +67,11 @@ public sealed class LatticeAdminGrainWalMoveTests
 
         public void Seed(params long[] offsets)
         {
-            foreach (var o in offsets) _offsets.Add(o);
+            foreach (var o in offsets)
+            {
+                _offsets.Add(o);
+                _highWater = Math.Max(_highWater, o);
+            }
         }
 
         public IReadOnlyCollection<long> Offsets => _offsets;
@@ -69,6 +87,7 @@ public sealed class LatticeAdminGrainWalMoveTests
             foreach (var o in offsets.Span)
             {
                 _offsets.Add(o);
+                _highWater = Math.Max(_highWater, o);
                 AppendedOffsets.Add(o);
             }
             return Task.CompletedTask;
@@ -98,7 +117,7 @@ public sealed class LatticeAdminGrainWalMoveTests
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => Task.FromResult(HighestOverrides.Count > 0
                 ? HighestOverrides.Dequeue()
-                : (_offsets.Count == 0 ? -1 : _offsets.Max));
+                : _highWater);
 
         public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => Task.FromResult(_offsets.Count == 0 ? -1 : _offsets.Min);
@@ -107,6 +126,10 @@ public sealed class LatticeAdminGrainWalMoveTests
         {
             Trims.Add(throughOffsetInclusive);
             _offsets.RemoveWhere(o => o <= throughOffsetInclusive);
+            if (TrimRaisesHighWaterMark)
+            {
+                _highWater = Math.Max(_highWater, throughOffsetInclusive);
+            }
             return Task.CompletedTask;
         }
 
@@ -150,12 +173,13 @@ public sealed class LatticeAdminGrainWalMoveTests
         WalPlacementPin? pin = null,
         int walPartitions = 2,
         bool registerSecondary = true,
-        bool deactivateThrows = false)
+        bool deactivateThrows = false,
+        bool targetTrimRaisesHighWaterMark = false)
     {
         pin ??= WalPlacementPin.Create();
 
         var source = new ScriptedWalProvider();
-        var target = new ScriptedWalProvider();
+        var target = new ScriptedWalProvider { TrimRaisesHighWaterMark = targetTrimRaisesHighWaterMark };
         var providers = new Dictionary<string, IWalStorageProvider>(StringComparer.Ordinal)
         {
             [IWalStorageProviderCatalog.DefaultProviderKey] = source,

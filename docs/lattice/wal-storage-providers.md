@@ -159,6 +159,12 @@ WalMoveReceipt reclaim = await admin.ReclaimMovedWalSourceAsync(
 
 > **Per-call scope.** A `ReclaimMovedWalSourceAsync` call reclaims exactly one partition's former source. To discard the retained sources after a batch move, reclaim each moved partition in turn.
 
+Re-running a reclaim is idempotent: once the former source holds no live entries the call reports `WalMoveOutcome.NoOp` and trims nothing, even though the source still reports its high-water mark (a trim never lowers `GetHighestOffsetAsync`).
+
+Reclaiming is what makes a move irreversible. A later move back onto the reclaimed provider is refused with `InvalidOperationException` while that provider's high-water mark covers offsets the partition still retains, because it no longer holds them and resuming past its mark would skip live entries. Move to a different provider key instead, or retry once the partition's retained range starts above the reclaimed mark.
+
+> **A partition with no live entries.** When WAL GC has trimmed a partition completely there is nothing to copy, but the target must still continue the partition's offsets. The move reserves the source's high-water mark on the target as a trim point, and refuses the cutover if the target does not then report it: the file provider records a reserved trim, while the Azure Table and in-memory providers do not, so on those a fully-trimmed partition is movable once it holds live entries again.
+
 ### Moving several partitions at once
 
 To relocate a whole tree (or a subset of its partitions) to a different account, use the batch overloads of `PlanWalMoveAsync` / `ExecuteWalMoveAsync`, which take a sequence of `(partition, targetProviderKey)` pairs. The batch flips the placement pin **once**, under a single compare-and-swap, so every partition moves together to the same new placement version - no intermediate placement is ever observable:

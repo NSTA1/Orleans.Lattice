@@ -208,6 +208,13 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// provider key as <paramref name="targetProviderKey"/>.
     /// </para>
     /// <para>
+    /// Throws <see cref="InvalidOperationException"/> without flipping the pin
+    /// when the target cannot continue the partition's offsets: its high-water
+    /// mark covers retained source offsets it no longer holds (a reclaimed former
+    /// source), or the source holds no live entries and the target does not
+    /// record the source's high-water mark.
+    /// </para>
+    /// <para>
     /// <b>Not</b> marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the move saga
     /// mutates placement and must run as a non-reentrant turn on the admin
     /// singleton so two concurrent moves of the same partition cannot interleave.
@@ -266,6 +273,10 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// <paramref name="sourceProviderKey"/> (reclaiming the live provider would
     /// destroy the active log); the partition must already have been moved away
     /// from the source first.
+    /// </para>
+    /// <para>
+    /// Reports <see cref="WalMoveOutcome.NoOp"/> and trims nothing when the source
+    /// holds no live entries, so re-running a completed reclaim is idempotent.
     /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose former source to reclaim.</param>
