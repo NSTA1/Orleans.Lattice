@@ -2,8 +2,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// One portable unit of the repository-context store: a single enumerated
-/// <c>(key, value, optional vector, optional embedding-space tag)</c> tuple,
-/// captured by the portability primitive and serialized into a snapshot stream.
+/// <c>(key, value, expiry, optional vector, optional embedding-space tag)</c>
+/// tuple, captured by the portability primitive and serialized into a snapshot
+/// stream.
 /// <para>
 /// The type is deliberately generic over the payload: <see cref="Value"/> is the
 /// opaque Orleans-serialized CRDT record bytes exactly as they sit in the store,
@@ -54,6 +55,27 @@ internal sealed record RepoContextSnapshotRecord
     public string? EmbeddingSpace { get; init; }
 
     /// <summary>
+    /// The absolute UTC tick at which the captured entry expires, or <c>0</c> when
+    /// the entry is durable (it carries no time-to-live).
+    /// <para>
+    /// An entry with a time-to-live is one whose silent disappearance the writer
+    /// judged acceptable; a durable entry is one whose loss would be a problem.
+    /// Carrying the expiry through a snapshot is what stops a restore quietly
+    /// promoting the first into the second and resurrecting records the store was
+    /// entitled to shed. The value is an absolute instant rather than a remaining
+    /// duration precisely so that time spent sitting in the snapshot counts
+    /// against the entry's life.
+    /// </para>
+    /// <para>
+    /// A record decoded from a format version that predates this member reports
+    /// <c>0</c>, which is the only honest reading available: such a snapshot never
+    /// captured an expiry, so its records restore durable.
+    /// </para>
+    /// </summary>
+    [Id(4)]
+    public long ExpiresAtTicks { get; init; }
+
+    /// <summary>
     /// Compares two records by value, with <see cref="Value"/> and
     /// <see cref="Vector"/> compared by content. The compiler-generated record
     /// equality compares the <see cref="byte"/> arrays with
@@ -66,6 +88,7 @@ internal sealed record RepoContextSnapshotRecord
         other is not null
         && string.Equals(Key, other.Key, StringComparison.Ordinal)
         && string.Equals(EmbeddingSpace, other.EmbeddingSpace, StringComparison.Ordinal)
+        && ExpiresAtTicks == other.ExpiresAtTicks
         && BytesEqual(Value, other.Value)
         && BytesEqual(Vector, other.Vector);
 
@@ -85,6 +108,7 @@ internal sealed record RepoContextSnapshotRecord
         }
 
         hash.Add(EmbeddingSpace, StringComparer.Ordinal);
+        hash.Add(ExpiresAtTicks);
         return hash.ToHashCode();
     }
 

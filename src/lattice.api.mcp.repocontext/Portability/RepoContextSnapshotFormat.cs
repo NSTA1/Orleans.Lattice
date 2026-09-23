@@ -31,10 +31,25 @@ internal static class RepoContextSnapshotFormat
     /// </summary>
     internal const int HeaderLength = 8 + sizeof(int);
 
-    /// <summary>The format version this build writes.</summary>
-    internal const int CurrentVersion = 1;
+    /// <summary>
+    /// The format version this build writes.
+    /// <para>
+    /// Version 2 added the per-record absolute expiry
+    /// (<see cref="RepoContextSnapshotRecord.ExpiresAtTicks"/>). The bump is
+    /// deliberate rather than cosmetic: a version-1 reader decodes a version-2
+    /// record perfectly well but silently ignores the expiry it does not know
+    /// about, which would restore every time-to-live entry as durable - the exact
+    /// silent corruption the member exists to prevent. Stamping 2 makes such a
+    /// reader refuse the stream loudly instead.
+    /// </para>
+    /// </summary>
+    internal const int CurrentVersion = 2;
 
-    /// <summary>The oldest format version this build can read.</summary>
+    /// <summary>
+    /// The oldest format version this build can read. A version-1 stream carries no
+    /// per-record expiry, so its records restore durable - the only reading that
+    /// stream can honestly support.
+    /// </summary>
     internal const int MinReadableVersion = 1;
 
     /// <summary>Writes the stream header (magic marker followed by the format version).</summary>

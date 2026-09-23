@@ -71,6 +71,56 @@ public sealed class RepoContextSnapshotRecordEqualityTests
     }
 
     [Test]
+    public void Not_equal_when_expiry_differs()
+    {
+        var durable = Sample();
+        var expiring = durable with { ExpiresAtTicks = 637_000_000_000_000_000L };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(durable.ExpiresAtTicks, Is.Zero, "A record with no expiry set is durable.");
+            Assert.That(durable.Equals(expiring), Is.False);
+            Assert.That(
+                expiring.Equals(expiring with { ExpiresAtTicks = 637_000_000_000_000_001L }),
+                Is.False,
+                "Two different expiry instants are two different records.");
+            Assert.That(
+                expiring.GetHashCode(),
+                Is.Not.EqualTo(durable.GetHashCode()),
+                "Expiry participates in the hash, so a dedup set cannot collapse the two.");
+        });
+    }
+
+    [Test]
+    public void Equal_when_expiry_matches()
+    {
+        var a = Sample() with { ExpiresAtTicks = 637_000_000_000_000_000L };
+        var b = Sample() with { ExpiresAtTicks = 637_000_000_000_000_000L };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.Equals(b), Is.True);
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
+    }
+
+    [Test]
+    public void Serialization_round_trip_preserves_expiry()
+    {
+        var record = Sample() with { ExpiresAtTicks = 637_000_000_000_000_000L };
+
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<RepoContextSnapshotRecord>>();
+        var decoded = serializer.Deserialize(serializer.SerializeToArray(record));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.ExpiresAtTicks, Is.EqualTo(637_000_000_000_000_000L));
+            Assert.That(decoded.Equals(record), Is.True);
+        });
+    }
+
+    [Test]
     public void Equal_when_vector_null_on_both_sides()
     {
         var a = Sample() with { Vector = null };
