@@ -53,6 +53,7 @@ sequenceDiagram
     D->>D: Start grain timer (2s ticks)
     loop For each shard
         D->>S0: PurgeAsync()
+        Note over S0: Clear leaves still owed a clear (PendingLeafClears)
         Note over S0: Walk leaf chain → ClearGrainStateAsync each leaf
         Note over S0: Walk internal nodes → ClearGrainStateAsync each
         Note over S0: ClearStateAsync (shard root itself)
@@ -76,9 +77,14 @@ When the reminder fires and the soft-delete window has elapsed (`now - DeletedAt
 
 For each shard, `PurgeAsync()`:
 
-1. Walks the doubly-linked leaf chain from the leftmost leaf, calling `ClearGrainStateAsync()` on each leaf (which clears persistent state and deactivates the grain).
-2. Collects all internal node grain IDs by iteratively walking the tree from the root using an explicit stack, then clears each one.
-3. Clears the shard root's own state via `ClearStateAsync()`.
+1. Clears every leaf the shard root still records as owed a state clear (`ShardRootState.PendingLeafClears`) - leaves an earlier [empty-leaf reclaim](tree-structure.md) or orphan repair took out of the tree but could not clear. They are on neither the chain nor any routing table, so no walk below reaches them, and the shard row cleared in the last step is the only thing that names them (issue [#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)).
+2. Walks the doubly-linked leaf chain from the leftmost leaf, calling `ClearGrainStateAsync()` on each leaf (which clears persistent state and deactivates the grain).
+3. Collects all internal node grain IDs by walking the tree from the root level by level, and with them every leaf the bottom internal level routes to. Any routed leaf the chain walk did not reach is cleared too, then each internal node.
+4. Clears the shard root's own state via `ClearStateAsync()`.
+
+Step 3's routed-leaf sweep matters on a **retried** purge. A purge that fails part-way has already cleared the head of the chain, and a cleared leaf has no sibling pointer left, so the retry's chain walk stops at the first leaf. The internal nodes are cleared only after the leaves, so on the retry they still name every routed leaf, and the sweep reaches the ones beyond the break. Any failure propagates out of `PurgeAsync()` with the shard row still in place, so the retry has the same record to work from.
+
+`ClearGrainStateAsync()` deletes the grain's storage record - the provider reports no state for it afterwards - and retires the leaf's WAL replay barrier and unregisters its materialiser pins before it does, so a cleared leaf no longer holds the WAL trim floor down. The WAL itself is trimmed separately: each GC pass re-computes the trim floor from the pins that remain and re-issues the trim, which is idempotent, so a trim that fails is retried on the next pass rather than lost. Deleting a record and reclaiming the storage behind it are distinct: a provider may keep the freed space until its own compaction runs.
 
 After all shards are purged, the deletion grain marks `PurgeComplete = true`, unregisters all reminders, and deactivates itself.
 
@@ -96,7 +102,7 @@ After all shards are purged, the deletion grain marks `PurgeComplete = true`, un
 
 - `DeleteTreeAsync()` is idempotent - calling it on an already-deleted tree is a no-op.
 - `MarkDeletedAsync()` is idempotent per shard.
-- `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op.
+- `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op. A retry reaches the leaves a failed attempt left behind, even past the chain break that attempt caused, through the routed-leaf sweep in step 3.
 - Failed shards during purge are retried once before being skipped. The next reminder tick starts a fresh purge pass.
 
 ## Read Cache Behaviour
