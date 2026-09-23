@@ -1,4 +1,3 @@
-using Orleans.Lattice.Testing;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Lattice.Vector.Tests.Fakes;
 
@@ -37,9 +36,18 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 /// developer measuring zero, another a large constant, CI green throughout -
 /// which reads as a hardware difference and invites a hunt through the SIMD
 /// paths for an allocating fallback that does not exist. That hunt is what
-/// issue #2540 actually was, so the precondition is now asserted with
-/// <see cref="AllocationContract.RequireOptimizedBuild"/> rather than left
-/// implicit here.
+/// issue #2540 actually was.
+/// </para>
+/// <para>
+/// Only the flush and load measurements are exposed to that cost, and both
+/// carry a budget large enough to absorb it. The warm lazy search does not:
+/// rather than asserting the precondition and skipping the test in every build
+/// that cannot meet it - which removes the red but leaves the path unmeasured
+/// in the configuration most contributors run - the production path answers a
+/// fully resident query before entering an asynchronous frame, so there is no
+/// state machine to allocate in either configuration. That test therefore uses
+/// the synchronous probe, asserts zero rather than a tolerance, and binds
+/// identically in Debug and Release. See issue #2450.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -194,6 +202,45 @@ public sealed class DurableVectorIndexAllocationTests
         Assert.That(delta, Is.GreaterThan(0),
             "The differential probe failed to detect a loop that allocates on every iteration. "
             + "Either the probe is broken, or the sink stopped escaping and the JIT elided the allocation.");
+    }
+
+    [Test]
+    public async Task The_asynchronous_allocation_probe_detects_a_loop_that_does_allocate()
+    {
+        // The same battery, for the other probe. PerIterationDeltaAsync is what
+        // the flush and load budgets rest on, and until this existed nothing
+        // checked that it could see an allocation at all: had it been broken,
+        // those budgets would have passed vacuously and reported nothing, which
+        // is strictly worse than failing because a vacuous gate is invisible.
+        //
+        // The per-iteration allocation is sized, where the synchronous battery
+        // above is content with a bare object, and the asymmetry is load-bearing
+        // rather than arbitrary. The asynchronous probe must read the
+        // process-wide counter (see AllocatedOverLoopAsync), which carries other
+        // threads' traffic as a noise floor the per-thread counter does not have,
+        // and it aggregates by taking the MINIMUM difference across attempts and
+        // clamping at zero. That aggregation is protective for the upper-bound
+        // assertions it was built for and hostile to a lower-bound one: a noise
+        // spike landing in the single-width sample drives that attempt's
+        // difference negative, the minimum selects precisely that attempt, and
+        // the clamp reports a flat zero. A bare object yields roughly 24 kB of
+        // signal here, inside the range ambient noise reaches, and this test duly
+        // failed in Release at that size while passing in Debug. Four kilobytes
+        // an iteration puts the signal three orders of magnitude clear of the
+        // floor, so the assertion turns on whether the probe can see an
+        // allocation rather than on what else the process happened to be doing.
+        var delta = await PerIterationDeltaAsync(
+            () =>
+            {
+                _escapeSink = new byte[4096];
+                return ValueTask.CompletedTask;
+            },
+            iterations: 1_000);
+
+        Assert.That(delta, Is.GreaterThan(0),
+            "The asynchronous differential probe failed to detect a loop that allocates on every "
+            + "iteration. Either the probe is broken, or the sink stopped escaping and the JIT "
+            + "elided the allocation.");
     }
 
     [Test]
@@ -362,14 +409,6 @@ public sealed class DurableVectorIndexAllocationTests
     [Test]
     public async Task A_lazy_search_over_resident_cells_allocates_a_bounded_amount()
     {
-        // The only measurement in this fixture whose budget is tighter than the
-        // cost of a Debug build's heap-allocated async state machines, so the
-        // only one that has to state the precondition. Every other test here is
-        // either synchronous - and so has no state machine at all - or carries a
-        // budget large enough to absorb one.
-        AllocationContract.RequireOptimizedBuild(
-            typeof(DurableVectorIndex).Assembly, typeof(DurableVectorIndexAllocationTests).Assembly);
-
         const int Iterations = 500;
         var store = new InMemoryVectorIndexStore();
         var source = DurableIndexHarness.Source(Corpus);
@@ -384,17 +423,29 @@ public sealed class DurableVectorIndexAllocationTests
         // steady-state path rather than of the fetch.
         await lazy.SearchAsync(query, results);
 
-        var delta = await PerIterationDeltaAsync(
-            async () => await lazy.SearchAsync(query, results),
+        // Asserted once, outside the measured window, because an NUnit
+        // constraint allocates a few hundred bytes of its own. It is also what
+        // licenses the synchronous probe below: a call that never enters an
+        // asynchronous frame cannot migrate threads, so the per-thread counter
+        // is exact rather than merely approximate, and the budget can be zero.
+        Assert.That(lazy.SearchAsync(query, results).IsCompletedSuccessfully, Is.True,
+            "A fully resident lazy search must answer without entering an asynchronous frame, "
+            + "or it heap-allocates a state machine per call in every unoptimized build.");
+
+        var delta = PerIterationDelta(
+            () =>
+            {
+                _ = lazy.SearchAsync(query, results).GetAwaiter().GetResult();
+            },
             iterations: Iterations);
 
-        // With a full-size warm-up and the minimum taken across attempts this
-        // measures zero: the probe scratch is pooled, and an asynchronous method
-        // that completes without ever suspending does not box its state machine
-        // - which is true of an OPTIMIZED build, and is why this test asserts
-        // that precondition above rather than assuming it.
-        // The budget is kept small rather than zero only because the
-        // process-wide counter this path must use can see unrelated threads.
-        AssertBoundedPerIterationAllocation(delta, Iterations, budget: 64, "A warm lazy search");
+        // Zero, and identically so in Debug and Release. The probe scratch is
+        // stack-allocated, the search writes into the caller's buffer, and the
+        // fast path in DurableVectorIndex.SearchAsync answers before any async
+        // frame exists - so there is no state machine whose emitted shape could
+        // differ by configuration. That is the whole of issue #2450: the old
+        // budget of 64 was not loose, it was measuring a frame that the
+        // production path no longer creates.
+        AssertNoPerIterationAllocation(delta, Iterations, "A warm lazy search");
     }
 }
