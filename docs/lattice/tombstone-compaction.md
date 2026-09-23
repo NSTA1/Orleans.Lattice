@@ -203,7 +203,7 @@ Every compaction pass emits the following instruments. See [Metrics](metrics.md)
 - `orleans.lattice.compaction.shard.retries` (counter) - tagged `tree`.
 - `orleans.lattice.compaction.shard.skipped` (counter) - tagged `tree`. **Any non-zero rate is alert-worthy.**
 - `orleans.lattice.compaction.shard.dirty_leaves` (histogram) - tagged `tree`. Records the per-shard dirty-leaf snapshot size at the moment the coordinator enters a shard. Use it to capacity-plan the dirty-leaves fast path.
-- `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree`. Only emitted when `MinTombstoneRatioForCompaction` is enabled.
+- `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree` and `tenant`, sampled at the entry of each compaction pass over a leaf. The leaf's identity is not a tag, so the family holds at most one series per tree however many leaves the tree has (issue #2518).
 
 The bundled Grafana **Overview** dashboard ships compaction-focused panels for each of these (pass duration p95 by trigger, leaves visited by outcome, shard retries / skips, and tombstone-ratio p95).
 
