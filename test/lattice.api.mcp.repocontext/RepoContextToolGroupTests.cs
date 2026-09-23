@@ -124,6 +124,22 @@ public sealed class RepoContextToolGroupTests
         });
     }
 
+    [Test]
+    public void Reset_index_tool_description_directs_a_caller_that_lost_the_response_to_index_status()
+    {
+        var description = new RepoContextToolGroup(enableWrites: true, workspaceMode: true)
+            .Tools.Single(t => t.ProtocolTool.Name == "repocontext_reset_index")
+            .ProtocolTool.Description;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Does.Contain("'repocontext_index_status'"),
+                "The reset names the surface a caller polls to learn its outcome (#2642).");
+            Assert.That(description, Does.Contain("keeps running"),
+                "The reset tells a caller whose call dropped that the sweep outlives it.");
+        });
+    }
+
     [TestCaseSource(nameof(ReadToolNames))]
     public void Read_tools_are_annotated_read_only_and_non_destructive(string toolName)
     {
