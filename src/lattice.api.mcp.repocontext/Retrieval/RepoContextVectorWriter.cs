@@ -379,6 +379,12 @@ internal sealed class RepoContextVectorWriter
         var updates = _annIndex is null ? null : new List<RepoContextAnnVectorUpdate>(vectors.Count);
 
         var keep = new HashSet<string>(StringComparer.Ordinal);
+
+        // Derive every key and payload for the batch before touching the store, so the
+        // durable writes below can be issued as two batched calls instead of the four
+        // sequential round trips per vector this loop used to cost.
+        var payloads = new Dictionary<string, byte[]>(vectors.Count, StringComparer.Ordinal);
+        var units = new List<VectorUnit>(vectors.Count);
         for (var unit = 0; unit < vectors.Count; unit++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -387,11 +393,21 @@ internal sealed class RepoContextVectorWriter
             var vectorId = FormatVectorId(sourceId, unit, contentAddress);
             keep.Add(vectorId);
 
-            await WritePayloadAsync(repoId, contentAddress, tag, payload, cancellationToken).ConfigureAwait(false);
-            await WriteMetadataAsync(repoId, vectorId, sourceKey, contentAddress, tag, cancellationToken)
-                .ConfigureAwait(false);
+            // Content-addressed, so a repeated address within one batch is by
+            // definition the same bytes and the duplicate simply collapses.
+            payloads[contentAddress] = payload;
+            units.Add(new VectorUnit(vectorId, contentAddress));
             updates?.Add(new RepoContextAnnVectorUpdate(vectorId, sourceKey, vectors[unit]));
         }
+
+        // Payloads first, then metadata. Batching widens the window in which a crash
+        // can land one and not the other, so the order is load-bearing: a payload with
+        // no metadata is unreachable and is re-written byte-identically on the next
+        // pass, whereas metadata naming an absent payload would be a dangling
+        // reference. The per-unit loop gave the same guarantee unit by unit; doing all
+        // payloads first gives it for the whole batch.
+        await WritePayloadsAsync(repoId, tag, payloads, cancellationToken).ConfigureAwait(false);
+        await WriteMetadataManyAsync(repoId, sourceKey, tag, units, cancellationToken).ConfigureAwait(false);
 
         var retired = await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
 
@@ -541,54 +557,153 @@ internal sealed class RepoContextVectorWriter
             await tree.DeleteRangeAsync(prefix, endExclusive, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
-    private async Task WritePayloadAsync(
-        string repoId, string contentAddress, EmbeddingSpaceTag tag, byte[] payload, CancellationToken cancellationToken)
+    /// <summary>
+    /// Writes every absent payload in the batch with <b>one</b> batched set: a
+    /// presence probe per distinct content address, then a single
+    /// <see cref="ILattice.SetManyAsync"/> for the addresses that are genuinely new.
+    /// <para>
+    /// The per-key alternative this replaced cost one sequential grain round trip
+    /// <i>per vector</i>. Batching removes those round trips; it does <b>not</b>
+    /// reduce write-ahead-log appends. A leaf coalesces only the entries that land on
+    /// it, and content addresses are hashes, so a batch of a dozen vectors scatters
+    /// across the shards and roughly one entry reaches each leaf - measured at 1.0
+    /// entries per append both before and after this change. Do not cite this path
+    /// as a log-growth fix.
+    /// </para>
+    /// <para>
+    /// The probe is load-bearing and is deliberately <b>not</b> folded into a batched
+    /// read. Payloads are immutable and content-addressed, so a present payload is
+    /// byte-identical and re-writing it would append to the write-ahead log for no
+    /// change; and <see cref="ILattice.ExistsAsync"/> avoids transferring the
+    /// (multi-kilobyte) embedding back across the grain boundary just to discover it
+    /// is already stored. Probes are reads and never touch the log, so they are
+    /// issued together rather than in a serial chain; the fan-out is bounded by the
+    /// number of passages in one source, not by the size of the repository.
+    /// </para>
+    /// <para>
+    /// <b>Not atomic</b>, like the underlying batch. That is safe here because a
+    /// payload write is idempotent under content addressing: a retried batch writes
+    /// the same bytes to the same keys, and any payload that did not land is written
+    /// again by the next pass that embeds the same passage.
+    /// </para>
+    /// </summary>
+    private async Task WritePayloadsAsync(
+        string repoId,
+        EmbeddingSpaceTag tag,
+        Dictionary<string, byte[]> payloads,
+        CancellationToken cancellationToken)
     {
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorPayload);
-        var key = RepoContextKeys.VectorPayload(repoId, contentAddress);
-
-        // Immutable and content-addressed: a present payload is byte-identical,
-        // so a presence probe is enough. ExistsAsync avoids transferring the
-        // (multi-kilobyte) embedding back across the grain boundary just to
-        // discover it is already stored.
-        if (await tree.ExistsAsync(key, cancellationToken).ConfigureAwait(false))
+        if (payloads.Count == 0)
         {
             return;
         }
 
-        var record = VectorPayloadRecord.Create(repoId, contentAddress, tag, payload);
-        await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorPayload);
+        var addresses = new List<string>(payloads.Keys);
+
+        var probes = new Task<bool>[addresses.Count];
+        for (var i = 0; i < addresses.Count; i++)
+        {
+            probes[i] = tree.ExistsAsync(RepoContextKeys.VectorPayload(repoId, addresses[i]), cancellationToken);
+        }
+
+        var present = await Task.WhenAll(probes).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var absent = new List<KeyValuePair<string, byte[]>>(addresses.Count);
+        for (var i = 0; i < addresses.Count; i++)
+        {
+            if (present[i])
+            {
+                continue;
+            }
+
+            var contentAddress = addresses[i];
+            var record = VectorPayloadRecord.Create(repoId, contentAddress, tag, payloads[contentAddress]);
+            absent.Add(new KeyValuePair<string, byte[]>(
+                RepoContextKeys.VectorPayload(repoId, contentAddress),
+                _serializer.SerializeToArray(record)));
+        }
+
+        if (absent.Count == 0)
+        {
+            return;
+        }
+
+        await tree.SetManyAsync(absent, cancellationToken).ConfigureAwait(false);
     }
 
-    private Task WriteMetadataAsync(
+    /// <summary>
+    /// Writes the metadata record for every vector in the batch with <b>one</b>
+    /// batched read and <b>one</b> batched set, replacing the read-merge-write chain
+    /// that previously cost two sequential grain round trips per vector. As with the
+    /// payload path the saving is round trips, not log appends: the keys are
+    /// hash-distributed, so each leaf still receives about one entry per batch.
+    /// <para>
+    /// Records are small, so unlike the payload tree the existing values can simply
+    /// be fetched with <see cref="ILattice.GetManyAsync"/> and merged in memory. The
+    /// merge itself is unchanged and still last-writer-wins per field, so a
+    /// concurrent writer converges exactly as it did per key.
+    /// </para>
+    /// <para>
+    /// <b>Not atomic</b>, like the underlying batch - a partial failure leaves some
+    /// records written. That is safe because the batch is re-derived and re-merged
+    /// from the same source on any retry, and a record that did not land leaves its
+    /// vector looking un-embedded, which the next pass repairs.
+    /// </para>
+    /// </summary>
+    private Task WriteMetadataManyAsync(
         string repoId,
-        string vectorId,
         string sourceKey,
-        string contentAddress,
         EmbeddingSpaceTag tag,
+        List<VectorUnit> units,
         CancellationToken cancellationToken)
-        => GuardMetadataAsync(async () =>
-        {
-            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
-            var key = RepoContextKeys.Vector(repoId, vectorId);
-            var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-
-            var record = new VectorMetadataRecord
+        => units.Count == 0
+            ? Task.CompletedTask
+            : GuardMetadataAsync(async () =>
             {
-                RepoId = repoId,
-                VectorId = vectorId,
-                Space = tag,
-                SourceKey = RepoContextValues.Lww(sourceKey, clock),
-                ContentAddress = RepoContextValues.Lww(contentAddress, clock),
-                CreatedAt = RepoContextValues.Lww(DateTime.UtcNow.Ticks, clock),
-            };
+                var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
 
-            var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-            var merged = existing is null
-                ? record
-                : VectorMetadataRecord.Merge(record, _serializer.Deserialize<VectorMetadataRecord>(existing));
-            await tree.SetAsync(key, _serializer.SerializeToArray(merged), cancellationToken).ConfigureAwait(false);
-        }, cancellationToken);
+                var keys = new List<string>(units.Count);
+                foreach (var unit in units)
+                {
+                    keys.Add(RepoContextKeys.Vector(repoId, unit.VectorId));
+                }
+
+                var existing = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var entries = new List<KeyValuePair<string, byte[]>>(units.Count);
+                for (var i = 0; i < units.Count; i++)
+                {
+                    var key = keys[i];
+                    var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+
+                    var record = new VectorMetadataRecord
+                    {
+                        RepoId = repoId,
+                        VectorId = units[i].VectorId,
+                        Space = tag,
+                        SourceKey = RepoContextValues.Lww(sourceKey, clock),
+                        ContentAddress = RepoContextValues.Lww(units[i].ContentAddress, clock),
+                        CreatedAt = RepoContextValues.Lww(DateTime.UtcNow.Ticks, clock),
+                    };
+
+                    var merged = existing.TryGetValue(key, out var prior) && prior is not null
+                        ? VectorMetadataRecord.Merge(record, _serializer.Deserialize<VectorMetadataRecord>(prior))
+                        : record;
+
+                    entries.Add(new KeyValuePair<string, byte[]>(key, _serializer.SerializeToArray(merged)));
+                }
+
+                await tree.SetManyAsync(entries, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken);
+
+    /// <summary>
+    /// One vector's derived identity within a batch: the vector id the metadata tree
+    /// is keyed by, and the content address the payload tree is keyed by.
+    /// </summary>
+    private readonly record struct VectorUnit(string VectorId, string ContentAddress);
 
     private Task<List<string>> RetireStaleAsync(
         string repoId, string sourceId, IReadOnlySet<string> keep, CancellationToken cancellationToken)

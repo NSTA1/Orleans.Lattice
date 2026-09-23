@@ -119,6 +119,23 @@ internal sealed class SubstitutedVectorTrees
                 return Task.CompletedTask;
             });
 
+        // The durable vector write path batches (see
+        // RepoContextVectorWriterBatchedVectorWriteTests): payloads and metadata
+        // each land in one SetManyAsync rather than one SetAsync per vector. A
+        // double that stubs only the single-key setter hands that path a null Task,
+        // so the write silently lands nowhere and every downstream read sees an
+        // empty tree.
+        tree.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(call =>
+            {
+                foreach (var entry in call.ArgAt<List<KeyValuePair<string, byte[]>>>(0))
+                {
+                    records[entry.Key] = entry.Value;
+                }
+
+                return Task.CompletedTask;
+            });
+
         tree.DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(call => Task.FromResult(records.Remove(call.ArgAt<string>(0))));
 
