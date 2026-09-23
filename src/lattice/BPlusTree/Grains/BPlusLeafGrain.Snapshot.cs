@@ -425,10 +425,13 @@ internal sealed partial class BPlusLeafGrain
     /// holds. Declining a partial capture is always safe, because a partial
     /// capture is a bonus and never a correctness requirement, whereas a
     /// regressing claim would drive <c>LeafSnapshotStorageGrain.MergeMonotone</c>
-    /// off its fast path onto the element-wise merge whose row union retains a
-    /// key present in the stored blob and ABSENT from the incoming one with no
-    /// comparison at all - the resurrection shape flagged by issue #2436. This
-    /// keeps that hazard exactly as reachable as it is today and no more.
+    /// off its fast path onto the element-wise merge. That merge now declines
+    /// rather than retaining a key the incoming capture does not carry (issue
+    /// #2436), so a regressing claim would no longer resurrect a compacted
+    /// delete - but it would silently discard the banked progress it exists to
+    /// record, which is the whole point of the call. Refusing here keeps the
+    /// decision where the claim is formed rather than deferring it to a store
+    /// that can only answer by throwing the capture away.
     /// </para>
     /// <para>
     /// This is NOT the durable-offset design ruled unsound in the #2089
