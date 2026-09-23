@@ -286,6 +286,36 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(20)] public List<PendingChildLink> PendingChildLinks { get; set; } = new();
+
+    /// <summary>
+    /// Leaves this shard has taken out of the tree but whose grain state it
+    /// has not yet confirmed removed from storage (issue #2207).
+    /// <para>
+    /// <b>Why this has to be durable.</b> Empty-leaf reclaim and orphaned-leaf
+    /// repair both remove a leaf in the same order: the predecessor absorbs it
+    /// in a compare-and-swap, routing to it is retired, and only then is the
+    /// leaf's own state cleared. Once the swap has committed, nothing can reach
+    /// the leaf again - every later walk discovers leaves by routing and by the
+    /// sibling chain, and it is on neither. Before this field existed, a clear
+    /// that failed at that point was logged and swallowed, so the leaf's storage
+    /// row, its replay barrier and its WAL materialiser pin survived with no
+    /// path left by which any pass could find them to try again.
+    /// </para>
+    /// <para>
+    /// Recorded once the leaf is out of the tree and before its clear is
+    /// attempted, removed once the clear has succeeded. An entry surviving here
+    /// means the clear is still owed: the next empty-leaf reclaim pass (and the
+    /// next non-dry-run orphaned-leaf repair) re-attempts it, and a tree purge
+    /// clears every entry before it clears this state. Re-clearing is safe
+    /// because <c>IBPlusLeafGrain.ClearGrainStateAsync</c> is idempotent: a leaf
+    /// whose state is already gone activates empty and clears nothing.
+    /// </para>
+    /// <para>
+    /// Adding this slot is backward-compatible: state persisted before the field
+    /// existed deserializes to an empty list, the correct "nothing owed" state.
+    /// </para>
+    /// </summary>
+    [Id(21)] public List<GrainId> PendingLeafClears { get; set; } = new();
 }
 
 /// <summary>
