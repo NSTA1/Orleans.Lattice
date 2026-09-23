@@ -260,6 +260,11 @@ topic scan plus per-candidate depth-1 checks, and **never** one graph query:
 over memory links, so "who is blocked by me?" cannot be asked. Do not design
 around a lookup this surface cannot serve.
 
+Before candidate narrowing, apply [Parked blockers and the ruling
+route](backlog-protocol.md#parked-blockers-and-the-ruling-route) to the full
+scan. That section owns dependency classifications and their required reports,
+and is authoritative over the outline below.
+
 In outline: scan the `backlog` topic paging on the continuation token; match
 every `state:`-prefixed tag against the closed vocabulary and drop the item on
 both outcomes, a recognised terminal value (`state:complete`, `state:parked`)
@@ -680,6 +685,10 @@ implementation agent.
   indefinitely into planning the planning.
 
 ## Phase 7 - Complete or release
+
+Before any parking write, apply [Parked blockers and the ruling
+route](backlog-protocol.md#parked-blockers-and-the-ruling-route). Use that one
+definition for the validation and the report, not a local variant.
 
 Order matters here, for the reason in principle 5: **write everything first,
 release last.**

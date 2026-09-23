@@ -462,6 +462,80 @@ Two rules follow from the store's semantics rather than from taste:
   claim/lease surface, whose monotonic fencing tokens and bounded,
   expiry-reclaimed leases give real exclusion and a real stale-claim reaper.
 
+### Parked blockers and the ruling route
+
+**This is the single definition for authoring, dependency reporting, and
+parking.** A parked item awaits a human ruling, not scheduled agent progress.
+"Stalled" means **never ready without human intervention**, not "not ready
+yet"; it is a derived report, never a new `state:` tag.
+
+**Before any `repocontext_remember` or `repocontext_update` that adds
+`blockedBy`, recall every proposed target in its home region and apply the
+table below.** Validate the whole proposed write before sending it. If any
+target is rejected, make no write (including unrelated fields or other edges
+in that request) and report a hard validation error naming the dependent and
+each rejected blocker key. A named ruling route does not make a parked target
+an acceptable new dependency. Do not silently omit the edge and create an
+apparently independent item.
+
+These are **agent preflight rules**, not a claim that the generic memory API
+interprets backlog tags or provides a cross-record transaction. A target may
+be parked after the read or after a previously valid edge was written, so
+authoring validation alone is insufficient.
+
+| Target observation | Authoring verdict | Dependency classification | Required report |
+|---|---|---|---|
+| missing | reject | invalid | dependent, blocker |
+| invalid | reject | invalid | dependent, blocker |
+| parked | reject | stalled | dependent, blocker, ruling route |
+| live | allow | waiting | dependent, blocker |
+| complete | allow | satisfied | none |
+
+The predicates are disjoint: `missing` means `exists: false`; otherwise
+`invalid` means multiple `state:` tags or any unrecognised value; `parked`
+and `complete` mean exactly their one recognised tag; `live` means no
+`state:` tag. A live blocker may be claimed or awaiting a claim; neither is a
+terminal state tag. The completion-evidence defect checks still apply.
+
+**Every ready-set computation and PM sweep evaluates existing edges before
+candidate narrowing**, even if other work is ready. Page the entire backlog
+scan, retain each dependent's outbound `blockedBy` keys, and recall any
+targets not resolved by the scan; a truncated `neighbors` result is not a
+complete dependency set. Classify every edge, including those whose
+dependent is filtered out later. Report every stalled edge in the listing
+with both keys, the blocker's ruling owner, and the question/issue pointer.
+Report a missing ruling route as an additional defect, never as ordinary
+waiting. For a dependent with mixed blockers, `invalid` takes precedence over
+`stalled`, then `waiting`, then `satisfied`; retain all edge diagnostics.
+Only all-satisfied (including no dependencies) survives dependency narrowing.
+Do not delete an edge, tag a blocker complete, or unpark it to make work ready.
+
+**Parking requires a named route out before writing `state:parked`.** Record
+exactly one non-empty `ruling-owner:<role-or-person>` tag and exactly one
+non-empty `ruling-topic:<decision-key>` tag alongside it in the same fenced
+memory write. In the resume note and mirrored issue comment, name the exact
+question that owner must rule on and the issue where they can answer it.
+`pm-ruling-required` and `needs-design-decision` may remain descriptive tags;
+they do not replace this explicit route. For example, `ruling-owner:pm` and
+`ruling-topic:design-decision` must point to the actual undecided design
+question, not merely say "needs a decision".
+
+| Ruling owner named | Ruling question named | Parking verdict |
+|---|---|---|
+| no | no | reject |
+| no | yes | reject |
+| yes | no | reject |
+| yes | yes | allow |
+
+Here "named" requires the corresponding unique, non-empty tag and the
+concrete owner/question recorded in the resume note and issue comment.
+Reject an incomplete route as a hard validation error naming the item and
+missing owner/question. Existing parks without a route remain excluded and
+are reported to the PM for repair, never automatically unparked. After a
+human ruling and re-admission, remove the parking and route tags under the
+claim and recompute dependencies; unparking a blocker makes its dependents
+waiting, not satisfied, until that blocker actually completes.
+
 ### Why `anchoredTo` matters
 
 Linking an item to the files it concerns captures those targets' content digests
@@ -678,7 +752,10 @@ The computation:
    rather than silently passing over it. The check is free here, because every
    item is already in hand, and this is the only step that sees all of them - so
    an item malformed in a way that hides it from the later narrowing steps is
-   caught here or not at all.
+   caught here or not at all. Before narrowing candidates, validate parking
+   routes and classify all existing dependency edges using [Parked blockers
+   and the ruling route](#parked-blockers-and-the-ruling-route); retain the
+   stalled and invalid diagnostics even when the ready set is non-empty.
 2. **Match every `state:`-prefixed tag against the closed vocabulary in [The
    `state:` tag vocabulary](#the-state-tag-vocabulary), and drop the item on
    both outcomes.** A recognised terminal value - `state:complete` or
@@ -706,9 +783,10 @@ The computation:
    cheap here: a grouping should also carry `blockedBy` its own integration item,
    which drops it at step 4 anyway. Author both. The redundancy is one-way safe -
    it can only ever remove a container from the ready set, never admit one.
-4. For each remaining candidate, one depth-1 `repocontext_neighbors` on
-   `blockedBy`. A candidate survives when every target it names carries
-   `state:complete`.
+4. For each remaining candidate, apply the dependency classifications from
+   step 1 per [Parked blockers and the ruling
+   route](#parked-blockers-and-the-ruling-route). Only all-satisfied survives;
+   ordinary waiting, stalled, and invalid dependencies stay out of the ready set.
 5. Drop survivors whose mirrored issue is not admitted (see
    [Entry gating](#entry-gating---mirror-first-admit-by-label)). This is checked
    *after* the `blockedBy` narrowing, so it costs one issue read per survivor
@@ -742,6 +820,11 @@ specific candidate.
 ### Defect conditions the ready-set computation must surface
 
 These are reported, never silently absorbed:
+
+- **Stalled by a parked blocker, or parked without a ruling route.** Apply
+  [Parked blockers and the ruling route](#parked-blockers-and-the-ruling-route)
+  before narrowing, report both item keys and the human ruling needed, and
+  keep stalled distinct from ordinary waiting even when other work is ready.
 
 - **Dangling `blockedBy`.** A target that returns `exists: false` is a defect,
   not a satisfied dependency. Treating an absent blocker as complete is how a
@@ -791,6 +874,10 @@ stateDiagram-v2
   Gated --> Ready: admitted (human, or human-authored at source)
   Ready --> Blocked: a blockedBy target is incomplete
   Blocked --> Ready: every blocker completes
+  Ready --> Stalled: a blocker is parked
+  Blocked --> Stalled: a blocker is parked
+  Stalled --> Blocked: human re-admits blocker, work still pending
+  Stalled --> Ready: every blocker completes
   Ready --> Quarantined: an unrecognised state tag value is present
   Quarantined --> Ready: reconciled to a recognised value, under a claim
   Ready --> Claimed: fenced claim acquired (homeRegion only)
@@ -817,6 +904,10 @@ tick, so the guard silently does nothing. Write both, and write them under the
 fencing token of the claim you hold, in the order tag then label - if the run
 dies between them the item is already out of the ready set and the sweep can
 finish the visible half.
+
+First validate and record [the ruling route](#parked-blockers-and-the-ruling-route).
+That section also governs dependents stranded by this transition and existing
+parks missing a route; neither may disappear as ordinary "not ready" work.
 
 **The poison threshold is three, and it is a floor on parking, not the only
 route to it.** An item whose claim-marker count has reached three is parked by
