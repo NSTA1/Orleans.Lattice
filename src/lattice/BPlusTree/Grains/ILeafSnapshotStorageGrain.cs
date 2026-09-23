@@ -30,14 +30,31 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal interface ILeafSnapshotStorageGrain : IGrainWithGuidKey
 {
     /// <summary>
-    /// Persists <paramref name="blob"/> as the current snapshot for
-    /// this leaf, overwriting any previously persisted blob. The
-    /// call returns only after the underlying state provider has
-    /// durably accepted the write.
+    /// Offers <paramref name="blob"/> as the current snapshot for this leaf and
+    /// reports whether the snapshot this grain holds once the call returns
+    /// covers everything <paramref name="blob"/> covers. The call returns only
+    /// after the underlying state provider has durably accepted any write it
+    /// made.
+    /// <para>
+    /// The store keeps coverage monotone, so it does not always keep what it was
+    /// offered: a capture whose coverage regresses is merged with the stored
+    /// snapshot (element-wise maximum, which still covers the offer), or
+    /// declined outright when the merge cannot be proved safe (a segmented
+    /// stored snapshot, or a stored key the capture no longer carries), and an
+    /// offered blob whose row payload does not read back is refused. A caller
+    /// must record the offered coverage as durable only on
+    /// <see cref="LeafSnapshotSaveOutcome.Kept"/>: recording an offer the store
+    /// declined licenses a WAL trim past what any durable snapshot can
+    /// reproduce (issue #3421).
+    /// </para>
     /// </summary>
     /// <param name="blob">Snapshot payload. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token observed before the persist call.</param>
-    Task SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken);
+    /// <returns>
+    /// <see cref="LeafSnapshotSaveOutcome.Kept"/> when the held snapshot covers
+    /// the offer; <see cref="LeafSnapshotSaveOutcome.Declined"/> otherwise.
+    /// </returns>
+    Task<LeafSnapshotSaveOutcome> SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the most recently persisted snapshot for this leaf,
@@ -154,7 +171,13 @@ internal interface ILeafSnapshotStorageGrain : IGrainWithGuidKey
     /// </summary>
     /// <param name="manifest">Coverage and sizing for the staged snapshot. Must carry no inline rows.</param>
     /// <param name="cancellationToken">Cancellation token observed before the write.</param>
-    /// <returns><see langword="true"/> when the staged snapshot became current.</returns>
+    /// <returns>
+    /// <see langword="true"/> when the staged snapshot became current;
+    /// <see langword="false"/> when the commit was declined and the stored
+    /// snapshot kept. As with <see cref="SaveAsync"/>, a caller must record the
+    /// manifest's coverage as durable only on <see langword="true"/>
+    /// (issue #3421).
+    /// </returns>
     Task<bool> CommitStagedSnapshotAsync(LeafSnapshotBlob manifest, CancellationToken cancellationToken);
 
     /// <summary>

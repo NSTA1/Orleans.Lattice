@@ -1718,13 +1718,37 @@ internal sealed partial class BPlusLeafGrain
                 SnapshotOffsetsByPartition = perPartitionOffsets,
             };
 
+            // Record what the store KEPT, never what this capture offered it
+            // (issue #3421). The store keeps coverage monotone and so declines
+            // an offer it cannot merge safely - a segmented stored snapshot, a
+            // stored key this capture omits, a regressing staged manifest, or an
+            // unreadable payload - and keeps its existing snapshot verbatim.
+            // Treating that as a save advanced the in-memory durable coverage
+            // past anything durable, and the next pin flush licensed the WAL GC
+            // to trim the only copy of the prefix in between.
+            bool kept;
             if (stagedSegmentCount > 0)
             {
-                await snapshotGrain.CommitStagedSnapshotAsync(blob, cancellationToken);
+                kept = await snapshotGrain.CommitStagedSnapshotAsync(blob, cancellationToken);
             }
             else
             {
-                await snapshotGrain.SaveAsync(blob, cancellationToken);
+                kept = await snapshotGrain.SaveAsync(blob, cancellationToken)
+                    == LeafSnapshotSaveOutcome.Kept;
+            }
+
+            if (!kept)
+            {
+                // The durable snapshot did not change, so neither may anything
+                // derived from it: the byte footprint and the load hint still
+                // describe the stored snapshot, and the durable coverage stays
+                // where it was. The attempt itself completed - the store
+                // answered - so it is still reported as a completed capture;
+                // what it did not do is advance durability, which surfaces as
+                // the pin not moving rather than as a storage failure.
+                LogSnapshotCaptureDeclinedByStore(stagedSegmentCount > 0);
+                captureSucceeded = true;
+                return;
             }
 
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
@@ -1746,14 +1770,14 @@ internal sealed partial class BPlusLeafGrain
             {
                 state.State.SnapshotLoadHintBytes = capturedLoadBytes;
             }
-            // The blob is now durable, so the checkpointed prefix it covers
+            // The store kept this blob, so the checkpointed prefix it covers
             // is recoverable independently of the WAL. Advance the coverage
             // view; the NEXT durable-pin flush will then authorise trimming
             // up to min(checkpoint, coveredOffset) per partition. Advancing
-            // coverage only AFTER a confirmed SaveAsync (and the pin lagging
-            // by design - the cursor report precedes this capture in
-            // FlushPendingCheckpointAsync) keeps the pin conservative: it can
-            // never license a trim ahead of durable coverage.
+            // coverage only AFTER the store confirms it KEPT the blob (and the
+            // pin lagging by design - the cursor report precedes this capture
+            // in FlushPendingCheckpointAsync) keeps the pin conservative: it
+            // can never license a trim ahead of durable coverage.
             RecordDurableSnapshotCoverage(blob);
             captureSucceeded = true;
         }
@@ -1772,6 +1796,35 @@ internal sealed partial class BPlusLeafGrain
             // that had never attempted a capture.
             ObserveSnapshotCaptureAttempt(captureSucceeded, cancellationToken, captureStartedAt);
         }
+    }
+
+    // Set once the first store-declined capture of this activation has been
+    // logged, so a leaf whose every capture is declined reports it once rather
+    // than on every checkpoint flush.
+    private bool _storeDeclinedCaptureReported;
+
+    /// <summary>
+    /// Reports that the snapshot store declined this capture and kept its
+    /// existing snapshot, so durable coverage did not advance (issue #3421).
+    /// Logged once per activation: a leaf in this state keeps being declined
+    /// until its offer becomes mergeable, and the durable pin not moving is the
+    /// persistent signal, not a per-capture event.
+    /// </summary>
+    private void LogSnapshotCaptureDeclinedByStore(bool staged)
+    {
+        if (_storeDeclinedCaptureReported)
+        {
+            return;
+        }
+
+        _storeDeclinedCaptureReported = true;
+        ResolveLogger()?.LogWarning(
+            "Leaf {GrainId} on tree {TreeId}: the snapshot store declined a {CaptureKind} capture and kept its "
+            + "existing snapshot, so durable snapshot coverage was not advanced and the durable pin stays put "
+            + "(issue #3421). Further declines in this activation are not logged.",
+            context.GrainId,
+            state.State.TreeId,
+            staged ? "staged" : "inline");
     }
 
     /// <summary>

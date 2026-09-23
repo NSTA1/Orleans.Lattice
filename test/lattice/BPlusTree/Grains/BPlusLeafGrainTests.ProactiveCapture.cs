@@ -325,7 +325,7 @@ public partial class BPlusLeafGrainTests
         // second CaptureSnapshotAsync directly; the single-flight guard
         // on the leaf must short-circuit the second call without
         // touching SaveAsync a second time.
-        var firstSaveTcs = new TaskCompletionSource();
+        var firstSaveTcs = new TaskCompletionSource<LeafSnapshotSaveOutcome>();
         var saveCallCount = 0;
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
@@ -383,7 +383,7 @@ public partial class BPlusLeafGrainTests
 
         // Release the first capture so the test does not leak the
         // pending Task.
-        firstSaveTcs.SetResult();
+        firstSaveTcs.SetResult(LeafSnapshotSaveOutcome.Kept);
         await first;
     }
 

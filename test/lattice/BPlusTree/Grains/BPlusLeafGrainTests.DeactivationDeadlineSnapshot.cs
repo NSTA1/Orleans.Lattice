@@ -54,7 +54,7 @@ public partial class BPlusLeafGrainTests
             .Returns(callInfo =>
             {
                 captured.Add(callInfo.ArgAt<CancellationToken>(1));
-                return Task.CompletedTask;
+                return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
             });
 
         var (leaf, _, _, _, _) =
@@ -141,12 +141,13 @@ public partial class BPlusLeafGrainTests
             {
                 if (!hangArmed)
                 {
-                    return;
+                    return LeafSnapshotSaveOutcome.Kept;
                 }
 
                 var token = callInfo.ArgAt<CancellationToken>(1);
                 entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
+                return LeafSnapshotSaveOutcome.Kept;
             });
 
         var (leaf, _, _, _, _) =

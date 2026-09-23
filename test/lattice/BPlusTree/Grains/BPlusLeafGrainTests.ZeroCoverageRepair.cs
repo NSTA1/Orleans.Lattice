@@ -150,7 +150,7 @@ public partial class BPlusLeafGrainTests
                 .Returns(ci =>
                 {
                     saved.Add(ci.Arg<LeafSnapshotBlob>());
-                    return Task.CompletedTask;
+                    return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
                 });
         }
         else
