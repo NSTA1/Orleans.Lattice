@@ -125,6 +125,13 @@
 //                           attribute caller-visible append latency to
 //                           grain-side queueing vs storage-provider
 //                           commit time.
+//   BENCH_EXPECTED_SILOS    Silo count each silo waits for in its cluster manifest
+//                           before warming the tree up (default 0 = no gate). The
+//                           multi-silo rig sets it to the cohort's replica count so
+//                           warm-up cannot place the hot grains on a partial cluster
+//                           (#3348). BENCH_WARMUP_GATE_TIMEOUT_SEC (default 300)
+//                           bounds the wait; BENCH_WARMUP_GATE_SETTLE_SEC (default 5)
+//                           is the extra delay after the count is reached.
 //   BENCH_TOTAL_DURATION_SEC
 //                           Server-side watchdog. After this many seconds the silo
 //                           triggers a graceful host shutdown so the systemd unit
@@ -586,6 +593,17 @@ builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSa
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
 builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
+// (#3348) Hold warm-up until this silo's cluster manifest lists the cohort's
+// full silo count, so the hot grains it activates are placed across the whole
+// cluster rather than the first silos to join. 0 (the default) disables it.
+var expectedSilos = ReadInt("BENCH_EXPECTED_SILOS", 0);
+var warmUpGateTimeoutSec = ReadInt("BENCH_WARMUP_GATE_TIMEOUT_SEC", 300);
+var warmUpGateSettleSec = ReadIntAllowZero("BENCH_WARMUP_GATE_SETTLE_SEC", 5);
+builder.Services.AddSingleton(sp => new VehicleFleetSimulator.AzureThroughput.Silo.WarmUpMembershipGate(
+    sp.GetRequiredService<Orleans.Runtime.IClusterManifestProvider>(),
+    expectedSilos,
+    TimeSpan.FromSeconds(warmUpGateTimeoutSec),
+    TimeSpan.FromSeconds(warmUpGateSettleSec)));
 
 builder.UseOrleans(silo =>
 {
@@ -978,6 +996,7 @@ static IPAddress ResolveContainerIPv4Address()
 internal sealed class TcpIngestService(
     IGrainFactory grainFactory,
     IngestSettings settings,
+    VehicleFleetSimulator.AzureThroughput.Silo.WarmUpMembershipGate warmUpGate,
     IHostApplicationLifetime lifetime,
     IWalSaturationSignal saturationSignal,
     BenchSaturationLogger saturationLogger,
@@ -1183,6 +1202,11 @@ internal sealed class TcpIngestService(
         // at 4 s totals ~25 s worst-case - comfortably under the rung
         // duration and matches the empirically-observed time for a
         // fresh silo's local client directory to converge.
+        // (#3348) Placement can only choose among the silos this silo's
+        // cluster manifest lists, and warm-up is what activates the hot
+        // grains. See WarmUpMembershipGate.
+        await warmUpGate.WaitAsync(stoppingToken).ConfigureAwait(false);
+
         const int MaxWarmUpAttempts = 12;
         const int MaxWarmUpBackoffMs = 6000;
         var warmUpAttempt = 0;

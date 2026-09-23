@@ -256,6 +256,9 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Orleans Silo + Client `ResponseTimeout` (s). **Raise to 180 when saturating** so a slow worst-partition flush doesn't trip the deadline and trigger a producer reconnect/retransmit storm. `ladder.ps1` pins this to 180. |
 | `BENCH_TOTAL_DURATION_SEC` | 600 | Server-side watchdog: after this many seconds the silo triggers a graceful shutdown even if the cohort runner died. `0` disables. |
+| `BENCH_EXPECTED_SILOS` | 0 (off; `run-cohort-aca.ps1` sets the replica count) | Each silo holds its startup warm-up until its cluster manifest lists this many silos. Ungated, warm-up during cluster formation pinned every shard root and WAL partition onto the first silos to join (#3348). |
+| `BENCH_WARMUP_GATE_TIMEOUT_SEC` | 300 | Bound on the `BENCH_EXPECTED_SILOS` wait; the silo fails loudly rather than warming a partial cluster. |
+| `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
 | `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |

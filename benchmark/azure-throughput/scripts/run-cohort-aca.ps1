@@ -305,6 +305,11 @@ $siloEnv = @(
 	"BENCH_SET_MANY_FANOUT_BUDGET_SEC=$SetManyFanOutBudgetSec",
 	"BENCH_WAL_ADMISSION_CALL_BUDGET_SEC=$WalAdmissionCallBudgetSec",
 	"BENCH_CLUSTER_ID=$ClusterId",
+	# (#3348) Every silo holds its warm-up until its cluster manifest lists
+	# all $SiloCount silos. Ungated, the first silo to warm up did so while
+	# the cluster was still forming and pinned every shard root and WAL
+	# partition onto the first two silos to join, so an N=8 cell measured N=2.
+	"BENCH_EXPECTED_SILOS=$SiloCount",
 	'BENCH_SHARD_COUNT=0',
 	'BENCH_CLUSTERING=azuretable',
 	'BENCH_INGEST_MODE=cluster',
