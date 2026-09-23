@@ -91,6 +91,11 @@ public class WalAdmissionCallBudgetTests
         signal.ResetForTesting();
         options.WalSaturationRecoveryWindow = TimeSpan.Zero;
 
+        // A partition seeded at its admission cap is the Saturated trigger
+        // here (the historical classification). WalSaturationAcuteOnly
+        // (default on, #3348) reads it as Throttled, so pin it off.
+        options.WalSaturationAcuteOnly = false;
+
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(options);
 

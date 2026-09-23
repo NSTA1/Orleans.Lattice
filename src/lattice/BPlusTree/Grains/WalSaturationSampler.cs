@@ -991,8 +991,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <para>
     /// (#3348) The admission-semaphore-at-cap input is an acute trigger only
     /// when <paramref name="parkedCallersSaturate"/> is <see langword="true"/>
-    /// (the default). When <see cref="LatticeOptions.WalSaturationAcuteOnly"/>
-    /// clears it, a partition at its cap falls through to the depth-ratio
+    /// (<see cref="LatticeOptions.WalSaturationAcuteOnly"/> disabled). When the
+    /// option is enabled (the default) it is cleared, and a partition at its cap falls through to the depth-ratio
     /// test below and reads Throttled: the semaphore already applies that
     /// back-pressure itself, so treating ordinary pipelining at the cap as a
     /// fault only closes the admission gate on healthy traffic.

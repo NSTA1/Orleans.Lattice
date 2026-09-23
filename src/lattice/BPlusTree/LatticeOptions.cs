@@ -3709,13 +3709,18 @@ public class LatticeOptions
     /// one that admits a newcomer.
     /// </para>
     /// <para>
-    /// <b>Default is <see langword="false"/>, preserving the historical
-    /// classification exactly.</b> Enabling it changes when
+    /// <b>Default is <see langword="true"/>.</b> The historical at-cap
+    /// classification is the #3348 defect, so the corrected verdict is the
+    /// default. It changes when
     /// <see cref="Orleans.Lattice.IWalSaturationSignal"/> reports Saturated to
     /// every consumer - replication flow control, the atomic-write quiesce,
-    /// cursors, dashboards - and when callers observe
-    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/>, so it is opt-in
-    /// on a released package.
+    /// cursors, view back-pressure, scaling pressure and the
+    /// <c>UnhealthyOnWalSaturated</c> health check, dashboards - which now see
+    /// an at-cap partition as Throttled. It only ever reports Saturated less
+    /// often, so callers observe
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> less often,
+    /// never in a new place. Set it to <see langword="false"/> to restore the
+    /// historical classification exactly.
     /// </para>
     /// <para>
     /// The sampler reads this value silo-wide (from the unnamed options
@@ -3727,10 +3732,10 @@ public class LatticeOptions
 
     /// <summary>
     /// Default value for <see cref="WalSaturationAcuteOnly"/>
-    /// (<see langword="false"/> - an admission semaphore at its cap classifies
-    /// Saturated, preserving pre-#3348 behaviour).
+    /// (<see langword="true"/> - an admission semaphore at its cap classifies
+    /// Throttled; only acute causes classify Saturated).
     /// </summary>
-    public const bool DefaultWalSaturationAcuteOnly = false;
+    public const bool DefaultWalSaturationAcuteOnly = true;
 
     /// <summary>
     /// Optional per-flush latency threshold that, when crossed for

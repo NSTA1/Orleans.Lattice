@@ -207,7 +207,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
 | [`WalReplaySliceBudget`](#walreplayslicebudget) | `int` | 256 | Yes |
-| [`WalSaturationAcuteOnly`](#walsaturationacuteonly) | `bool` | false | Yes |
+| [`WalSaturationAcuteOnly`](#walsaturationacuteonly) | `bool` | true | Yes |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
 | [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -1479,11 +1479,11 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalSaturationAcuteOnly`
 
-When `true`, only *acute* causes - dispatch-timeout trips, provider failures, and sustained flush latency - classify a WAL partition as `Saturated` (default: `false`). A partition whose admission semaphore is merely at its cap then reads `Throttled`, and a caller parked at the writer's admission gate resumes as soon as its partition leaves `Saturated` instead of waiting for `Healthy`.
+When `true`, only *acute* causes - dispatch-timeout trips, provider failures, and sustained flush latency - classify a WAL partition as `Saturated` (default: `true`). A partition whose admission semaphore is merely at its cap then reads `Throttled`, and a caller parked at the writer's admission gate resumes as soon as its partition leaves `Saturated` instead of waiting for `Healthy`.
 
 At-cap is the steady state of a well-pipelined partition, not a fault: the admission semaphore already bounds in-flight work at the cap, and that bound is the back-pressure. Classifying it `Saturated` closes the admission gate on healthy traffic, and the gate then holds each parked append until `Healthy` - a condition the [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) hysteresis and the paced [`WalSaturationRecoveryReleaseBatch`](#walsaturationrecoveryreleasebatch) release both defer. A caller arriving during that same `Throttled` window passes the gate without waiting, so the parked caller was held on a stricter condition than the one that admits a newcomer. On the eight-silo `set-many` rig this gate wait was the dominant per-append cost (see issue #3348).
 
-The default preserves the historical classification exactly. Enabling it changes when `IWalSaturationSignal` reports `Saturated` to every consumer (replication flow control, the atomic-write quiesce, cursors, dashboards) and when callers observe `LatticeSaturatedException`, so it is opt-in. The sampler reads this value silo-wide, like the other `WalSaturation*` classifier options, so set it globally rather than per tree.
+The historical at-cap classification is that defect, so the corrected verdict is the default. It changes when `IWalSaturationSignal` reports `Saturated` to every consumer (replication flow control, the atomic-write quiesce, cursors, view back-pressure, scaling pressure and the `UnhealthyOnWalSaturated` health check, dashboards): an at-cap partition now reads `Throttled`. It only ever reports `Saturated` less often, so callers observe `LatticeSaturatedException` less often and never in a new place. Set it to `false` to restore the historical classification exactly. The sampler reads this value silo-wide, like the other `WalSaturation*` classifier options, so set it globally rather than per tree.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick and the next gated append.
 

@@ -114,10 +114,10 @@ public class WalSaturationAcuteOnlyTests
     };
 
     [Test]
-    public void WalSaturationAcuteOnly_defaults_to_false()
+    public void WalSaturationAcuteOnly_defaults_to_true()
     {
-        Assert.That(new LatticeOptions().WalSaturationAcuteOnly, Is.False);
-        Assert.That(LatticeOptions.DefaultWalSaturationAcuteOnly, Is.False);
+        Assert.That(new LatticeOptions().WalSaturationAcuteOnly, Is.True);
+        Assert.That(LatticeOptions.DefaultWalSaturationAcuteOnly, Is.True);
     }
 
     [TestCase(false, WalSaturationState.Saturated)]
