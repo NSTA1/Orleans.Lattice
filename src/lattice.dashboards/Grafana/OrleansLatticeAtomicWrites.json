@@ -376,16 +376,16 @@
     {
       "id": 100,
       "title": "Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder",
-      "description": "Per-phase saga latency breakdown. Sum of phase p95s approximates the total saga p95; outliers identify which phase is binding under load.",
+      "description": "Per-phase saga latency breakdown. Sum of phase p95s approximates the total saga p95; outliers identify which phase is binding under load. Conditionally-emitted series here (saga.broadcast.duration, saga.prepare.duration, saga.terminal_decision.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
       "targets": [
-        { "refId": "P", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_prepare_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "prepare" },
-        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_terminal_decision_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "decision" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_broadcast_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "broadcast" },
+        { "refId": "P", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_prepare_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "prepare" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_terminal_decision_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "decision" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_broadcast_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "broadcast" },
         { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_checkpoint_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "checkpoint" },
         { "refId": "R", "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(orleans_lattice_saga_reminder_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "reminder {{phase}}" }
       ]
@@ -408,13 +408,13 @@
     {
       "id": 102,
       "title": "Per-key saga work - p95 per-key duration (ms)",
-      "description": "saga.perkey.duration: per-key work inside the saga loop, derived as the batch's elapsed time divided by its entry count. Compare against saga.prepare.duration to see how much of the saga envelope the data writes account for.",
+      "description": "saga.perkey.duration: per-key work inside the saga loop, derived as the batch's elapsed time divided by its entry count. Compare against saga.prepare.duration to see how much of the saga envelope the data writes account for. Conditionally-emitted series here (saga.perkey.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
-        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" }
+        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p95 perkey.duration" }
       ]
     },
     {

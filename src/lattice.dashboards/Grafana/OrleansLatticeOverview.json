@@ -622,6 +622,7 @@
     {
       "id": 12,
       "title": "Events dropped (by reason)",
+      "description": "Conditionally-emitted series here (events.dropped) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -642,7 +643,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (rate(orleans_lattice_events_dropped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "expr": "sum by (reason) (rate(orleans_lattice_events_dropped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "{{reason}}"
         }
       ]
@@ -1161,14 +1162,14 @@
     {
       "id": 29,
       "title": "GetAsync stage breakdown p95 (ms)",
-      "description": "Per-stage sub-attribution inside LatticeGrain.GetAsync. get.stage.duration is tagged stage = route (per-attempt GetShardGrainAsync resolution) and stage = shard (per-attempt shard.GetAsync RPC including the cache-or-leaf read). Under a stale-routing storm both stages record multiple observations per envelope so the histograms attribute the retry cost.",
+      "description": "Per-stage sub-attribution inside LatticeGrain.GetAsync. get.stage.duration is tagged stage = route (per-attempt GetShardGrainAsync resolution) and stage = shard (per-attempt shard.GetAsync RPC including the cache-or-leaf read). Under a stale-routing storm both stages record multiple observations per envelope so the histograms attribute the retry cost. Conditionally-emitted series here (get.stage.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 89 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_get_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{stage}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_get_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p95 {{stage}}" }
       ]
     },
     {
@@ -1278,13 +1279,13 @@
     {
       "id": 38,
       "title": "Snapshot replay throughput (rate)",
-      "description": "Rate of entries replayed from snapshots (orleans.lattice.snapshot.replay.entries), by tree. Non-zero during activation/recovery when a leaf rebuilds state from a snapshot plus WAL tail.",
+      "description": "Rate of entries replayed from snapshots (orleans.lattice.snapshot.replay.entries), by tree. Non-zero during activation/recovery when a leaf rebuilds state from a snapshot plus WAL tail. Conditionally-emitted series here (snapshot.replay.entries) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 117 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_snapshot_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_snapshot_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}" }
       ]
     },
     {
@@ -1316,13 +1317,13 @@
     {
       "id": 41,
       "title": "Retroactive split-forward throughput (rate)",
-      "description": "Rate of entries retroactively forwarded to a sibling shard after an adaptive split (orleans.lattice.split.retroactive_forward.entries), by tree. Non-zero only while a split is reconciling writes that landed on the pre-split slot ownership.",
+      "description": "Rate of entries retroactively forwarded to a sibling shard after an adaptive split (orleans.lattice.split.retroactive_forward.entries), by tree. Non-zero only while a split is reconciling writes that landed on the pre-split slot ownership. Conditionally-emitted series here (split.retroactive_forward.entries) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 124 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_split_retroactive_forward_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_split_retroactive_forward_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}" }
       ]
     },
     {
@@ -1342,14 +1343,14 @@
     {
       "id": 43,
       "title": "Compaction dirty leaves per pass (p50/p95)",
-      "description": "Distribution of dirty leaves visited per compaction pass (orleans.lattice.compaction.shard.dirty_leaves). A rising distribution means compaction is falling behind the write rate.",
+      "description": "Distribution of dirty leaves visited per compaction pass (orleans.lattice.compaction.shard.dirty_leaves). A rising distribution means compaction is falling behind the write rate. Conditionally-emitted series here (compaction.shard.dirty_leaves) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 131 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" }
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p95" }
       ]
     },
     {
@@ -1690,14 +1691,14 @@
     {
       "id": 76,
       "title": "Tree-registry fan-in gate - admission wait",
-      "description": "Time a tree id waited for a fan-in permit before its batched registry read was dispatched (orleans_lattice_registry_admission_wait, issue #3240). Cold-start fan-in onto the registry singleton is bounded by RegistryFanInGate, and bounding fan-in does not remove work - it queues it. That matters for reading every other panel on this dashboard: once concurrent reads are capped, a saturated registry stops producing registry-side symptoms and starts producing caller-side waiting instead, so registry.call.duration, registry.call.in_flight and the caller-side timeout count all fall toward zero and the estate reads as recovered. This panel is the only place that relocated wait is visible. Read it AGAINST the service-time panel: a rising wait together with a rising registry.call.duration is a slow registry, which is the expected shape under genuine load, whereas a rising wait with registry.call.duration flat means the GATE is what callers are queueing on rather than the registry. Admission is deliberately uncapped and untimed - shedding a cold-start options resolution would turn latency into a correctness failure, since the caller cannot proceed without its entry - so unbounded waiting is a reachable state and nothing else would reveal it. Recorded on every dequeue including a zero wait, so the rate is the gated-read rate and a flat-zero mean is the healthy steady state rather than a gap. A platform-tenant series: the registry spans every tenant, so there is no per-tree breakdown to filter.",
+      "description": "Time a tree id waited for a fan-in permit before its batched registry read was dispatched (orleans_lattice_registry_admission_wait, issue #3240). Cold-start fan-in onto the registry singleton is bounded by RegistryFanInGate, and bounding fan-in does not remove work - it queues it. That matters for reading every other panel on this dashboard: once concurrent reads are capped, a saturated registry stops producing registry-side symptoms and starts producing caller-side waiting instead, so registry.call.duration, registry.call.in_flight and the caller-side timeout count all fall toward zero and the estate reads as recovered. This panel is the only place that relocated wait is visible. Read it AGAINST the service-time panel: a rising wait together with a rising registry.call.duration is a slow registry, which is the expected shape under genuine load, whereas a rising wait with registry.call.duration flat means the GATE is what callers are queueing on rather than the registry. Admission is deliberately uncapped and untimed - shedding a cold-start options resolution would turn latency into a correctness failure, since the caller cannot proceed without its entry - so unbounded waiting is a reachable state and nothing else would reveal it. Recorded on every dequeue including a zero wait, so the rate is the gated-read rate and a flat-zero mean is the healthy steady state rather than a gap. A platform-tenant series: the registry spans every tenant, so there is no per-tree breakdown to filter. Conditionally-emitted series here (registry.admission.wait) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1042 },
       "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "mean admission wait (ms)" },
-        { "refId": "R", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "gated reads/s (secondary)" }
+        { "refId": "R", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gated reads/s (secondary)" }
       ]
     },    {
       "id": 74,
