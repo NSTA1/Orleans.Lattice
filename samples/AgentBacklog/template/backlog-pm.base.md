@@ -650,7 +650,10 @@ and whenever the human asks for a sweep:
    precisely so it cannot be counted as an attempt, and a superseded or killed
    worker writes no outcome at all - so a claim with no outcome beside it is a
    died attempt and **still counts**, which is what makes killed runs tally
-   correctly with no reaper. Park at three failed attempts unless the epic sets a
+   correctly with no reaper. Read the item's fencing token beside that count and
+   report an item that is claimed but unmarked rather than treating it as fresh,
+   per [`backlog-protocol.md`](backlog-protocol.md#cross-checking-attempts-against-the-fencing-token).
+   Park at three failed attempts unless the epic sets a
    different threshold, by applying the existing `stale` label, and say in a
    comment what failed each time. A worker parks on the run whose failure crosses
    the threshold; your sweep is the backstop for one that died before it could, and
