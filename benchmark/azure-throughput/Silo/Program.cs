@@ -195,6 +195,12 @@
 //                           0 explicitly disables the sampler (signal pins
 //                           to Healthy and the TCP-read gating in
 //                           HandleConnectionAsync becomes a no-op).
+//   BENCH_WAL_SATURATION_ACUTE_ONLY
+//                           #3348: 1 (rig default) sets
+//                           LatticeOptions.WalSaturationAcuteOnly so an
+//                           admission semaphore at its cap classifies
+//                           Throttled rather than Saturated. 0 measures the
+//                           library default (off).
 //   BENCH_SATURATION_THROTTLED_RATIO
 //                           F-085 admission-depth ratio at-or-above which
 //                           the saturation signal raises the tree to
@@ -419,6 +425,13 @@ var saturationDispatchTimeoutThreshold = ReadInt(
 var saturationReleaseBatch = ReadIntAllowZero(
     "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH",
     LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch);
+// BENCH_WAL_SATURATION_ACUTE_ONLY (#3348): only acute causes classify a WAL
+// partition Saturated, so an admission semaphore at its cap reads Throttled and
+// a gate-parked append resumes once its partition leaves Saturated. Deliberately
+// does NOT inherit the library default (off): at-cap-as-Saturated closes the
+// admission gate on healthy pipelined traffic at multi-silo scale, so the rig
+// opts in to the corrected classification. Set 0 to measure the library default.
+var saturationAcuteOnly = ReadBool("BENCH_WAL_SATURATION_ACUTE_ONLY", true);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
@@ -729,6 +742,7 @@ builder.UseOrleans(silo =>
         o.WalSaturationThrottledRatio = saturationThrottledRatio;
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
         o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
+        o.WalSaturationAcuteOnly = saturationAcuteOnly;
     });
 
     silo.ConfigureLattice(treeId, o =>
