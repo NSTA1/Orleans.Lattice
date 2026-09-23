@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Testing;
 
 /// <summary>
 /// Consumer-supplied adapter over one WAL storage provider, used by
-/// <see cref="WalOffsetAllocationContractTestsBase"/>.
+/// <see cref="WalOffsetAllocationContractTestsBase"/>, including its reconcile tests.
 /// <para>
 /// The shared testing library is deliberately product-agnostic and references no
 /// Orleans.Lattice assembly, so the conformance suite cannot name
@@ -31,6 +31,24 @@ public interface IWalOffsetAllocationProbe : IAsyncDisposable
 
     /// <summary>The offsets still readable from the log, ascending.</summary>
     Task<IReadOnlyList<long>> ReadLiveOffsetsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Appends one entry per supplied offset and returns as soon as the
+    /// provider's own append returns, <b>without</b> crossing any further
+    /// durability barrier that <see cref="AppendAsync"/>
+    /// adds. This is the acknowledgement the WAL grain acts on: a provider may
+    /// still be completing the append in the background (a pipelined commit, for
+    /// example) when it returns. A provider with no such background work
+    /// implements this exactly as <see cref="AppendAsync"/>.
+    /// </summary>
+    Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Provider's <c>ReconcileAsync</c>. The WAL grain calls it on activation and
+    /// again in its post-failure resync, immediately before reading the highest
+    /// offset, so it sits directly on the offset-allocation path.
+    /// </summary>
+    Task ReconcileAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Models a process restart: durable providers must drop all in-memory state

@@ -32,7 +32,7 @@ namespace Orleans.Lattice.Testing;
 /// provider's test assembly.
 /// </para>
 /// </summary>
-public abstract class WalOffsetAllocationContractTestsBase
+public abstract partial class WalOffsetAllocationContractTestsBase
 {
     /// <summary>
     /// Creates a probe over a fresh, empty shard. Each test disposes its own

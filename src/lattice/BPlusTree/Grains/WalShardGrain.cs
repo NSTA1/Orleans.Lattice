@@ -1989,11 +1989,19 @@ internal sealed partial class WalShardGrain(
                 _stickyFailure = null;
             }
         }
-        catch
+        catch (Exception resyncFailure)
         {
             // If even the resync fails we keep _stickyFailure latched
-            // so callers continue to see the original fault; the next
-            // successful activation will resync from scratch.
+            // so callers continue to see the original fault, and ask for
+            // deactivation so the next activation reconciles and resyncs
+            // from scratch. Without the request nothing ever retires this
+            // activation while traffic keeps it warm, so one failed resync
+            // wedged the shard - every later append rethrew the latched
+            // fault indefinitely (#3348).
+            Trace($"failure.resync_failed {resyncFailure.GetType().Name}");
+            context.Deactivate(new DeactivationReason(
+                DeactivationReasonCode.ApplicationRequested,
+                "WAL post-failure resync failed"));
         }
 
         // Fault every captured TCS now that the grain is in a

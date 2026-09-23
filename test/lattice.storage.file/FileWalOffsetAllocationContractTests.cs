@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using NUnit.Framework;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Testing;
 using Orleans.Serialization;
@@ -106,6 +107,22 @@ public sealed class FileWalOffsetAllocationContractTests : WalOffsetAllocationCo
             }
 
             return offsets;
+        }
+
+        // TODO(#3448): enrol this provider in the reconcile half of the contract.
+        // Stubbed out of the #3348 change's scope; until it lands the reconcile
+        // contract tests report Ignored for this provider rather than passing.
+        public Task AppendAcknowledgedAsync(IReadOnlyList<long> offsets, CancellationToken cancellationToken)
+        {
+            Assert.Ignore("TODO(#3448): reconcile contract not yet enrolled for this provider.");
+            return Task.CompletedTask;
+        }
+
+        // TODO(#3448): see AppendAcknowledgedAsync.
+        public Task ReconcileAsync(CancellationToken cancellationToken)
+        {
+            Assert.Ignore("TODO(#3448): reconcile contract not yet enrolled for this provider.");
+            return Task.CompletedTask;
         }
 
         /// <summary>
