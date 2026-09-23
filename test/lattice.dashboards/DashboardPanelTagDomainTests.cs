@@ -842,6 +842,17 @@ public sealed class DashboardPanelTagDomainTests
         => InstrumentFieldsLazy.Value;
 
     /// <summary>
+    /// The metric surfaces whose instrument declarations this fixture resolves
+    /// against. Declared once so that every projection over the declarations -
+    /// the name-to-field map below and <see cref="DeclaredInstruments"/> - reads
+    /// the same owner set. Two hand-maintained copies of this list would be free
+    /// to drift, and the surface omitted from one of them would be unguarded by
+    /// whichever guard read it.
+    /// </summary>
+    private static readonly Type[] InstrumentOwnerTypes =
+        [typeof(LatticeMetrics), typeof(LatticeReplicationMetrics)];
+
+    /// <summary>
     /// Maps each instrument's canonical dotted name onto the field that declares
     /// it, by reading the live <see cref="Instrument.Name"/> off the field value
     /// rather than inferring it from the field's name. Issue #2854 was caused by
@@ -852,7 +863,7 @@ public sealed class DashboardPanelTagDomainTests
     {
         var map = new Dictionary<string, (Type, string)>(StringComparer.Ordinal);
 
-        foreach (var owner in new[] { typeof(LatticeMetrics), typeof(LatticeReplicationMetrics) })
+        foreach (var owner in InstrumentOwnerTypes)
         {
             foreach (var field in owner.GetFields(BindingFlags.Public | BindingFlags.Static))
             {
@@ -864,6 +875,66 @@ public sealed class DashboardPanelTagDomainTests
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// One instrument declaration, paired with the description it publishes.
+    /// </summary>
+    /// <param name="Name">The canonical dotted instrument name.</param>
+    /// <param name="Owner">The declaring type's name.</param>
+    /// <param name="Field">The declaring field's name.</param>
+    /// <param name="Description">
+    /// The live <see cref="Instrument.Description"/>, which is the exact text the
+    /// exporter publishes as that series' <c># HELP</c> line. Null when the
+    /// declaration supplied none.
+    /// </param>
+    internal sealed record DeclaredInstrument(string Name, string Owner, string Field, string? Description);
+
+    /// <summary>
+    /// Every instrument declared on the metric surfaces, in a stable order, with
+    /// the description each one publishes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Exposed so that <see cref="MetricDocArmArityTests"/> can hold published
+    /// descriptions to the same arity discipline as a documentation row
+    /// (issue #3202). It reads the <b>live</b> instrument rather than parsing a
+    /// <c>description:</c> argument out of source, for the same reason
+    /// <see cref="BuildInstrumentFields"/> reads the live name: a parse is an
+    /// approximation of the published string, and the published string is the
+    /// thing an operator actually reads.
+    /// </para>
+    /// <para>
+    /// Computed once. Reflecting over every public static field on both surfaces
+    /// is the expensive part, and several tests interrogate the result.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<DeclaredInstrument> DeclaredInstruments() => DeclaredInstrumentsLazy.Value;
+
+    private static readonly Lazy<IReadOnlyList<DeclaredInstrument>> DeclaredInstrumentsLazy =
+        new(BuildDeclaredInstruments);
+
+    private static IReadOnlyList<DeclaredInstrument> BuildDeclaredInstruments()
+    {
+        var declared = new List<DeclaredInstrument>();
+
+        foreach (var owner in InstrumentOwnerTypes)
+        {
+            foreach (var field in owner.GetFields(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (field.GetValue(null) is Instrument instrument)
+                {
+                    declared.Add(new DeclaredInstrument(
+                        instrument.Name, owner.Name, field.Name, instrument.Description));
+                }
+            }
+        }
+
+        // Reflection does not promise a field order, and a guard that reports a
+        // different first offender on each run is harder to act on than one that
+        // does not.
+        declared.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+        return declared;
     }
 
     private static string? TokenToDottedName(string token)
