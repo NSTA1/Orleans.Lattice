@@ -66,6 +66,13 @@ public sealed partial class DurableVectorIndex
     private long[] _persistedPartitionVersion = [];
     private long[] _persistedEpoch = [];
     private int[] _persistedChunkCount = [];
+
+    // What the store holds for each partition of the current generation, one
+    // entry per stored chunk: the epoch it lives under, and a hash of its content
+    // so a flush can tell which chunks it has to rewrite. A null hash entry means
+    // the content is unknown and the chunk is rewritten on the next flush.
+    private long[][] _persistedChunkEpochs = [];
+    private UInt128[]?[] _persistedChunkHashes = [];
     private bool[] _resident = [];
     private long _generation;
     private long _centroidEpoch;

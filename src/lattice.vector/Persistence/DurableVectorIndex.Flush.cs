@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.IO.Hashing;
+
 namespace Orleans.Lattice.Vector.Persistence;
 
 public sealed partial class DurableVectorIndex
@@ -14,11 +17,12 @@ public sealed partial class DurableVectorIndex
     /// <summary>
     /// Makes the index's current contents durable.
     /// <para>
-    /// Only partitions whose version stamp has moved are rewritten, so a flush
-    /// after a handful of updates costs a handful of cells rather than the
-    /// corpus. Records are written first and the manifest last, so an interrupted
-    /// flush leaves the previously committed index intact and loadable rather
-    /// than a mixture of two.
+    /// Only partitions whose version stamp has moved are revisited, and within
+    /// them only the chunks whose content changed are rewritten, so a flush after
+    /// a handful of updates costs a handful of chunks rather than the corpus or
+    /// even whole cells. Records are written first and the manifest last, so an
+    /// interrupted flush leaves the previously committed index intact and
+    /// loadable rather than a mixture of two.
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the flush.</param>
@@ -39,7 +43,17 @@ public sealed partial class DurableVectorIndex
         var header = snapshot.Header;
         var slots = Math.Max(1, header.PartitionCount);
         var epoch = header.IndexVersion;
-        EnsureSlotArrays(slots);
+        if (generation != _generation)
+        {
+            // A new generation holds nothing yet, so nothing it is about to write
+            // can match or supersede a stored chunk: whatever the slots describe
+            // belongs to the generation being replaced, which is reclaimed whole.
+            ResetSlotArrays(slots);
+        }
+        else
+        {
+            EnsureSlotArrays(slots);
+        }
 
         var centroidEpoch = _centroidEpoch;
         if (header.PartitionCount > 0 && (full || !_centroidsPersisted))
@@ -70,21 +84,18 @@ public sealed partial class DurableVectorIndex
                 continue;
             }
 
-            var previousEpoch = _persistedEpoch[partition];
-            await WriteChunkRangeAsync(
+            await FlushPartitionAsync(
                 snapshot,
-                VectorIndexChunkKind.Vectors,
+                generation,
                 partition,
                 first: chunkIndex,
-                count: chunks,
-                sequenceBase: chunkIndex,
-                generation,
-                epoch,
+                chunks,
+                fromSequence: 0,
+                NextEpoch(partition, epoch),
+                onlyChanged: !full,
+                size,
+                version,
                 cancellationToken).ConfigureAwait(false);
-
-            await CommitPartitionAsync(
-                generation, partition, epoch, chunks, size, version, previousEpoch, cancellationToken)
-                .ConfigureAwait(false);
 
             chunkIndex += chunks;
         }
@@ -139,28 +150,19 @@ public sealed partial class DurableVectorIndex
             : _index.Count / itemsPerChunk;
         var committedCount = complete ? _index.Count : chunks * itemsPerChunk;
 
-        if (chunks > _persistedChunkCount[0])
-        {
-            await WriteChunkRangeAsync(
-                snapshot,
-                VectorIndexChunkKind.Vectors,
-                partition: 0,
-                first: _persistedChunkCount[0],
-                count: chunks - _persistedChunkCount[0],
-                sequenceBase: 0,
-                _generation,
-                epoch,
-                cancellationToken).ConfigureAwait(false);
-        }
-
-        await CommitPartitionAsync(
+        // Chunks below the committed count are immutable while ingesting, so only
+        // the ones at or past it are rendered and written.
+        await FlushPartitionAsync(
+            snapshot,
             _generation,
             partition: 0,
-            epoch,
+            first: 0,
             chunks,
+            fromSequence: Math.Min(_persistedChunkCount[0], chunks),
+            epoch,
+            onlyChanged: false,
             committedCount,
             PartitionVersionOf(0),
-            previousEpoch: epoch,
             cancellationToken).ConfigureAwait(false);
 
         // The manifest describes the committed prefix, not the in-memory index:
@@ -188,36 +190,232 @@ public sealed partial class DurableVectorIndex
         _durableCursor = complete ? _cursor : _chunkBoundaryCursor;
     }
 
+    /// <summary>
+    /// Writes one partition's chunks from <paramref name="fromSequence"/> onwards
+    /// and commits the partition.
+    /// <para>
+    /// With <paramref name="onlyChanged"/> set, a chunk whose content hashes to
+    /// what the store already holds at that position is not written again: it
+    /// keeps the epoch it was stored under, and the commit record names that
+    /// epoch for it. A cell is a dense array that an insert extends at the tail
+    /// and a removal backfills from the tail, so one mutation disturbs at most two
+    /// of its chunks. Rewriting the whole cell for it is what made the vector
+    /// index the dominant write-ahead log consumer of a deployment (#3427).
+    /// </para>
+    /// <para>
+    /// Changed chunks are written under a fresh epoch, never over a live key, and
+    /// the commit record is replaced after them, so an interrupted flush still
+    /// leaves the previous partition whole and loadable. Only once the record
+    /// names the new chunks are the superseded ones deleted.
+    /// </para>
+    /// </summary>
+    private async Task FlushPartitionAsync(
+        VectorIndexSnapshot snapshot,
+        long generation,
+        int partition,
+        int first,
+        int chunks,
+        int fromSequence,
+        long epoch,
+        bool onlyChanged,
+        int vectorCount,
+        long version,
+        CancellationToken cancellationToken)
+    {
+        var storedEpochs = _persistedChunkEpochs[partition];
+        var storedHashes = _persistedChunkHashes[partition];
+        var epochs = new long[chunks];
+        UInt128[]? hashes = new UInt128[chunks];
+
+        for (var sequence = 0; sequence < fromSequence; sequence++)
+        {
+            epochs[sequence] = storedEpochs[sequence];
+            if (storedHashes is not null && hashes is not null)
+            {
+                hashes[sequence] = storedHashes[sequence];
+            }
+            else
+            {
+                hashes = null;
+            }
+        }
+
+        var batch = new List<KeyValuePair<string, byte[]>>();
+        var batchBytes = 0;
+        byte[]? buffer = null;
+        try
+        {
+            for (var sequence = fromSequence; sequence < chunks; sequence++)
+            {
+                var index = first + sequence;
+                var payloadLength = snapshot.MeasureChunk(index);
+                var recordLength = VectorIndexRecord.Measure(payloadLength);
+                if (buffer is null || buffer.Length < recordLength)
+                {
+                    if (buffer is not null)
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+
+                    buffer = ArrayPool<byte>.Shared.Rent(recordLength);
+                }
+
+                var payload = buffer.AsSpan(VectorIndexPersistenceFormat.RecordHeaderSize, payloadLength);
+                snapshot.WriteChunk(index, payload);
+                var hash = XxHash128.HashToUInt128(payload);
+                if (hashes is not null)
+                {
+                    hashes[sequence] = hash;
+                }
+
+                if (onlyChanged &&
+                    storedHashes is not null &&
+                    sequence < storedEpochs.Length &&
+                    sequence < storedHashes.Length &&
+                    storedHashes[sequence] == hash)
+                {
+                    epochs[sequence] = storedEpochs[sequence];
+                    continue;
+                }
+
+                var record = buffer.AsSpan(0, recordLength).ToArray();
+                VectorIndexRecord.Seal(record, payloadLength);
+                epochs[sequence] = epoch;
+
+                if (batch.Count > 0 && batchBytes + record.Length > WriteBatchBytes)
+                {
+                    await _store.WriteAsync(batch, cancellationToken).ConfigureAwait(false);
+                    batch = [];
+                    batchBytes = 0;
+                }
+
+                batch.Add(new KeyValuePair<string, byte[]>(
+                    VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, epoch, sequence), record));
+                batchBytes += record.Length;
+            }
+        }
+        finally
+        {
+            if (buffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        if (batch.Count > 0)
+        {
+            await _store.WriteAsync(batch, cancellationToken).ConfigureAwait(false);
+        }
+
+        await CommitPartitionAsync(generation, partition, epoch, epochs, hashes, vectorCount, version, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private async Task CommitPartitionAsync(
         long generation,
         int partition,
         long epoch,
-        int chunkCount,
+        long[] epochs,
+        UInt128[]? hashes,
         int vectorCount,
         long version,
-        long previousEpoch,
         CancellationToken cancellationToken)
     {
-        var state = new VectorIndexPartitionState(epoch, chunkCount, vectorCount, version);
+        // The record's epoch is the newest any of its chunks lives under, which
+        // is what the next flush has to move past to be sure it never writes
+        // over a live key.
+        var commitEpoch = epochs.Length == 0 ? epoch : epochs.Max();
+        var state = new VectorIndexPartitionState(commitEpoch, epochs.Length, vectorCount, version);
         await _store.WriteAsync(
             [new KeyValuePair<string, byte[]>(
-                VectorIndexStorageKeys.PartitionState(_prefix, generation, partition), state.ToRecord())],
+                VectorIndexStorageKeys.PartitionState(_prefix, generation, partition), state.ToRecord(epochs))],
             cancellationToken).ConfigureAwait(false);
 
-        _persistedEpoch[partition] = epoch;
-        _persistedChunkCount[partition] = chunkCount;
+        var stored = _persistedChunkEpochs[partition];
+        _persistedEpoch[partition] = commitEpoch;
+        _persistedChunkCount[partition] = epochs.Length;
+        _persistedChunkEpochs[partition] = epochs;
+        _persistedChunkHashes[partition] = hashes;
         _persistedPartitionVersion[partition] = version;
 
-        if (previousEpoch != epoch)
+        await ReclaimSupersededChunksAsync(generation, partition, stored, epochs, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes the stored chunks the commit record no longer names.
+    /// <para>
+    /// An epoch that no chunk of the partition lives under any more is swept by
+    /// prefix, which also reclaims anything an interrupted flush left under it.
+    /// An epoch that still holds live chunks has only its superseded keys
+    /// deleted. Either way this is reclamation rather than part of the commit:
+    /// the superseded keys are unreachable from the moment the record is replaced.
+    /// </para>
+    /// </summary>
+    private async Task ReclaimSupersededChunksAsync(
+        long generation, int partition, long[] stored, long[] live, CancellationToken cancellationToken)
+    {
+        if (stored.Length == 0)
         {
-            // The superseded epoch is unreachable the moment the state record
-            // names the new one, so sweeping it is reclamation rather than part
-            // of the commit.
+            return;
+        }
+
+        HashSet<long>? liveEpochs = null;
+        Dictionary<long, List<string>>? superseded = null;
+        for (var sequence = 0; sequence < stored.Length; sequence++)
+        {
+            var storedEpoch = stored[sequence];
+            if (sequence < live.Length && live[sequence] == storedEpoch)
+            {
+                continue;
+            }
+
+            liveEpochs ??= [.. live];
+            superseded ??= [];
+            if (!superseded.TryGetValue(storedEpoch, out var keys))
+            {
+                keys = [];
+                superseded[storedEpoch] = keys;
+            }
+
+            keys.Add(VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, storedEpoch, sequence));
+        }
+
+        if (superseded is null)
+        {
+            return;
+        }
+
+        List<string>? pointDeletes = null;
+        foreach (var (supersededEpoch, keys) in superseded)
+        {
+            if (liveEpochs!.Contains(supersededEpoch))
+            {
+                (pointDeletes ??= []).AddRange(keys);
+                continue;
+            }
+
             await _store.DeletePrefixAsync(
-                VectorIndexStorageKeys.PartitionEpochPrefix(_prefix, generation, partition, previousEpoch),
+                VectorIndexStorageKeys.PartitionEpochPrefix(_prefix, generation, partition, supersededEpoch),
                 cancellationToken).ConfigureAwait(false);
         }
+
+        if (pointDeletes is not null)
+        {
+            await _store.DeleteAsync(pointDeletes, cancellationToken).ConfigureAwait(false);
+        }
     }
+
+    /// <summary>
+    /// The epoch a partition's changed chunks are written under: the index
+    /// version, as before, unless the partition already holds a chunk at or past
+    /// it, in which case the next epoch after its newest. A changed chunk must
+    /// never land on a key the commit record still names.
+    /// </summary>
+    private long NextEpoch(int partition, long indexVersion) =>
+        _persistedChunkEpochs[partition].Length == 0
+            ? indexVersion
+            : Math.Max(indexVersion, _persistedEpoch[partition] + 1);
 
     private Task CommitManifestAsync(
         long generation,
@@ -355,9 +553,16 @@ public sealed partial class DurableVectorIndex
             return;
         }
 
+        ResetSlotArrays(slots);
+    }
+
+    private void ResetSlotArrays(int slots)
+    {
         _persistedPartitionVersion = new long[slots];
         _persistedEpoch = new long[slots];
         _persistedChunkCount = new int[slots];
+        _persistedChunkEpochs = new long[slots][];
+        _persistedChunkHashes = new UInt128[]?[slots];
         _resident = new bool[slots];
 
         // Fresh slots hold no committed chunks, so every partition reads as
@@ -366,6 +571,7 @@ public sealed partial class DurableVectorIndex
         for (var partition = 0; partition < slots; partition++)
         {
             _persistedPartitionVersion[partition] = -1;
+            _persistedChunkEpochs[partition] = [];
         }
     }
 }
