@@ -133,7 +133,12 @@ internal sealed class MyExceptionCopier : IDeepCopier<MyException>
 `Orleans.Serialization.Cloning`. The `SerializableExceptionDeepCopyContractTests`
 guard (backed by the shared testing library) audits every `[GenerateSerializer]`
 exception per package by reflection and fails CI on any type that lacks this
-coverage, so no per-type same-silo test is needed.
+coverage, so no per-type same-silo test is needed. The guard is enrolled per test
+project, so `SerializableExceptionDeepCopyGateEnrolmentTests` fails CI when a
+package declares such an exception and its test project does not subclass the
+guard: the first `[GenerateSerializer]` exception in a package means adding
+`test/<package>/SerializableExceptionDeepCopyContractTests.cs` and removing the
+package from that gate's exemption list.
 
 ## Dependency Registration
 
