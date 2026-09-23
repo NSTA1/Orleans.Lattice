@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -250,11 +251,51 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// </summary>
     private readonly Dictionary<string, HashSet<string>> _matchedMetersByPrefix;
 
+    /// <summary>
+    /// The event id of the one warning emitted the first time a ceiling refuses a
+    /// series. See <see cref="AttachLogger"/>.
+    /// </summary>
+    public static readonly EventId CeilingReachedEvent = new(1, "MetricsCeilingReached");
+
+    private static readonly Action<ILogger, string, int, DateTimeOffset, string, long, long, Exception?> LogFamilyCeilingReached =
+        LoggerMessage.Define<string, int, DateTimeOffset, string, long, long>(
+            LogLevel.Warning,
+            CeilingReachedEvent,
+            "RepoContext metrics collector reached its {Ceiling} ceiling of {Limit} series at {SaturatedAtUtc:O} "
+            + "while admitting family {Family} ({FamilySeries} series in that family, {TotalSeries} in total). "
+            + "Further first-seen label sets IN THIS FAMILY will be refused for the life of this process and counted on "
+            + DroppedByFamilyCounterName + "; from this instant an absent series in this family is ambiguous "
+            + "between never-fired and refused.");
+
+    private static readonly Action<ILogger, string, int, DateTimeOffset, string, long, long, Exception?> LogGlobalCeilingReached =
+        LoggerMessage.Define<string, int, DateTimeOffset, string, long, long>(
+            LogLevel.Warning,
+            CeilingReachedEvent,
+            "RepoContext metrics collector reached its {Ceiling} ceiling of {Limit} series at {SaturatedAtUtc:O} "
+            + "while admitting family {Family} ({FamilySeries} series in that family, {TotalSeries} in total). "
+            + "Further first-seen label sets IN EVERY FAMILY will be refused for the life of this process and counted on "
+            + DroppedByFamilyCounterName + "; from this instant an absent series anywhere in this exposition is "
+            + "ambiguous between never-fired and refused.");
+
     private readonly MeterListener _listener = new();
     private readonly int _maxSeriesPerFamily;
     private readonly int _maxSeries;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>
+    /// Ceiling crossings captured at the instant they happened and not yet written to
+    /// a logger. A crossing can precede the logger - the collector is built before
+    /// the host's container, so before any logger exists - and a transition has to be
+    /// captured when it occurs, because no reading taken afterwards can recover the
+    /// instant. Bounded by the number of families plus one, since each family and
+    /// the global backstop are captured at most once.
+    /// </summary>
+    private readonly ConcurrentQueue<CeilingCrossing> _pendingCrossings = new();
+
+    private ILogger? _logger;
     private long _seriesCount;
     private long _dropped;
+    private int _globalCeilingReached;
     private int _disposed;
 
     /// <summary>
@@ -270,17 +311,23 @@ public sealed class RepoContextMetricsCollector : IDisposable
     /// The backstop ceiling on distinct series across every family; defaults to
     /// <see cref="DefaultMaxSeries"/>. Must be positive.
     /// </param>
+    /// <param name="timeProvider">
+    /// The clock that stamps the instant a ceiling is first reached; defaults to
+    /// <see cref="TimeProvider.System"/>.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="maxSeriesPerFamily"/> or <paramref name="maxSeries"/> is not positive.
     /// </exception>
     public RepoContextMetricsCollector(
         int maxSeriesPerFamily = DefaultMaxSeriesPerFamily,
-        int maxSeries = DefaultMaxSeries)
+        int maxSeries = DefaultMaxSeries,
+        TimeProvider? timeProvider = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSeriesPerFamily);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSeries);
         _maxSeriesPerFamily = maxSeriesPerFamily;
         _maxSeries = maxSeries;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         // Minted here, before Start() replays anything, so every configured prefix
         // has a series from the first scrape whether or not a meter ever publishes
@@ -300,6 +347,43 @@ public sealed class RepoContextMetricsCollector : IDisposable
         _listener.SetMeasurementEventCallback<double>(OnMeasurement);
         _listener.SetMeasurementEventCallback<decimal>(OnMeasurement);
         _listener.Start();
+    }
+
+    /// <summary>
+    /// Supplies the logger that announces the instant each series ceiling is first
+    /// reached, and immediately writes any crossing that happened before it was
+    /// attached.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A ceiling refusal is permanent for the life of the process, and from the first
+    /// one the exposition stops being a complete account of what the host emits: an
+    /// absent series becomes ambiguous between "never fired" and "fired and refused".
+    /// The drop counters report that as a level, which cannot say when it began, so
+    /// the transition itself is announced: exactly one warning
+    /// (<see cref="CeilingReachedEvent"/>) the first time the per-family ceiling
+    /// refuses a series in each family, and exactly one the first time the global
+    /// backstop refuses any series (issue #2519). Never one per refusal - the
+    /// counters carry the ongoing volume, and per-refusal logging on a saturated host
+    /// would be its own incident.
+    /// </para>
+    /// <para>
+    /// This is a method rather than a constructor argument because the host builds
+    /// the collector before its service container exists, so that startup
+    /// measurements are counted, and no logger exists yet at that point. A crossing
+    /// that happens before a logger is attached is captured, with its timestamp, at
+    /// the instant it happens and written here, so a deferred record still states the
+    /// true instant rather than the moment of attachment. Attaching again replaces
+    /// the logger; a crossing already written is never written a second time.
+    /// </para>
+    /// </remarks>
+    /// <param name="logger">The logger to announce ceiling crossings to.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="logger"/> is <see langword="null"/>.</exception>
+    public void AttachLogger(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        Volatile.Write(ref _logger, logger);
+        AnnouncePendingCrossings();
     }
 
     /// <summary>
@@ -704,12 +788,23 @@ public sealed class RepoContextMetricsCollector : IDisposable
         if (family.SeriesCount >= _maxSeriesPerFamily)
         {
             RecordDrop(family.Name, FamilyCeilingLabel);
+            if (family.TryMarkCeilingReached())
+            {
+                CaptureCrossing(FamilyCeilingLabel, _maxSeriesPerFamily, family);
+            }
+
             return;
         }
 
         if (Interlocked.Read(ref _seriesCount) >= _maxSeries)
         {
             RecordDrop(family.Name, GlobalCeilingLabel);
+            if (Volatile.Read(ref _globalCeilingReached) == 0
+                && Interlocked.CompareExchange(ref _globalCeilingReached, 1, 0) == 0)
+            {
+                CaptureCrossing(GlobalCeilingLabel, _maxSeries, family);
+            }
+
             return;
         }
 
@@ -726,6 +821,55 @@ public sealed class RepoContextMetricsCollector : IDisposable
         Interlocked.Increment(ref _dropped);
         var count = _dropsByFamily.GetOrAdd((family, ceiling), static _ => new DropCount());
         Interlocked.Increment(ref count.Value);
+    }
+
+    /// <summary>
+    /// Records a ceiling's first refusal at the instant it happens. Reached at most
+    /// once per family plus once for the backstop, so the allocation here is off the
+    /// per-measurement path entirely.
+    /// </summary>
+    private void CaptureCrossing(string ceiling, int limit, MetricFamily family)
+    {
+        _pendingCrossings.Enqueue(new CeilingCrossing(
+            ceiling,
+            limit,
+            family.Name,
+            family.SeriesCount,
+            Interlocked.Read(ref _seriesCount),
+            _timeProvider.GetUtcNow()));
+        AnnouncePendingCrossings();
+    }
+
+    /// <summary>
+    /// Writes every captured crossing to the attached logger, if there is one. Each
+    /// crossing is dequeued by exactly one caller, so it is written exactly once even
+    /// when a crossing races <see cref="AttachLogger"/>: the enqueue precedes the
+    /// logger read here, and the logger write precedes the drain there, so at least
+    /// one of the two sees the other's side.
+    /// </summary>
+    private void AnnouncePendingCrossings()
+    {
+        var logger = Volatile.Read(ref _logger);
+        if (logger is null)
+        {
+            return;
+        }
+
+        while (_pendingCrossings.TryDequeue(out var crossing))
+        {
+            var log = string.Equals(crossing.Ceiling, GlobalCeilingLabel, StringComparison.Ordinal)
+                ? LogGlobalCeilingReached
+                : LogFamilyCeilingReached;
+            log(
+                logger,
+                crossing.Ceiling,
+                crossing.Limit,
+                crossing.AtUtc,
+                crossing.Family,
+                crossing.FamilySeries,
+                crossing.TotalSeries,
+                null);
+        }
     }
 
     /// <summary>
@@ -810,15 +954,39 @@ public sealed class RepoContextMetricsCollector : IDisposable
         public long Read() => Interlocked.Read(ref Value);
     }
 
+    /// <summary>
+    /// One ceiling's first refusal, captured at the instant it happened: which
+    /// ceiling, its configured value, the family being admitted, the family's and the
+    /// collector's series counts, and when.
+    /// </summary>
+    private sealed record CeilingCrossing(
+        string Ceiling,
+        int Limit,
+        string Family,
+        long FamilySeries,
+        long TotalSeries,
+        DateTimeOffset AtUtc);
+
     /// <summary>One exposed metric family: a name, a Prometheus type, and its series.</summary>
     private sealed class MetricFamily(string name, RepoContextMetricKind kind, string help)
     {
         private readonly ConcurrentDictionary<string, Series> _series = new(StringComparer.Ordinal);
         private long _seriesCount;
+        private int _ceilingReached;
 
         public string Name { get; } = name;
 
         public RepoContextMetricKind Kind { get; } = kind;
+
+        /// <summary>
+        /// Marks this family's per-family ceiling as reached, returning
+        /// <see langword="true"/> to exactly one caller - the first refusal. The plain
+        /// read first keeps every later refusal to a single volatile load, with no
+        /// interlocked write on the saturated path.
+        /// </summary>
+        public bool TryMarkCeilingReached()
+            => Volatile.Read(ref _ceilingReached) == 0
+                && Interlocked.CompareExchange(ref _ceilingReached, 1, 0) == 0;
 
         /// <summary>
         /// The number of series this family holds. Tracked explicitly rather than
