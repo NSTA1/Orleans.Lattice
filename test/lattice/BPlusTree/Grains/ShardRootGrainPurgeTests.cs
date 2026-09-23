@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainPurgeTests
+public sealed partial class ShardRootGrainPurgeTests
 {
     private const string ShardKey = "purge-tree/0";
 

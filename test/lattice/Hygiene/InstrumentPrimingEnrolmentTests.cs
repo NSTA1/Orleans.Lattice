@@ -1299,13 +1299,19 @@ public sealed partial class InstrumentPrimingEnrolmentTests
         File.WriteAllText(path, builder.ToString());
     }
 
-    /// <summary>Detail prefixes only the generator writes. A row carrying one was never curated.</summary>
+    /// <summary>
+    /// Detail prefixes only the generator writes. A row carrying one was never curated. The bare
+    /// <c>reason=unrecognised value expression</c> form is what an earlier generator wrote before
+    /// it named the dimension; without it such a row is frozen as if curated, so a later change
+    /// to the call site or to the analyser never reaches it.
+    /// </summary>
     private static readonly string[] GeneratedReasonPrefixes =
     {
         "reason=bounded domain found",
         "reason=dimension ",
         "reason=single-value domain ",
         "reason=constant tag ",
+        "reason=unrecognised value expression",
     };
 
     /// <summary>Whether <paramref name="row"/> is one the generator wrote rather than a curated one.</summary>

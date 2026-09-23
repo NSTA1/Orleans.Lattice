@@ -415,6 +415,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // service (the container host does).
         services.TryAddSingleton<IRepoIndexRunner, RepoIndexRunner>();
 
+        // The index reset runs its sweep the same way: off the request thread, bound
+        // to the host lifetime, so a caller that drops its connection mid-reset
+        // abandons only its wait and the reset still reports its completion through
+        // index_status (#2642). It runs under the calling principal, not the run
+        // authority below.
+        services.TryAddSingleton<RepoIndexResetLauncher>();
+
         // Resolve the credential every background indexing run assumes. The default
         // resolves none, so a run carries whatever ambient credential the enqueue
         // captured - correct for an in-process host with no access gate. A host that

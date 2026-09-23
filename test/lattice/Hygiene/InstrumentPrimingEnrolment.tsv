@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 184 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 185 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -25,7 +25,7 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_duration	unresolved	reason=dimension tool: no declaration found for tool
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_stageDuration	unresolved	reason=dimension stage: no declaration found for stage
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_readySeconds	unresolved	reason=dimension phase: no declaration found for phaseTag
-src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_unavailable	unresolved	reason=unrecognised value expression: NormalizeCause(cause)
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_unavailable	unresolved	reason=dimension cause: unrecognised value expression: NormalizeCause(cause)
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextSymbolWalkReporter.cs#_symbolWalks	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextVectorPlaneReDeriver.cs#_counter	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_callsCounter	unresolved	reason=dimension command: no declaration found for Command
@@ -114,8 +114,8 @@ src/lattice.replication/LatticeReplicationMetrics.cs#DoorbellRung	open	open=peer
 src/lattice.replication/LatticeReplicationMetrics.cs#LeafReReplayEntries	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (tree)
 src/lattice.replication/LatticeReplicationMetrics.cs#LeafReReplaySkipped	unresolved	reason=dimension reason: unrecognised value expression: LatticeReplicationMetrics.LeafReReplaySkipReasonTag(reason)
 src/lattice.replication/LatticeReplicationMetrics.cs#ManifestExchanges	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
-src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkAborted	unresolved	reason=unrecognised value expression: LatticeReplicationMetrics.MerkleWalkAbortReasonTag(reason)
-src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkLocalised	unresolved	reason=unrecognised value expression: depth.ToString(CultureInfo.InvariantCulture)
+src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkAborted	unresolved	reason=dimension reason: unrecognised value expression: LatticeReplicationMetrics.MerkleWalkAbortReasonTag(reason)
+src/lattice.replication/LatticeReplicationMetrics.cs#MerkleWalkLocalised	unresolved	reason=dimension depth: unrecognised value expression: depth.ToString(CultureInfo.InvariantCulture)
 src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLog	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLogSuppressed	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentEntriesElided	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (request.TreeName)
@@ -214,9 +214,9 @@ src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	unresolved	reason=dim
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteDuration	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteParticipants	unresolved	reason=dimension outcome: no declaration found for outcomeTag
-src/lattice/LatticeMetrics.cs#DigestPublishTimeouts	unresolved	reason=unrecognised value expression: state.State.TreeId ?? string.Empty
+src/lattice/LatticeMetrics.cs#DigestPublishTimeouts	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
 src/lattice/LatticeMetrics.cs#EventsDropped	unresolved	reason=dimension reason: unrecognised value expression: _dropReason ?? "publish_error"
-src/lattice/LatticeMetrics.cs#EventsPublished	unresolved	reason=unrecognised value expression: evt.Kind.ToString()
+src/lattice/LatticeMetrics.cs#EventsPublished	unresolved	reason=dimension kind: unrecognised value expression: evt.Kind.ToString()
 src/lattice/LatticeMetrics.cs#ExistsDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree): tag argument(s) stageTagTree are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#GetDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree): tag argument(s) stageTagTree are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#GetManyDuration	unresolved	reason=dimension (unread-tag-argument:stageTagTree): tag argument(s) stageTagTree are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
@@ -231,7 +231,7 @@ src/lattice/LatticeMetrics.cs#LeafActivationFailures	unresolved	reason=bounded d
 src/lattice/LatticeMetrics.cs#LeafActivationOverBudgetReplays	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#LeafActivationReplays	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafActivationStalledReplays	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
-src/lattice/LatticeMetrics.cs#LeafBisectRefusals	unresolved	reason=unrecognised value expression: DetachSeamTag(seam)
+src/lattice/LatticeMetrics.cs#LeafBisectRefusals	unresolved	reason=dimension reason: unrecognised value expression: BisectRefusalTag(reason)
 src/lattice/LatticeMetrics.cs#LeafByteOverflows	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafCachePreWarmDurationMs	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafCachePreWarmed	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
@@ -241,7 +241,7 @@ src/lattice/LatticeMetrics.cs#LeafCommitDuration	unresolved	reason=dimension ste
 src/lattice/LatticeMetrics.cs#LeafCommitInFlight	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
 src/lattice/LatticeMetrics.cs#LeafCompactionDuration	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafDeactivationBarrierFailures	unresolved	reason=dimension (unread-tag-argument:treeTag, barrier, tenantTag): tag argument(s) treeTag, barrier, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
-src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=unrecognised value expression: reason.ReasonCode.ToString()
+src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafDeferredTerminalsDroppedAtCap	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#LeafDigestPublishes	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafReplayBarrierOutcomes	primed	
@@ -261,8 +261,8 @@ src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentedHydrations	open	open=tenant, 
 src/lattice/LatticeMetrics.cs#LeafSplitAttempts	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionOldestAge	unresolved	reason=dimension tree: read from this observable instrument's measurement callback, which yields [archive/memory-restore-state]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionsInFlight	unresolved	reason=dimension tree: read from this observable instrument's measurement callback, which yields [archive/memory-restore-state]. A callback read is a lower bound on the tag surface, not a closed domain
-src/lattice/LatticeMetrics.cs#LeafSplits	unresolved	reason=unrecognised value expression: state.State.TreeId ?? string.Empty
-src/lattice/LatticeMetrics.cs#LeafTombstoneRatio	unresolved	reason=unrecognised value expression: context.GrainId.ToString()
+src/lattice/LatticeMetrics.cs#LeafSplits	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
+src/lattice/LatticeMetrics.cs#LeafTombstoneRatio	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
 src/lattice/LatticeMetrics.cs#LeafTombstonesCreated	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
 src/lattice/LatticeMetrics.cs#LeafTombstonesExpired	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafTombstonesReaped	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
@@ -286,9 +286,9 @@ src/lattice/LatticeMetrics.cs#ProviderIdempotentReplays	open	open=shard, tenant,
 src/lattice/LatticeMetrics.cs#ProviderPhase2BatchSize	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#ProviderPhase2CommitTimeouts	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#ProviderPhaseOneTransientRetries	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
-src/lattice/LatticeMetrics.cs#ProviderRetryAttempts	unresolved	reason=unrecognised value expression: status.ToString(CultureInfo.InvariantCulture)
-src/lattice/LatticeMetrics.cs#ProviderRetryExhausted	unresolved	reason=unrecognised value expression: ResolveProviderStatusTag(rfe)
-src/lattice/LatticeMetrics.cs#ProviderRetryShortCircuited	unresolved	reason=unrecognised value expression: SaturatedResponse.SyntheticStatus.ToString(CultureInfo.Invar...
+src/lattice/LatticeMetrics.cs#ProviderRetryAttempts	unresolved	reason=dimension status: unrecognised value expression: status.ToString(CultureInfo.InvariantCulture)
+src/lattice/LatticeMetrics.cs#ProviderRetryExhausted	unresolved	reason=bounded domain found, enrolment not yet chosen
+src/lattice/LatticeMetrics.cs#ProviderRetryShortCircuited	unresolved	reason=dimension status: unrecognised value expression: SaturatedResponse.SyntheticStatus.ToString(CultureInfo.Invar...
 src/lattice/LatticeMetrics.cs#RegistryAdmissionBatchSize	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#RegistryAdmissionInFlight	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#RegistryAdmissionQueueDepth	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
@@ -355,7 +355,7 @@ src/lattice/LatticeMetrics.cs#ViewBacklogDepth	none
 src/lattice/LatticeMetrics.cs#ViewCrossTreeJointViolation	unresolved	reason=dimension view: no declaration found for ViewName
 src/lattice/LatticeMetrics.cs#ViewKeyCollisions	none	
 src/lattice/LatticeMetrics.cs#ViewLagBudgetEviction	none	
-src/lattice/LatticeMetrics.cs#ViewSourceBackpressure	unresolved	reason=unrecognised value expression: saturation.ToString().ToLowerInvariant()
+src/lattice/LatticeMetrics.cs#ViewSourceBackpressure	unresolved	reason=dimension state: unrecognised value expression: saturation.ToString().ToLowerInvariant()
 src/lattice/LatticeMetrics.cs#WalAppendAdmissionSaturationRefusals	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#WalAppendAdmissionTimeouts	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (stamped.TreeId)
 src/lattice/LatticeMetrics.cs#WalAppendAdmissionWait	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (stamped.TreeId)

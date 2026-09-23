@@ -103,9 +103,12 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeMetrics.LeafTombstoneRatio"/> histogram. Called
     /// from <c>CompactTombstonesAsync</c> at pass entry so operators see
     /// space-amplification hot spots even on passes that reap nothing.
-    /// Tagged by tree and per-leaf grain id; per-leaf cardinality is
-    /// expected to be bounded by the operator's view layer if the tree
-    /// has very many leaves.
+    /// Tagged by tree and tenant only. The leaf's identity is deliberately
+    /// not a tag: a per-leaf label gave the family one series per leaf grain,
+    /// so its cardinality grew with the store and exhausted the collector's
+    /// per-family budget (issue #2518). Every leaf of a tree now records into
+    /// the same series, so the family holds at most one series per tree
+    /// however many leaves the tree has, and no tag value is built per sample.
     /// <para>
     /// Reads both counts in O(1), for the reason given on
     /// <see cref="EvaluateCompactionTrigger"/>. This sampler has no threshold
@@ -124,7 +127,6 @@ internal sealed partial class BPlusLeafGrain
         var ratio = (double)tombstoneCount / total;
         LatticeMetrics.LeafTombstoneRatio.Record(ratio,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagLeaf, context.GrainId.ToString()),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
     }
 }

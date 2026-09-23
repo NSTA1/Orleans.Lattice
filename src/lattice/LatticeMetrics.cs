@@ -217,11 +217,12 @@ public static class LatticeMetrics
     public const string TagPath = "path";
 
     /// <summary>
-    /// Tag key for a leaf-grain identifier on per-leaf instruments
-    /// (e.g. <see cref="LeafTombstoneRatio"/>). Cardinality follows the
-    /// same caveats as any per-leaf tag - operators that run very wide
-    /// trees should expect to either drop the tag at the OpenTelemetry
-    /// view layer or sample it.
+    /// Tag key for a leaf-grain identifier. No instrument in this package
+    /// emits it: a per-leaf tag gives a metric family one series per leaf
+    /// grain, so its cardinality grows with the store rather than being
+    /// bounded (issue #2518, which removed it from
+    /// <see cref="LeafTombstoneRatio"/>). Retained for source compatibility;
+    /// do not add it to a new instrument.
     /// </summary>
     public const string TagLeaf = "leaf";
 
@@ -9461,7 +9462,14 @@ public static class LatticeMetrics
     /// (<c>tombstones / max(liveKeys + tombstones, 1)</c>) sampled
     /// inside a tombstone-compaction pass, just before
     /// <c>CompactTombstonesAsync</c> performs its scan. Tagged with
-    /// <see cref="TagTree"/> and <see cref="TagLeaf"/>. Surfaces
+    /// <see cref="TagTree"/> and the tenant label only. Each sample is one
+    /// leaf's ratio, but the leaf's identity is <b>not</b> a tag: every leaf
+    /// of a tree records into the same series, so the family holds at most
+    /// one series per tree, independent of how many leaves the store holds.
+    /// A per-leaf tag previously gave the family one series per leaf grain
+    /// and exhausted the collector's per-family budget (issue #2518); the
+    /// distribution across a tree's leaves is what the histogram's quantiles
+    /// report. Surfaces
     /// space-amplification hot spots without requiring an
     /// <c>ObservableGauge</c> over a registry of live activations -
     /// the histogram is observed lazily inside the pass, so it costs

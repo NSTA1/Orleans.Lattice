@@ -246,7 +246,9 @@ write per write - and because a too-low durable pin only ever retains
 pass the GC consults the durable pins and lowers its trim floor for any
 materialiser consumer that is **missing** from the in-memory registry
 (a consumer that is present has a fresher in-memory cursor already
-folded into the floor, so steady-state trimming is unchanged). A leaf
+folded into the floor, so steady-state trimming is unchanged; one
+registered only with a `Zero` block-pin-only cursor contributed nothing
+to that floor, so it is treated as missing). A leaf
 that activated but never checkpointed seeds a durable `Zero` "block"
 pin, which holds the WAL head for that leaf until it produces its first
 checkpoint; the TTL ceiling (`LatticeOptions.WalRetention`) still bounds

@@ -167,12 +167,15 @@ internal sealed partial class ShardRootGrain
         // no chain at all. Decided by node TYPE rather than the persisted
         // RootIsLeaf flag, matching every other chain walk on this grain.
         if (state.State.RootNodeId is null) return 0;
-        if (RootIsLeafTyped) return 0;
 
         // Structural churn at the shard level moves whole slot ranges between
         // shards and rewrites the moved-away seals this pass reads. Reclaim is
         // background tidy-up, so it yields rather than interleaving.
         if (state.State.SplitInProgress is not null) return 0;
+
+        // A single-leaf tree still enters when it owes a clear from an earlier
+        // fold, so that clear is not stranded behind a check it can never pass.
+        if (RootIsLeafTyped && state.State.PendingLeafClears.Count == 0) return 0;
 
         if (Interlocked.CompareExchange(ref _leafReclaimInProgress, 1, 0) != 0) return 0;
         try
@@ -187,7 +190,22 @@ internal sealed partial class ShardRootGrain
             var startTimestamp = LeafWalkBudget.StartClock();
 
             await PrepareForOperationAsync();
-            return await ReclaimEmptyLeavesCoreAsync(maxLeaves, startTimestamp);
+
+            // Clears owed by earlier folds first. Those leaves are off the
+            // chain, so the walk below cannot find them; this record is the
+            // only path back to them. A no-op when nothing is owed.
+            await RetryPendingLeafClearsAsync();
+
+            if (RootIsLeafTyped) return 0;
+
+            try
+            {
+                return await ReclaimEmptyLeavesCoreAsync(maxLeaves, startTimestamp);
+            }
+            finally
+            {
+                await FlushPendingLeafClearsAsync();
+            }
         }
         finally
         {
@@ -534,8 +552,11 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// <para>
     /// At no point is a key claimed by two leaves at once, and every step is
-    /// idempotent, so an interrupted fold is finished by the next pass rather
-    /// than left half-done.
+    /// idempotent. The steps before the leaf leaves the chain are finished by
+    /// the next pass's walk; the final clear of the leaf's grain state is not
+    /// reachable by any walk once the leaf is unlinked, so it is recorded in
+    /// <see cref="State.ShardRootState.PendingLeafClears"/> before it is
+    /// attempted and a failed clear is retried from that record.
     /// </para>
     /// </summary>
     private async Task<bool> TryReclaimLeafAsync(
@@ -644,24 +665,34 @@ internal sealed partial class ShardRootGrain
             await RetireRoutingAsync(parentToRetireFrom, currentId);
         }
 
-        try
+        if (currentProbe.NextSibling is { } nextId)
         {
-            if (currentProbe.NextSibling is { } nextId)
+            try
             {
                 await ResolveLeafGrain(nextId).SetPrevSiblingAsync(prevId);
             }
+            catch (Exception ex)
+            {
+                // The walk's own back-pointer repair re-points the successor on
+                // a later pass, because the successor is still on the chain.
+                logger.LogWarning(
+                    ex,
+                    "Shard {ShardIndex} of tree '{TreeId}' folded leaf {LeafId} out of the chain but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; a later pass repairs the back pointer.",
+                    MyShardIndex,
+                    TreeId,
+                    currentId,
+                    nextId,
+                    prevId);
+            }
+        }
 
-            await leaf.ClearGrainStateAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Shard {ShardIndex} of tree '{TreeId}' folded leaf {LeafId} out of the chain but could not finish tidying up after it; the leaf is unrouted and unlinked, and the next pass will finish the job.",
-                MyShardIndex,
-                TreeId,
-                currentId);
-        }
+        // The clear is NOT something a later walk can rediscover: the leaf is
+        // off the chain now, so no walk reaches it again. Issue #2207: a clear
+        // that failed here used to be swallowed with a promise that "the next
+        // pass" would finish it, and no pass ever could, orphaning the leaf's
+        // storage row and its WAL materialiser pin. It is recorded durably as
+        // owed first, and a failure is retried from that record.
+        await ClearRemovedLeafAsync(currentId, "folded");
 
         _leafGrains.TryRemove(currentId, out _);
 

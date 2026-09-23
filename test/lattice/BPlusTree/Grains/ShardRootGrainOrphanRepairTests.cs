@@ -67,6 +67,7 @@ public sealed partial class ShardRootGrainOrphanRepairTests
     {
         public ShardRootGrain Grain { get; set; } = null!;
         public required IBPlusInternalGrain Root { get; init; }
+        public required FakePersistentState<ShardRootState> State { get; init; }
         public required GrainId LeafA { get; init; }
         public required GrainId LeafB { get; init; }
         public required GrainId LeafC { get; init; }
@@ -158,6 +159,7 @@ public sealed partial class ShardRootGrainOrphanRepairTests
         var harness = new OrphanHarness
         {
             Root = Substitute.For<IBPlusInternalGrain>(),
+            State = state,
             LeafA = leafA,
             LeafB = leafB,
             LeafC = leafC,

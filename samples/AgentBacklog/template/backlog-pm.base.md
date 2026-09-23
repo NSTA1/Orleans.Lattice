@@ -177,7 +177,11 @@ flowchart TD
    evaluated", not "not stale". Do not report an item as healthy on the strength of
    a scan.
 
-7. `repocontext_recall` on each item you are about to report on as in-flight,
+7. Apply [Parked blockers and the ruling
+   route](backlog-protocol.md#parked-blockers-and-the-ruling-route) to the full
+   scan before narrowing what to report as ready or in flight.
+
+   `repocontext_recall` on each item you are about to report on as in-flight,
    ready, or newly relevant. This is the only call that evaluates `anchoredTo`
    drift, so it is where a `stale` item surfaces. For blocked items, one depth-1
    `repocontext_neighbors` on `blockedBy` per candidate resolves what each is
@@ -476,7 +480,9 @@ because the issue number **is** the item id.
 5. **Tag each item** per the model: the `backlog` marker, exactly one `priority:`,
    one `phase:`, one `homeRegion:`, and `baseBranch:` inherited from the epic. One
    tag per prefix; two means concurrent authors and is a defect.
-6. **Author the edges**: `partOf` on each sub-item to the epic, `blockedBy` on the
+6. **Validate before authoring edges**, following [Parked blockers and the ruling
+   route](backlog-protocol.md#parked-blockers-and-the-ruling-route) before either
+   memory write tool is called. Then author `partOf` on each sub-item to the epic, `blockedBy` on the
    dependent (never on the target), `anchoredTo` on the code the item concerns,
    `integrates` on the integration item to the epic, `informs` from a research
    grouping to what it emitted, `related` to near-duplicates and prior-attempt
@@ -650,8 +656,14 @@ and whenever the human asks for a sweep:
    precisely so it cannot be counted as an attempt, and a superseded or killed
    worker writes no outcome at all - so a claim with no outcome beside it is a
    died attempt and **still counts**, which is what makes killed runs tally
-   correctly with no reaper. Park at three failed attempts unless the epic sets a
-   different threshold, by applying the existing `stale` label, and say in a
+   correctly with no reaper. Read the item's fencing token beside that count and
+   report an item that is claimed but unmarked rather than treating it as fresh,
+   per [`backlog-protocol.md`](backlog-protocol.md#cross-checking-attempts-against-the-fencing-token).
+   Park at three failed attempts unless the epic sets a
+   different threshold, following [Parked blockers and the ruling
+   route](backlog-protocol.md#parked-blockers-and-the-ruling-route) and
+   [Parking an item](backlog-protocol.md#parking-an-item---both-sides-and-not-only-on-exhaustion)
+   for the fenced memory write and the existing `stale` label, and say in a
    comment what failed each time. A worker parks on the run whose failure crosses
    the threshold; your sweep is the backstop for one that died before it could, and
    parking is idempotent, so acting on both is safe. Unparking is

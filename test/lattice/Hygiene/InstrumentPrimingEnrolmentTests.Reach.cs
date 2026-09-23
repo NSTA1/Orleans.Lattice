@@ -428,4 +428,48 @@ public sealed partial class InstrumentPrimingEnrolmentTests
             + "identifier by design:"
             + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", failures)}");
     }
+
+    [Test]
+    public void A_row_an_earlier_generator_wrote_is_reseeded_and_a_curated_row_is_kept()
+    {
+        const string Key = "src/lattice/X.cs#Y";
+
+        Assert.That(
+            IsGeneratedRow(new EnrolmentRow(Key, Enrolment.Unresolved,
+                "reason=unrecognised value expression: context.GrainId.ToString()")),
+            Is.True,
+            "the pre-dimension generator form must be re-seeded, or a call-site change never reaches its row");
+        Assert.That(
+            IsGeneratedRow(new EnrolmentRow(Key, Enrolment.Unresolved,
+                "reason=dimension tree: unrecognised value expression: treeId")),
+            Is.True);
+        Assert.That(
+            IsGeneratedRow(new EnrolmentRow(Key, Enrolment.Unresolved,
+                "curated: the phase tag is primed by the coordinator on activation")),
+            Is.False,
+            "a curated unresolved row must be preserved verbatim");
+        Assert.That(
+            IsGeneratedRow(new EnrolmentRow(Key, Enrolment.Primed,
+                "reason=unrecognised value expression: x")),
+            Is.False,
+            "only an unresolved or open row is ever generator-owned");
+    }
+
+    [Test]
+    public void No_checked_in_row_carries_a_frozen_generator_reason()
+    {
+        var frozen = ReadEnrolmentFile(out _)
+            .Where(r => r.Enrolment == Enrolment.Unresolved
+                && r.Detail.StartsWith("reason=", StringComparison.Ordinal)
+                && !IsGeneratedRow(r))
+            .Select(r => $"{r.Key}: {r.Detail}")
+            .ToList();
+
+        Assert.That(
+            frozen,
+            Is.Empty,
+            $"{frozen.Count} unresolved row(s) carry a reason= detail the rewriter treats as curated, "
+            + "so regeneration can never correct them. Add the prefix to GeneratedReasonPrefixes:"
+            + $"{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", frozen)}");
+    }
 }

@@ -388,7 +388,8 @@ Four things dominate scan cost:
   Remember that a shallow report reports zero tombstones unconditionally.
 - **Watch `orleans.lattice.leaf.scan.duration`** to see whether the time is
   going into per-leaf work, and `orleans.lattice.leaf.tombstone.ratio` for the
-  live per-leaf view. See [Metrics](metrics.md).
+  distribution of per-leaf ratios within each tree (the histogram is tagged by
+  tree, not by leaf). See [Metrics](metrics.md).
 - **Compare per-shard figures in the report.** Because every scan fans out to
   every shard, the slowest shard sets the pace. Look for the shard whose
   `TombstoneRatio` or `OpsPerSecond` is the outlier and treat that shard as the

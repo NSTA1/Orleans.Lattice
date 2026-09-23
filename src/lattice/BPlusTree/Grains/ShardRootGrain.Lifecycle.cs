@@ -121,6 +121,14 @@ internal sealed partial class ShardRootGrain
 
     public async Task PurgeAsync()
     {
+        // First, because nothing else names these leaves: they were taken out
+        // of the tree by a reclaim or an orphan repair whose clear failed, so
+        // they are on neither the chain nor any routing table, and clearing the
+        // shard row below would drop the only record that they still hold state
+        // (issue #2207). A failure propagates with the record intact, so the
+        // tree-deletion retry comes back to them.
+        await ClearPendingLeavesForPurgeAsync();
+
         if (state.State.RootNodeId is null)
         {
             await state.ClearStateAsync();
@@ -142,9 +150,11 @@ internal sealed partial class ShardRootGrain
         }
 
         var internalNodeIds = new List<GrainId>();
+        List<GrainId>? routedLeafIds = null;
         if (!rootIsLeafTyped)
         {
-            await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds);
+            routedLeafIds = new List<GrainId>();
+            await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds, routedLeafIds);
         }
 
         // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
@@ -155,16 +165,37 @@ internal sealed partial class ShardRootGrain
         // walk can - once a leaf's state is cleared its sibling pointer is gone,
         // which is why nextId is read before the clear. Bounded by observability.
         var walk = new AtomicLeafWalk("PurgeShardAsync");
+        var clearedLeafIds = routedLeafIds is null ? null : new HashSet<GrainId>();
         while (leafId is not null)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
             var nextId = await leaf.GetNextSiblingAsync();
             await leaf.ClearGrainStateAsync();
+            clearedLeafIds?.Add(leafId.Value);
             walk.RecordLeafVisited();
             leafId = nextId;
         }
 
         walk.ReportIfSlow(logger, context.GrainId);
+
+        // The chain walk alone is not enough on a RETRIED purge (issue #2207).
+        // A purge that failed part-way has already cleared the head of the
+        // chain, and a cleared leaf has no sibling pointer, so the retry's walk
+        // stops at the first leaf and every routed leaf beyond the failure
+        // would keep its state after the shard row that routes to it is gone.
+        // The internal nodes are cleared only after this, so on the retry they
+        // still name every routed leaf; clear the ones the walk did not reach.
+        // Re-clearing a leaf is idempotent, so the set only saves grain calls.
+        if (routedLeafIds is not null)
+        {
+            foreach (var routedLeafId in routedLeafIds)
+            {
+                if (clearedLeafIds!.Add(routedLeafId))
+                {
+                    await grainFactory.GetGrain<IBPlusLeafGrain>(routedLeafId).ClearGrainStateAsync();
+                }
+            }
+        }
 
         await ClearInternalNodesAsync(internalNodeIds);
 
@@ -194,7 +225,10 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Collects every internal node id beneath <paramref name="rootNodeId"/>
-    /// (inclusive) so <see cref="ClearInternalNodesAsync"/> can sweep them.
+    /// (inclusive) so <see cref="ClearInternalNodesAsync"/> can sweep them, and
+    /// every leaf id the bottom internal level routes to into
+    /// <paramref name="routedLeafIds"/>, so a purge can clear routed leaves its
+    /// chain walk did not reach.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -224,7 +258,10 @@ internal sealed partial class ShardRootGrain
     /// traversal order.
     /// </para>
     /// </remarks>
-    private async Task CollectInternalNodeIds(GrainId rootNodeId, List<GrainId> collected)
+    private async Task CollectInternalNodeIds(
+        GrainId rootNodeId,
+        List<GrainId> collected,
+        List<GrainId> routedLeafIds)
     {
         var level = new List<GrainId> { rootNodeId };
 
@@ -240,6 +277,9 @@ internal sealed partial class ShardRootGrain
             {
                 if (routing.ChildrenAreLeaves)
                 {
+                    // Already in hand from the same snapshot, so recording the
+                    // routed leaves costs no extra call.
+                    routedLeafIds.AddRange(routing.ChildIds);
                     continue;
                 }
 

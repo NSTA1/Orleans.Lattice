@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainLeafReclaimResilienceTests
+public sealed partial class ShardRootGrainLeafReclaimResilienceTests
 {
     private const string TreeId = "reclaim-resilience-tree";
     private const string ShardKey = TreeId + "/0";
@@ -54,6 +54,7 @@ public sealed class ShardRootGrainLeafReclaimResilienceTests
     {
         public ShardRootGrain Grain { get; set; } = null!;
         public required IBPlusInternalGrain Root { get; init; }
+        public required FakePersistentState<ShardRootState> State { get; init; }
         public required GrainId LeafA { get; init; }
         public required GrainId LeafB { get; init; }
         public required GrainId LeafC { get; init; }
@@ -135,6 +136,7 @@ public sealed class ShardRootGrainLeafReclaimResilienceTests
         var harness = new ReclaimHarness
         {
             Root = Substitute.For<IBPlusInternalGrain>(),
+            State = state,
             LeafA = leafA,
             LeafB = leafB,
             LeafC = leafC,
@@ -322,7 +324,8 @@ public sealed class ShardRootGrainLeafReclaimResilienceTests
     {
         // Clearing the folded leaf's state runs AFTER the commit point and is
         // idempotent, so a failure in it is logged and swallowed: the leaf is
-        // already unrouted and unlinked, and the next pass finishes the job.
+        // already unrouted and unlinked. It is recorded as owed and the next
+        // pass retries the clear (issue #2207; see the PendingClear partial).
         // Reporting the fold as failed here would have the pass treat a leaf it
         // has already unlinked as still present.
         var h = CreateHarness();

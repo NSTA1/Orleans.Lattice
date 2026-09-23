@@ -648,6 +648,13 @@ public static class RepoContextHostBuilder
 
         var app = builder.Build();
 
+        // The collector was built before any logger existed, so it could not be given
+        // one then. Attached here, as early as the container allows: a ceiling it
+        // reached in the meantime was captured with its timestamp at the instant it
+        // happened and is written now, so the record still states when the exposition
+        // stopped being complete rather than when logging became possible (issue #2519).
+        metricsCollector.AttachLogger(app.Services.GetRequiredService<ILogger<RepoContextMetricsCollector>>());
+
         app.MapLatticeMcp();
         app.MapHealthChecks(LivenessPath, new HealthCheckOptions
         {
