@@ -103,6 +103,28 @@ internal interface IRepoIndexJobGrain : IGrainWithStringKey
     Task FailAsync(string error);
 
     /// <summary>
+    /// Returns the repository's current index-incarnation token, minting and
+    /// persisting one when none exists yet. The token names the generation of
+    /// derived state the code index currently belongs to, so an in-memory cache
+    /// holding evidence ABOUT that derived state can tell "the index I gathered
+    /// this under" from "a different index that happens to have the same id".
+    /// <para>
+    /// The token changes exactly when the derived planes are discarded: a reset
+    /// re-mints it, and a removal clears the whole job state so the next re-add
+    /// mints a fresh one. It deliberately does NOT change per indexing pass -
+    /// re-minting every pass would invalidate the cross-pass evidence the gap
+    /// back-fill's loop detection and saturation backoff depend on.
+    /// </para>
+    /// <para>
+    /// The first call for a never-indexed repository writes state, which is why
+    /// this is an <c>Ensure</c> rather than a <c>Get</c>. Orleans grains are
+    /// single-threaded, so two concurrent callers cannot mint two tokens.
+    /// </para>
+    /// </summary>
+    /// <returns>The repository's current index-incarnation token; never empty.</returns>
+    Task<string> EnsureIndexIncarnationAsync();
+
+    /// <summary>
     /// Cancels any in-flight run, unregisters the reminder, and clears the durable
     /// state. Called when a repository is removed so no orphaned reminder keeps
     /// firing for a repository that no longer exists.

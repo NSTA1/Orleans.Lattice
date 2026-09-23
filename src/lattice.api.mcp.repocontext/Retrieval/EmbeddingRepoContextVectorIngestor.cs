@@ -259,6 +259,31 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     private readonly ConcurrentDictionary<string, FileGapScanBackoff> _fileGapScanBackoff = new();
 
+    /// <summary>
+    /// The index incarnation each repository's cached gap evidence above was
+    /// gathered under, so that evidence can be discarded the moment it stops being
+    /// about the index it describes (issue #2826).
+    /// <para>
+    /// Every cache above is keyed by repository id and lives for the process,
+    /// because this ingestor is a singleton. A repository id, however, does not
+    /// identify an <i>index</i>: a reset discards every derived plane and
+    /// deliberately KEEPS the repository, and a remove/re-add cycle brings the same
+    /// id back over an empty index. In both cases the caches above carried the
+    /// previous index's evidence into the new one, where the back-fill consulted it,
+    /// concluded the gap it was looking at had already been served, and stood itself
+    /// down - leaving the new index permanently missing exactly the content the
+    /// back-fill exists to supply, while reporting itself converged. Silent, and
+    /// self-certifying.
+    /// </para>
+    /// <para>
+    /// The job grain mints an incarnation token that changes on precisely those two
+    /// events and on no others - in particular NOT per pass, which would defeat the
+    /// cross-pass evidence entirely. Each arm reads it once per pass and evicts the
+    /// whole per-repository cache set on a mismatch.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _evidenceIncarnations = new();
+
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
     /// <param name="grainFactory">The grain factory used to enumerate the symbol tree for symbol embedding. Must not be <see langword="null"/>.</param>
@@ -319,6 +344,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 repoId);
             return RepoFileVectorIngestOutcome.None;
         }
+
+        // Discard any cached gap evidence gathered under a PREVIOUS index
+        // incarnation before this pass consults it (issue #2826). It must run ahead
+        // of ClaimFileGapScanSkip below, which is the first reader of that evidence
+        // on this arm.
+        await DiscardEvidenceFromAPriorIncarnationAsync(repoId, cancellationToken).ConfigureAwait(false);
 
         // Probe coverage for exactly the candidate files (changed + unchanged) with a
         // bounded point-read, so a churn-bloated membership tree can never force an
@@ -774,6 +805,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             return 0;
         }
 
+        // Discard any cached gap evidence gathered under a PREVIOUS index
+        // incarnation before this pass consults it (issue #2826). It must run ahead
+        // of the walk-cursor read and ClaimSymbolGapScanSkip below, which are the
+        // first readers of that evidence on this arm.
+        await DiscardEvidenceFromAPriorIncarnationAsync(repoId, cancellationToken).ConfigureAwait(false);
+
         // A symbol is (re-)embedded when its declaration changed this pass or when
         // it has no live embedding yet (a new symbol, or a back-fill of symbols
         // captured before symbol embedding existed). Presence is judged from the
@@ -1106,6 +1143,89 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             MaxPendingChangedSymbolKeys);
 
         return trimmed;
+    }
+
+    /// <summary>
+    /// Discards this repository's cached gap evidence when it was gathered under a
+    /// previous index incarnation, so a pass never stands its back-fill down on
+    /// evidence about an index that no longer exists (issue #2826).
+    /// <para>
+    /// The caches this evicts are all keyed by repository id and all outlive any
+    /// single index, because the ingestor is a singleton. A repository id does not
+    /// identify an index: <c>reset_index</c> discards every derived plane and
+    /// deliberately KEEPS the repository, so keying on existence would see no
+    /// change at all. The job grain's incarnation token is what changes on exactly
+    /// the two events that invalidate this evidence - a reset, and the state clear a
+    /// removal performs before a re-add - and on no others.
+    /// </para>
+    /// <para>
+    /// <b>Fault policy.</b> An unreadable or empty token leaves every cache exactly
+    /// as it was and records nothing, so the next pass re-reads and detects the
+    /// mismatch then. Grain-read failures correlate with plane saturation, which is
+    /// precisely when the backoff this evidence drives is load-bearing, so evicting
+    /// under fault would re-drive a struggling plane at the worst moment. The cost
+    /// of the conservative arm is bounded at one pass of delay, against a stand-down
+    /// budget of several passes, so it cannot leave the index permanently wrong.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose pass is about to consult its cached evidence.</param>
+    /// <param name="cancellationToken">Cancels the incarnation read.</param>
+    private async ValueTask DiscardEvidenceFromAPriorIncarnationAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string incarnation;
+        try
+        {
+            incarnation = await _grainFactory
+                .GetGrain<IRepoIndexJobGrain>(repoId)
+                .EnsureIndexIncarnationAsync()
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(
+                ex,
+                "Repo {RepoId}: could not read the index incarnation this pass; leaving cached gap evidence in place "
+                + "and re-checking next pass.",
+                repoId);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(incarnation))
+        {
+            return;
+        }
+
+        // The steady-state path: the same incarnation the evidence was gathered
+        // under, so nothing is evicted and nothing is allocated. GetOrAdd also makes
+        // the first pass for a repository record its incarnation in one lookup,
+        // where there is no evidence to evict anyway.
+        var previous = _evidenceIncarnations.GetOrAdd(repoId, incarnation);
+        if (string.Equals(previous, incarnation, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _evidenceIncarnations[repoId] = incarnation;
+
+        // Evict every per-repository cache that carries evidence ABOUT the derived
+        // state, on both arms. Each is an assertion about an index that has been
+        // discarded, and every one of them can stand a back-fill down: the walk
+        // cursor resumes a range walk over symbols that no longer exist, the two
+        // backoffs suppress the gap scan outright, and the landed/history records
+        // are the loop-detection evidence that arms them.
+        _symbolWalkCursors.TryRemove(repoId, out _);
+        _symbolGapScanBackoff.TryRemove(repoId, out _);
+        _lastGapLanded.TryRemove(repoId, out _);
+        _fileGapHistory.TryRemove(repoId, out _);
+        _fileGapScanBackoff.TryRemove(repoId, out _);
+
+        _logger.LogInformation(
+            "Repo {RepoId}: the index incarnation changed, so cached gap-back-fill evidence from the previous "
+            + "incarnation was discarded. The back-fill re-evaluates this repository from scratch.",
+            repoId);
     }
 
     /// <summary>

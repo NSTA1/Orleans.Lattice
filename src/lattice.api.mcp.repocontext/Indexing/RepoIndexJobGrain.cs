@@ -182,6 +182,14 @@ internal sealed class RepoIndexJobGrain(
         state.State.CompletedAt = null;
         state.State.ElapsedMilliseconds = null;
         state.State.Error = null;
+
+        // Re-mint the index incarnation BEFORE the sweep that discards the derived
+        // planes, so anything holding evidence about the old index can see that its
+        // evidence no longer applies. The token is the only thing that distinguishes
+        // "this repository's index" from "this repository's PREVIOUS index" - the
+        // repository id does not, because a reset deliberately preserves the
+        // repository (issue #2826).
+        state.State.IndexIncarnation = NewIncarnation();
         await state.WriteStateAsync().ConfigureAwait(true);
 
         logger.LogInformation("Repo {RepoId}: index reset started; running as an observable teardown.", RepoId);
@@ -262,6 +270,35 @@ internal sealed class RepoIndexJobGrain(
         await UnregisterResumeReminderAsync().ConfigureAwait(true);
         logger.LogWarning("Repo {RepoId}: indexing job failed: {Error}", RepoId, error);
     }
+
+    /// <inheritdoc />
+    public async Task<string> EnsureIndexIncarnationAsync()
+    {
+        // Mint on first read rather than on StartAsync. StartAsync runs on EVERY
+        // reconcile pass, so minting there would hand out a new token every pass
+        // and invalidate the very cross-pass evidence the token exists to protect
+        // (the gap back-fill's loop detection and saturation backoff). Minting
+        // lazily also covers the remove/re-add cycle for free: CancelAndClearAsync
+        // clears this state, so the token becomes absent and the next read mints a
+        // fresh one - without needing the removal path to know about it.
+        if (!string.IsNullOrEmpty(state.State.IndexIncarnation))
+        {
+            return state.State.IndexIncarnation;
+        }
+
+        var minted = NewIncarnation();
+        state.State.IndexIncarnation = minted;
+        await state.WriteStateAsync().ConfigureAwait(true);
+        return minted;
+    }
+
+    /// <summary>
+    /// Mints a fresh index-incarnation token. A GUID rather than a counter: a
+    /// removal clears the state entirely, so a counter would restart at zero and
+    /// collide with the incarnation the pre-removal index already used.
+    /// </summary>
+    /// <returns>A token distinct from every previously minted one.</returns>
+    private static string NewIncarnation() => Guid.NewGuid().ToString("N");
 
     /// <inheritdoc />
     public async Task CancelAndClearAsync()
