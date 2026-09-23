@@ -419,8 +419,47 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             }
         }
 
-        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var endOffsetInclusive = firstOffset + entries.Count - 1;
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var activity = GetShardActivity(manifestPartitionKey);
+
+        // Claim the offsets before the first await so appends issued in
+        // allocation order take the no-I/O path in that order.
+        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        try
+        {
+            var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+            if (!claimed)
+            {
+                await ClaimOverlapFreeAsync(
+                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                    .ConfigureAwait(false);
+                claimed = true;
+            }
+
+            await AppendClaimedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, entries, firstOffset, endOffsetInclusive, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            if (claimed)
+            {
+                activity.Overlap.Release(firstOffset, endOffsetInclusive);
+            }
+        }
+    }
+
+    private async Task AppendClaimedBatchAsync(
+        TableClient table,
+        WalShardActivity activity,
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        IReadOnlyList<WalEntry> entries,
+        long firstOffset,
+        long endOffsetInclusive,
+        CancellationToken cancellationToken)
+    {
         var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
 
         // Phase 0 (parallel with phase 1): stamp a candidate-row in
@@ -436,8 +475,6 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // enumerates batch partitions above TAIL. See
         // AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath
         // for the soundness argument.
-        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
-        var activity = GetShardActivity(manifestPartitionKey);
         activity.Writes.Enter();
         try
         {
@@ -520,18 +557,55 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // not need to be preserved across the `await` boundary below.
         ValidateDenseOffsets(treeId, shardIndex, offsets.Span);
 
-        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var firstOffset = offsets.Span[0];
         var endOffsetInclusive = firstOffset + offsets.Length - 1;
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var activity = GetShardActivity(manifestPartitionKey);
+
+        // Claimed before the first await; see AppendBatchAsync.
+        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        try
+        {
+            var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+            if (!claimed)
+            {
+                await ClaimOverlapFreeAsync(
+                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                    .ConfigureAwait(false);
+                claimed = true;
+            }
+
+            await AppendClaimedEncodedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, encodedEntries, offsets, firstOffset, endOffsetInclusive, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            if (claimed)
+            {
+                activity.Overlap.Release(firstOffset, endOffsetInclusive);
+            }
+        }
+    }
+
+    private async Task AppendClaimedEncodedBatchAsync(
+        TableClient table,
+        WalShardActivity activity,
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
+        ReadOnlyMemory<long> offsets,
+        long firstOffset,
+        long endOffsetInclusive,
+        CancellationToken cancellationToken)
+    {
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span, out var compressionStats);
 
         // Phase 0 / phase 1 / phase 2 split mirrors AppendBatchAsync;
         // see the comments there for the parallelism, candidate-row,
         // and monotonic-TAIL rationale.
-        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
         var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
-        var activity = GetShardActivity(manifestPartitionKey);
         activity.Writes.Enter();
         try
         {

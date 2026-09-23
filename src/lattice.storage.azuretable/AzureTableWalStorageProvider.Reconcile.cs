@@ -109,8 +109,14 @@ public sealed partial class AzureTableWalStorageProvider
             {
                 try
                 {
-                    await ReconcileOnceAsync(table, manifestPartitionKey, treeId, shardIndex, cancellationToken)
+                    var resultingTail = await ReconcileOnceAsync(table, manifestPartitionKey, treeId, shardIndex, cancellationToken)
                         .ConfigureAwait(false);
+
+                    // With the D-mode discovery scan, the pass has seen every
+                    // batch partition above TAIL and kept none above the
+                    // resulting TAIL, so it is the written bound. Without it,
+                    // the next append reads the bound afresh.
+                    activity.Overlap.Reset(_options.EliminateCandidateRowOnHotPath ? resultingTail : null);
                     return;
                 }
                 catch (RequestFailedException ex)
@@ -163,7 +169,7 @@ public sealed partial class AzureTableWalStorageProvider
     internal static bool IsConcurrentManifestConflict(RequestFailedException ex) =>
         ex.Status is 409 or 412;
 
-    private async Task ReconcileOnceAsync(
+    private async Task<long> ReconcileOnceAsync(
         TableClient table,
         string manifestPartitionKey,
         string treeId,
@@ -229,7 +235,7 @@ public sealed partial class AzureTableWalStorageProvider
 
         if (orphans.Count == 0)
         {
-            return;
+            return currentTail;
         }
 
         // Step 3: plan rollforward vs rollback. The rollforward set
@@ -254,6 +260,8 @@ public sealed partial class AzureTableWalStorageProvider
         {
             await RollBackOrphanAsync(table, manifestPartitionKey, rollback, cancellationToken).ConfigureAwait(false);
         }
+
+        return plan.ResultingTail;
     }
 
     /// <summary>

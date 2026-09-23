@@ -69,6 +69,14 @@ A caller that genuinely needs read-after-write - a controlled hand-off, an opera
 
 `PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely.
 
+### Overlap rejection
+
+Every batch is stored in its own partition, keyed by its first offset, so storage on its own would accept a batch that starts inside one already written, and a read would then return the shared offsets twice. The provider rejects that batch with `InvalidOperationException` before writing anything, as the `IWalStorageProvider` contract requires.
+
+The check costs nothing on the steady-state path. The provider keeps, per shard, an upper bound on the offsets that may be written, and an append starting above it is admitted with no storage call; the core WAL grain always appends above it. Any other append, such as an out-of-order arrival or a retry, is checked against the batches in motion on this instance and then with one query over the few partitions that could hold an overlapping entry. The first append on a shard reads the bound from the stored tail and any uncommitted batches above it. Reconciliation re-establishes it.
+
+A re-append that starts at the same offset as a written batch is not rejected here: it collides on the batch's own rows and is resolved by the idempotent-replay check, which accepts an identical retry and fails anything else. The bound is only trusted while this instance is the shard's single writer, which the WAL grain's single activation provides, so a batch another process writes after this instance read the bound is not detected until the next reconciliation.
+
 ## Recovery and downgrade safety
 
 On activation, and again after a failed flush, the core WAL grain calls the provider reconciliation hook. The provider compares the committed tail with interrupted append evidence and applies these rules:
