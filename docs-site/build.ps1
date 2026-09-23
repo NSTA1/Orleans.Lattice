@@ -42,22 +42,44 @@ try {
     $size = '{0:N1} MB' -f ((Get-ChildItem $site -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
     Write-Host "Site built: $pages pages, $size"
 
-    $warnings = 0
-    $summary = $output | Select-String -Pattern '^\s*(\d+)\s+warning\(s\)' | Select-Object -Last 1
-    if ($summary) { $warnings = [int]$summary.Matches[0].Groups[1].Value }
+    # Match against an ANSI-stripped copy of the output. docfx colours its
+    # summary line when it detects a terminal, which CI provides, so there the
+    # line arrives as ESC[38;5;11m    2 warning(s)ESC[0m. The '^\s*' anchor
+    # below cannot match past that leading escape, so the count silently stayed
+    # at its 0 default and -MaxWarnings 0 passed on exactly the runs it exists
+    # to gate. The by-type breakdown was never affected because its pattern is
+    # unanchored, which is why the log printed the contradiction in plain sight:
+    # "2 warning(s)" and "2 InvalidBookmark" above "Link check: 0 warning(s)".
+    $ansi = [regex]"$([char]27)\[[0-9;]*m"
+    $plain = $output | ForEach-Object { $ansi.Replace([string]$_, '') }
 
-    $byType = $output |
+    $summary = $plain | Select-String -Pattern '^\s*(\d+)\s+warning\(s\)' | Select-Object -Last 1
+    $warnings = if ($summary) { [int]$summary.Matches[0].Groups[1].Value } else { $null }
+
+    $byType = $plain |
         Select-String -Pattern 'warning (\w+):' -AllMatches |
         ForEach-Object { $_.Matches } |
         ForEach-Object { $_.Groups[1].Value } |
         Group-Object | Sort-Object Count -Descending
     foreach ($entry in $byType) { Write-Host ("  {0,4} {1}" -f $entry.Count, $entry.Name) }
 
-    if ($MaxWarnings -ge 0 -and $warnings -gt $MaxWarnings) {
+    if ($null -eq $warnings) {
+        # Fail closed on a count that was never read. Defaulting to 0 makes an
+        # unparsed summary byte-identical in the result to a clean build, which
+        # is the precise shape of the defect above: the gate reported a number
+        # it had not obtained, and reported it as passing.
+        if ($MaxWarnings -ge 0) {
+            throw "Documentation link check could not read a warning count: the docfx summary line ('N warning(s)') was not found in the build output, so the ceiling of $MaxWarnings was never applied. This is a failure, not a clean build - a count that defaults to 0 is indistinguishable from one that was read as 0."
+        }
+        Write-Host 'Link check: warning count unreadable (no ceiling requested)'
+    }
+    elseif ($MaxWarnings -ge 0 -and $warnings -gt $MaxWarnings) {
         throw "Documentation link check failed: $warnings warning(s), ceiling is $MaxWarnings. A newly broken link or anchor was introduced - fix it, or lower the ceiling if you have fixed existing ones."
     }
-    $ceiling = if ($MaxWarnings -ge 0) { ", ceiling $MaxWarnings" } else { '' }
-    Write-Host "Link check: $warnings warning(s)$ceiling"
+    else {
+        $ceiling = if ($MaxWarnings -ge 0) { ", ceiling $MaxWarnings" } else { '' }
+        Write-Host "Link check: $warnings warning(s)$ceiling"
+    }
 
     if ($Serve) { docfx serve $site --port $Port }
 }
