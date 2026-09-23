@@ -268,7 +268,7 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// the sampler can attribute a transition (or short-circuit when
     /// the state is unchanged).
     /// </summary>
-    internal WalSaturationState UpdateState(string treeId, WalSaturationState newState)
+    internal WalSaturationState UpdateState(string treeId, WalSaturationState newState, int releaseBatch = 0)
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
@@ -281,16 +281,22 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
         var previous = _states.TryGetValue(treeId, out var existing) ? existing : WalSaturationState.Healthy;
         _states[treeId] = newState;
 
-        if (newState == WalSaturationState.Healthy && previous != WalSaturationState.Healthy)
+        // (#3402) Level-triggered for the same reason as the
+        // partition-scoped sibling below: a paced release leaves a
+        // residue that only a later tick can drain, and that tick sees
+        // no transition. This path is the fallback used when no
+        // per-partition signal is registered, so it carries the same
+        // herd hazard and takes the same treatment.
+        if (newState == WalSaturationState.Healthy)
         {
-            // Drain every pending waiter for this tree. The TCSs were
+            // Drain pending waiters for this tree. The TCSs were
             // built with RunContinuationsAsynchronously so the
             // completion does not run inline on the sampler thread.
             // Disposing the cancellation registration inline keeps the
             // per-wait disposal cost off a separate continuation Task
             // (the per-await ContinueWith chain the entry was
             // explicitly designed to avoid).
-            CompleteWaiters(treeId);
+            CompleteWaiters(treeId, releaseBatch);
         }
 
         return previous;
@@ -304,7 +310,11 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// <see cref="WalSaturationState.Healthy"/>, completes every
     /// partition-scoped waiter. Returns the previous state.
     /// </summary>
-    internal WalSaturationState UpdatePartitionState(string treeId, int partition, WalSaturationState newState)
+    internal WalSaturationState UpdatePartitionState(
+        string treeId,
+        int partition,
+        WalSaturationState newState,
+        int releaseBatch = 0)
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
@@ -314,28 +324,62 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
             : WalSaturationState.Healthy;
         _partitionStates[key] = newState;
 
-        if (newState == WalSaturationState.Healthy && previous != WalSaturationState.Healthy)
+        // (#3402) Level-triggered, not edge-triggered. A paced release
+        // hands out at most `releaseBatch` waiters per call, so the
+        // residue has to be drained by later ticks - and those ticks see
+        // no Saturated -> Healthy transition, because the partition is
+        // already Healthy. Releasing on the edge alone would strand the
+        // residue until the next saturation cycle, which is a worse
+        // failure than the herd this replaces. Releasing on the level
+        // costs a dictionary miss under `_waitGate` per healthy
+        // partition per tick, which at the 200 ms default cadence is
+        // negligible.
+        if (newState == WalSaturationState.Healthy)
         {
-            CompleteWaiters(PartitionWaitKey(treeId, partition));
+            CompleteWaiters(PartitionWaitKey(treeId, partition), releaseBatch);
         }
 
         return previous;
     }
 
     /// <summary>
-    /// Completes and unregisters every waiter parked on
-    /// <paramref name="waitKey"/>. Shared by the tree-scoped and
-    /// partition-scoped write paths.
+    /// Completes and unregisters up to <paramref name="maxToRelease"/>
+    /// waiters parked on <paramref name="waitKey"/>, oldest first.
+    /// Shared by the tree-scoped and partition-scoped write paths.
+    /// <para>
+    /// (#3402) A value of zero or less releases every parked waiter, which
+    /// is the pre-fix behaviour. A positive value paces the release so a
+    /// recovered partition is not immediately re-saturated by the herd it
+    /// just admitted; the residue stays parked and is drained by
+    /// subsequent sampler ticks, which keep calling in while the
+    /// partition reads Healthy.
+    /// </para>
+    /// <para>
+    /// Release is oldest-first so a paced drain cannot starve the callers
+    /// that have already waited longest, which are also the ones closest
+    /// to exhausting their wait budget.
+    /// </para>
     /// </summary>
-    private void CompleteWaiters(string waitKey)
+    private void CompleteWaiters(string waitKey, int maxToRelease = 0)
     {
         List<WaiterEntry>? toComplete = null;
         lock (_waitGate)
         {
             if (_waiters.TryGetValue(waitKey, out var list))
             {
-                toComplete = list;
-                _waiters.Remove(waitKey);
+                if (maxToRelease <= 0 || list.Count <= maxToRelease)
+                {
+                    toComplete = list;
+                    _waiters.Remove(waitKey);
+                }
+                else
+                {
+                    // Partial release: hand out the oldest `maxToRelease`
+                    // entries and leave the remainder parked under the
+                    // same key for the next tick to pick up.
+                    toComplete = list.GetRange(0, maxToRelease);
+                    list.RemoveRange(0, maxToRelease);
+                }
             }
         }
         if (toComplete is not null)

@@ -209,6 +209,11 @@ param(
 	# This is the knob the #3396 arms differ in: -1/4 is the shipped
 	# behaviour, 0 is the control arm that reproduces pre-#3396 main.
 	[int] $WalAppendCoalescingInFlightThreshold = -1,
+	# (#3402) Paced release of parked WAL-admission waiters on partition
+	# recovery. 0 is MEANINGFUL here too - it is the pre-#3402 "release the
+	# whole parked herd in one pass" behaviour, which is the control arm -
+	# so -1 is the inherit sentinel meaning "do not set the env var".
+	[int] $WalSaturationRecoveryReleaseBatch = -1,
 	[int] $SettleSec = 30
 )
 
@@ -289,6 +294,12 @@ $siloEnv = @(
 # passes 0 to reproduce pre-#3396 behaviour.
 if ($WalAppendCoalescingInFlightThreshold -ge 0) {
 	$siloEnv += "BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=$WalAppendCoalescingInFlightThreshold"
+}
+
+# (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
+# pre-#3402 release-everything control arm.
+if ($WalSaturationRecoveryReleaseBatch -ge 0) {
+	$siloEnv += "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH=$WalSaturationRecoveryReleaseBatch"
 }
 
 $startedUtc = (Get-Date).ToUniversalTime()

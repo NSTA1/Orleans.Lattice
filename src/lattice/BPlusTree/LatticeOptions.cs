@@ -3576,6 +3576,61 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalSaturationRecoveryWindow = TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// (#3402) Maximum number of callers parked at the WAL admission
+    /// saturation gate that one sampler tick may release when a
+    /// partition reads
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>.
+    /// Defaults to <see cref="DefaultWalSaturationRecoveryReleaseBatch"/>
+    /// (16). Set to <c>0</c> to release every parked caller at once,
+    /// restoring the pre-fix behaviour; the registered options validator
+    /// rejects a negative value at first-resolve time.
+    /// <para>
+    /// <b>Why the release must be paced.</b> Recovery used to complete
+    /// every parked waiter in a single pass on the
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> edge.
+    /// Once the parked population exceeds what the partition's admission
+    /// pipeline can absorb (<see cref="WalMaxPendingBatches"/>), the
+    /// released herd re-saturates the partition before any meaningful
+    /// drain, the signal flips straight back, and the cycle repeats
+    /// without net progress. The gate then behaves as an absorbing
+    /// state rather than a back-pressure valve: at eight silos the rig
+    /// measured zero saturation recoveries against 388,740 refusals,
+    /// with the WAL append pipeline observed <i>empty</i> at the median
+    /// (<c>wal.append.in_flight</c> p50 of 0) and storage latency less
+    /// than half the healthy four-silo rung. The partition was refusing
+    /// work while the resource it protects sat idle.
+    /// </para>
+    /// <para>
+    /// <b>Why this default.</b> 16 matches
+    /// <see cref="DefaultWalMaxPendingBatches"/>, so one tick admits at
+    /// most one pipeline-fill. At the
+    /// <see cref="DefaultWalSaturationSampleInterval"/> of 200 ms that
+    /// paces roughly 80 admissions per second per partition, which
+    /// comfortably exceeds the offered per-partition append rate at the
+    /// rung where the collapse was observed, so the pacing bounds the
+    /// recovery burst without becoming the new bottleneck. Raise it
+    /// alongside <see cref="WalMaxPendingBatches"/> if you widen the
+    /// pipeline.
+    /// </para>
+    /// <para>
+    /// <b>Parked callers are not stranded by a partial release.</b> The
+    /// sampler re-evaluates every partition on every tick, and the
+    /// release is driven by the partition <i>reading</i> Healthy rather
+    /// than by the recovery edge, so a backlog larger than one batch
+    /// drains across consecutive ticks instead of waiting for the next
+    /// saturation cycle.
+    /// </para>
+    /// </summary>
+    public int WalSaturationRecoveryReleaseBatch { get; set; } = DefaultWalSaturationRecoveryReleaseBatch;
+
+    /// <summary>
+    /// Default value for <see cref="WalSaturationRecoveryReleaseBatch"/>
+    /// (16, matching <see cref="DefaultWalMaxPendingBatches"/>).
+    /// </summary>
+    public const int DefaultWalSaturationRecoveryReleaseBatch = 16;
+
+    /// <summary>
     /// Optional per-flush latency threshold that, when crossed for
     /// <see cref="WalSaturationFlushLatencySampleWindows"/> consecutive
     /// sampler ticks, escalates the affected tree to

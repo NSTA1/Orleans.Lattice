@@ -245,6 +245,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op). |
 | `BENCH_SATURATION_THROTTLED_RATIO` | `LatticeOptions.DefaultWalSaturationThrottledRatio` (0.75) | Admission-depth ratio at/above which the tree raises Throttled. Range [0.0, 1.0]; lower = earlier throttle. |
 | `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` | `LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold` (1) | Min dispatch-timeout trips per window that raise Saturated regardless of depth. |
+| `BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH` | `LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch` (16) | Parked WAL-admission waiters a recovered partition admits per sampler tick. `0` releases the whole parked herd at once (pre-#3402 behaviour) - the control arm for the #3402 comparison. |
 | `BENCH_THROTTLED_LINE_DELAY_MICROS` | library default (1000 = 1 ms) | Per-line delay applied while Throttled, slowing the TCP reader so the producer's socket blocks and the admission gate drains. `0` = no delay. |
 | `BENCH_WAL_APPEND_DISPATCH_TIMEOUT_SEC` | `LatticeOptions.DefaultWalAppendDispatchTimeout` | WAL append dispatch timeout override. |
 

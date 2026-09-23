@@ -48,6 +48,7 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalSaturationDispatchTimeoutThreshold", o => o.WalSaturationDispatchTimeoutThreshold = 0);
         yield return Case("WalSaturationProviderFailureRateThreshold", o => o.WalSaturationProviderFailureRateThreshold = -1);
         yield return Case("WalSaturationRecoveryWindow", o => o.WalSaturationRecoveryWindow = NegOne);
+        yield return Case("WalSaturationRecoveryReleaseBatch", o => o.WalSaturationRecoveryReleaseBatch = -1);
         yield return Case("WalSaturationFlushLatencyThreshold", o => o.WalSaturationFlushLatencyThreshold = TimeSpan.Zero);
         yield return Case("WalSaturationFlushLatencySampleWindows", o => o.WalSaturationFlushLatencySampleWindows = 0);
         yield return Case("WalSaturationMaterialiserLagThreshold", o => o.WalSaturationMaterialiserLagThreshold = TimeSpan.Zero);

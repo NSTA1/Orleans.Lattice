@@ -159,6 +159,144 @@ public class WalSaturationSignalTests
         Assert.That(waits.All(w => w.IsCompletedSuccessfully), Is.True);
     }
 
+    // ---- (#3402) Paced recovery release -------------------------------
+    // A recovered partition used to complete every parked waiter in one
+    // pass. Once the parked population exceeds the admission pipeline's
+    // capacity the released herd re-saturates the partition immediately,
+    // so the signal never sustains Healthy and no caller makes progress.
+    // These cover the pacing and, critically, that pacing does not strand
+    // the residue.
+
+    /// <summary>
+    /// Parks more waiters than the release batch and asserts a single
+    /// Healthy observation hands out exactly the batch size, leaving the
+    /// remainder parked rather than releasing the whole herd at once.
+    /// </summary>
+    [Test]
+    public void UpdatePartitionState_releases_at_most_the_configured_batch()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        signal.UpdatePartitionState("tree-herd", 0, WalSaturationState.Saturated);
+
+        var waits = Enumerable.Range(0, 5)
+            .Select(_ => signal.WaitForHealthyAsync("tree-herd", 0))
+            .ToArray();
+        Assert.That(waits.Count(w => w.IsCompleted), Is.EqualTo(0), "all five must park while Saturated");
+
+        signal.UpdatePartitionState("tree-herd", 0, WalSaturationState.Healthy, releaseBatch: 2);
+
+        Assert.That(waits.Count(w => w.IsCompleted), Is.EqualTo(2),
+            "exactly the release batch may be admitted by one tick; releasing the whole herd is the #3402 defect");
+    }
+
+    /// <summary>
+    /// The no-stranding guarantee. The residue left by a paced release is
+    /// drained by later ticks that observe the partition still reading
+    /// Healthy - there is no second Saturated to Healthy edge to wait for,
+    /// so an edge-triggered release would park the remainder until the next
+    /// saturation cycle.
+    /// </summary>
+    [Test]
+    public async Task UpdatePartitionState_drains_the_residue_on_later_healthy_ticks()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        signal.UpdatePartitionState("tree-drain", 0, WalSaturationState.Saturated);
+
+        var waits = Enumerable.Range(0, 5)
+            .Select(_ => signal.WaitForHealthyAsync("tree-drain", 0))
+            .ToArray();
+
+        signal.UpdatePartitionState("tree-drain", 0, WalSaturationState.Healthy, releaseBatch: 2);
+        Assert.That(waits.Count(w => w.IsCompleted), Is.EqualTo(2));
+
+        // Already Healthy: no transition occurs, so this only releases
+        // more waiters if the release is level-triggered.
+        signal.UpdatePartitionState("tree-drain", 0, WalSaturationState.Healthy, releaseBatch: 2);
+        Assert.That(waits.Count(w => w.IsCompleted), Is.EqualTo(4),
+            "a steady-state Healthy tick must keep draining the residue, not wait for the next saturation cycle");
+
+        signal.UpdatePartitionState("tree-drain", 0, WalSaturationState.Healthy, releaseBatch: 2);
+        await Task.WhenAll(waits).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.That(waits.All(w => w.IsCompletedSuccessfully), Is.True);
+    }
+
+    /// <summary>
+    /// Oldest-first release, so pacing cannot starve the callers that have
+    /// waited longest and are closest to exhausting their wait budget.
+    /// </summary>
+    [Test]
+    public void UpdatePartitionState_releases_oldest_waiters_first()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        signal.UpdatePartitionState("tree-fifo", 0, WalSaturationState.Saturated);
+
+        var first = signal.WaitForHealthyAsync("tree-fifo", 0);
+        var second = signal.WaitForHealthyAsync("tree-fifo", 0);
+        var third = signal.WaitForHealthyAsync("tree-fifo", 0);
+
+        signal.UpdatePartitionState("tree-fifo", 0, WalSaturationState.Healthy, releaseBatch: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.IsCompleted, Is.True, "the longest-parked caller is released first");
+            Assert.That(second.IsCompleted, Is.False);
+            Assert.That(third.IsCompleted, Is.False);
+        });
+    }
+
+    /// <summary>
+    /// Zero is the documented escape hatch and must restore the pre-#3402
+    /// release-everything behaviour.
+    /// </summary>
+    [Test]
+    public async Task UpdatePartitionState_with_zero_batch_releases_every_waiter()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        signal.UpdatePartitionState("tree-all", 0, WalSaturationState.Saturated);
+
+        var waits = Enumerable.Range(0, 6)
+            .Select(_ => signal.WaitForHealthyAsync("tree-all", 0))
+            .ToArray();
+
+        signal.UpdatePartitionState("tree-all", 0, WalSaturationState.Healthy, releaseBatch: 0);
+
+        await Task.WhenAll(waits).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.That(waits.All(w => w.IsCompletedSuccessfully), Is.True);
+    }
+
+    /// <summary>
+    /// Pacing is per partition: draining one partition's backlog must not
+    /// consume another partition's release quota or complete its waiters.
+    /// </summary>
+    [Test]
+    public void UpdatePartitionState_paces_each_partition_independently()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        signal.UpdatePartitionState("tree-iso", 0, WalSaturationState.Saturated);
+        signal.UpdatePartitionState("tree-iso", 1, WalSaturationState.Saturated);
+
+        var p0 = Enumerable.Range(0, 3)
+            .Select(_ => signal.WaitForHealthyAsync("tree-iso", 0))
+            .ToArray();
+        var p1 = Enumerable.Range(0, 3)
+            .Select(_ => signal.WaitForHealthyAsync("tree-iso", 1))
+            .ToArray();
+
+        signal.UpdatePartitionState("tree-iso", 0, WalSaturationState.Healthy, releaseBatch: 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(p0.Count(w => w.IsCompleted), Is.EqualTo(2));
+            Assert.That(p1.Any(w => w.IsCompleted), Is.False,
+                "recovering partition 0 must not complete a wait registered against partition 1");
+        });
+    }
+
     [Test]
     public void WaitForHealthyAsync_for_different_trees_is_independent()
     {

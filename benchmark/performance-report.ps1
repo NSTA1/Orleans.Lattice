@@ -210,6 +210,10 @@ param(
 	# 0 cannot double as the inherit sentinel here because, unlike the two
 	# budgets above, 0 is itself a meaningful value for this option.
 	[int] $WalAppendCoalescingInFlightThreshold = -1,
+	# (#3402) Layer 3 only. Paced release of parked WAL-admission waiters on
+	# partition recovery. -1 inherits the shipping library default; 0 is the
+	# control arm reproducing the pre-#3402 release-the-whole-herd behaviour.
+	[int] $WalSaturationRecoveryReleaseBatch = -1,
 
 	[string] $NamePrefix,
 	[string] $ParametersFile
@@ -1249,6 +1253,7 @@ function Invoke-Layer3Cohorts {
 		[int] $SetManyFanOutBudgetSec = 30,
 		[int] $WalAdmissionCallBudgetSec = 15,
 		[int] $WalAppendCoalescingInFlightThreshold = -1,
+		[int] $WalSaturationRecoveryReleaseBatch = -1,
 		[scriptblock] $OnCellComplete
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
@@ -1309,6 +1314,7 @@ function Invoke-Layer3Cohorts {
 						-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
 						-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 						-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
+						-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
 						-CohortTag        $cohortTag | Out-Host
 				} catch {
 					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -2680,6 +2686,7 @@ function Main {
 				-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
+				-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
 				-OnCellComplete $checkpoint
 
 			$l3State.layer3.cohorts = $l3Cells

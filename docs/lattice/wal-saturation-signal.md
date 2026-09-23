@@ -38,6 +38,18 @@ Two sentinels disable or invert the upgrade:
 - `WalSaturationRecoveryWindow = TimeSpan.Zero`: the upgrade is disabled entirely. The classifier behaves the way the sampler shipped originally - the per-tick depth observation drives the regime directly. Use this when the workload's WAL drain pattern is non-bursty (single-partition trees, or workloads where every partition tracks closely in lockstep) and the upgrade introduces no benefit.
 - `WalSaturationRecoveryWindow = Timeout.InfiniteTimeSpan`: the upgrade is sticky. Once `Saturated` has been observed, every subsequent `Healthy`-classified tick is upgraded to `Throttled` forever. Useful for tests that want a deterministic sticky-Throttled floor without arming wall-clock dependencies, and for defensive production deployments that prefer the saturation regime to be sticky.
 
+### Paced recovery release
+
+Recovery is not only a question of *when* a partition is declared `Healthy` but of *how many* parked callers that declaration admits. `WaitForHealthyAsync` parks one waiter per blocked WAL dispatch, and releasing all of them on a single recovery is self-defeating once the parked population exceeds the partition's admission capacity (`WalMaxPendingBatches`): the released herd refills the pipeline to its cap before any meaningful drain, the classifier flips straight back to `Saturated`, and the cycle repeats. Callers observe recovery after recovery while no caller makes progress, each losing a full `WalAdmissionSaturationWaitBudget` per cycle while holding a concurrency slot. The gate stops being a back-pressure valve and becomes an absorbing state.
+
+`WalSaturationRecoveryReleaseBatch` (default `16`) bounds that burst: a recovered partition admits at most this many parked waiters per sampler tick. Three properties make the pacing safe:
+
+- **Oldest-first.** The longest-parked callers are released first, so metering cannot starve the callers closest to exhausting their wait budget.
+- **Level-triggered.** Every tick that observes the partition `Healthy` releases a further batch, not just the tick that observes the `Saturated -> Healthy` transition. The residue therefore drains on subsequent ticks; an edge-triggered release would strand everything past the first batch until the next saturation episode, which is a worse failure than the herd it replaces.
+- **Per partition.** Each partition meters its own backlog, so draining one does not consume another's quota.
+
+The default equals `WalMaxPendingBatches`, admitting exactly one pipeline-fill per tick - about 80 admissions per second per partition at the default 200 ms sample interval. Set it to `0` to release every parked waiter at once (the original behaviour).
+
 ### Flush-latency classifier input (opt-in)
 
 The first three Saturated inputs (admission depth at cap, dispatch-timeout trips, provider-failure trips) all require the WAL writer to have *already* shed work: callers parked on the admission semaphore, dispatch tasks tripped on their per-shard timeout, or the storage provider returned an error. The classifier therefore has a **small-batch blind spot** - a workload whose every flush calls into the provider just *slowly* (provider getting close to capacity, but not yet erroring or throttling enough to back up admission depth) can sail past all three inputs and never register as `Saturated`, even when steady-state flush latency has crept up by an order of magnitude.
