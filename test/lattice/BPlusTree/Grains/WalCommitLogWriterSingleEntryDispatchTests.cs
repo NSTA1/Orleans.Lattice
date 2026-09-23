@@ -165,13 +165,15 @@ public class WalCommitLogWriterSingleEntryDispatchTests
     }
 
     [Test]
-    public void DefaultWalBatchedSingleEntryAppends_is_false_and_is_the_option_default()
+    public void DefaultWalBatchedSingleEntryAppends_is_true_and_is_the_option_default()
     {
-        // Guards the "off by default" decision: enabling it broadens an
-        // existing race between an append and the exclusive reader methods
-        // that report a shard's next sequence and live entry count, so the
-        // default is deliberate and a flip must be argued separately.
-        Assert.That(LatticeOptions.DefaultWalBatchedSingleEntryAppends, Is.False);
-        Assert.That(new LatticeOptions().WalBatchedSingleEntryAppends, Is.False);
+        // The default is on because the exclusive turn it gives up conferred
+        // no read guarantee: the two in-memory readers contain no await, so
+        // they have no yield point Orleans could interleave them at, and the
+        // one that does await disclaims snapshot consistency in its own
+        // contract. WalShardGrainSingleEntryAppendInterleaveTests enforces
+        // that structurally rather than restating it in prose here.
+        Assert.That(LatticeOptions.DefaultWalBatchedSingleEntryAppends, Is.True);
+        Assert.That(new LatticeOptions().WalBatchedSingleEntryAppends, Is.True);
     }
 }

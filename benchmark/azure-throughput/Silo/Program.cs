@@ -70,13 +70,13 @@
 //                           through the interleaving batched grain method rather
 //                           than the exclusive-turn singular overload (defaults
 //                           to LatticeOptions.DefaultWalBatchedSingleEntryAppends,
-//                           i.e. false / historical behaviour). Under a wide
+//                           i.e. true / the batched path). Under a wide
 //                           fan-out the per-leaf slice is one entry, so the
 //                           exclusive turn holds the partition for a whole
 //                           provider round trip and pins batch occupancy at 1,
 //                           which also makes the coalescing threshold above
-//                           unreachable. Set to 1 for the fix arm of the #3408
-//                           A/B; leave unset for the control arm.
+//                           unreachable. Set to 0 for the control arm of the
+//                           #3408 A/B; leave unset for the fix arm.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench

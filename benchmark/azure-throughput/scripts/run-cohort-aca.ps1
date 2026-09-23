@@ -181,6 +181,21 @@ param(
 	# links to and makes the aggregation depend on parsing each log before
 	# the next run clobbers it.
 	[string] $CohortTag,
+	# Per-cohort WAL table. Successive cohorts on one deployment otherwise
+	# share the single default table and accumulate every prior cohort's
+	# rows. Measured effect (#3348, 8-silo set-many): with the shared table,
+	# arms produced bursts of 409 EntityAlreadyExists transaction failures
+	# (0 / 95 / 153 / 0 across four successive cohorts) that correlated with
+	# nothing under test and swamped the comparison; with a distinct table
+	# per cohort the same four-arm sweep produced zero. Rotating BENCH_TREE_ID
+	# keeps cohorts logically isolated but does not stop the table growing,
+	# so set this per cohort whenever arms are to be compared.
+	#
+	# It does NOT fix the separate, unexplained decay in absolute throughput
+	# across successive cohorts on one deployment (first cohort ~329 ops/s,
+	# ninth ~17-45 regardless of table). Treat only the first cohort after a
+	# deployment as a trustworthy absolute number.
+	[string] $WalTable = "OrleansLatticeWal",
 	# (#3348) The two saturation budgets the rig deliberately sets rather than
 	# inheriting. Both default to Timeout.InfiniteTimeSpan in the library so
 	# the bounds are opt-in on the released 9.x line (#3386, #3390), and both
@@ -264,6 +279,7 @@ Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleC
 # producer performs the single reshard instead.
 $siloEnv = @(
 	"BENCH_TREE_ID=$TreeId",
+	"BENCH_WAL_TABLE=$WalTable",
 	"BENCH_WORKLOAD_MODE=$WorkloadMode",
 	"BENCH_BATCH_SIZE=$BatchSize",
 	"BENCH_FLUSH_MS=$FlushMs",
