@@ -1056,15 +1056,29 @@ public partial class BPlusLeafGrainTests
     /// The instrument's own <c>description</c> must name every armed arm, and any
     /// arity claim it makes must match the armed count.
     /// <para>
-    /// <b>This closes a SCOPE gap, not a regex gap, and the distinction is the
-    /// point.</b> <c>MetricDocArmArityTests</c> is the arity guard for this
-    /// repository, but it scans exactly two paths -
-    /// <c>docs/lattice/metrics.md</c> and
-    /// <c>docs/lattice.dashboards/metrics-to-panel-map.md</c>. <c>LatticeMetrics.cs</c>
-    /// is outside its range entirely, so the <c>description:</c> string could -
-    /// and did - keep asserting "All five arms are zero-primed" for a seven-arm
-    /// instrument while both documentation files were correct and the build was
-    /// green.
+    /// <b>This closed a SCOPE gap, not a regex gap, and the distinction is the
+    /// point.</b> When this test was written for issue #3194,
+    /// <c>MetricDocArmArityTests</c> - the arity guard for this repository -
+    /// scanned exactly two paths, <c>docs/lattice/metrics.md</c> and
+    /// <c>docs/lattice.dashboards/metrics-to-panel-map.md</c>.
+    /// <c>LatticeMetrics.cs</c> was outside its range entirely, so the
+    /// <c>description:</c> string could - and did - keep asserting "All five arms
+    /// are zero-primed" for a seven-arm instrument while both documentation files
+    /// were correct and the build was green.
+    /// </para>
+    /// <para>
+    /// <b>That repository-wide gap is now closed</b>: issue #3202 extended
+    /// <c>MetricDocArmArityTests</c> to reflect over every live
+    /// <c>Instrument.Description</c>, so a stale arity claim in any published
+    /// description reddens there too. This test is therefore no longer the only
+    /// thing standing between this description and a silent drift - but it is not
+    /// redundant, and deleting it would lose real coverage. The repository-wide
+    /// gate decides a claim against a TAG DOMAIN, so it can only check counts a
+    /// tag's armed value set already expresses. The two further claims below are
+    /// not of that shape: the terminal arity is the armed set MINUS the lifecycle
+    /// arms, and the ordinal claim is a position within the armed set. Neither is
+    /// any tag's cardinality, so neither is derivable from a tag domain and both
+    /// are checkable only here, beside the array they are about.
     /// </para>
     /// <para>
     /// That surface is not a derivative. A counter's description is published as
@@ -1146,8 +1160,19 @@ public partial class BPlusLeafGrainTests
             // a claim that reddens in one place while retaining its authority
             // everywhere the guard does not look. Add an eighth arm and all
             // three must redden together.
+            //
+            // The noun on the first claim is optionally tag-named ("seven
+            // outcome arms" as well as "seven arms") because issue #3202 now
+            // REQUIRES the tag-named form repository-wide: a bare "all N arms"
+            // is unpinned, so that gate's resolver would accept it from
+            // whichever tag happened to have N values and the claim could never
+            // fail. The group stays non-capturing so Groups[1] is still the
+            // numeral. Accepting both keeps this guard's concern the COUNT and
+            // leaves the pinning to #3202's gate, so a drift in either
+            // direction reddens the guard that owns it rather than both or
+            // neither.
             AssertArityClaim(
-                description!, @"\bAll (three|four|five|six|seven|eight|nine|ten) arms\b",
+                description!, @"\bAll (three|four|five|six|seven|eight|nine|ten) (?:outcome )?arms\b",
                 counts, armed.Length, "zero-priming (the whole armed set)");
 
             AssertArityClaim(
