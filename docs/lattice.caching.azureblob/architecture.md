@@ -28,7 +28,7 @@ The container is created on first use behind a one-shot async gate (`EnsureConta
 ## Concurrency and failure semantics
 
 - **Writes** are last-writer-wins blob uploads; there is no read-modify-write race because `Set` replaces the whole blob.
-- **Sliding renewals and expired-entry deletes are best-effort.** A `RequestFailedException` from a concurrent delete or rewrite is swallowed: a lost slide only shortens a window (never corrupts the value), and a failed delete is harmless because the entry already read as a miss.
+- **Sliding renewals and expired-entry deletes are best-effort and conditional.** Each is sent with `If-Match` on the ETag of the version the read observed, so a concurrent `Set` that replaced the blob in between wins: the renewal cannot stamp the old entry's expiry onto the new value, and the eviction cannot delete the fresh entry. The resulting `412`, like any `RequestFailedException` from a concurrent delete, is swallowed: a lost slide only shortens a window (never corrupts the value), and a failed delete is harmless because the entry already read as a miss.
 - **404s are misses.** A missing blob on `Get`/`Refresh`/`Remove` is treated as an absent entry, not an error.
 
 ## How it attaches

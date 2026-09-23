@@ -72,4 +72,22 @@ internal static class WalMoveResumeCore
     /// <returns><see langword="true"/> when the target trim floor must be reserved first.</returns>
     public static bool NeedsFloorReserve(long dstHighestBefore, long srcLowest)
         => dstHighestBefore < srcLowest - 1 && srcLowest > 0;
+
+    /// <summary>
+    /// Whether the target actually holds every offset <see cref="ResumeCursor"/>
+    /// will resume past. <c>GetHighestOffsetAsync</c> is a monotonic high-water
+    /// mark that survives a trim, so a target that was trimmed after an earlier
+    /// placement (for example a reclaimed former source) can report a highest
+    /// offset inside the source's retained range while holding none of it.
+    /// Resuming past that mark would skip those offsets and leave a gap.
+    /// </summary>
+    /// <param name="dstHighestBefore">The target partition's high-water mark, or <c>-1</c> when it has never held an entry.</param>
+    /// <param name="dstLowestBefore">The target partition's lowest live offset, or <c>-1</c> when it holds none.</param>
+    /// <param name="srcLowest">The source partition's lowest retained offset.</param>
+    /// <returns>
+    /// <see langword="true"/> when the target's mark sits below the source's
+    /// retained range, or its live entries reach down to <paramref name="srcLowest"/>.
+    /// </returns>
+    public static bool TargetHoldsResumedPrefix(long dstHighestBefore, long dstLowestBefore, long srcLowest)
+        => dstHighestBefore < srcLowest || (dstLowestBefore >= 0 && dstLowestBefore <= srcLowest);
 }

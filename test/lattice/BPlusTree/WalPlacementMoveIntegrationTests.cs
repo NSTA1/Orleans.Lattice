@@ -173,6 +173,51 @@ public sealed class WalPlacementMoveIntegrationTests
     }
 
     [Test]
+    public async Task ExecuteWalMove_back_onto_a_reclaimed_source_is_refused_rather_than_skipping_its_range()
+    {
+        var treeId = $"move-reclaimed-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+        var routing = await tree.GetRoutingAsync();
+        var physical = routing.PhysicalTreeId;
+
+        await WriteKeysAsync(tree, "k", 5);
+        var reclaimedMark = await WaitForHighestAsync(WalMoveProviders.Baseline, physical, 0, 0);
+
+        var forward = await Admin.ExecuteWalMoveAsync(treeId, 0, "secondary");
+        Assert.That(forward.Outcome, Is.EqualTo(WalMoveOutcome.Moved));
+
+        var reclaim = await Admin.ReclaimMovedWalSourceAsync(treeId, 0, IWalStorageProviderCatalog.DefaultProviderKey);
+        var reclaimAgain = await Admin.ReclaimMovedWalSourceAsync(treeId, 0, IWalStorageProviderCatalog.DefaultProviderKey);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reclaim.Outcome, Is.EqualTo(WalMoveOutcome.SourceReclaimed));
+            Assert.That(reclaimAgain.Outcome, Is.EqualTo(WalMoveOutcome.NoOp),
+                "the reclaimed source holds nothing, even though its high-water mark survives the trim");
+        });
+
+        // The secondary still retains the whole range from offset 0, while the
+        // reclaimed baseline reports high-water mark `reclaimedMark` and holds
+        // none of it. Resuming the copy past that mark would drop 0..reclaimedMark.
+        var secondaryLowest = await WalMoveProviders.Secondary.GetLowestOffsetAsync(physical, 0, CancellationToken.None);
+        Assert.That(secondaryLowest, Is.LessThanOrEqualTo(reclaimedMark),
+            "precondition: the move back must overlap the reclaimed range, or this test proves nothing");
+
+        Assert.That(
+            async () => await Admin.ExecuteWalMoveAsync(treeId, 0, IWalStorageProviderCatalog.DefaultProviderKey),
+            Throws.InstanceOf<InvalidOperationException>().With.Message.Contains("no longer holds"));
+
+        var placement = await Admin.GetWalPlacementAsync(treeId);
+        Assert.That(placement.Partitions[0].ProviderKey, Is.EqualTo("secondary"),
+            "a refused move must leave the partition on its current provider");
+        var baselineLowest = await WalMoveProviders.Baseline.GetLowestOffsetAsync(physical, 0, CancellationToken.None);
+        Assert.That(baselineLowest, Is.EqualTo(-1), "the refused move must not have appended a partial tail");
+
+        var value = await tree.GetAsync("k-0");
+        Assert.That(value, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(value!), Is.EqualTo("value-k-0"));
+    }
+
+    [Test]
     public async Task ExecuteWalMove_to_unregistered_provider_fails_closed()
     {
         var treeId = $"move-bad-{Guid.NewGuid():N}";
