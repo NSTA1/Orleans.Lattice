@@ -346,6 +346,11 @@ internal sealed class WalCommitLogWriter(
     /// <param name="treeId">Tree id whose saturation signal to consult.</param>
     /// <param name="partition">Writer partition (for metric and exception attribution).</param>
     /// <param name="budget">Budget to wait on <c>WaitForHealthyAsync</c> before refusing.</param>
+    /// <param name="callBudget">Per-top-level-call share of gate waiting.</param>
+    /// <param name="acuteOnly">(#3348) <see cref="LatticeOptions.WalSaturationAcuteOnly"/>:
+    /// when set, a parked caller resumes as soon as the partition leaves
+    /// Saturated - the same condition a fresh caller passes the gate on - rather
+    /// than waiting for Healthy.</param>
     /// <param name="cancellationToken">Caller-supplied cancellation.</param>
     /// <param name="drainToken">Writer-supplied drain token.</param>
     private async ValueTask GateOnSaturationAsync(
@@ -353,6 +358,7 @@ internal sealed class WalCommitLogWriter(
         int partition,
         TimeSpan budget,
         TimeSpan callBudget,
+        bool acuteOnly,
         CancellationToken cancellationToken,
         CancellationToken drainToken)
     {
@@ -398,7 +404,7 @@ internal sealed class WalCommitLogWriter(
                 }
                 try
                 {
-                    await WaitForGateHealthyAsync(treeId, partition, linkedCts.Token);
+                    await WaitForGateHealthyAsync(treeId, partition, acuteOnly, linkedCts.Token);
                     // Recovery observed within the budget; the caller
                     // proceeds into the admission semaphore as normal.
                     return;
@@ -519,9 +525,18 @@ internal sealed class WalCommitLogWriter(
     /// partition-scoped-when-available, tree-scoped-otherwise
     /// resolution.
     /// </summary>
-    private Task WaitForGateHealthyAsync(string treeId, int partition, CancellationToken cancellationToken)
+    /// <remarks>
+    /// (#3348) With <paramref name="untilNotSaturated"/> set the
+    /// partition-scoped wait resumes once the partition leaves Saturated. The
+    /// tree-scoped fallback keeps its Healthy condition regardless: it is the
+    /// fail-closed shape for a signal that cannot answer per partition, and a
+    /// foreign implementation offers no weaker wait to relax it to.
+    /// </remarks>
+    private Task WaitForGateHealthyAsync(string treeId, int partition, bool untilNotSaturated, CancellationToken cancellationToken)
         => _partitionSaturationSignal is { } partitionSignal
-            ? partitionSignal.WaitForHealthyAsync(treeId, partition, cancellationToken)
+            ? (untilNotSaturated
+                ? partitionSignal.WaitForNotSaturatedAsync(treeId, partition, cancellationToken)
+                : partitionSignal.WaitForHealthyAsync(treeId, partition, cancellationToken))
             : saturationSignal!.WaitForHealthyAsync(treeId, cancellationToken);
 
     /// <summary>
@@ -685,7 +700,7 @@ internal sealed class WalCommitLogWriter(
         // of parking on the admission semaphore for
         // WalAppendDispatchTimeout. No-op when no signal is registered
         // or the budget is Zero.
-        await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, cancellationToken, _drainCts.Token);
+        await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
 
         // Local-path Throttled pacing. Gives the drain-lag back-pressure
         // teeth on the single-silo write path by applying a bounded
@@ -1057,7 +1072,7 @@ internal sealed class WalCommitLogWriter(
 
         // Pre-admission saturation gate (batched path).
         // Same shape as the single-entry overload above.
-        await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, cancellationToken, _drainCts.Token);
+        await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
 
         // Local-path Throttled pacing (batched path); same shape as the
         // single-entry overload above.

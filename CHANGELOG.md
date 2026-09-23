@@ -68,6 +68,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Saturation recovery released every parked caller at once.** A recovered partition completed its whole parked population in one pass, which re-saturated it before any drain and left the gate flapping with no net progress. Release is now paced, oldest-first, and level-triggered. ([#3402](https://github.com/NSTA1/Orleans.Lattice/issues/3402)) (`Orleans.Lattice`)
 
+- **WAL - A partition at its admission cap closed the saturation gate.** Opt-in `LatticeOptions.WalSaturationAcuteOnly` classifies an at-cap partition Throttled rather than Saturated, and a caller parked at the gate resumes once its partition leaves Saturated instead of waiting for Healthy. ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348)) (`Orleans.Lattice`)
+
 - **Docs - Link check reported a count it never read.** docfx colours its summary line on CI, defeating the anchored pattern parsing it, so the count kept its `0` default and `-MaxWarnings 0` passed while two broken anchors shipped. It now reads stripped output, and an unreadable count fails. ([#3406](https://github.com/NSTA1/Orleans.Lattice/issues/3406)) (`repository-wide`)
 
 - **WAL - In-memory provider reused offsets after a full trim.** `InMemoryWalStorageProvider` restarted allocation at `0` once a trim removed every live entry. It keeps no durable state, so offsets were reused rather than data lost. `IWalStorageProvider` now states the high-water-mark contract. ([#3401](https://github.com/NSTA1/Orleans.Lattice/issues/3401)) (`Orleans.Lattice`)

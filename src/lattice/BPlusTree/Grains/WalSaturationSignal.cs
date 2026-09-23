@@ -158,6 +158,15 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     private static string PartitionWaitKey(string treeId, int partition)
         => string.Create(CultureInfo.InvariantCulture, $"{treeId}\u0000{partition}");
 
+    /// <summary>
+    /// (#3348) Composes the <see cref="_waiters"/> key for a partition-scoped
+    /// "no longer Saturated" wait. Kept distinct from
+    /// <see cref="PartitionWaitKey"/> so releasing these waiters on a
+    /// Throttled tick never releases a caller that asked for Healthy.
+    /// </summary>
+    private static string PartitionNotSaturatedWaitKey(string treeId, int partition)
+        => string.Create(CultureInfo.InvariantCulture, $"{treeId}\u0000{partition}\u0000ns");
+
     /// <inheritdoc />
     public Task WaitForHealthyAsync(string treeId, CancellationToken cancellationToken = default)
     {
@@ -188,13 +197,30 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
         return WaitCoreAsync(PartitionWaitKey(treeId, partition), treeId, partition, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task WaitForNotSaturatedAsync(string treeId, int partition, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (GetCurrentState(treeId, partition) != WalSaturationState.Saturated)
+        {
+            return Task.CompletedTask;
+        }
+
+        return WaitCoreAsync(PartitionNotSaturatedWaitKey(treeId, partition), treeId, partition, cancellationToken, untilNotSaturated: true);
+    }
+
     /// <summary>
     /// Shared slow path for both wait overloads. <paramref name="waitKey"/>
     /// is the <see cref="_waiters"/> bucket to register against;
     /// <paramref name="partition"/> is negative for a tree-scoped wait
     /// and selects which state probe the in-lock re-check uses.
+    /// <paramref name="untilNotSaturated"/> relaxes that re-check from
+    /// "Healthy" to "not Saturated", matching the release condition of the
+    /// bucket it registers against.
     /// </summary>
-    private Task WaitCoreAsync(string waitKey, string treeId, int partition, CancellationToken cancellationToken)
+    private Task WaitCoreAsync(string waitKey, string treeId, int partition, CancellationToken cancellationToken, bool untilNotSaturated = false)
     {
         // Slow path: allocate a TCS + WaiterEntry, register them, and
         // arm a cancellation hook that faults the TCS with
@@ -213,7 +239,8 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
             var current = partition < 0
                 ? GetCurrentState(treeId)
                 : GetCurrentState(treeId, partition);
-            if (current == WalSaturationState.Healthy)
+            if (current == WalSaturationState.Healthy
+                || (untilNotSaturated && current != WalSaturationState.Saturated))
             {
                 return Task.CompletedTask;
             }
@@ -337,6 +364,17 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
         if (newState == WalSaturationState.Healthy)
         {
             CompleteWaiters(PartitionWaitKey(treeId, partition), releaseBatch);
+        }
+
+        // (#3348) Level-triggered for the same reason. These waiters asked
+        // only for the partition to leave Saturated, so a Throttled tick -
+        // including the recovery window's hysteresis - releases them too.
+        // The bucket is empty unless WalSaturationAcuteOnly is set, so the
+        // default configuration pays one dictionary miss per partition per
+        // non-Saturated tick.
+        if (newState != WalSaturationState.Saturated)
+        {
+            CompleteWaiters(PartitionNotSaturatedWaitKey(treeId, partition), releaseBatch);
         }
 
         return previous;
