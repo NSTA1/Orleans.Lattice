@@ -1191,23 +1191,30 @@ internal sealed partial class BPlusLeafGrain(
         // batched commit path falls back to BaseIndex + bucketLocal,
         // matching the foreground non-saga shape.
         //
-        // Only an in-progress split keeps the per-key fallback path:
-        // the split recovery in SetCoreAsync forwards mid-batch entries
-        // across two grains and we keep that path serialized. An active
-        // post-merge observer also routes per key: the batched commit path
-        // (CommitSetManyAsync) does not invoke the observer, so falling back to
-        // the per-key SetAsync loop keeps every LWW write observable. Zero-cost
-        // when inactive (cached flag) - the batched fast path is unchanged on
-        // the default null-observer path.
-        // A batch carrying a key outside this leaf's declared range also routes
-        // per key: CommitSetManyAsync commits wholesale with no per-key
-        // admission step, so only the per-key loop (which forwards inside
-        // SetCoreAsync) can place each entry on the leaf that declares it. The
-        // scan is skipped entirely on a leaf with no declared bounds, which is
+        // An in-progress split, an active post-merge observer, or a key
+        // outside this leaf's declared range each rule out the wholesale
+        // CommitSetManyAsync commit: the split must complete first so each
+        // entry lands on the leaf that will own it, the batched commit does
+        // not invoke the observer, and CommitSetManyAsync has no per-key
+        // admission step. A foreground batch then goes through
+        // SetManyAdmittingSpanAsync, which completes the split once, forwards
+        // each out-of-span group as one batch, and commits the rest in one
+        // append (#3348). Saga-prepared, atomic-batch, and observer writes keep
+        // the per-key SetAsync loop, whose per-key semantics their suites
+        // prove. The observer flag is cached and the span scan is skipped on a
+        // leaf with no declared bounds, so the fast path below is unchanged on
         // the common shape. See BPlusLeafGrain.SpanAdmission.cs.
-        var splitInProgress = HasInterruptedSplit;
-        if (splitInProgress || MergeObserverActive || ContainsOutOfSpanKey(entries))
+        if (HasInterruptedSplit || MergeObserverActive || ContainsOutOfSpanKey(entries))
         {
+            // (#3348) A foreground batch keeps its batched shape through a
+            // split or a span straddle: one WAL append for the in-span entries
+            // plus one forwarded SetMany per sibling, instead of a full serial
+            // WAL round trip per key. See SetManyAdmittingSpanAsync.
+            if (!MergeObserverActive && !LatticePreparedContext.Current && LatticeAtomicBatchContext.Current is null)
+            {
+                return await SetManyAdmittingSpanAsync(entries);
+            }
+
             SplitResult? lastSplit = null;
             foreach (var entry in entries)
             {
