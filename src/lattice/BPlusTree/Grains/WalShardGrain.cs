@@ -44,7 +44,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// against the provider is restored even when later concurrent flushes
 /// had already committed against now-orphaned offset windows.
 /// </para>
+/// <para>
+/// Pinned to random placement rather than the Orleans default
+/// (resource-optimised), for the burst-activation reason given on
+/// <see cref="ShardRootGrain"/>.
+/// </para>
 /// </summary>
+[Orleans.Placement.RandomPlacement]
 internal sealed partial class WalShardGrain(
     IGrainContext context,
     IOptionsMonitor<LatticeOptions> optionsMonitor,

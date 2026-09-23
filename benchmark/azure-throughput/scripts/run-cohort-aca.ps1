@@ -181,6 +181,21 @@ param(
 	# links to and makes the aggregation depend on parsing each log before
 	# the next run clobbers it.
 	[string] $CohortTag,
+	# Per-cohort WAL table. Successive cohorts on one deployment otherwise
+	# share the single default table and accumulate every prior cohort's
+	# rows. Measured effect (#3348, 8-silo set-many): with the shared table,
+	# arms produced bursts of 409 EntityAlreadyExists transaction failures
+	# (0 / 95 / 153 / 0 across four successive cohorts) that correlated with
+	# nothing under test and swamped the comparison; with a distinct table
+	# per cohort the same four-arm sweep produced zero. Rotating BENCH_TREE_ID
+	# keeps cohorts logically isolated but does not stop the table growing,
+	# so set this per cohort whenever arms are to be compared.
+	#
+	# It does NOT fix the separate, unexplained decay in absolute throughput
+	# across successive cohorts on one deployment (first cohort ~329 ops/s,
+	# ninth ~17-45 regardless of table). Treat only the first cohort after a
+	# deployment as a trustworthy absolute number.
+	[string] $WalTable = "OrleansLatticeWal",
 	# (#3348) The two saturation budgets the rig deliberately sets rather than
 	# inheriting. Both default to Timeout.InfiniteTimeSpan in the library so
 	# the bounds are opt-in on the released 9.x line (#3386, #3390), and both
@@ -209,11 +224,20 @@ param(
 	# This is the knob the #3396 arms differ in: -1/4 is the shipped
 	# behaviour, 0 is the control arm that reproduces pre-#3396 main.
 	[int] $WalAppendCoalescingInFlightThreshold = -1,
+
+	# Routes a one-entry bulk WAL append through the interleaving batched grain
+	# method instead of the exclusive-turn singular overload (#3408). -1 leaves
+	# the silo on its shipping default (off); 0 and 1 pin the control and fix
+	# arms explicitly so a cohort's arm is never implicit.
+	[int] $WalBatchedSingleEntryAppends = -1,
 	# (#3402) Paced release of parked WAL-admission waiters on partition
 	# recovery. 0 is MEANINGFUL here too - it is the pre-#3402 "release the
 	# whole parked herd in one pass" behaviour, which is the control arm -
 	# so -1 is the inherit sentinel meaning "do not set the env var".
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
+	# Extra silo env vars as "NAME=value" strings, appended last so they win.
+	# For one-off diagnostic arms that do not warrant a dedicated parameter.
+	[string[]] $ExtraSiloEnv = @(),
 	[int] $SettleSec = 30
 )
 
@@ -258,6 +282,7 @@ Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleC
 # producer performs the single reshard instead.
 $siloEnv = @(
 	"BENCH_TREE_ID=$TreeId",
+	"BENCH_WAL_TABLE=$WalTable",
 	"BENCH_WORKLOAD_MODE=$WorkloadMode",
 	"BENCH_BATCH_SIZE=$BatchSize",
 	"BENCH_FLUSH_MS=$FlushMs",
@@ -283,6 +308,11 @@ $siloEnv = @(
 	"BENCH_SET_MANY_FANOUT_BUDGET_SEC=$SetManyFanOutBudgetSec",
 	"BENCH_WAL_ADMISSION_CALL_BUDGET_SEC=$WalAdmissionCallBudgetSec",
 	"BENCH_CLUSTER_ID=$ClusterId",
+	# (#3348) Every silo holds its warm-up until its cluster manifest lists
+	# all $SiloCount silos. Ungated, the first silo to warm up did so while
+	# the cluster was still forming and pinned every shard root and WAL
+	# partition onto the first two silos to join, so an N=8 cell measured N=2.
+	"BENCH_EXPECTED_SILOS=$SiloCount",
 	'BENCH_SHARD_COUNT=0',
 	'BENCH_CLUSTERING=azuretable',
 	'BENCH_INGEST_MODE=cluster',
@@ -296,10 +326,19 @@ if ($WalAppendCoalescingInFlightThreshold -ge 0) {
 	$siloEnv += "BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=$WalAppendCoalescingInFlightThreshold"
 }
 
+if ($WalBatchedSingleEntryAppends -ge 0) {
+	$siloEnv += "BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS=$WalBatchedSingleEntryAppends"
+}
+
 # (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
 # pre-#3402 release-everything control arm.
 if ($WalSaturationRecoveryReleaseBatch -ge 0) {
 	$siloEnv += "BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH=$WalSaturationRecoveryReleaseBatch"
+}
+
+foreach ($kv in $ExtraSiloEnv) {
+	if ($kv -notmatch '^[A-Z0-9_]+=') { throw "ExtraSiloEnv entry '$kv' is not NAME=value." }
+	$siloEnv += $kv
 }
 
 $startedUtc = (Get-Date).ToUniversalTime()

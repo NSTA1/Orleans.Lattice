@@ -65,6 +65,18 @@
 //                           unconditional kick - use it as the control arm of a
 //                           sweep. The shipping default was chosen on the
 //                           fan-out arithmetic (#3396) and needs measuring.
+//   BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS
+//                           Routes a bulk WAL append carrying exactly one entry
+//                           through the interleaving batched grain method rather
+//                           than the exclusive-turn singular overload (defaults
+//                           to LatticeOptions.DefaultWalBatchedSingleEntryAppends,
+//                           i.e. true / the batched path). Under a wide
+//                           fan-out the per-leaf slice is one entry, so the
+//                           exclusive turn holds the partition for a whole
+//                           provider round trip and pins batch occupancy at 1,
+//                           which also makes the coalescing threshold above
+//                           unreachable. Set to 0 for the control arm of the
+//                           #3408 A/B; leave unset for the fix arm.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -113,6 +125,13 @@
 //                           attribute caller-visible append latency to
 //                           grain-side queueing vs storage-provider
 //                           commit time.
+//   BENCH_EXPECTED_SILOS    Silo count each silo waits for in its cluster manifest
+//                           before warming the tree up (default 0 = no gate). The
+//                           multi-silo rig sets it to the cohort's replica count so
+//                           warm-up cannot place the hot grains on a partial cluster
+//                           (#3348). BENCH_WARMUP_GATE_TIMEOUT_SEC (default 300)
+//                           bounds the wait; BENCH_WARMUP_GATE_SETTLE_SEC (default 5)
+//                           is the extra delay after the count is reached.
 //   BENCH_TOTAL_DURATION_SEC
 //                           Server-side watchdog. After this many seconds the silo
 //                           triggers a graceful host shutdown so the systemd unit
@@ -252,6 +271,7 @@ var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
+var walBatchedSingleEntryAppends = ReadBool("BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS", LatticeOptions.DefaultWalBatchedSingleEntryAppends);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
 // the shape the replay admission gate is sized to refuse, and refusing it here
 // is a measurement artefact rather than a finding.
@@ -521,7 +541,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -573,6 +593,17 @@ builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSa
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
 builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
+// (#3348) Hold warm-up until this silo's cluster manifest lists the cohort's
+// full silo count, so the hot grains it activates are placed across the whole
+// cluster rather than the first silos to join. 0 (the default) disables it.
+var expectedSilos = ReadInt("BENCH_EXPECTED_SILOS", 0);
+var warmUpGateTimeoutSec = ReadInt("BENCH_WARMUP_GATE_TIMEOUT_SEC", 300);
+var warmUpGateSettleSec = ReadIntAllowZero("BENCH_WARMUP_GATE_SETTLE_SEC", 5);
+builder.Services.AddSingleton(sp => new VehicleFleetSimulator.AzureThroughput.Silo.WarmUpMembershipGate(
+    sp.GetRequiredService<Orleans.Runtime.IClusterManifestProvider>(),
+    expectedSilos,
+    TimeSpan.FromSeconds(warmUpGateTimeoutSec),
+    TimeSpan.FromSeconds(warmUpGateSettleSec)));
 
 builder.UseOrleans(silo =>
 {
@@ -683,6 +714,23 @@ builder.UseOrleans(silo =>
     // partition can have multiple appends in flight against Azure
     // Tables (offset assignment is still serialised under the grain
     // turn; only the AppendBatchAsync RPCs overlap).
+    // F-086: the saturation sampler cadence and thresholds. These MUST be
+    // global: WalSaturationSampler reads every one of them from the unnamed
+    // options (Get(string.Empty)), so a per-tree assignment is silently
+    // ignored. Before this moved here every BENCH_SATURATION_* and
+    // BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH override ran on library
+    // defaults (#3348). 0 means "sampler disabled"; the library spells that
+    // InfiniteTimeSpan and rejects TimeSpan.Zero at options validation.
+    silo.ConfigureLattice(o =>
+    {
+        o.WalSaturationSampleInterval = saturationSampleMs == 0
+            ? Timeout.InfiniteTimeSpan
+            : TimeSpan.FromMilliseconds(saturationSampleMs);
+        o.WalSaturationThrottledRatio = saturationThrottledRatio;
+        o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
+        o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
+    });
+
     silo.ConfigureLattice(treeId, o =>
     {
         o.WalPartitions = walPartitions;
@@ -693,6 +741,11 @@ builder.UseOrleans(silo =>
         // vary it without a redeploy - the default itself was chosen on
         // the fan-out arithmetic and needs measuring, not asserting.
         o.WalAppendCoalescingInFlightThreshold = walAppendCoalescing;
+        // Routes a one-entry bulk append onto the interleaving batched
+        // grain method instead of the exclusive-turn singular one, so
+        // a wide fan-out of single-entry leaf slices stops serialising
+        // the partition behind one provider round trip (#3408).
+        o.WalBatchedSingleEntryAppends = walBatchedSingleEntryAppends;
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library
@@ -700,17 +753,6 @@ builder.UseOrleans(silo =>
         // read-your-own-digest-after-write invariant integration tests
         // pin); the bench has no such consumer.
         o.DigestCoalescingWindowMs = digestCoalescingMs;
-        // F-086: pin the F-085 saturation sampler cadence + thresholds
-        // for this tree. Defaults are the library shipping defaults so
-        // a cohort with no env-vars set reproduces the out-of-the-box
-        // behaviour exactly; the env-vars exist for per-cohort A/B
-        // sweeps. The signal is silo-scoped per F-085, so per-tree
-        // overrides here only affect the sampler's classification of
-        // *this* tree - aligned with the bench's single-tree topology.
-        o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(saturationSampleMs);
-        o.WalSaturationThrottledRatio = saturationThrottledRatio;
-        o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
-        o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
         // See the BENCH_WAL_REPLAY_QUEUE_DEPTH block above. Assigned
         // unconditionally because the default IS the library default, so
         // the single-silo path is byte-for-byte unchanged.
@@ -960,6 +1002,7 @@ static IPAddress ResolveContainerIPv4Address()
 internal sealed class TcpIngestService(
     IGrainFactory grainFactory,
     IngestSettings settings,
+    VehicleFleetSimulator.AzureThroughput.Silo.WarmUpMembershipGate warmUpGate,
     IHostApplicationLifetime lifetime,
     IWalSaturationSignal saturationSignal,
     BenchSaturationLogger saturationLogger,
@@ -1165,6 +1208,11 @@ internal sealed class TcpIngestService(
         // at 4 s totals ~25 s worst-case - comfortably under the rung
         // duration and matches the empirically-observed time for a
         // fresh silo's local client directory to converge.
+        // (#3348) Placement can only choose among the silos this silo's
+        // cluster manifest lists, and warm-up is what activates the hot
+        // grains. See WarmUpMembershipGate.
+        await warmUpGate.WaitAsync(stoppingToken).ConfigureAwait(false);
+
         const int MaxWarmUpAttempts = 12;
         const int MaxWarmUpBackoffMs = 6000;
         var warmUpAttempt = 0;

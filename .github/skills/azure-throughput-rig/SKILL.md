@@ -186,7 +186,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_STORAGE_URI` | - (required) | `https://{account}.table.core.windows.net` - WAL table endpoint for managed identity. |
 | `BENCH_STORAGE_CONN` | - | Connection-string fallback; overrides `BENCH_STORAGE_URI` when set. |
-| `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. |
+| `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. **Set this per cohort (`run-cohort-aca.ps1 -WalTable`) whenever arms are to be compared.** Cohorts sharing one table accumulate each other's rows and produce bursts of 409 `EntityAlreadyExists` failures uncorrelated with anything under test; a distinct table per cohort removes them. Rotating `BENCH_TREE_ID` isolates cohorts logically but does not stop the table growing. |
 | `BENCH_TREE_ID` | rotating `azure-throughput-<utc>` | Tree id. Rotates per silo restart so prior offsets don't bias the run; **pin it to re-use existing rows** (cross-run replay). |
 | `BENCH_TCP_PORT` | 7000 | Silo TCP listen port. |
 
@@ -213,6 +213,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. `1` = strict single-in-flight ordering against the provider. |
 | `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` | `LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold` (4) | In-flight flush depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables coalescing and restores the historical unconditional kick - **this is the control arm** when sweeping the threshold. The shipping default was chosen on the fan-out arithmetic (#3396), not measured, so a sweep over `{0, 1, 2, 4, 8}` is the way to pin it. |
 | `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `SetManyAsync` awaits its per-shard fan-out before refusing with `LatticeSaturatedException` (`SetManyFanOut`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): an unbounded fan-out is the #3348 collapse, so the rig opts in to the finite budget. `0` = infinite. |
+| `BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS` | `LatticeOptions.DefaultWalBatchedSingleEntryAppends` (on) | Routes a bulk WAL append carrying exactly **one** entry through the interleaving `AppendBatchAsync` rather than the exclusive-turn `AppendAsync` overload. Under a wide fan-out the per-leaf slice is one entry, so the exclusive turn holds the partition for a whole provider round trip, pinning `wal.append.batch_entries` at 1 and `wal.append.in_flight` at 0 - which also makes `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` unreachable, since reaching it needs the concurrency the exclusive turn removed. `0` is the control arm of the #3408 A/B (historical behaviour), `1` or unset the fix arm. Echoed in the silo banner, so an arm is self-proving against a stale image. |
 | `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts). Clamped to the number actually provisioned (`deploy.ps1 -WalAccountCount`). |
 | `BENCH_WAL_EXTRA_ACCOUNT_URIS` | - (set by `update.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, ...`. Normally you don't set this by hand - `deploy.ps1 -WalAccountCount` + `update.ps1` populate it. |
 | `BENCH_PIPELINE_PHASE2` | on | Overlap phase 2 of batch N with phases 0+1 of batch N+1 on the same shard. `0` disables. |
@@ -242,7 +243,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op). |
+| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op; the silo maps `0` to `Timeout.InfiniteTimeSpan`, the library's "disabled" value). On ACA pass it with `run-cohort-aca.ps1 -ExtraSiloEnv 'BENCH_SATURATION_SAMPLE_MS=0'`. The silo applies this row and the three below it as **global** `LatticeOptions`, because `WalSaturationSampler` reads only the unnamed options; applied per tree, as the rig did before #3348, they were silently ignored. |
 | `BENCH_SATURATION_THROTTLED_RATIO` | `LatticeOptions.DefaultWalSaturationThrottledRatio` (0.75) | Admission-depth ratio at/above which the tree raises Throttled. Range [0.0, 1.0]; lower = earlier throttle. |
 | `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` | `LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold` (1) | Min dispatch-timeout trips per window that raise Saturated regardless of depth. |
 | `BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH` | `LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch` (16) | Parked WAL-admission waiters a recovered partition admits per sampler tick. `0` releases the whole parked herd at once (pre-#3402 behaviour) - the control arm for the #3402 comparison. |
@@ -255,6 +256,9 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Orleans Silo + Client `ResponseTimeout` (s). **Raise to 180 when saturating** so a slow worst-partition flush doesn't trip the deadline and trigger a producer reconnect/retransmit storm. `ladder.ps1` pins this to 180. |
 | `BENCH_TOTAL_DURATION_SEC` | 600 | Server-side watchdog: after this many seconds the silo triggers a graceful shutdown even if the cohort runner died. `0` disables. |
+| `BENCH_EXPECTED_SILOS` | 0 (off; `run-cohort-aca.ps1` sets the replica count) | Each silo holds its startup warm-up until its cluster manifest lists this many silos. Ungated, warm-up during cluster formation pinned every shard root and WAL partition onto the first silos to join (#3348). |
+| `BENCH_WARMUP_GATE_TIMEOUT_SEC` | 300 | Bound on the `BENCH_EXPECTED_SILOS` wait; the silo fails loudly rather than warming a partial cluster. |
+| `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
 | `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |
@@ -262,6 +266,17 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 ---
 
 ## Reading a cohort result
+
+> **Only the first cohort after a deployment is a trustworthy absolute number.**
+> Measured on an 8-silo ACA deployment (#3348): the first cohort sustained
+> ~329 ops/s and every later cohort on that same deployment fell to 17-45,
+> independent of workload, of the option under test, and of whether each cohort
+> got a fresh WAL table. The cause is not understood. Two consequences: never
+> compare a cohort against one taken earlier in the same deployment's life, and
+> when an A/B matters, interleave the arms (ctl, fix, ctl, fix) so the decay is
+> shared by both rather than attributed to one - or redeploy and take the first
+> cohort of each arm. An A/B run as "all controls, then all fix arms" on one
+> deployment will report the decay as an effect of the fix.
 
 `run-cohort.ps1` prints a `=== Cohort complete ===` summary and writes the silo journal to
 `benchmark/.run/azure-throughput/silo-<cohort>.log`. Parse the **log file** directly

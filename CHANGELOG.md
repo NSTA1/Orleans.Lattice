@@ -62,6 +62,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Backlog - An unrecognised state tag read as no state at all.** The ready-set computation recognised only state:complete and state:parked, so any other value - four were in use - got the verdict an untagged item gets, offering finished work as claimable. The vocabulary is closed and fails safe. ([#2468](https://github.com/NSTA1/Orleans.Lattice/issues/2468)) (`repository-wide`)
 
+- **WAL - A one-entry bulk append serialised its partition.** It took the exclusive-turn overload, holding the partition for a whole provider round trip and pinning batch occupancy at 1, which under a wide fan-out is nearly every append. It now interleaves; `WalBatchedSingleEntryAppends` reverts it. ([#3408](https://github.com/NSTA1/Orleans.Lattice/issues/3408)) (`Orleans.Lattice`)
+
+- **Multi-silo - Hot grains piled onto one silo.** Shard roots and WAL shards burst-activate from the gateway silo and default placement kept them all there, so one silo held the tree. They now use random placement. ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348)) (`Orleans.Lattice`)
+
 - **WAL - Saturation recovery released every parked caller at once.** A recovered partition completed its whole parked population in one pass, which re-saturated it before any drain and left the gate flapping with no net progress. Release is now paced, oldest-first, and level-triggered. ([#3402](https://github.com/NSTA1/Orleans.Lattice/issues/3402)) (`Orleans.Lattice`)
 
 - **Docs - Link check reported a count it never read.** docfx colours its summary line on CI, defeating the anchored pattern parsing it, so the count kept its `0` default and `-MaxWarnings 0` passed while two broken anchors shipped. It now reads stripped output, and an unreadable count fails. ([#3406](https://github.com/NSTA1/Orleans.Lattice/issues/3406)) (`repository-wide`)

@@ -2474,6 +2474,61 @@ public class LatticeOptions
     /// <summary>Default value for <see cref="WalAppendCoalescingInFlightThreshold"/> (<c>4</c>). Permits four concurrent provider round trips per shard before coalescing engages, so the measured <see cref="WalMaxPendingBatches"/> concurrency is preserved for shards whose batches are already well filled, while capping the many-tiny-concurrent-appends pathology. <c>0</c> disables.</summary>
     public const int DefaultWalAppendCoalescingInFlightThreshold = 4;
 
+    /// <summary>
+    /// When <c>true</c> (the default), a bulk WAL append carrying exactly one
+    /// entry is dispatched through the interleaving batched grain method
+    /// rather than the exclusive-turn per-entry overload.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bulk append of one entry historically collapsed onto the singular
+    /// per-entry grain overload to match its per-call allocation cost. That
+    /// overload takes an <b>exclusive</b> grain turn, and an Orleans
+    /// activation stays busy across awaits, so the WAL shard is held for the
+    /// whole provider round trip. Under a wide fan-out whose per-leaf slices
+    /// are one entry each - the dominant shape when keys are uniformly
+    /// distributed - every append therefore serialises against every other
+    /// append on the same partition. Concurrency collapses to one, batch
+    /// occupancy pins at a single entry, and
+    /// <see cref="WalAppendCoalescingInFlightThreshold"/> can never be
+    /// reached, because reaching it requires the concurrency that the
+    /// exclusive turn has already removed.
+    /// </para>
+    /// <para>
+    /// Routing that case onto the batched method is safe by construction:
+    /// offset assignment, pending-list mutation, and in-flight cap
+    /// enforcement are serialised by the shard's internal state gate rather
+    /// than by turn exclusivity. Ordering, durability, and offset density are
+    /// unchanged, and a bulk append of one entry becomes semantically
+    /// identical to a bulk append of two.
+    /// </para>
+    /// <para>
+    /// The exclusive turn conferred no read guarantee that is being given up.
+    /// Orleans interleaves only at <c>await</c> boundaries, and the two
+    /// in-memory shard readers - <c>GetNextSequenceAsync</c> and
+    /// <c>GetEntryCountAsync</c> - contain no <c>await</c> at all, so they
+    /// have no yield point to interleave at and their single <c>long</c> read
+    /// cannot be torn regardless of what else is queued.
+    /// <c>GetLiveEntryCountAsync</c> does await, but reads through the
+    /// storage provider and documents in its own body that its two reads
+    /// "do not need to be a consistent snapshot" - a diagnostic signal, not a
+    /// correctness invariant - and interleaving multi-entry appends already
+    /// race it today. Separately, a caller reading two of those values makes
+    /// two <i>separate</i> grain calls, and turn exclusivity never made
+    /// separate calls atomic: the activation drains queued appends between
+    /// them either way.
+    /// </para>
+    /// <para>
+    /// Set to <c>false</c> to restore the historical exclusive-turn dispatch.
+    /// This exists as an escape hatch and as the control arm for throughput
+    /// A/B measurement; it is not a safety switch.
+    /// </para>
+    /// </remarks>
+    public bool WalBatchedSingleEntryAppends { get; set; } = DefaultWalBatchedSingleEntryAppends;
+
+    /// <summary>Default value for <see cref="WalBatchedSingleEntryAppends"/> (<c>true</c>). A bulk append of one entry must not hold a WAL partition exclusively for a whole provider round trip, because the wide-fan-out shape that dominates batched writes produces one-entry slices almost exclusively.</summary>
+    public const bool DefaultWalBatchedSingleEntryAppends = true;
+
 
     /// <summary>
     /// Hard ceiling on how long a single per-shard WAL flush (the

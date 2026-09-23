@@ -28,7 +28,8 @@ public class WalCommitLogWriterTests
 
     private static (WalCommitLogWriter writer, List<WalRecord> captured) CreateWriter(
         string clusterId = "site-test",
-        LatticeMergeMode? mode = LatticeMergeMode.LwwRegister)
+        LatticeMergeMode? mode = LatticeMergeMode.LwwRegister,
+        bool walBatchedSingleEntryAppends = LatticeOptions.DefaultWalBatchedSingleEntryAppends)
     {
         var captured = new List<WalRecord>();
         var shard = Substitute.For<IWalShardGrain>();
@@ -40,7 +41,7 @@ public class WalCommitLogWriterTests
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
 
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalBatchedSingleEntryAppends = walBatchedSingleEntryAppends });
 
         var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
         modeResolver.Resolve(Arg.Any<string>()).Returns(mode);
@@ -182,9 +183,12 @@ public class WalCommitLogWriterTests
     }
 
     [Test]
-    public async Task AppendManyAsync_single_mutation_uses_single_dispatch_fast_path()
+    public async Task AppendManyAsync_single_mutation_uses_single_dispatch_fast_path_when_batching_disabled()
     {
-        var (writer, captured) = CreateWriter();
+        // The legacy exclusive fast path is only reachable through the
+        // opt-out; the default routing is covered by
+        // WalCommitLogWriterSingleEntryDispatchTests.
+        var (writer, captured) = CreateWriter(walBatchedSingleEntryAppends: false);
 
         var result = await writer.AppendManyAsync(new[] { MakeMutation() });
 
