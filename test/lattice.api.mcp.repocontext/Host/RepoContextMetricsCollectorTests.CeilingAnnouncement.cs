@@ -56,7 +56,7 @@ public sealed partial class RepoContextMetricsCollectorTests
             Assert.That(SampleLines(payload, family), Has.Count.EqualTo(2),
                 "precondition: the family really was held at its ceiling");
             Assert.That(records, Has.Count.EqualTo(1),
-                "197 refusals of one ceiling must produce exactly one record, not one per refusal");
+                "198 refusals of one ceiling must produce exactly one record, not one per refusal");
         });
 
         var record = records.Single();
@@ -134,7 +134,7 @@ public sealed partial class RepoContextMetricsCollectorTests
             .ToList();
 
         Assert.That(global, Has.Count.EqualTo(1),
-            "38 backstop refusals across two families must produce exactly one global record");
+            "39 backstop refusals across two families must produce exactly one global record");
         var record = global[0];
         Assert.Multiple(() =>
         {
