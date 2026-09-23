@@ -814,6 +814,214 @@ public sealed class InstrumentPrimingEnrolmentTests
     }
 
     [Test]
+    public void An_observation_callback_the_parser_cannot_read_is_never_recorded_as_an_absent_dimension()
+    {
+        // Known-positive control for issue #3318, and a THIRD blind spot distinct from the two
+        // the control above covers. Both of those need an `owner.Add(...)` site to exist before
+        // they have anything to report on: one names a tag argument that is not a literal pair,
+        // the other names a literal whose key would not resolve. An OBSERVABLE instrument has
+        // no Add() site at all. Its tag surface lives inside the measurement callback handed to
+        // the factory, and that callback body routinely sits in a DIFFERENT FILE from the
+        // declaration - so the scan matched nothing, produced no dimensions, and the generator
+        // wrote `none`. `none` is not a placeholder: it is an affirmative claim that the
+        // instrument carries no bounded tag dimension, and a satisfied claim SUPPRESSES the
+        // contradiction check that would otherwise guard the tag surface. The parser was
+        // manufacturing the evidence that silenced the gate.
+        var across = SourceCorpus.ForTesting(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/probe/Metrics.cs"] = """
+                internal static class Metrics
+                {
+                    public static readonly ObservableGauge<long> Depth = Meter.CreateObservableGauge(
+                        "probe.depth",
+                        static () => Sampler.ObserveDepth(),
+                        unit: "1",
+                        description: "Depth per lane.");
+                }
+                """,
+            ["src/probe/Sampler.cs"] = """
+                internal static class Sampler
+                {
+                    public static IEnumerable<Measurement<long>> ObserveDepth()
+                    {
+                        yield return new Measurement<long>(1, new KeyValuePair<string, object?>("lane", "read"));
+                        yield return new Measurement<long>(2, new KeyValuePair<string, object?>("lane", "write"));
+                    }
+                }
+                """,
+        });
+
+        var resolved = across.Declarations.Single(d => d.Owner == "Depth").Dimensions;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resolved.ContainsKey("lane"),
+                Is.True,
+                "A callback defined in another file was not followed, so the gauge's tag key was "
+                + "never named. Leaving the declaration with no dimensions is what seeds `none` - "
+                + "a parse failure laundered into a measured absence.");
+
+            Assert.That(
+                resolved["lane"].Values,
+                Is.EquivalentTo(new[] { "read", "write" }),
+                "The callback was reached but its literal tag values were not read.");
+
+            // The half that keeps the recovery honest. Following ONE callback path with a
+            // single forwarder hop is a LOWER BOUND on the tag surface, never a closed set: a
+            // second contributing helper, or a value yielded only under a runtime condition,
+            // is invisible here. Reporting it as bounded would turn a partial read into an
+            // affirmative claim of completeness - the same false positive this test exists to
+            // remove, relocated one field to the left.
+            Assert.That(
+                resolved["lane"].Ambiguous,
+                Is.True,
+                "A domain recovered from an observation callback was marked bounded. A partial "
+                + "read presented as a closed domain is the identical false positive this gate "
+                + "was added to prevent.");
+        });
+
+        // A callback whose target is nowhere in the corpus. The parser must say it cannot see,
+        // not that there is nothing there.
+        var orphan = SourceCorpus.ForTesting(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/probe/Orphan.cs"] = """
+                internal static class Orphan
+                {
+                    public static readonly ObservableGauge<long> Stalls = Meter.CreateObservableGauge(
+                        "probe.stalls",
+                        static () => Nowhere.ObserveStalls(),
+                        unit: "s",
+                        description: "Stall age.");
+                }
+                """,
+        });
+
+        var blind = orphan.Declarations.Single(d => d.Owner == "Stalls").Dimensions
+            .Where(d => d.Key.StartsWith(SourceCorpus.ObservableBlindSpotPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                blind,
+                Is.Not.Empty,
+                "An unreachable observation callback produced no dimension at all, so the "
+                + "declaration seeds `none` - the parser asserting an absence it never "
+                + "established. An instrument the parser cannot resolve must land `unresolved`.");
+
+            Assert.That(
+                blind.All(d => d.Value.Ambiguous),
+                Is.True,
+                "The blind spot must be ambiguous. Recorded as resolved-and-empty it is a "
+                + "negative claim again, wearing a different name.");
+        });
+
+        // The negative half, and the half that makes every assertion above mean anything: a
+        // detector that fires on every observable is indistinguishable from one stuck on, and
+        // would collapse `none` and `unresolved` into one value just as surely as the defect
+        // did. A callback the parser CAN read all the way to a genuinely tagless measurement
+        // must produce no dimension and no marker, leaving `none` legitimately claimable.
+        var tagless = SourceCorpus.ForTesting(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/probe/Plain.cs"] = """
+                internal static class Plain
+                {
+                    public static readonly ObservableGauge<int> Count = Meter.CreateObservableGauge(
+                        "probe.count",
+                        static () => new Measurement<int>(0),
+                        unit: "1",
+                        description: "Untagged count.");
+                }
+                """,
+        });
+
+        Assert.That(
+            tagless.Declarations.Single(d => d.Owner == "Count").Dimensions,
+            Is.Empty,
+            "The detector fired on a callback it CAN read to a tagless measurement, so it does "
+            + "not distinguish a blind spot from a successful parse and its output carries no "
+            + "information. `none` must remain claimable for an instrument that genuinely "
+            + "carries no tags.");
+    }
+
+    [Test]
+    public void Observable_instruments_in_the_repository_do_not_claim_an_absence_the_parser_never_established()
+    {
+        // The production half of issue #3318, run against the real corpus rather than a
+        // synthetic one. The synthetic control above proves the MECHANISM; this proves it is
+        // wired to the instruments that actually ship - a gate verified only against its own
+        // helper is the vacuous shape this issue is about.
+        var byKey = Corpus.Value.Declarations.ToDictionary(d => d.Key, StringComparer.Ordinal);
+        var rows = ReadEnrolmentFile(out _);
+
+        var laundered = rows
+            .Where(r => r.Enrolment == Enrolment.None)
+            .Where(r => byKey.TryGetValue(r.Key, out var d)
+                && d.Dimensions.Keys.Any(k =>
+                    k.StartsWith(SourceCorpus.ObservableBlindSpotPrefix, StringComparison.Ordinal)))
+            .Select(r => r.Key)
+            .ToList();
+
+        // The issue's own reproduction, asserted by name. `orleans.lattice.materialiser.pin
+        // .shed_stall_seconds` is declared in LatticeMetrics.cs while its tags are built in
+        // WalMaterialiserPinPressure.ObserveShedStalls, in another file - and it seeded `none`
+        // despite carrying a bounded pin_shard dimension. Pinning the key here is deliberate:
+        // a floor over the aggregate population would stay green if the cross-file resolution
+        // regressed to a blind spot, because the marker count would simply rise.
+        const string ReproKey = "src/lattice/LatticeMetrics.cs#MaterialiserPinShedStallSeconds";
+        var repro = byKey.TryGetValue(ReproKey, out var declaration)
+            ? declaration.Dimensions
+            : new Dictionary<string, DomainResult>(StringComparer.Ordinal);
+
+        // A floor over the parser's LIVE output, not over rows of the checked-in file: the
+        // file does not change when the resolver breaks, so a floor over rows would stay green
+        // through exactly the regression it is meant to witness.
+        var resolvedObservables = Corpus.Value.Declarations.Count(d =>
+            d.Kind.StartsWith("CreateObservable", StringComparison.Ordinal)
+            && d.Dimensions.Count > 0
+            && !d.Dimensions.Keys.Any(k =>
+                k.StartsWith(SourceCorpus.ObservableBlindSpotPrefix, StringComparison.Ordinal)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                laundered,
+                Is.Empty,
+                $"{laundered.Count} observable instrument(s) are enrolled as carrying no bounded "
+                + "tag dimension while the parser is telling you it could not read their "
+                + "observation callback. `none` is a claim about the instrument's CONTENT; a "
+                + "callback the parser cannot reach is a fact about its REACH. Re-enrol each as "
+                + $"unresolved:{Environment.NewLine}  "
+                + string.Join($"{Environment.NewLine}  ", laundered.Take(20)));
+
+            Assert.That(
+                repro.ContainsKey("pin_shard"),
+                Is.True,
+                "The reproduction from issue #3318 no longer resolves. "
+                + $"`{ReproKey}` declares a gauge whose tags are built in "
+                + "WalMaterialiserPinPressure.ObserveShedStalls, in another file; its bounded "
+                + "pin_shard dimension must be recovered across that file boundary, or the row "
+                + "falls back to claiming an absence nobody established. Dimensions seen: "
+                + $"[{string.Join(", ", repro.Keys)}].");
+
+            Assert.That(
+                repro.ContainsKey("tree"),
+                Is.True,
+                $"`{ReproKey}` also carries a `tree` tag built in the same cross-file callback. "
+                + $"Dimensions seen: [{string.Join(", ", repro.Keys)}].");
+
+            Assert.That(
+                resolvedObservables,
+                Is.GreaterThan(0),
+                "Not one observable instrument in the repository had its callback resolved. The "
+                + "cross-file resolution has stopped working and every observable is now a named "
+                + "blind spot - which passes the clause above vacuously, because a declaration "
+                + "that is all marker can never be caught claiming `none`.");
+        });
+    }
+
+    [Test]
     public void An_unread_tag_domain_is_never_recorded_as_an_absent_one()
     {
         // The audit issue #2968 asked for, expressed as an assertion rather than as a number
@@ -1091,6 +1299,14 @@ public sealed class InstrumentPrimingEnrolmentTests
     /// <summary>The parsed source corpus and everything derived from it.</summary>
     public sealed class SourceCorpus
     {
+        /// <summary>
+        /// Prefix of the dimension key recorded when an observable instrument's measurement
+        /// callback could not be reached. It marks an admission about the parser's REACH, and
+        /// is deliberately shaped so the existing contradiction gate treats it as a dimension:
+        /// a row carrying it can never be enrolled as a negative claim.
+        /// </summary>
+        public const string ObservableBlindSpotPrefix = "(unread-observable-callback:";
+
         private static readonly Regex ConstStringPattern = new(
             @"\bconst\s+string\s+(\w+)\s*=\s*""([^""]*)""", RegexOptions.Compiled);
 
@@ -1101,9 +1317,13 @@ public sealed class InstrumentPrimingEnrolmentTests
         private static readonly Regex TestMethodPattern = new(
             @"public\s+(?:async\s+)?(?:void|Task)\s+(\w+)\s*\(", RegexOptions.Compiled);
 
+        private static readonly Regex MeasurementConstructionPattern = new(
+            @"new\s+Measurement\s*<[^<>]*>\s*\(", RegexOptions.Compiled);
+
         private readonly Dictionary<string, string> _files;
         private readonly Dictionary<string, List<(string File, List<string> Values)>> _describeHelpers = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<(string File, string Value)>> _consts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<(string Path, string Body)>> _methodBodies = new(StringComparer.Ordinal);
 
         private SourceCorpus(Dictionary<string, string> files, IReadOnlyCollection<string> testMethodNames)
         {
@@ -1245,6 +1465,19 @@ public sealed class InstrumentPrimingEnrolmentTests
                         ? new Dictionary<string, DomainResult>(StringComparer.Ordinal)
                         : ResolveDimensions(owner);
 
+                    // An observable instrument has no Add()/Record() site at all - its tag
+                    // surface lives inside the measurement callback handed to the factory, and
+                    // that callback body routinely sits in a different file from the
+                    // declaration. ResolveDimensions scans only for owner.Add/Record, so before
+                    // this the scan found nothing and the generator wrote that down as "no
+                    // bounded tag dimension" - an affirmative negative claim manufactured out
+                    // of the parser's own blindness, which then SUPPRESSED the contradiction
+                    // check that would have guarded the tag surface. See issue #3318.
+                    if (m.Groups[1].Value.StartsWith("CreateObservable", StringComparison.Ordinal))
+                    {
+                        MergeObservableSurface(dimensions, path, arguments);
+                    }
+
                     var nameDomain = arguments.Count > 0
                         ? ResolveDomain(arguments[0], path)
                         : new DomainResult(Array.Empty<string>(), true, "no name argument");
@@ -1335,32 +1568,307 @@ public sealed class InstrumentPrimingEnrolmentTests
 
                     foreach (var (key, domain) in ExtractTagPairs(string.Join(",", args.Skip(1)), path))
                     {
-                        if (dimensions.TryGetValue(key, out var existing))
-                        {
-                            // Unioning ACROSS EMISSION SITES of one instrument is correct and is
-                            // not an ambiguity: a bounded taxonomy is emitted exactly that way,
-                            // one arm per call site. This is a different operation from unioning
-                            // two same-named declarations in different files, which is unsound
-                            // and is refused in ResolveByName. Conflating the two marked every
-                            // genuinely bounded instrument here as ambiguous.
-                            var merged = existing.Values
-                                .Union(domain.Values, StringComparer.Ordinal)
-                                .OrderBy(v => v, StringComparer.Ordinal)
-                                .ToList();
-                            var ambiguous = existing.Ambiguous || domain.Ambiguous;
-                            dimensions[key] = new DomainResult(
-                                merged, ambiguous, ambiguous ? existing.Note ?? domain.Note : null);
-                        }
-                        else
-                        {
-                            dimensions[key] = domain;
-                        }
+                        MergeDimension(dimensions, key, domain);
                     }
                 }
             }
 
             return dimensions;
         }
+
+        /// <summary>Unions <paramref name="domain"/> into the accumulated dimension set.</summary>
+        private static void MergeDimension(
+            Dictionary<string, DomainResult> dimensions, string key, DomainResult domain)
+        {
+            if (!dimensions.TryGetValue(key, out var existing))
+            {
+                dimensions[key] = domain;
+                return;
+            }
+
+            // Unioning ACROSS EMISSION SITES of one instrument is correct and is
+            // not an ambiguity: a bounded taxonomy is emitted exactly that way,
+            // one arm per call site. This is a different operation from unioning
+            // two same-named declarations in different files, which is unsound
+            // and is refused in ResolveByName. Conflating the two marked every
+            // genuinely bounded instrument here as ambiguous.
+            var merged = existing.Values
+                .Union(domain.Values, StringComparer.Ordinal)
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToList();
+            var ambiguous = existing.Ambiguous || domain.Ambiguous;
+            dimensions[key] = new DomainResult(
+                merged, ambiguous, ambiguous ? existing.Note ?? domain.Note : null);
+        }
+
+        /// <summary>
+        /// Merges the tag dimensions of an observable instrument's measurement callback into
+        /// <paramref name="dimensions"/>, or records a named blind spot when the callback's
+        /// measurement construction cannot be reached.
+        /// </summary>
+        /// <param name="dimensions">The accumulated dimension set for the declaration.</param>
+        /// <param name="path">Repo-relative path of the file holding the declaration.</param>
+        /// <param name="arguments">The factory call's argument list.</param>
+        private void MergeObservableSurface(
+            Dictionary<string, DomainResult> dimensions, string path, IReadOnlyList<string> arguments)
+        {
+            // Argument 1 is the observation callback for every CreateObservable* overload the
+            // corpus uses: (name, callback, unit, description).
+            var callback = arguments.Count > 1 ? Collapse(arguments[1]) : string.Empty;
+
+            if (callback.Length == 0)
+            {
+                MergeDimension(
+                    dimensions,
+                    $"{ObservableBlindSpotPrefix}no callback argument)",
+                    new DomainResult(
+                        Array.Empty<string>(),
+                        true,
+                        "the factory call has no observation callback argument, so the tag "
+                        + "surface of this instrument was never reached"));
+                return;
+            }
+
+            var blobs = ReadMeasurementBlobs(callback, path, depth: 0);
+
+            if (blobs is null)
+            {
+                MergeDimension(
+                    dimensions,
+                    $"{ObservableBlindSpotPrefix}{Render(callback)})",
+                    new DomainResult(
+                        Array.Empty<string>(),
+                        true,
+                        "the tags of this observable instrument are built inside its measurement "
+                        + "callback, whose body this parser could not reach, so its tag surface "
+                        + "was never read. This is an admission of reach, never a claim that the "
+                        + "instrument carries no bounded dimension"));
+                return;
+            }
+
+            foreach (var (blob, blobPath) in blobs)
+            {
+                foreach (var (key, domain) in ExtractTagPairs(blob, blobPath))
+                {
+                    // A callback read is a LOWER BOUND on the tag surface, never a closed
+                    // set: this parser follows one callback path with a single forwarder
+                    // hop, so a second contributing helper - or a value the callback yields
+                    // only under a runtime condition - is invisible to it. Reporting the
+                    // recovered domain as bounded would turn a partial read into an
+                    // affirmative claim of completeness, which is the same false positive
+                    // this whole change exists to remove. So the tag key is NAMED (which is
+                    // what falsifies a 'none' row) while the domain stays ambiguous (which
+                    // is what keeps the downstream priming check from acting on a subset).
+                    MergeDimension(
+                        dimensions,
+                        key,
+                        new DomainResult(
+                            domain.Values,
+                            true,
+                            domain.Values.Count > 0
+                                ? "read from this observable instrument's measurement callback, "
+                                    + $"which yields [{string.Join(", ", domain.Values)}]. A callback "
+                                    + "read is a lower bound on the tag surface, not a closed domain"
+                                : domain.Note
+                                    ?? "read from this observable instrument's measurement callback, "
+                                    + "whose domain did not resolve to literals"));
+                }
+            }
+        }
+
+        /// <summary>
+        /// The tag-argument text of every measurement constructed by an observation callback,
+        /// or null when the callback body could not be reached or held no measurement
+        /// construction. An empty list is the honest "reached it, and it carries no tags".
+        /// </summary>
+        private List<(string Blob, string Path)>? ReadMeasurementBlobs(
+            string expression, string path, int depth)
+        {
+            if (depth > 2)
+            {
+                return null;
+            }
+
+            var body = expression;
+            var bodyPath = path;
+            var arrow = body.IndexOf("=>", StringComparison.Ordinal);
+            if (arrow >= 0)
+            {
+                body = body[(arrow + 2)..].Trim();
+            }
+
+            // A construction that WAS found but carried no tag arguments is the honest
+            // "reached it, and it carries no tags" - the one reading that still entitles a
+            // declaration to claim `none`. Testing only `direct.Count > 0` would fold it into
+            // the unreachable branch below, marking every callback a blind spot and leaving
+            // the detector indistinguishable from one stuck on.
+            var direct = ExtractMeasurementBlobs(body, bodyPath);
+            if (direct.Count > 0 || MeasurementConstructionPattern.IsMatch(body))
+            {
+                return direct;
+            }
+
+            // Not constructed inline, so the callback delegates: either a method group
+            // (Observe, Registry.ObserveProcessed) or a lambda invoking one. Resolve the
+            // target's body and look there, file-local first then repo-wide-unique, the same
+            // discipline ResolveByName uses - a name declared in two files is ambiguous, never
+            // unioned.
+            var target = CallbackTargetName(body);
+            if (target is null || !TryFindMethodBody(target, bodyPath, out var found, out var foundPath))
+            {
+                return null;
+            }
+
+            var blobs = ExtractMeasurementBlobs(found, foundPath);
+            if (blobs.Count > 0 || MeasurementConstructionPattern.IsMatch(found))
+            {
+                return blobs;
+            }
+
+            // A one-hop forwarder (static () => Instance.ObservePeak(), or a body that is a
+            // single delegation) is common enough to follow; beyond that the parser stops and
+            // says so rather than guessing.
+            var forwarded = Regex.Match(found.Trim(), @"^(?:return\s+)?([\w\.]+\s*\([^;]*\))\s*;?\s*$");
+            return forwarded.Success
+                ? ReadMeasurementBlobs(Collapse(forwarded.Groups[1].Value), foundPath, depth + 1)
+                : null;
+        }
+
+        /// <summary>Tag-argument text of every <c>new Measurement&lt;T&gt;(...)</c> in a body.</summary>
+        private static List<(string Blob, string Path)> ExtractMeasurementBlobs(string body, string path)
+        {
+            var blobs = new List<(string, string)>();
+
+            foreach (Match m in MeasurementConstructionPattern.Matches(body))
+            {
+                var args = SplitArguments(body, m.Index + m.Length);
+                if (args.Count <= 1)
+                {
+                    continue;
+                }
+
+                blobs.Add((string.Join(",", args.Skip(1)), path));
+            }
+
+            return blobs;
+        }
+
+        /// <summary>The simple name of the method an observation callback delegates to.</summary>
+        private static string? CallbackTargetName(string body)
+        {
+            var invocation = Regex.Match(body.Trim(), @"^(?:return\s+)?([\w\.]+)\s*\(");
+            if (invocation.Success)
+            {
+                return invocation.Groups[1].Value.Split('.')[^1];
+            }
+
+            var group = Regex.Match(body.Trim(), @"^([\w\.]+)$");
+            return group.Success ? group.Groups[1].Value.Split('.')[^1] : null;
+        }
+
+        /// <summary>
+        /// Locates the body of a method by simple name, preferring the declaring file and
+        /// widening to the corpus only when the name resolves to exactly one file.
+        /// </summary>
+        private bool TryFindMethodBody(
+            string name, string preferredPath, out string body, out string path)
+        {
+            // Memoised and pre-filtered deliberately. A naive implementation compiles a
+            // regex and scans all ~3,400 corpus files once per observable declaration,
+            // which is enough work to trip the test host's inactivity guard. The ordinal
+            // Contains() pre-filter rejects the overwhelming majority of files at memcmp
+            // speed before any regex runs, and the cache makes a repeated name free.
+            if (!_methodBodies.TryGetValue(name, out var hits))
+            {
+                var pattern = new Regex(
+                    @"(?<![\w\.])[\w\<\>\,\?\[\]\.]+\s+" + Regex.Escape(name) + @"\s*\(");
+                hits = new List<(string Path, string Body)>();
+
+                foreach (var (file, text) in _files)
+                {
+                    if (!text.Contains(name, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    foreach (Match m in pattern.Matches(text))
+                    {
+                        if (TryReadBody(text, ArgumentListEnd(text, m.Index + m.Length), out var found))
+                        {
+                            hits.Add((file, found));
+                        }
+                    }
+                }
+
+                _methodBodies[name] = hits;
+            }
+
+            var local = hits.Where(h => string.Equals(h.Path, preferredPath, StringComparison.Ordinal)).ToList();
+            var chosen = local.Count > 0 ? local : hits;
+
+            if (chosen.Count == 0
+                || chosen.Select(h => h.Path).Distinct(StringComparer.Ordinal).Count() > 1)
+            {
+                body = string.Empty;
+                path = string.Empty;
+                return false;
+            }
+
+            body = string.Join(Environment.NewLine, chosen.Select(h => h.Body));
+            path = chosen[0].Path;
+            return true;
+        }
+
+        /// <summary>Reads a method body that begins at or after <paramref name="start"/>.</summary>
+        private static bool TryReadBody(string text, int start, out string body)
+        {
+            body = string.Empty;
+            var i = start;
+            while (i < text.Length && char.IsWhiteSpace(text[i]))
+            {
+                i++;
+            }
+
+            if (i >= text.Length)
+            {
+                return false;
+            }
+
+            if (text[i] == '{')
+            {
+                var depth = 1;
+                int end;
+                for (end = i + 1; end < text.Length && depth > 0; end++)
+                {
+                    if (text[end] == '{')
+                    {
+                        depth++;
+                    }
+                    else if (text[end] == '}')
+                    {
+                        depth--;
+                    }
+                }
+
+                body = text[(i + 1)..Math.Min(end, text.Length)];
+                return true;
+            }
+
+            if (i + 1 < text.Length && text[i] == '=' && text[i + 1] == '>')
+            {
+                var end = text.IndexOf(';', i);
+                body = end < 0 ? text[(i + 2)..] : text[(i + 2)..end];
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Marker text bounded to <see cref="ResidueRenderLimit"/> characters.</summary>
+        private static string Render(string expression) =>
+            expression.Length <= ResidueRenderLimit
+                ? expression
+                : expression[..ResidueRenderLimit] + "...";
 
         private IEnumerable<(string Key, DomainResult Domain)> ExtractTagPairs(string blob, string path)
         {
