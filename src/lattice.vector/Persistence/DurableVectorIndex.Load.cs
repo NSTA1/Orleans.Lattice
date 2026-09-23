@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Hashing;
 
 namespace Orleans.Lattice.Vector.Persistence;
 
@@ -115,6 +116,8 @@ public sealed partial class DurableVectorIndex
         var partitionSlots = Math.Max(1, manifest.Header.PartitionCount);
         var epochs = new long[partitionSlots];
         var chunkCounts = new int[partitionSlots];
+        var chunkEpochs = new long[partitionSlots][];
+        var chunkHashes = new UInt128[]?[partitionSlots];
         var resident = new bool[partitionSlots];
 
         try
@@ -126,7 +129,7 @@ public sealed partial class DurableVectorIndex
             }
 
             if (!await ReadPartitionStatesAsync(
-                    manifest, partitionSlots, epochs, chunkCounts, cancellationToken).ConfigureAwait(false))
+                    manifest, partitionSlots, epochs, chunkCounts, chunkEpochs, cancellationToken).ConfigureAwait(false))
             {
                 return false;
             }
@@ -135,14 +138,17 @@ public sealed partial class DurableVectorIndex
             {
                 for (var partition = 0; partition < partitionSlots; partition++)
                 {
+                    var hashes = new UInt128[chunkCounts[partition]];
                     await ApplyPartitionAsync(
                         restored,
                         manifest.Generation,
                         partition,
-                        epochs[partition],
+                        chunkEpochs[partition],
                         chunkCounts[partition],
+                        hashes,
                         cancellationToken).ConfigureAwait(false);
 
+                    chunkHashes[partition] = hashes;
                     resident[partition] = true;
                 }
 
@@ -165,6 +171,8 @@ public sealed partial class DurableVectorIndex
         _centroidsPersisted = manifest.Header.PartitionCount > 0;
         _persistedEpoch = epochs;
         _persistedChunkCount = chunkCounts;
+        _persistedChunkEpochs = chunkEpochs;
+        _persistedChunkHashes = chunkHashes;
         _resident = resident;
         _persistedPartitions = partitionSlots;
         _restored = true;
@@ -256,6 +264,7 @@ public sealed partial class DurableVectorIndex
         int partitionSlots,
         long[] epochs,
         int[] chunkCounts,
+        long[][] chunkEpochs,
         CancellationToken cancellationToken)
     {
         var seen = new bool[partitionSlots];
@@ -273,13 +282,14 @@ public sealed partial class DurableVectorIndex
                 return false;
             }
 
-            if (!VectorIndexPartitionState.TryReadRecord(entry.Value, out var state))
+            if (!VectorIndexPartitionState.TryReadRecord(entry.Value, out var state, out var stateChunkEpochs))
             {
                 return false;
             }
 
             epochs[partition] = state.Epoch;
             chunkCounts[partition] = state.ChunkCount;
+            chunkEpochs[partition] = stateChunkEpochs;
             seen[partition] = true;
         }
 
@@ -305,12 +315,23 @@ public sealed partial class DurableVectorIndex
     /// manifest does not account for.
     /// </para>
     /// </summary>
+    /// <param name="target">The index the chunks are applied to.</param>
+    /// <param name="generation">The generation being read.</param>
+    /// <param name="partition">The partition being read.</param>
+    /// <param name="chunkEpochs">The epoch each chunk lives under, as the commit record names it.</param>
+    /// <param name="chunkCount">How many chunks the commit record claims.</param>
+    /// <param name="hashes">
+    /// Receives a hash of each chunk's content, so the next flush can tell which
+    /// chunks changed; null when the caller will never flush.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the read.</param>
     private async Task ApplyPartitionAsync(
         VectorIndex target,
         long generation,
         int partition,
-        long epoch,
+        long[] chunkEpochs,
         int chunkCount,
+        UInt128[]? hashes,
         CancellationToken cancellationToken)
     {
         const int ReadBatch = 16;
@@ -321,12 +342,13 @@ public sealed partial class DurableVectorIndex
             var upper = Math.Min(sequence + ReadBatch, chunkCount);
             for (var i = sequence; i < upper; i++)
             {
-                keys.Add(VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, epoch, i));
+                keys.Add(VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, chunkEpochs[i], i));
             }
 
             var records = await _store.ReadManyAsync(keys, cancellationToken).ConfigureAwait(false);
-            foreach (var key in keys)
+            for (var i = sequence; i < upper; i++)
             {
+                var key = keys[i - sequence];
                 if (!records.TryGetValue(key, out var record) ||
                     !VectorIndexRecord.TryUnwrap(record, out var payload))
                 {
@@ -335,6 +357,10 @@ public sealed partial class DurableVectorIndex
                 }
 
                 target.ApplyChunk(payload);
+                if (hashes is not null)
+                {
+                    hashes[i] = XxHash128.HashToUInt128(payload);
+                }
             }
         }
     }
@@ -503,6 +529,8 @@ public sealed partial class DurableVectorIndex
         _persistedPartitionVersion = [];
         _persistedEpoch = [];
         _persistedChunkCount = [];
+        _persistedChunkEpochs = [];
+        _persistedChunkHashes = [];
         _resident = [];
         _persistedPartitions = 0;
         _generation = 0;

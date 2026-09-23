@@ -879,8 +879,9 @@ public sealed partial class DurableVectorIndex
                     _index,
                     _generation,
                     partition,
-                    _persistedEpoch[partition],
+                    _persistedChunkEpochs[partition],
                     _persistedChunkCount[partition],
+                    hashes: null,
                     cancellationToken).ConfigureAwait(false);
 
                 // A cell fetched after a retirement was journalled would

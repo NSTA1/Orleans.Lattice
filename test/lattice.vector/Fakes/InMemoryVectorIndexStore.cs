@@ -42,7 +42,20 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     internal long BytesWritten { get; private set; }
 
     /// <summary>Resets <see cref="BytesWritten"/> so a test can measure one phase in isolation.</summary>
-    internal void ResetBytesWritten() => BytesWritten = 0;
+    internal void ResetBytesWritten()
+    {
+        BytesWritten = 0;
+        _keysWritten.Clear();
+    }
+
+    private readonly List<string> _keysWritten = [];
+
+    /// <summary>
+    /// Every key handed to <see cref="WriteAsync"/> since the store was created or
+    /// <see cref="ResetBytesWritten"/> was last called, in write order and counting
+    /// a rewrite again, so a test can say which records a flush rewrote.
+    /// </summary>
+    internal IReadOnlyList<string> KeysWritten => _keysWritten;
 
     /// <summary>
     /// The largest single record ever handed to <see cref="WriteAsync"/>.
@@ -162,6 +175,7 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
             }
 
             _records[entry.Key] = entry.Value;
+            _keysWritten.Add(entry.Key);
         }
 
         if (entries.Count > 0)
