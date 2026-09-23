@@ -296,6 +296,7 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
             try
             {
                 long recordsRead;
+                long recordsWritten;
                 await using (var source = new FileStream(
                     candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
                 {
@@ -303,6 +304,12 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
                             tree, source, serializer, cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                     recordsRead = result.RecordsRead;
+
+                    // Records whose time-to-live elapsed while the archive sat on
+                    // disk are deliberately dropped by the import, so they are not
+                    // a shortfall. Counting them here would report a correct
+                    // restore as incomplete.
+                    recordsWritten = result.RecordsWritten;
                 }
 
                 // Verify before stamping complete, and stamp from here rather than
@@ -310,10 +317,10 @@ internal sealed class RepoContextMemoryArchive(RepoContextMemoryArchiveOptions o
                 // that writes the records inherits that path's failure modes, and a
                 // partial restore could then present as a complete one.
                 var held = await CountMemoryAsync(tree, cancellationToken).ConfigureAwait(false);
-                if (held < recordsRead)
+                if (held < recordsWritten)
                 {
                     lastFailure =
-                        $"{Path.GetFileName(candidate)} imported {recordsRead} record(s) but the tree "
+                        $"{Path.GetFileName(candidate)} imported {recordsWritten} record(s) but the tree "
                         + $"holds {held}, so the restore did not land completely";
                     continue;
                 }
