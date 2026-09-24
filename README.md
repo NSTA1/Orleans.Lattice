@@ -24,6 +24,7 @@ data.
 
 | If you want to | Go to |
 |---|---|
+| Get the idea in three minutes, with no background needed | [Orleans.Lattice in three minutes](docs/videos/introduction.md), a video |
 | Understand what the platform is and how it is put together | This page |
 | Browse the full capability catalogue | [FEATURES.md](FEATURES.md) |
 | Find the right package for a concern | [PACKAGES.md](PACKAGES.md) |
