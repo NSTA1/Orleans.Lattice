@@ -12,7 +12,7 @@
 > click away. Treat the suite as a CI-grade tripwire: run the relevant
 > scenarios before merging anything that touches the hot path.
 
-End-to-end benchmark suite covering the 14 scenarios in [`benchmark-scenarios.md`](./benchmark-scenarios.md).
+End-to-end benchmark suite driven by the scenario files under `benchmark/scenarios/` and catalogued in [`benchmark-scenarios.md`](./benchmark-scenarios.md).
 
 The stack is brought up via `docker compose` and driven through the Vehicle Fleet
 Simulator's HTTP API (`samples/VehicleFleetSimulator/`). A single PowerShell script
@@ -36,7 +36,7 @@ benchmark/
 │                                    # docs/lattice/performance-single-silo.md, and tears
 │                                    # the VM down. See the dedicated section below.
 ├── start-history.ps1                # Bring up / tear down the long-lived history stack only.
-├── benchmark-scenarios.md           # Authoritative scenario plan (14 scenarios).
+├── benchmark-scenarios.md           # Authoritative scenario plan.
 ├── docker-compose.yml               # Base topology (single cluster).
 ├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer,
 │                                    # replication-backpressure, receiver-crash,

@@ -104,7 +104,7 @@ which one that was. The approximate index serves by default; it falls back to a
 bounded exact scan, and to deterministic keyword ranking over the content
 projection when no vector plane can serve. Hits hydrate from the store of
 record, never from the index. See [Semantic search](semantic-search.md) for the
-five-value `retrievalPath` vocabulary, and
+`retrievalPath` vocabulary, and
 [Retrieval and token economics](retrieval-economics.md) for the graph verbs and
 the budgeted bundle.
 

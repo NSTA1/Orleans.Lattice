@@ -25,16 +25,23 @@ contract: what is remembered, at what scope, for how long, and how to clear it.
 | `schema.surface` | The active sub-surface of the Schema area |
 | `telemetry.query` | The selected query in the Telemetry area |
 
-The last two are contributed by plugins rather than declared by the shell: an
-area registers its own keys on the same catalog when its panel mounts, so a
+The area rows, from `tenants.surface` to `telemetry.query`, are contributed by
+plugins rather than declared by the shell: an area registers its own keys on the same catalog when its panel mounts, so a
 deployment gains them by rendering the area and the reset affordance discloses
 and clears them with no further wiring. The set is therefore extensible without
 editing the shell. Each is namespaced to its own area rather than sharing a bare
 `surface` key, because a route keeps its parameters across an area change and two
 areas sharing a key would overwrite one another. Every key is declared once and
 registered, rather than written through ad hoc calls scattered across
-components. A key that is not registered cannot be read or written at all, which
-is what keeps this list honest.
+components. A key that is not registered cannot be read or written through the
+preference contract at all, which is what keeps this list honest.
+
+Some surfaces also retain per-tree working state directly in the same underlying
+preference store, outside the contract: the Data surface's key-search prefix,
+page size, scan mode, and selected tag index and value, and the active
+per-selection surface (`detail-plugin`). These expire with the store's retention
+window, but they are not registered keys, so `/reset-view` neither lists nor
+clears them.
 
 ## Scope
 

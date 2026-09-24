@@ -99,7 +99,7 @@ internal static class RepoContextTrees
     /// <summary>
     /// Tree holding the per-page vector-coverage digest: a compacted mirror of
     /// <see cref="VectorMembership"/>, partitioned into
-    /// <see cref="Retrieval.RepoContextCoveragePage.PageCount"/> fixed pages by the
+    /// <see cref="RepoContextCoveragePage.PageCount"/> fixed pages by the
     /// leading byte of each source identifier, maintained incrementally on the same
     /// write path that maintains membership (issue #2486). Reading it costs a fixed
     /// number of rows, so gap detection stops costing two membership point-reads per

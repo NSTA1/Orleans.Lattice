@@ -2,7 +2,7 @@
 
 The replication package ships a small set of typed delta records - one per replicable primitive - that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
 
-Today the records are the **single wire contract** between the producer's commit-time accessor surface and the receiver's typed-delta apply pipeline. Every typed CRDT mode authors a public delta DTO into the single `WalRecord.Delta` byte slot at commit time, and the receiver-side apply pipeline dispatches on `WalRecord.Mode` to the matching primitive's instance `MergeDelta` operation. `WalRecord.Value` is retained alongside `Delta` for change-feed back-compat (full-state snapshot view), but the typed-delta path is the only thing the receiver reads on CRDT modes. `LwwRegister` continues to use the opaque `Value` path and is unaffected.
+Today the records are the **single wire contract** between the producer's commit-time accessor surface and the receiver's typed-delta apply pipeline. Every typed CRDT mode authors a public delta DTO into the single `WalRecord.Delta` byte slot at commit time, and the receiver-side apply pipeline dispatches on `WalRecord.Mode` to the matching primitive's instance `MergeDelta` operation. The canonical WAL encoder strips `WalRecord.Value` from every committed CRDT-mode `Set` that carries a `Delta`, so the stored and shipped record holds the delta only; prepared saga entries keep `Value`, which the receiver's pending-bucket apply needs. Change-feed consumers of a CRDT tree should therefore read `Delta`, or read current state through `ILattice`, rather than treating `Value` as a full-state snapshot. `LwwRegister` continues to use the opaque `Value` path and is unaffected.
 
 ## Why typed deltas
 
@@ -27,6 +27,10 @@ Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[
 | `RgaDeltaNode` | `ol.rgi` | A single inserted node inside an `RgaDelta`: the `(replicaId, counter)` dot, the parent dot it was linked under, and the value bytes. |
 | `OrFlagDelta` | `ol.ofd` | Observed-remove (enable-wins) flag: the enable dots added (`OrSetDot`) plus the observed-remove (disable) dots. Carries the dot context so concurrent enable/disable converge enable-wins. |
 | `RwFlagDelta` | `ol.rwd` | Remove-wins (disable-wins) flag: the enable dots added, the disable dots added, plus the disable dots an observed enable has tombstoned (all `OrSetDot`). Carries the dot context so concurrent enable/disable converge disable-wins. |
+| `GCounterDelta` | `ol.gcd` | Grow-only counter: per-replica cumulative components that have advanced, merged by pointwise max. |
+| `GSetDelta` | `ol.gsd` | Grow-only set: the element bytes added, merged by set union. |
+| `RwSetDelta` | `ol.rsd` | Remove-wins observed-remove set: the add dots, the remove dots, and the remove dots an observed add has cancelled (tombstones), each an `OrSetDeltaDot` attached to its element. |
+| `BoundedRegisterDelta` | `ol.mxd` | Monotonic bounded register, shared by `MaxRegister` and `MinRegister`: the candidate value bytes and their total-order key; the direction comes from the receiver's register, not the delta. |
 
 The typed CRDT delta records each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
 

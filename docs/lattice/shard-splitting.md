@@ -308,7 +308,7 @@ individually** when:
 |---|---|---|
 | `AutoSplitEnabled = false` | Whole pass | Returns early. |
 | Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Whole pass | Returns early. |
-| Resize / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Merge/SnapshotCompleteAsync()` returns `false`. |
+| Resize / reshard / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Reshard/Merge/SnapshotCompleteAsync()` returns `false`. |
 | Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
 | In-flight splits already at `MaxConcurrentAutoSplits` | Whole pass | Sum of `IsSplittingAsync()` results. |
 | Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |

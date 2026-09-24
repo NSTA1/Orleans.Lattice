@@ -595,7 +595,7 @@ internal sealed partial class ShardRootGrain
     /// (issue #3016) is its only caller.
     /// <para>
     /// <b>This is the one place an in-flight entry may be evicted, and the
-    /// comment in <see cref="SweepScanPageLeafReads"/> forbidding it is not
+    /// comment in <see cref="PruneScanPageLeafReads"/> forbidding it is not
     /// being overridden - its premise has failed.</b> That rule protects the
     /// case where the read will complete: evicting one there lets the next
     /// attempt enqueue a duplicate behind it, trading a bounded map for the

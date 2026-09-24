@@ -45,7 +45,7 @@ Artifact export is likewise streamed chunk-wise, so exporting a large artifact -
 
 ## Safe deletion
 
-Deleting a backup removes its manifest from both the catalog and the sink, and deletes only the artifacts it owns that are **not** shared with any other retained manifest. Because artifacts are content-addressed, a base artifact can be referenced by several increments; the facade computes the unshared set before deleting so a shared base artifact is never orphaned out from under a retained increment. Deletion authorizes the backup's scope first and reports whether a backup was actually removed.
+Deleting a backup removes its manifest from both the catalog and the sink, and deletes only the artifacts it owns that are **not** shared with any other retained manifest. Before deleting, the facade collects every artifact id still referenced by the content descriptors of any other retained manifest and deletes only this backup's artifacts outside that set, so an artifact another retained manifest points at is never deleted out from under it. Deletion authorizes the backup's scope first and reports whether a backup was actually removed.
 
 ## Inventory
 

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication.Grpc API reference
 
-The package exposes a public typed client, two registration entry points, a public authorization seam, and a public options type. The service, marshallers, method definitions, and interceptor are internal.
+The package exposes a public typed client, two registration entry points, public authorization, credential-bridge, and auth-scheme seams, the binding's serialization-alias constants, and a public options type. The service, marshallers, method definitions, and interceptor are internal.
 
 ## Registration
 
@@ -29,7 +29,12 @@ The result and report types (`ReplicationEnableResult`, `ReplicationDisableResul
 |---|---|---|
 | `ILatticeReplicationApiAuthorizer` | interface | The transport meta-authorizer the interceptor consults for every guarded RPC. A host implements it to decide whether a call may run at all. |
 | `DenyAllReplicationApiAuthorizer` | class | The default-deny authorizer used when a host registers no authorizer and leaves `RequireAuthorization` on. Rejects every guarded RPC. |
-| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `Unknown`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
+| `AllowAllReplicationApiAuthorizer` | class | Opt-in authorizer that permits every guarded RPC. Register it explicitly only when an outer trust boundary already guards the endpoint. |
+| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
+| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` (the target tree for enable / disable, `null` for the config read and discovery). |
+| `ILatticeReplicationApiCredentialBridge` | interface | Resolves the caller credential from an inbound `ServerCallContext` into the ambient `LatticeCredential` the facade access gate authorizes. Runs after the transport authorizer; returning `null` leaves the caller anonymous, which auth-backed replication control denies. The default reads `CredentialHeaderName` / `CredentialScheme`. |
+| `ILatticeReplicationApiAuthSchemeSource` | interface | Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns; it must carry only public configuration. |
+| `GrpcReplicationTypeAliases` | static class | The binding's stable serialization aliases for its wire messages (prefix `oirg.`). |
 
 ## Options
 

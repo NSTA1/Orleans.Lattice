@@ -52,6 +52,8 @@ These shape persistence and maintenance.
 | `KeyPrefix` | `vidx/` | The key prefix every durable record lives under. |
 | `MaxItemsPerChunk` | `1024` | Caps items per persisted chunk, which is what keeps records bounded regardless of corpus size. |
 | `IngestBatchSize` | `4096` | How many source vectors one background build step ingests before returning. Bounds the work a single `BuildStepAsync` does. |
+| `IngestSliceBudget` | 5 seconds (`DefaultIngestSliceBudget`) | Wall-clock ceiling on one build step: the step checkpoints and returns at the first source item that finds the budget spent, and the budget is also a deadline raced against each source read, so a slow or stalled source cannot hold the step. A non-positive value removes the bound, leaving `IngestBatchSize` as the only one. |
+| `TimeProvider` | `TimeProvider.System` | The clock `IngestSliceBudget` is measured against; a test substitutes a fake. Must not be `null`. |
 | `KeyReservationBlock` | `1024` | How many identifiers the key dictionary reserves per durable watermark write. A crash burns the remainder of a block rather than reissuing. |
 
 ### Give the index its own tree, or at least its own prefix

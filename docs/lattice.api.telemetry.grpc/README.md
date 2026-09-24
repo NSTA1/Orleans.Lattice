@@ -85,6 +85,16 @@ The interceptor is scoped to this service's method prefix, exempts
 `GetAuthScheme`, and maps an unrecognised method to `LatticeTelemetryApiOperation.Unknown`
 so a deny-by-default policy refuses it rather than falling through.
 
+### Server options (`LatticeTelemetryApiGrpcOptions`)
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces `ILatticeTelemetryApiAuthorizer` on every inbound call. Set `false` only when an outer authentication boundary already guards the endpoint. |
+| `CredentialHeaderName` | `string` | `authorization` | Request header carrying the caller's credential token, bridged into the ambient Lattice credential. Read only when auth-backed control (the `Orleans.Lattice.Auth` add-on) is active. |
+| `CredentialScheme` | `string` | `Bearer` | Scheme stamped on the bridged credential; a matching case-insensitive prefix on the header value is stripped. |
+| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | Request header carrying the tenant the caller is acting as, lifted onto the ambient active-tenant context per call. Only carried: it is re-validated downstream and the facade derives the effective tenant server-side, so it can never widen a caller's scope. |
+| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | Auth schemes the unauthenticated `GetAuthScheme` RPC advertises, in preference order; public configuration only. |
+
 ## The binding derives no tenant
 
 It relays. `RequestedVisibility` and `RequestedTenantId` are forwarded verbatim,

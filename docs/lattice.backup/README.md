@@ -20,7 +20,7 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 - **Causally faithful.** A restore preserves the captured history verbatim: entries replay through the HLC-preserving last-writer-wins merge and bulk-load seams, so a restored tree converges identically to the source.
 - **Point-in-time isolation.** A capture rides the core snapshot cursor for a stable read, inherits the core snapshot shedding and replay-budget behaviour, and fails fast when the in-scope size would exceed the replay budget.
 - **Fail-closed authorization.** Every capture, restore, list, describe, and delete authorizes its scope before touching data, through the same access gate the data path uses, against a dedicated `Backup` (capture) or `Restore` (author / bulk-load) capability. A restore governs **both** the trees it names: `Restore` over the tree written into, and - only when it retargets the backup onto a different tree - `Backup` over the tree the manifest was captured from, so a cross-tree restore can never materialize a tree the caller holds nothing on.
-- **Idempotent by construction.** Artifacts are content-addressed (SHA-256), so a retried capture that produces identical bytes is stored once; registering the same manifest twice, or re-running the same restore, converges without duplication.
+- **Idempotent by construction.** A backup's id is the SHA-256 content address of its captured payload (an incremental's id also folds in its base backup id), so a retried capture that produces identical bytes re-registers the same backup - keeping its original capture time - rather than creating a duplicate; registering the same manifest twice, or re-running the same restore, converges without duplication.
 - **Opt-in and hidden.** Registering the package installs the storage surface but starts no scheduled work until an operator opts in. The catalog and store live in reserved `sys-backup-*` trees that inherit the core `sys-` catalog-hiding filter, so the backup surface is the sole enumeration point for backups.
 
 ## Features
@@ -37,7 +37,7 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 | Catalog rebuild / scrub | `ILatticeBackupControl.RebuildCatalogFromSinkAsync` / `ScrubCatalogAgainstSinkAsync` | Re-derive the catalog from the sink, or reconcile and prune rows whose sink payload is gone. |
 | Cold restore | `ILatticeBackupControl.ColdRestoreAsync` | Restore into a fresh cluster from the sink alone, with no surviving catalog. |
 | Health monitoring | `ILatticeBackupHealthService` / `ILatticeBackupControl` health ops | Periodic presence + content-hash verification of each backup's durable sink payload, gated on a durable sink. |
-| Sink | `ILatticeBackupSink` | Pluggable content-addressed artifact + manifest storage. |
+| Sink | `ILatticeBackupSink` | Pluggable streamed-artifact + manifest storage. |
 | Reserved-namespace guard | `LatticeBackupReservedTrees` | Lets an application validate its own tree ids against the reserved `sys-backup-*` namespace. |
 | Observability | `BackupMetrics` / `LatticeBackupMetrics` | A dedicated `orleans.lattice.backup` meter for space, throughput, failures, and inventory. |
 

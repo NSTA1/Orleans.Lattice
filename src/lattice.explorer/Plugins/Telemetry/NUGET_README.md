@@ -1,10 +1,13 @@
 # Orleans.Lattice.Explorer.Plugins.Telemetry
 
 The shared **telemetry seam** for the
-[Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice). It is not a
-rendered surface of its own: it is the single place the Explorer's telemetry
+[Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice), plus the
+two surfaces built on it. The seam is the single place the Explorer's telemetry
 panels reach the cluster's telemetry facade, so each panel operates against a
-controlled domain model rather than the raw connection.
+controlled domain model rather than the raw connection. The operator-facing
+Telemetry area (`AddExplorerTelemetryPlugin()`) and the tenant-metrics section of
+the My Tenant area (`AddExplorerTelemetryMyTenantSection()`) are independent
+opt-ins; both need `AddExplorerTelemetry()`.
 
 ## What it provides
 

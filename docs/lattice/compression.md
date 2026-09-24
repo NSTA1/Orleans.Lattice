@@ -284,7 +284,7 @@ Both encode paths compress (`AppendBatchAsync` and the shipper's pre-encoded `Ap
 
 ### Observability: compression-savings metrics
 
-Each append batch a compressing WAL provider commits emits two monotonic counters on the `orleans.lattice` meter, both in bytes and tagged by `tree`, so a dashboard can chart the realised savings per tree:
+Each append batch a compressing WAL provider commits emits three monotonic counters on the `orleans.lattice` meter - two byte counters tagged by `tree`, and a row counter tagged by `tree` and `reason` - so a dashboard can chart the realised savings per tree and attribute a shortfall to its skip cause:
 
 | Metric | Unit | Tags | Meaning |
 |---|---|---|---|

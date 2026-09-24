@@ -138,7 +138,7 @@ internal static class LatticeEventPublisher
     /// <see cref="RequestContext"/> read. Batch callers that publish one
     /// event per written entry pay all of it N times for an identical
     /// result. This seam hoists it to once per batch; only the per-event
-    /// <see cref="IAsyncStream{T}.OnNextAsync"/> remains in the loop.
+    /// <c>IAsyncStream&lt;T&gt;.OnNextAsync</c> remains in the loop.
     /// </para>
     /// <para>
     /// Per-event metric semantics are unchanged: every

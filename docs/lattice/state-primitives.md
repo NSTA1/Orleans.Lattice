@@ -116,7 +116,7 @@ Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, 
 
 The CRDT primitives described below are **opt-in**. Plain writes - `SetAsync`, `SetManyAsync`, and friends - are last-writer-wins: a later timestamp silently overwrites a concurrent write. To get convergent, no-lost-update behaviour you write through the typed CRDT accessors on `ILattice`, which pick the right merge mode for the key.
 
-The [Conflict-Free Merges sample](../../samples/ConflictFreeMerges/README.md) is a runnable tour of every accessor, including convergence under concurrent threads.
+The [Conflict-Free Merges sample](../../samples/ConflictFreeMerges/README.md) is a runnable tour of the PN-counter, OR-Set, OR-Flag, RW-Flag, MV-Register, OR-Map, RGA, and version-vector accessors, including convergence under concurrent threads.
 
 ## Grow-Only Counter (G-Counter)
 

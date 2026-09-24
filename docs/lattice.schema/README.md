@@ -65,6 +65,10 @@ siloBuilder.AddLatticeSchemaVersioning(registry =>
 > `AddLatticeSchemaVersioning` so the enforcement validation stage is composed
 > ahead of the versioning envelope stage on the write path.
 
+To layer further option delegates after registration, use
+`ConfigureLatticeSchemaEnforcement(Action<LatticeSchemaEnforcementOptions>)` and
+`ConfigureLatticeSchemaVersioning(Action<LatticeSchemaVersioningOptions>)`.
+
 ## Documents
 
 | Document | What it covers |

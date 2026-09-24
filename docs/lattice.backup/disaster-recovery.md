@@ -12,7 +12,7 @@ see the [API reference](api.md) and the
 
 A backup has two distinct pieces of state:
 
-- **Payload** - the self-describing `BackupManifest` and its content-addressed
+- **Payload** - the self-describing, content-addressed `BackupManifest` and its
   artifacts, written to the external [sink](../lattice.backup.azureblob/README.md).
   This is the backup itself.
 - **Discovery index** - the per-cluster catalog in the reserved

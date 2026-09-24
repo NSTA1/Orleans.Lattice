@@ -64,7 +64,7 @@ The durable, introspectable index of manifests, persisted into the reserved `sys
 
 ### `ILatticeBackupSink`
 
-The pluggable storage sink a backup is written to and restored from. Stores streamed, content-addressed artifacts and self-describing manifests; the artifact surface moves the payload as an ordered chunk sequence so a large tree streams without being materialized whole. Artifact ids are expected to be content-addressed (see `BackupContentHash`) so identical retries are no-ops.
+The pluggable storage sink a backup is written to and restored from. Stores streamed artifacts and self-describing manifests; the artifact surface moves the payload as an ordered chunk sequence so a large tree streams without being materialized whole. Re-writing the same artifact id with the same content is idempotent. The capture engine names each artifact with a per-capture id (scope tree id, scope kind, capture ticks, and a GUID) and records the artifact's SHA-256 digest (`BackupContentHash`) in the manifest's content descriptor; the content-addressed id is the backup (manifest) id, not the artifact id.
 
 Capability members:
 
@@ -194,6 +194,36 @@ One resolved member of a captured backup set: the member backup id and the tree 
 
 - `string BackupId` - the content-addressed id of the member backup.
 - `string TreeId` - the tree the member backup restores.
+
+## Tenancy seam
+
+The seam the backup engine consults to keep every capture and restore inside the active tenant's `t/{tenantId}/{name}` namespace and within the tenant's quota. It follows the same null-default pattern as the data-plane tenant gate: `AddLatticeBackup` installs an inert internal implementation (`IsActive` is `false`, every check a no-op), so a host without a tenancy add-on is unchanged; the tenancy add-on registers the active implementation in its place. The tenant is the ambient active tenant, not a parameter.
+
+### `ILatticeBackupTenantScope`
+
+- `bool IsActive { get; }` - `true` when a tenancy add-on has replaced the null default; every tenant check is gated on it.
+- `void AuthorizeCapture(string treeId)` - verifies the active tenant may capture `treeId`: a platform tree is left to the authorization gate, and a tenant-owned tree may be captured only by its owning tenant. Throws `LatticeBackupTenantIsolationException` when refused.
+- `void AuthorizeRestoreTarget(string treeId)` - applies the same ownership rule to a restore target, before any record is streamed. Throws `LatticeBackupTenantIsolationException` when refused.
+- `ValueTask<IBackupRestoreAdmission> BeginRestoreAsync(string targetTreeId, CancellationToken cancellationToken = default)` - opens a per-record admission controller for a restore into `targetTreeId`, resolving the active tenant's quota once.
+
+### `IBackupRestoreAdmission`
+
+The per-restore admission controller the restore stream consults once per record. A refused record is dead-lettered (skipped), never silently written. Not required to be thread-safe.
+
+- `long AdmittedCount { get; }` - records admitted (written) so far.
+- `long DeadLetteredCrossTenant { get; }` - records dead-lettered because they were addressed outside the active tenant's namespace.
+- `long DeadLetteredOverQuota { get; }` - records dead-lettered because admitting them would exceed the active tenant's key quota.
+- `BackupRestoreRecordDisposition Admit(string key)` - decides whether the record may be written, updating the counters. Throws `ArgumentNullException` when `key` is null.
+
+### `BackupRestoreRecordDisposition`
+
+| Value | Meaning |
+|-------|---------|
+| `Admit` | Inside the active tenant's namespace and within quota; the record is written. |
+| `CrossTenant` | Addressed outside the active tenant's namespace; the record is dead-lettered. |
+| `OverQuota` | Would take the active tenant past its key quota; the record is dead-lettered. |
+
+An in-process control value only (no serializer surface).
 
 ## Requests and results
 
@@ -388,6 +418,25 @@ The per-backup health-monitoring override: whether the periodic monitor verifies
 - Constructor: `BackupHealthConfig(bool monitoringEnabled, TimeSpan interval)`. Throws `ArgumentOutOfRangeException` when `interval` is not strictly positive.
 - Properties: `bool MonitoringEnabled`, `TimeSpan Interval`.
 
+## Catalog index
+
+### `BackupCatalogIndexProjection`
+
+The `ILatticeViewProjection` behind the backup-catalog index materialised view (created when `LatticeBackupOptions.EnableBackupCatalogIndexView` is `true`). It lowers each catalog registration - a `Set` carrying a `BackupManifest` - into one compact `BackupCatalogIndexRow`, re-keyed so the index scans newest-first with the members of a backup set contiguous; deletes and range deletes project nothing, and the listing drops any index row whose backup no longer exists in the catalog.
+
+- `const string Version` - the projection's code-identity version (`backup-catalog-index-v3`).
+- `string ProjectionVersion { get; }` - returns `Version`.
+- `IEnumerable<ViewWrite> Project(LatticeMutation mutation)` - maps one catalog mutation to its index-row upsert.
+
+### `BackupCatalogIndexRow`
+
+The compact row the index stores per catalogued backup - exactly the fields the listing filters and sorts on - so a filtered, created-descending, paged query is answered from the index and only the rows that land on the page read their full manifest. Serialized, immutable.
+
+- `string BackupId`, `string Name`, `BackupKind Kind`, `string TreeId`, `DateTimeOffset CreatedAtUtc` - the indexed backup's id, name, kind, scope tree, and capture time.
+- `string? SetId`, `string? SetName` - the backup set the backup belongs to, or `null` when it was captured standalone.
+- `string? BaseBackupId` - the base an incremental is layered on, or `null` for a full backup.
+- `string DisplayName` - `SetName` when the backup belongs to a set, otherwise `Name`.
+
 ## Enums
 
 ### `BackupKind`
@@ -446,6 +495,10 @@ The per-backup health-monitoring override: whether the periodic monitor verifies
 ### `LatticeBackupCrossTreeFenceException` : `Exception`
 
 Thrown by `CaptureSetAsync` when a stable cross-tree fence cannot be established within the configured attempts or drain timeout. Constructors: `(string message)` and `(string message, Exception innerException)`.
+
+### `LatticeBackupTenantIsolationException` : `InvalidOperationException`
+
+Thrown by `ILatticeBackupTenantScope.AuthorizeCapture` / `AuthorizeRestoreTarget` when a capture or restore would cross the active tenant's isolation boundary. The operation is refused before any data is read or written. Constructors: `(string message)` and `(string message, Exception innerException)`.
 
 ### `LatticeRestoreValidationException` : `InvalidOperationException`
 

@@ -225,7 +225,7 @@ public class LatticeOptions
     /// split is triggered, measured as the leaf's running
     /// <c>StateBytes</c> total (UTF-8 key length plus stored value length per
     /// entry). Complements the structural
-    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/> bound: the key count
+    /// <see cref="BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> bound: the key count
     /// bounds how many entries a leaf holds, and this bounds how large those
     /// entries are allowed to be in aggregate.
     /// <para>
@@ -233,7 +233,7 @@ public class LatticeOptions
     /// values are large (an approximate-nearest-neighbour index storing a
     /// chunk of vectors per key, say) reaches a multi-hundred-megabyte leaf
     /// while still holding fewer keys than
-    /// <see cref="ResolvedLatticeOptions.MaxLeafKeys"/>, so it never splits.
+    /// <see cref="BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/>, so it never splits.
     /// Capturing that leaf's snapshot has to materialise the payload in one
     /// contiguous buffer, which fails with
     /// <see cref="OutOfMemoryException"/> under ambient heap pressure. A failed
@@ -2756,6 +2756,7 @@ public class LatticeOptions
     /// figure per partition and is understated to that same degree; both
     /// figures are surfaced separately on the storage-usage report so the gap
     /// is visible rather than inferred.
+    /// </para>
     /// <para>
     /// <b>Size it above
     /// <see cref="WalMaxRetainedBytesWorkingSetMultiple"/> times the largest

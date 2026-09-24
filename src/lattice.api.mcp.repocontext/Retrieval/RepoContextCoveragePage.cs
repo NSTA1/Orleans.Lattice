@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// A page carries the <b>set</b> of covered identifiers rather than a count or a
 /// checksum, and that choice is load-bearing rather than incidental. Membership is
 /// written through
-/// <see cref="Orleans.Lattice.ILattice.EnableManyAsync(System.Collections.Generic.List{string}, string, System.Threading.CancellationToken)"/>,
+/// <see cref="Orleans.Lattice.CrdtLatticeExtensions.EnableManyAsync(Orleans.Lattice.ILattice, System.Collections.Generic.IReadOnlyCollection{string}, string, System.Threading.CancellationToken)"/>,
 /// which reports no per-key transition, so a delta-maintained counter would
 /// double-count the routine case of re-adding an already-covered source. A set is
 /// idempotent under add, exact (a gap the whole-set scan would have found is still

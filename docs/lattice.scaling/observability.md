@@ -21,7 +21,7 @@ gauge callbacks read a published scalar and never recompute the signal.
 | `orleans.lattice.scaling.compute.wal_dispatch_pressure` | `1` | `ComputePressure.WalDispatch` |
 | `orleans.lattice.scaling.compute.replicas` | `{replica}` | `ScalingSignal.RecommendedReplicas` |
 | `orleans.lattice.scaling.storage.accounts_over_threshold` | `{account}` | count of over-threshold `WalAccountPressure` entries |
-| `orleans.lattice.scaling.storage.rebalance_recommendations` | `{recommendation}` | `1` when a rebalance is recommended, else `0` |
+| `orleans.lattice.scaling.storage.rebalance_recommendations` | `1` | `1` when a rebalance is recommended, else `0` |
 
 The instrument-name constants are exposed on `LatticeScalingMetrics`
 (`ScaleValueName`, `RawScaleValueName`, `ComputeActivationPressureName`, and so

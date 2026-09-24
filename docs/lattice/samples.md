@@ -80,6 +80,7 @@ A few samples deploy or compose more than one process and have a detailed sectio
 | [McpServer](../../samples/McpServer/README.md) | A single-silo cluster co-hosted with the Model Context Protocol endpoint from `Orleans.Lattice.Api.Mcp`, exposing the API facades as agent-callable tools. |
 | [McpTelemetry](../../samples/McpTelemetry/README.md) | A single-silo cluster co-hosted with the `Orleans.Lattice.Api.Mcp.Telemetry` add-on, exposing cluster metrics to an agent over a read-only Prometheus-backed proxy. |
 | [RepoContextContainer](../../samples/RepoContextContainer/README.md) | The RepoContext MCP server run as a single restart-durable container alongside its embedding companion. |
+| [AgentBacklog](../../samples/AgentBacklog/README.md) | A tool-driven walkthrough, run against the RepoContextContainer host, of the claim, lease, fencing, and release surface that makes an agent-operated backlog safe for several agents to drain at once, plus a copyable backlog template. |
 
 ### Indexing, Search and Views
 

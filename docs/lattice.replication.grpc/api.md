@@ -46,7 +46,7 @@ On the receiving ASP.NET Core pipeline, call `MapLatticeReplicationGrpc` on the 
 | Type or member | Kind | Purpose |
 |---|---|---|
 | `LatticeReplicationGrpcServiceCollectionExtensions` | static class | Extension-method holder for registering and mapping the gRPC binding. |
-| `AddLatticeReplicationGrpc` | extension method | Registers the gRPC sender, receiver endpoint dependencies, snapshot transport, anti-entropy probe transport, channel options, and security defaults. |
+| `AddLatticeReplicationGrpc` | extension method | Registers the gRPC sender, receiver endpoint dependencies, snapshot transport, anti-entropy probe transport, cross-cluster saga control channel and its receiving service, channel options, and security defaults. |
 | `MapLatticeReplicationGrpc` | extension method | Maps inbound replication routes on an ASP.NET Core endpoint route builder and returns the builder for chaining. |
 | `LatticeReplicationGrpcOptions` | sealed class | Configures peer endpoints, plaintext policy, channel customization, and local origin header override. |
 
