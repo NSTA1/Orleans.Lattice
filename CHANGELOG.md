@@ -62,6 +62,24 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## Released
 
+## [2026-09-24]
+
+Patch release: `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication` and `Orleans.Lattice.Caching.AzureBlob` advance to `9.7.1`. Every other package stays where the 2026-09-21 and 2026-09-23 waves left it. Packages that depend on `Orleans.Lattice.Backup` or `Orleans.Lattice.Replication` still require `9.7.0`, so hosts that use backup or replication should reference those packages directly to pick up these fixes.
+
+### Fixed
+
+- **Backup - A schedule could outlive an unpersisted scope.** A storage fault while recording a backup scope changed only memory, so a retried `EnsureScheduleAsync` registered reminders that later found no scope and captured nothing. A failed write now restores the scope, so the retry persists it. ([#3471](https://github.com/NSTA1/Orleans.Lattice/issues/3471)) (`Orleans.Lattice.Backup` 9.7.1)
+
+- **Replication - A failed receive-fence write was never retried.** A storage fault during a saga pause or resume changed only memory, so the retry was a no-op: a lost pause let inbound apply resume mid-saga, and a lost resume left the tree paused with no owner. A failed write now restores the owner. ([#3470](https://github.com/NSTA1/Orleans.Lattice/issues/3470)) (`Orleans.Lattice.Replication` 9.7.1)
+
+- **Storage - Blob cache clobbered a concurrent rewrite.** The sliding renewal and the expired-entry eviction were unconditional, so a `Set` from another replica landing between the read and that write lost its expiry or was deleted. Both now require the read version's ETag. ([#3461](https://github.com/NSTA1/Orleans.Lattice/issues/3461)) (`Orleans.Lattice.Caching.AzureBlob` 9.7.1)
+
+### Security
+
+- **Security - Keyword-named metrics passed the telemetry allow-list.** The deny-all gate skipped any metric named like a PromQL keyword, so `up or min` read `min` with only `up` admitted. Such a keyword now counts as a metric name wherever Prometheus parses it as one. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Telemetry` 9.7.1)
+
+- **Security - MCP telemetry packages resolved the unpatched facade.** `Orleans.Lattice.Api.Mcp.Telemetry` and `Orleans.Lattice.Api.Mcp.Telemetry.Azure` are republished with no code change, so they require the patched `Orleans.Lattice.Api.Telemetry` 9.7.1 instead of resolving 9.7.0. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Mcp.Telemetry` 9.7.1, `Orleans.Lattice.Api.Mcp.Telemetry.Azure` 9.7.1)
+
 ## [2026-09-23]
 
 Patch release: `Orleans.Lattice.Storage.File` advances to `9.7.1`. No other package changes in this wave.
