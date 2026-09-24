@@ -13,7 +13,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <para>
 /// The production trigger is <c>[StatelessWorker]</c> worker mis-routing.
 /// <c>LatticeGrain</c> - which backs the registry's own <c>_lattice_trees</c>
-/// tree - is <c>[StatelessWorker(maxLocalWorkers: 32)]</c>. Orleans holds
+/// tree - is a <c>[StatelessWorker]</c> with a local pool of up to
+/// <c>LatticeGrain.MaxLocalWorkers</c> activations. Orleans holds
 /// async-enumerable state in a dictionary on the activation that served
 /// <c>StartEnumeration</c>, but routes every subsequent <c>MoveNext</c> as an
 /// independent message with no request affinity, so a <c>MoveNext</c> that

@@ -18,7 +18,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <c>MaxLocalWorkers</c> is set to 32 so the
+/// <b>Sizing history.</b> <c>MaxLocalWorkers</c> was first set to 32 so the
 /// per-silo activation pool can absorb 32 concurrent in-flight calls before any
 /// new caller starts queueing on an existing activation's non-reentrancy queue.
 /// The Orleans default (<c>Environment.ProcessorCount</c>) is much smaller on
@@ -38,6 +38,58 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// activation-scoped and remain safe under multiple parallel activations.
 /// </para>
 /// <para>
+/// <b>Raised from 32 to 256 for single-key throughput (issue #812).</b> Every
+/// point call (<c>SetAsync</c>, <c>GetAsync</c>, ...) holds one non-reentrant
+/// activation for its whole end-to-end latency, so per-silo point-op
+/// concurrency is capped at <see cref="MaxLocalWorkers"/> and, by Little's law,
+/// throughput is capped at <c>MaxLocalWorkers / latency</c>. On the ACA
+/// two-silo set-point rig (4,000 keys/s offered) the 32-worker pool held 53 of
+/// a possible 64 calls in flight at 1,445 keys/s and 36.6 ms mean latency - the
+/// pool, not storage, was the bound. At 256 workers the same rig ran 1,721
+/// keys/s at 64 shards (+19%), where the bound moved to the per-shard
+/// serialisation of point writes on <see cref="IShardRootGrain"/> (almost all
+/// of the 258 ms mean latency was queueing in the shard stage, against a 20 ms
+/// leaf commit), and 2,735 keys/s at 256 shards (495 of 512 calls in flight),
+/// with zero failures in every arm. The read side hit the same wall: on the
+/// N=2 get-point rig the silo taking remote shard hops accumulated about
+/// 318,853 ms of <c>get.duration</c> per 10 s window - an average of 32 calls
+/// always in flight, exactly the old pool size - so with a p50 hop of about
+/// 3.3 ms point reads were capped near 10,000 per second per silo by the pool
+/// alone. 256 is the value the set-point rig proved safe; it
+/// is still a hard bound, so a runaway caller cannot expand the pool without
+/// limit.
+/// </para>
+/// <para>
+/// <b>The pool size is a throughput bound, not a correctness mechanism.</b>
+/// Nothing in this grain's correctness depends on the pool being large: a
+/// call path that could only complete if a second activation were free would
+/// deadlock at any size under enough load, so such a path must be fixed where
+/// it is (for example by interleaving the re-entrant entry point), never
+/// papered over by widening the pool.
+/// </para>
+/// <para>
+/// <b>Cost of the larger pool.</b> Orleans creates stateless-worker activations
+/// only on demand - a new one is added only when every existing local
+/// activation is busy - and idle ones are collected by the normal activation
+/// collector, so a lightly loaded tree still runs one or a handful of
+/// activations and pays nothing for the higher cap. Under saturation each
+/// activation carries only its lazy routing caches: a reference to the shared
+/// <see cref="ShardMap"/>, one grain-reference slot per physical shard in
+/// <c>_cachedShards</c> (8 bytes each, so 32 KB at the 4096-shard ceiling), and a
+/// few scalars - roughly 256 x (activation overhead + shard slots) per hot tree
+/// per silo, a few MB at most. Each new activation also pays one routing
+/// resolution (a registry shard-map read for a tree with a persisted map) on its
+/// first call, amortised over its lifetime. The only behavioural cost is on the
+/// raw <see cref="ILattice.KeysAsync"/>-family enumerators: their
+/// <c>MoveNext</c> mis-routing to a sibling worker is load-proportional, so a
+/// wider pool can raise their <c>EnumerationAbortedException</c> rate under load;
+/// the resumable <c>ScanKeysAsync</c> / <c>ScanEntriesAsync</c> forms recover
+/// from it transparently. Per-caller fan-out windows sized at 32
+/// (<see cref="BoundedFanOut.DefaultWidth"/> and the tag-index row-removal
+/// window) are deliberately left at 32: they bound one caller's burst, and a
+/// window below the pool size can never exhaust the pool on its own.
+/// </para>
+/// <para>
 /// <b>The timeout diagnostic quoted above is a censored channel; do not size a
 /// queue from it.</b> Orleans emits that clause only for a request already
 /// approaching the 30 s response deadline, and the clause describes the
@@ -55,7 +107,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// records at dispatch on every call and requires no timeout to exist.
 /// </para>
 /// </remarks>
-[StatelessWorker(maxLocalWorkers: 32)]
+[StatelessWorker(maxLocalWorkers: MaxLocalWorkers)]
 internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
@@ -64,6 +116,13 @@ internal sealed partial class LatticeGrain(
     IServiceProvider services,
     ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain, IGrainBase
 {
+    /// <summary>
+    /// Maximum number of local activations of this stateless worker per silo,
+    /// which bounds per-silo concurrency of single-key calls. See the type remarks
+    /// for the sizing history and cost.
+    /// </summary>
+    internal const int MaxLocalWorkers = 256;
+
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
 

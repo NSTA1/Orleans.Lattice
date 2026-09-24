@@ -406,10 +406,11 @@ public sealed class BoundedFanOutWindowedTests
     }
 
     [Test]
-    public void DefaultWidth_matches_the_router_grains_local_worker_count()
+    public void DefaultWidth_stays_a_per_caller_burst_bound_below_the_router_pool()
     {
-        // The window is sized to LatticeGrain's [StatelessWorker(maxLocalWorkers: 32)].
-        // A wider window would buy no further overlap while bursting more calls.
+        // The window bounds one caller's burst. It stays at 32 while the router's
+        // pool is larger (issue #812), so a single fan-out cannot exhaust the pool.
         Assert.That(BoundedFanOut.DefaultWidth, Is.EqualTo(32));
+        Assert.That(BoundedFanOut.DefaultWidth, Is.LessThan(Orleans.Lattice.BPlusTree.Grains.LatticeGrain.MaxLocalWorkers));
     }
 }

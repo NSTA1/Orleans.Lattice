@@ -47,12 +47,14 @@ internal static class BoundedFanOut
     /// (<see cref="ForEachAsync{TItem}"/> and <see cref="ReadAheadAsync{TItem, TResult}"/>).
     /// </summary>
     /// <remarks>
-    /// Sized to the <see cref="ILattice"/> router grain's
+    /// Originally sized to the <see cref="ILattice"/> router grain's
     /// <c>[StatelessWorker(maxLocalWorkers: 32)]</c>: calls issued together are
-    /// serviced by separate local workers rather than queued behind one another,
-    /// but only up to that worker count, so a wider window would buy no further
-    /// overlap while bursting more outbound calls. It is the same bound the
-    /// shipped leaf-seal fan-out and tag-index row removal already use.
+    /// serviced by separate local workers rather than queued behind one another.
+    /// Issue #812 raised that pool to 256 for single-key throughput; this window
+    /// deliberately stays at 32, because it bounds one caller's burst rather than
+    /// matching the pool, and a window well below the pool size can never exhaust
+    /// the pool on its own and starve concurrent point traffic. It is the same
+    /// bound the shipped leaf-seal fan-out and tag-index row removal already use.
     /// </remarks>
     public const int DefaultWidth = 32;
 
