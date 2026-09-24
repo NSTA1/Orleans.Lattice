@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// allowance - no constant here is tuned to any particular host's memory.
 /// </para>
 /// </summary>
-public sealed class BPlusLeafGrainBoundedSplitTransferTests
+public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
 {
     /// <summary>Rows are 256 payload bytes each, so the corpus size is predictable.</summary>
     private static byte[] Payload(int i)
@@ -388,7 +388,7 @@ public sealed class BPlusLeafGrainBoundedSplitTransferTests
     }
 
     // ---------------------------------------------------------------
-    // Arm 2 - the control. The already-resident population must be untouched.
+    // Arm 2 - the control. A small resident transfer still fits one batch.
     // ---------------------------------------------------------------
 
     [Test]
@@ -410,9 +410,7 @@ public sealed class BPlusLeafGrainBoundedSplitTransferTests
         Assert.That(
             recorder.Batches.Count,
             Is.EqualTo(1),
-            "a leaf that is already wholly resident has nothing to bound, so it must still move "
-            + "in a single pass - the batching must not impose a cost on the population that "
-            + "never had the problem");
+            "the right half fits the transfer budget, so it must still move in a single pass");
         Assert.That(recorder.AllTransferredKeys.Count(), Is.EqualTo(32));
         Assert.That(result.PromotedKey, Is.EqualTo(Key(32)));
     }

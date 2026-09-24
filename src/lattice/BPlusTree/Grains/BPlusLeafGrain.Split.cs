@@ -956,9 +956,10 @@ internal sealed partial class BPlusLeafGrain
         // leaf is, which is the property that makes this a fix rather than a
         // mitigation: a leaf twice the size divides at the same peak, not at
         // twice the peak. The batch width is derived at runtime from the
-        // frame's own measured mean row footprint against an option that
-        // already exists and already defaults sanely, so no new constant is
-        // introduced and nothing is tuned to a particular host's memory.
+        // frame's own measured mean row footprint, or the actual accounted
+        // row lengths when the frame is absent, against the resident budget.
+        // Already-resident payloads still need bounded transfer messages;
+        // only an indivisible oversized row may exceed that budget alone.
         //
         // Crash-safety is unchanged by batching. The split intent - SplitKey,
         // SplitSiblingId and NextSibling - is already durable before any row
