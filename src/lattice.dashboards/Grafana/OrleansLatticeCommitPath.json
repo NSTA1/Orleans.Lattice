@@ -1199,6 +1199,24 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_checkpoint_flush_tail_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} faulted/s" }
       ]
+    },
+    {
+      "id": 165,
+      "title": "Leaf span FAIL-OPEN commits by reason/origin - issue #2125 (out-of-span key kept locally; absent = healthy or build did not land)",
+      "description": "Keys a leaf committed LOCALLY although its declared [low, high) span excludes them, because declared-span admission found no neighbouring leaf to forward them to (orleans.lattice.leaf.span_fail_open_commits) - issue #2125. Split by reason (no_sibling: the chain pointer on the key's side is null; self_reference: it names the leaf itself) and origin (client_write, merge, cross_shard_migration). WHY IT MATTERS: WAL replay admits by declared span, so a row committed outside its leaf's span is one that leaf will not reinstate on its own rebuild; whether it survives a cold restart depends on the checkpoint position of the leaf that does declare it. A fail-open is the shape that precedes a silent loss. READ THE ORIGIN TAG FIRST: cross_shard_migration is the deliberate graft shape and can be expected during a reshard; client_write or merge is an accidental fall-back and is worth investigating on its own. A leaf that declares no span at all (a single-leaf tree or a bulk-loaded leaf) owns every key and never advances this counter, so a bulk-loaded tree reading absent is not evidence its chain is healthy. ABSENT IS NOT A MEASURED ZERO. This counter is not zero-primed, so a series appears only on the first fail-open and a missing line is consistent BOTH with a build that lacks the instrument AND with a build that carries it and has never fallen open. Confirm deployment from the image digest, never from the presence of this series. A HEALTHY ESTATE IS FLAT AT ABSENT, so any line at all here is worth reading. The companion warning log (rate-limited to one line per silo every 10 seconds) names the leaf and tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 398 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason, origin) (rate(orleans_lattice_leaf_span_fail_open_commits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} {{origin}} keys/s" }
+      ]
     }
   ]
 }

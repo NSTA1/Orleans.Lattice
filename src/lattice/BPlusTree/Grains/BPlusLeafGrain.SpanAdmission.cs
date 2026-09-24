@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 
@@ -132,9 +133,10 @@ internal sealed partial class BPlusLeafGrain
     /// has not yet been persisted.
     /// </para>
     /// </summary>
-    private bool TryResolveSpanForwardTarget(string key, out GrainId target)
+    private bool TryResolveSpanForwardTarget(string key, out GrainId target, out SpanFailOpenReason failOpen)
     {
         target = default;
+        failOpen = SpanFailOpenReason.None;
 
         var low = state.State.LowKeyInclusive;
         var high = state.State.HighKeyExclusive;
@@ -149,14 +151,131 @@ internal sealed partial class BPlusLeafGrain
 
         // A self-reference would spin the forward on this same grain, and a
         // missing pointer means there is nowhere better to put the row than
-        // here. Both fall back to committing locally.
-        if (candidate is null || candidate.Value.Equals(context.GrainId))
+        // here. Both fall back to committing locally, and both are reported
+        // through failOpen so the caller can count the fall-back (issue #2125).
+        if (candidate is null)
         {
+            failOpen = SpanFailOpenReason.NoSibling;
+            return false;
+        }
+
+        if (candidate.Value.Equals(context.GrainId))
+        {
+            failOpen = SpanFailOpenReason.SelfReference;
             return false;
         }
 
         target = candidate.Value;
         return true;
+    }
+
+    /// <summary>
+    /// Why <see cref="TryResolveSpanForwardTarget"/> declined to forward an
+    /// out-of-span key. <see cref="None"/> covers both the in-span case and a
+    /// successful forward, neither of which is a fail-open.
+    /// </summary>
+    private enum SpanFailOpenReason : byte
+    {
+        /// <summary>Not a fail-open: the key is in span, or a forward target resolved.</summary>
+        None,
+
+        /// <summary>The chain pointer on the key's side is null.</summary>
+        NoSibling,
+
+        /// <summary>The chain pointer on the key's side names this leaf.</summary>
+        SelfReference,
+    }
+
+    /// <summary>
+    /// The write origin a fail-open is attributed to on
+    /// <see cref="LatticeMetrics.LeafSpanFailOpenCommits"/>.
+    /// </summary>
+    private enum SpanWriteOrigin : byte
+    {
+        /// <summary>A foreground set, delete, or batched set.</summary>
+        ClientWrite,
+
+        /// <summary>A <c>MergeManyAsync</c> batch that is not a migration import.</summary>
+        Merge,
+
+        /// <summary>A <c>MergeManyAsync</c> batch flagged as a cross-shard migration import.</summary>
+        CrossShardMigration,
+    }
+
+    /// <summary>
+    /// Minimum interval, in ticks, between span fail-open warning logs across
+    /// the whole silo. Every fail-open is still counted on
+    /// <see cref="LatticeMetrics.LeafSpanFailOpenCommits"/>; only the log line
+    /// is rate-limited, so a torn chain pointer under a write storm cannot
+    /// flood the log.
+    /// </summary>
+    private static readonly long SpanFailOpenLogIntervalTicks = TimeSpan.FromSeconds(10).Ticks;
+
+    /// <summary>Last UTC tick a span fail-open warning was logged (silo-wide).</summary>
+    private static long _lastSpanFailOpenLogTicks;
+
+    /// <summary>
+    /// Counts one key this leaf is about to admit locally although its
+    /// declared span excludes it, and emits a rate-limited warning naming the
+    /// leaf and the tree (issue #2125). Called by every caller of
+    /// <see cref="TryResolveSpanForwardTarget"/> when it reports a fail-open,
+    /// and never on the in-span path, so a leaf with no declared span cannot
+    /// reach it. Observability only: never throws into the write.
+    /// </summary>
+    private void RecordSpanFailOpenCommit(SpanFailOpenReason reason, SpanWriteOrigin origin)
+    {
+        var reasonTag = reason == SpanFailOpenReason.SelfReference
+            ? LatticeMetrics.SpanFailOpenReasonSelfReference
+            : LatticeMetrics.SpanFailOpenReasonNoSibling;
+        var originTag = origin switch
+        {
+            SpanWriteOrigin.Merge => LatticeMetrics.SpanFailOpenOriginMerge,
+            SpanWriteOrigin.CrossShardMigration => LatticeMetrics.SpanFailOpenOriginCrossShardMigration,
+            _ => LatticeMetrics.SpanFailOpenOriginClientWrite,
+        };
+
+        LatticeMetrics.LeafSpanFailOpenCommits.Add(1, LeafTreeTag(), reasonTag, originTag, LeafTenantTag());
+
+        if (!ShouldLogSpanFailOpen())
+        {
+            return;
+        }
+
+        try
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(
+                    "Leaf {GrainId} of tree {TreeId} committed an out-of-span key locally because no neighbouring leaf resolved (reason {Reason}, origin {Origin}). See orleans.lattice.leaf.span_fail_open_commits.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    reasonTag.Value,
+                    originTag.Value);
+            }
+        }
+        catch
+        {
+            // Observability must never fail the write it is describing.
+        }
+    }
+
+    /// <summary>
+    /// Per-silo token check for the span fail-open warning: returns
+    /// <see langword="true"/> at most once per
+    /// <see cref="SpanFailOpenLogIntervalTicks"/>, via the same interlocked
+    /// compare-and-swap gate as the cursor-publish-failure warning.
+    /// </summary>
+    private static bool ShouldLogSpanFailOpen()
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var last = Volatile.Read(ref _lastSpanFailOpenLogTicks);
+        if (now - last < SpanFailOpenLogIntervalTicks)
+        {
+            return false;
+        }
+
+        return Interlocked.CompareExchange(ref _lastSpanFailOpenLogTicks, now, last) == last;
     }
 
     /// <summary>
@@ -224,11 +343,17 @@ internal sealed partial class BPlusLeafGrain
     {
         var local = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
         Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>? buckets = null;
+        var origin = isCrossShardMigration ? SpanWriteOrigin.CrossShardMigration : SpanWriteOrigin.Merge;
 
         foreach (var (key, lww) in entries)
         {
-            if (!TryResolveSpanForwardTarget(key, out var target))
+            if (!TryResolveSpanForwardTarget(key, out var target, out var failOpen))
             {
+                if (failOpen != SpanFailOpenReason.None)
+                {
+                    RecordSpanFailOpenCommit(failOpen, origin);
+                }
+
                 local[key] = lww;
                 continue;
             }
@@ -319,8 +444,13 @@ internal sealed partial class BPlusLeafGrain
 
         foreach (var entry in entries)
         {
-            if (!TryResolveSpanForwardTarget(entry.Key, out var target))
+            if (!TryResolveSpanForwardTarget(entry.Key, out var target, out var failOpen))
             {
+                if (failOpen != SpanFailOpenReason.None)
+                {
+                    RecordSpanFailOpenCommit(failOpen, SpanWriteOrigin.ClientWrite);
+                }
+
                 local.Add(entry);
                 continue;
             }
@@ -427,8 +557,13 @@ internal sealed partial class BPlusLeafGrain
 
         foreach (var entry in entries)
         {
-            if (!TryResolveSpanForwardTarget(entry.Key, out var target))
+            if (!TryResolveSpanForwardTarget(entry.Key, out var target, out var failOpen))
             {
+                if (failOpen != SpanFailOpenReason.None)
+                {
+                    RecordSpanFailOpenCommit(failOpen, SpanWriteOrigin.ClientWrite);
+                }
+
                 local.Add(entry);
                 continue;
             }

@@ -2805,10 +2805,16 @@ internal sealed partial class ShardRootGrain(
         // grouped internal-routing path below instead of blind-casting.
         if (RootIsLeafTyped)
         {
-            await MergeGroupAsync(entries, isCrossShardMigration);
+            await MergeGroupAsync(entries, isCrossShardMigration,
+                Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
             await forwardTask;
             return;
         }
+
+        // Captured BEFORE grouping so a routing change that lands while the
+        // grouping traversal is suspended is also seen as a change (#2125).
+        var groupedAtGeneration = Volatile.Read(ref _routingGeneration);
+        var groupedAtRoot = state.State.RootNodeId;
 
         // Group entries by target leaf so each leaf is called exactly once.
         // Per-leaf WriteStateAsync collapses from O(entries) to O(leaves) -
@@ -2842,7 +2848,7 @@ internal sealed partial class ShardRootGrain(
 
         foreach (var group in groups.Values)
         {
-            await MergeGroupAsync(group, isCrossShardMigration);
+            await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
         }
 
         // Await forwardTask at the end of the grouped path - matches the
@@ -2879,8 +2885,31 @@ internal sealed partial class ShardRootGrain(
     /// against the current topology and propagating any resulting split up to
     /// the root. Retries on transient Orleans / storage exceptions; the leaf's
     /// <c>MergeManyAsync</c> is LWW-idempotent, so replay is safe.
+    /// <para>
+    /// <b>Re-grouping (issue #2125).</b> The group was built by routing each
+    /// key once, and the normal path re-routes only its first key and hands
+    /// the whole group to that leaf. That is correct only while routing is
+    /// unchanged: if a leaf split (or a reclaim, graft, or root promotion)
+    /// moved a boundary through the group since it was built, every key past
+    /// the new boundary reaches a leaf whose declared span excludes it, and
+    /// its survival then rests on the leaf's span forward - or, with no
+    /// resolvable neighbour, on a fail-open local commit. So on a retry, and
+    /// whenever <see cref="_routingGeneration"/> or the root has moved since
+    /// <paramref name="groupedAtGeneration"/> /
+    /// <paramref name="groupedAtRoot"/> were captured, every key is re-routed
+    /// and the group is split into per-leaf sub-groups before merging.
+    /// </para>
+    /// <para>
+    /// The normal path - first attempt, unchanged routing - is exactly the
+    /// pre-#2125 path: one volatile read and one <see cref="GrainId"/>
+    /// comparison, no extra routing lookup, and no allocation.
+    /// </para>
     /// </summary>
-    private async Task MergeGroupAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
+    private async Task MergeGroupAsync(
+        Dictionary<string, LwwValue<byte[]>> group,
+        bool isCrossShardMigration,
+        long groupedAtGeneration,
+        GrainId? groupedAtRoot)
     {
         // Any key in the group routes to the same leaf under the current
         // topology; pick one via foreach-break to avoid the LINQ enumerator
@@ -2891,10 +2920,23 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+
+        // Tracked separately from attempt: the retired-leaf back-off rewinds
+        // attempt so it does not consume the transient retry budget, and a
+        // retry after that back-off must still re-group.
+        var retried = false;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
+                if (retried
+                    || Volatile.Read(ref _routingGeneration) != groupedAtGeneration
+                    || !Nullable.Equals(state.State.RootNodeId, groupedAtRoot))
+                {
+                    await RegroupAndMergeAsync(group, isCrossShardMigration);
+                    return;
+                }
+
                 var splitResult = await TraverseForMergeAsync(pivotKey!, group, isCrossShardMigration);
 
                 while (splitResult is not null)
@@ -2906,8 +2948,69 @@ internal sealed partial class ShardRootGrain(
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                retried = true;
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
 
+            }
+        }
+    }
+
+    /// <summary>
+    /// The re-grouping arm of <see cref="MergeGroupAsync"/>: re-routes every
+    /// key of <paramref name="group"/> against the current topology and merges
+    /// each resulting per-leaf sub-group through the ordinary
+    /// <see cref="TraverseForMergeAsync"/> + <see cref="PromoteRootAsync"/>
+    /// sequence.
+    /// <para>
+    /// It deliberately does not recurse into <see cref="MergeGroupAsync"/>. A
+    /// fault here propagates to the caller's retry loop, which re-groups again
+    /// from scratch under the same retry budget and deadline; recursing would
+    /// give every nested level a fresh budget, so a persistently failing leaf
+    /// could re-group without bound. Re-merging a sub-group that already
+    /// landed before the fault is LWW-idempotent.
+    /// </para>
+    /// </summary>
+    private async Task RegroupAndMergeAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
+    {
+        Interlocked.Increment(ref _mergeRegroupCount);
+
+        // A root that is (again) a single leaf owns every key, so there is
+        // nothing to split; TraverseForMergeAsync routes the whole group to it.
+        if (RootIsLeafTyped)
+        {
+            string? onlyPivot = null;
+            foreach (var k in group.Keys) { onlyPivot = k; break; }
+            var rootSplit = await TraverseForMergeAsync(onlyPivot!, group, isCrossShardMigration);
+            while (rootSplit is not null)
+            {
+                rootSplit = await PromoteRootAsync(rootSplit);
+            }
+
+            return;
+        }
+
+        var subGroups = new Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>();
+        foreach (var (key, lww) in group)
+        {
+            var leafId = await TraverseToLeafWithRetryAsync(key);
+            if (!subGroups.TryGetValue(leafId, out var subGroup))
+            {
+                subGroup = new Dictionary<string, LwwValue<byte[]>>(capacity: Math.Min(group.Count, 16));
+                subGroups[leafId] = subGroup;
+            }
+
+            subGroup[key] = lww;
+        }
+
+        foreach (var subGroup in subGroups.Values)
+        {
+            string? subPivot = null;
+            foreach (var k in subGroup.Keys) { subPivot = k; break; }
+
+            var splitResult = await TraverseForMergeAsync(subPivot!, subGroup, isCrossShardMigration);
+            while (splitResult is not null)
+            {
+                splitResult = await PromoteRootAsync(splitResult);
             }
         }
     }
