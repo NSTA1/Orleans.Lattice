@@ -297,7 +297,8 @@ public sealed class LatticeWalGc(
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
         var floorResult = await ApplyDurableMaterialiserFloorAsync(
             treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds,
-            offsetCoverage.AbstainedConsumerIds, cancellationToken).ConfigureAwait(false);
+            offsetCoverage.AbstainedConsumerIds, cancellationToken,
+            ResolvePartitionProvider).ConfigureAwait(false);
         var cursorBlocked = floorResult.Blocked;
         var blockingConsumerId = floorResult.BlockingConsumerId;
         var blockingConsumerIds = floorResult.BlockingConsumerIds;
@@ -787,6 +788,15 @@ public sealed class LatticeWalGc(
     /// <c>UncoveredCursorComputed</c> distinguishes "nothing left uncovered"
     /// from "never established", because only the first may admit anything.
     /// </para>
+    /// <para>
+    /// <b>Empty-WAL rule (issue #3453) - reporting and scheduling only.</b> A
+    /// <c>(Zero, -1)</c> pin whose partition
+    /// <paramref name="resolvePartitionProvider"/> proves empty still blocks
+    /// that partition's trim, but is left out of <c>Blocked</c> and the
+    /// blocking-consumer ids, so the scheduler neither reports nor drives it.
+    /// It never feeds trim: <c>BlockedPartitions</c> is unchanged. A
+    /// <see langword="null"/> resolver disables the rule.
+    /// </para>
     /// </summary>
     private async Task<DurableMaterialiserFloor> ApplyDurableMaterialiserFloorAsync(
         string treeName,
@@ -794,7 +804,8 @@ public sealed class LatticeWalGc(
         int partitions,
         IReadOnlySet<string>? coveredConsumerIds,
         IReadOnlySet<string>? abstainedConsumerIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, IWalStorageProvider?>? resolvePartitionProvider)
     {
         var factory = GrainFactory;
         if (factory is null)
@@ -964,6 +975,7 @@ public sealed class LatticeWalGc(
         var blockedCount = 0;
         string? blockingConsumerId = null;
         List<string>? blockingConsumerIds = null;
+        sbyte[]? walEmptyByPartition = null;
 
         foreach (var (consumerId, pin) in pins)
         {
@@ -1064,11 +1076,42 @@ public sealed class LatticeWalGc(
                 // in hand - and restores the per-consumer limits to the scope
                 // they were written for.
                 blockedPartitions ??= new bool[partitions];
-                blockingConsumerId ??= consumerId;
-                blockingConsumerIds ??= new List<string>(MaxReportedBlockingConsumers);
-                if (blockingConsumerIds.Count < MaxReportedBlockingConsumers)
+
+                // Issue #3453: a (Zero, -1) pin on a partition whose WAL is
+                // proven EMPTY (no entry was ever durably appended) is still
+                // recorded against that partition's trim below - so trim is
+                // byte-identical to before, and the first entry appended there
+                // is retained by the next pass - but it is NOT reported as
+                // blocking. There is nothing in an empty partition for it to
+                // protect, and a never-written leaf whose replay had nothing to
+                // scan has no checkpoint to publish, so reporting it only feeds
+                // the scheduler a drive that must return NoAdvance for ever.
+                //
+                // Narrow and fail-closed: only a consumer the offset plane
+                // proved abstained ("-1"), only on a partition the id names
+                // (partition 0 on an unpartitioned tree; an unattributable id on
+                // a partitioned tree keeps blocking), and only when the head
+                // probe positively reads an empty partition. An unresolvable
+                // provider or a probe that throws keeps the pin blocking.
+                var reportExempt = resolvePartitionProvider is not null
+                    && abstainedConsumerIds is not null
+                    && abstainedConsumerIds.Contains(consumerId)
+                    && (partitions <= 1 ? 0 : TryResolvePinPartition(consumerId, partitions)) is { } probePartition
+                    && await IsPartitionWalProvenEmptyAsync(
+                        treeName,
+                        probePartition,
+                        resolvePartitionProvider,
+                        walEmptyByPartition ??= new sbyte[Math.Max(1, partitions)],
+                        cancellationToken).ConfigureAwait(false);
+
+                if (!reportExempt)
                 {
-                    blockingConsumerIds.Add(consumerId);
+                    blockingConsumerId ??= consumerId;
+                    blockingConsumerIds ??= new List<string>(MaxReportedBlockingConsumers);
+                    if (blockingConsumerIds.Count < MaxReportedBlockingConsumers)
+                    {
+                        blockingConsumerIds.Add(consumerId);
+                    }
                 }
 
                 if (TryResolvePinPartition(consumerId, partitions) is { } blockedPartition)
@@ -1101,7 +1144,7 @@ public sealed class LatticeWalGc(
                 // when the set is not yet full walks a dictionary already held
                 // in memory and issues no I/O.
                 if (blockedCount >= partitions
-                    && blockingConsumerIds.Count >= MaxReportedBlockingConsumers)
+                    && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
                 {
                     // The uncovered-cursor fold is abandoned unfinished here, so
                     // it is reported as NOT computed (issue #3172). Every
@@ -1137,11 +1180,62 @@ public sealed class LatticeWalGc(
         return new DurableMaterialiserFloor(
             floor,
             blockedPartitions,
-            blockedPartitions is not null,
+            blockingConsumerId is not null,
             blockingConsumerId,
             blockingConsumerIds,
             uncovered,
             true);
+    }
+
+    /// <summary>
+    /// Whether WAL partition <paramref name="partition"/> of
+    /// <paramref name="treeName"/> is proven empty - its provider reports no
+    /// entry was ever durably appended (<c>GetHighestOffsetAsync &lt; 0</c>, the
+    /// provider's monotonic high-water mark, so a trim never makes a written
+    /// partition read empty) - memoised per pass in
+    /// <paramref name="cache"/> (<c>0</c> unprobed, <c>1</c> empty,
+    /// <c>-1</c> not proven empty). Fails closed: an unresolvable provider or a
+    /// probe that throws reads as not empty (issue #3453).
+    /// </summary>
+    private static async ValueTask<bool> IsPartitionWalProvenEmptyAsync(
+        string treeName,
+        int partition,
+        Func<int, IWalStorageProvider?> resolvePartitionProvider,
+        sbyte[] cache,
+        CancellationToken cancellationToken)
+    {
+        if ((uint)partition >= (uint)cache.Length)
+        {
+            return false;
+        }
+
+        if (cache[partition] != 0)
+        {
+            return cache[partition] > 0;
+        }
+
+        var empty = false;
+        try
+        {
+            if (resolvePartitionProvider(partition) is { } provider)
+            {
+                var highest = await provider
+                    .GetHighestOffsetAsync(treeName, partition, cancellationToken)
+                    .ConfigureAwait(false);
+                empty = highest < 0;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            empty = false;
+        }
+
+        cache[partition] = empty ? (sbyte)1 : (sbyte)-1;
+        return empty;
     }
 
     /// <summary>
@@ -1220,11 +1314,16 @@ public sealed class LatticeWalGc(
     /// blocked (the common case, which allocates no array).
     /// </param>
     /// <param name="Blocked">
-    /// Whether any partition is blocked. The report's
+    /// Whether any partition is blocked by a pin that is <em>reported</em> as
+    /// blocking. The report's
     /// <see cref="WalGcCursorFloorState"/> is derived from this, so a tree with
     /// one blocked partition still reports
     /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/> and still drives
-    /// the scheduler's blocked-leaf remedy at its cadence floor.
+    /// the scheduler's blocked-leaf remedy at its cadence floor. It can be
+    /// <see langword="false"/> while <see cref="BlockedPartitions"/> is not:
+    /// a <c>(Zero, -1)</c> pin on a partition whose WAL is proven empty still
+    /// blocks that partition's trim but is not reported (issue #3453). Trim
+    /// reads <see cref="IsPartitionBlocked"/> only, never this flag.
     /// </param>
     /// <param name="BlockingConsumerId">
     /// The consumer id of the first blocking pin encountered, or
