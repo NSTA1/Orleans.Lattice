@@ -53,7 +53,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     /// <summary>The terminal arms, which partition every attempted touch.</summary>
     private static readonly string[] TerminalOutcomeArms =
-        ["completed", "unresolvable", "faulted", "undelivered", "orphaned"];
+        ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale"];
 
     [Test]
     public void ReactivationOutcomeTag_arms_every_declared_terminal_outcome()
@@ -116,8 +116,47 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     /// <summary>
-    /// Runs one permanently-blocked tree to its first abandonment and returns
-    /// how many times each terminal arm fired.
+    /// A drive that the leaf refuses because issue #3451 has latched it stale.
+    /// </summary>
+    private static Task<string?> LatchedStaleProbe() =>
+        throw new LeafProjectionStaleException(
+            "latched stale", new InvalidOperationException("projection fell off the WAL"));
+
+    /// <summary>
+    /// Drives a blocked tree until its first reactivation verdict ends the
+    /// consumer's retries, and returns the attempts charged by then.
+    /// </summary>
+    /// <remarks>
+    /// Every other terminal arm is retried until the consumer is abandoned, so
+    /// abandonment is the end of their story. A latched-stale verdict is
+    /// terminal for its pin (issue #3478): it never reaches abandonment, and a
+    /// wait for one would spin to its guard. For that arm the run waits for the
+    /// verdict itself and then runs a further hour, so a sweep that re-drove the
+    /// leaf would still show up as extra attempts and extra arm counts.
+    /// </remarks>
+    private static async Task<int> AttemptsBeforeRetriesEndAsync(
+        VirtualTimeProvider time,
+        InstrumentRecorder recorder)
+    {
+        var guard = 0;
+        while (Outcomes(recorder, "abandoned") == 0 && Outcomes(recorder, "latched_stale") == 0)
+        {
+            await TickAsync(time);
+            Assert.That(++guard, Is.LessThan(400),
+                "the leaf never reached a verdict that ends its retries, so no terminal arm can be read from this run.");
+        }
+
+        if (Outcomes(recorder, "latched_stale") > 0)
+        {
+            await AdvanceAtLeastAsync(time, TimeSpan.FromHours(1));
+        }
+
+        return Outcomes(recorder, "attempted");
+    }
+
+    /// <summary>
+    /// Runs one permanently-blocked tree until its retries end and returns how
+    /// many times each terminal arm fired.
     /// </summary>
     private static async Task<Dictionary<string, int>> TerminalArmCountsAsync(
         string treeId,
@@ -130,7 +169,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         using (recorder)
         {
             await StartAndRunFirstPassAsync(scheduler, time);
-            await AttemptsBeforeFirstAbandonmentAsync(time, recorder);
+            await AttemptsBeforeRetriesEndAsync(time, recorder);
             await scheduler.StopAsync(CancellationToken.None);
 
             return TerminalOutcomeArms.ToDictionary(
@@ -143,10 +182,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     public async Task ExecuteAsync_records_each_terminal_outcome_on_its_own_arm_and_no_other()
     {
         // Every arm is asserted present on its own probe and absent on the other
-        // three, which makes this a 4x4 identity matrix rather than four
+        // others, which makes this a 6x6 identity matrix rather than six
         // independent assertions. That shape is what discharges #2938's own
         // standard: each off-diagonal zero is proven observable by the diagonal
-        // entry in the same matrix, so no zero here is an unearned one. Four
+        // entry in the same matrix, so no zero here is an unearned one. Six
         // separate fixtures would each have had to carry a positive control of
         // their own, and an absence with no control is precisely the defect
         // being fixed.
@@ -164,6 +203,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "arming-undelivered", () => throw new TimeoutException("silo busy")),
             ["orphaned"] = await TerminalArmCountsAsync(
                 "arming-orphaned", () => Task.FromResult<string?>(null)),
+            ["latched_stale"] = await TerminalArmCountsAsync("arming-latched-stale", LatchedStaleProbe),
         };
 
         Assert.Multiple(() =>
@@ -201,6 +241,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ("sum-undelivered", () => throw new TimeoutException("silo busy"), null),
             ("sum-unresolvable", () => Task.FromResult<string?>("sum-unresolvable"), "not-a-materialiser-consumer-id"),
             ("sum-orphaned", () => Task.FromResult<string?>(null), null),
+            ("sum-latched-stale", LatchedStaleProbe, null),
         })
         {
             var time = new VirtualTimeProvider();
@@ -209,7 +250,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             using (recorder)
             {
                 await StartAndRunFirstPassAsync(scheduler, time);
-                var attempted = await AttemptsBeforeFirstAbandonmentAsync(time, recorder);
+                var attempted = await AttemptsBeforeRetriesEndAsync(time, recorder);
                 var terminal = TerminalOutcomeArms.Sum(arm => Outcomes(recorder, arm));
 
                 Assert.Multiple(() =>
