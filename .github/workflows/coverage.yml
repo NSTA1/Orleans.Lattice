@@ -1,109 +1,73 @@
 name: Coverage
 
-# Coverage is measured on main only. The README coverage badge reads the
-# default branch's coverage from Codecov, and Codecov only learns main's
-# coverage from an upload made on a main commit - so a post-merge push run is
-# what keeps the badge live. This deliberately does NOT run on pull_request:
-# the full non-chaos suite (every test/*.Tests.csproj, including the durable
-# active-active and other Azurite integration tests) is expensive, and paying
-# it on every PR would slow the PR feedback loop for no badge benefit. The
-# change-scoped build-and-test job in ci.yml remains the PR gate.
+# Coverage is measured on main only, once a night. The README coverage badge
+# reads the default branch's coverage from Codecov, and Codecov only learns
+# main's coverage from an upload made on a main commit, which a scheduled run on
+# main is. This deliberately does NOT run on pull_request: the full non-chaos
+# suite (every test/*.Tests.csproj, including the durable active-active and
+# other Azurite integration tests) is expensive, and paying it on every PR would
+# slow the PR feedback loop for no badge benefit. The change-scoped
+# build-and-test job in ci.yml remains the PR gate.
+#
+# Why nightly rather than on every push. This lane builds the whole solution and
+# runs every non-chaos suite under coverlet, the browser UI suite included, which
+# takes about an hour - by far the most expensive workflow in the repository -
+# and main takes merges faster than that. Run on every push with
+# `cancel-in-progress: true`, most runs were cancelled part way (22 of the 35
+# runs from #3327 to #3473), and GitHub rolls a cancelled check run up as a
+# FAILURE, so main showed a red cross on most of its commits although nothing had
+# failed. Queueing the runs instead removes the red but spends more, because the
+# run already in flight always finishes. Replaying the 207 pushes to main from
+# 4 to 24 September against today's hour-long run, every per-push design cost
+# 8,900-10,000 runner-minutes; one run a night cost about 870, and it is the only
+# design that stops this lane competing with pull-request CI for runners during
+# the working day. The price is freshness: the badge is up to a day old, and a
+# failure here narrows to a day's merges rather than to one. Coverage gates
+# nothing and build-and-test tests every pull request before it merges, so that
+# is the right trade. CiCoverageLaneScheduleTests holds this shape in place.
 on:
-  push:
-    branches: [main]
-    # Only run when something that can actually move the coverage number changed.
-    # This lane builds the whole solution and runs every non-chaos suite under
-    # coverlet, including the Azurite integration tests and the browser UI suite,
-    # so it is by far the most expensive workflow in the repository - and a
-    # docs-only or workflow-only merge cannot change coverage by a single line.
-    #
-    # A genuine `paths` filter is safe here, unlike in ci.yml: that workflow's
-    # build-and-test job is the required status check on main, so a filtered-out
-    # run would never report and a pull request could never merge, which is why
-    # it always runs and classifies the diff internally instead. Coverage gates
-    # nothing, so a skipped run simply leaves the badge on its last value.
-    #
-    # test/** is included deliberately. Adding tests is the single most direct
-    # way to change coverage, and this repository does it often in isolation: of
-    # the last 60 commits on main, 8 touched test/** with no src/ or apps/ change
-    # at all, and several were explicitly coverage-closing work. Filtering to
-    # src/ and apps/ alone would have skipped the badge update for exactly the
-    # commits whose purpose was to raise it.
-    #
-    # The root build files are included because they decide what is compiled and
-    # therefore what is measured, and this workflow's own helper files are
-    # included so a change to the lane itself is validated by running it.
-    paths:
-      - 'src/**'
-      - 'apps/**'
-      - 'test/**'
-      - 'Directory.Build.targets'
-      - 'Orleans.Lattice.slnx'
-      - '.github/workflows/coverage.yml'
-      - '.github/workflows/coverage-supersession.py'
-      - '.github/workflows/failed-tests-filter.py'
-      - '.github/workflows/ui-test-shards.json'
-  # Manual trigger. Coverage is a post-merge lane, so without this there is no way
-  # to re-run it after a transient failure, or to validate a change to the lane
-  # itself on a branch before merging it - the change would have to land on main
-  # unverified. It is also the escape hatch when the paths filter above skips a
-  # merge whose coverage you nonetheless want re-measured. A dispatched run is the
-  # newest run of this workflow when it is created, so the supersession gate below
-  # lets it measure unless a newer run arrives behind it.
+  schedule:
+    # 03:17 UTC. The quietest hour on main - not one of those 207 pushes landed
+    # between 03:00 and 04:00 UTC - and off the top of the hour, when GitHub
+    # delays and can drop scheduled runs under load. GitHub also disables a
+    # public repository's schedules after 60 days without activity.
+    - cron: '17 3 * * *'
+  # Manual trigger: re-run after a transient failure, measure a merge without
+  # waiting for the night, or validate a change to this lane on a branch before
+  # merging it - otherwise the change would land on main unverified. A dispatched
+  # run always measures.
   workflow_dispatch:
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
-# The supersession job additionally reads this workflow's own run history.
+# The `measured` job additionally reads this workflow's own run history.
 permissions:
   contents: read
 
-# Queue runs; never cancel one.
-#
-# This lane used `cancel-in-progress: true`. That is the right setting for a lane
-# that gates a pull request and the wrong one here. A run takes about an hour and
-# main routinely takes merges faster than that, so most runs were cancelled part
-# way: of the 35 runs from #3327 to #3473, 22 were cancelled, spending 615
-# runner-minutes measuring nothing against 708 for the 11 that completed. GitHub
-# rolls a cancelled check run up as a FAILURE on its commit, so main showed a red
-# cross on most of its commits although nothing had failed - indistinguishable at
-# a glance from the lane being broken - and the two runs that genuinely failed
-# were buried among them.
-#
-# `queue: max` lets every run that starts finish, and holds later runs first in,
-# first out instead of cancelling them. On its own that would measure every commit
-# one after another, and a burst of merges would leave the queue hours behind main.
-# The supersession job below closes that gap: a queued run that reaches the front
-# skips when a newer run of this workflow exists, because that run measures a later
-# commit. The newest run never finds a newer one, so the latest state of main is
-# always measured, behind at most the one run already in flight. The predicate,
-# and why it fails open, are in coverage-supersession.py. GitHub rejects
-# `queue: max` alongside `cancel-in-progress: true`, and
-# CiCoverageLaneConcurrencyTests holds this shape in place.
+# One measurement at a time. A dispatch that arrives during the nightly run waits
+# for it rather than cancelling it: nothing in this lane should cancel a run,
+# because GitHub rolls a cancelled check run up as a failure on its commit.
 concurrency:
   group: coverage-${{ github.ref }}
-  queue: max
+  cancel-in-progress: false
 
 jobs:
-  # Decides whether this run measures, or leaves it to a newer run of this workflow
-  # on the same branch. It is cheap - a sparse checkout, one API call, one script -
-  # which is what makes skipping a superseded run worth it: a skipped run costs this
-  # job, a measured one costs the hour below.
-  supersession:
+  # A night with no merges would otherwise spend an hour re-measuring the commit
+  # the previous night measured - main went eight days without a commit in the
+  # period replayed above. So a scheduled run skips when its commit is the one the
+  # last successful run measured. That is exact rather than a heuristic, because
+  # the same commit measures the same coverage, and it fails open: another commit,
+  # a failed last run, an API error or a manual dispatch all measure.
+  measured:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
-      contents: read
-      # To list this workflow's runs, which is all the gate reads.
+      # To read this workflow's last successful run, which is all this job reads.
       actions: read
     outputs:
-      measure: ${{ steps.verdict.outputs.measure }}
+      measure: ${{ steps.head.outputs.measure }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          sparse-checkout: .github/workflows
-
-      - name: Decide whether this run measures
-        id: verdict
+      - name: Skip a commit the last successful run already measured
+        id: head
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,44 +75,29 @@ jobs:
           # GITHUB_WORKFLOW_REF is <owner>/<repo>/.github/workflows/<file>@<ref>.
           workflow="${GITHUB_WORKFLOW_REF%@*}"
           workflow="${workflow##*/}"
-          runs="${RUNNER_TEMP}/coverage-runs.json"
+          last="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+            -f branch="${GITHUB_REF_NAME}" -f status=success -f per_page=1 \
+            --jq '.workflow_runs[0].head_sha // ""')" || last=""
 
-          verdict=""
-          if gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
-              -f branch="${GITHUB_REF_NAME}" -f per_page=100 -f exclude_pull_requests=true \
-              > "$runs"; then
-            verdict="$(python3 .github/workflows/coverage-supersession.py --run-id "$GITHUB_RUN_ID" "$runs")" \
-              || verdict=""
-          fi
-
-          # Fail open. Measuring needlessly costs one run of this lane; skipping
-          # wrongly leaves main unmeasured with nothing red to show for it.
-          case "$verdict" in
-            measure|skip) ;;
-            *)
-              echo "::warning::Could not decide whether a newer run supersedes this one, so this run measures."
-              verdict=measure
-              ;;
-          esac
-
-          if [ "$verdict" = skip ]; then
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ -n "$last" ] && [ "$last" = "$GITHUB_SHA" ]; then
+            echo "::notice title=Coverage already measured::${GITHUB_SHA} is the commit the last successful run measured, so this run skips the measurement."
             echo "measure=false" >> "$GITHUB_OUTPUT"
           else
             echo "measure=true" >> "$GITHUB_OUTPUT"
           fi
 
   coverage:
-    needs: supersession
-    # Measure unless the gate positively decided that a newer run supersedes this one.
-    # Only an explicit 'false' skips, so a missing verdict measures, and `!cancelled()`
-    # keeps a failed gate job from blocking the measurement (it still turns the run
-    # red, so the failure is not hidden).
-    if: ${{ !cancelled() && needs.supersession.outputs.measure != 'false' }}
+    needs: measured
+    # Measure unless the check positively found this commit already measured. Only
+    # an explicit 'false' skips, so a missing verdict measures, and `!cancelled()`
+    # keeps a failed check job from blocking the measurement (it still turns the
+    # run red, so the failure is not hidden).
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' }}
     runs-on: ubuntu-latest
-    # A backstop, not a budget. Runs no longer cancel each other, so without it one
-    # hung run would hold every queued run behind it for the six-hour default. The
-    # suites carry their own ten-minute hang dumps below; this is about twice the
-    # longest recent run (69 minutes).
+    # A backstop, not a budget: without it one hung run would hold the lane - and
+    # any dispatch waiting behind it - for GitHub's six-hour default. The suites
+    # carry their own ten-minute hang dumps below; this is about twice the longest
+    # recent run (69 minutes).
     timeout-minutes: 150
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
@@ -465,7 +414,7 @@ jobs:
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project
           # settings). fail_ci_if_error is left false so a transient upload
-          # hiccup never fails the post-merge run.
+          # hiccup never fails the nightly run.
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: coverage
           fail_ci_if_error: false
