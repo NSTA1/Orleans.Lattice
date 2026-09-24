@@ -74,7 +74,7 @@ public partial class BPlusLeafGrainTests
                 cts.Cancel();
         };
 
-        var coldP0 = BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: null, fullEntries);
+        var coldP0 = BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: null, fullEntries);
         var coldP1 = BuildObservableCoordinator(head: 0, sliceSize: 4, tail: 0, onRead: null);
         var grain = BuildFlushCeilingLeaf(state, [coldP0, coldP1], store.Stub, reclassifyEveryN: 1);
 
@@ -107,7 +107,7 @@ public partial class BPlusLeafGrainTests
             .ToArray();
 
         var p0 = WithFaultingTailProbe(
-            BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: null, suffixEntries));
+            BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: null, suffixEntries));
         var p1 = BuildObservableCoordinator(head: 0, sliceSize: 4, tail: 5, onRead: null);
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, reclassifyEveryN: 1);
@@ -119,7 +119,7 @@ public partial class BPlusLeafGrainTests
         // one, and the trimmed prefix survived. The DidNotReceive is the
         // discriminating assertion - a cold replay slices THROUGH offset 4,
         // so only the absence of the from-oldest read proves the resume.
-        await p0.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await p0.Received().ReadSliceAsync(4L, 13L, Arg.Any<int>(), Arg.Any<CancellationToken>());
         await p0.DidNotReceive().ReadSliceAsync(-1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         for (var i = 1; i <= 12; i++)
@@ -149,7 +149,7 @@ public partial class BPlusLeafGrainTests
         // Three partitions, two of which fault, and the trimmed one probed
         // LAST - so only a probe that survives every fault can reach it.
         var p0 = WithFaultingTailProbe(
-            BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: null, suffixEntries),
+            BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: null, suffixEntries),
             "partition 0 coordinator timed out");
         var p1 = WithFaultingTailProbe(
             BuildObservableCoordinator(head: 0, sliceSize: 4, tail: 0, onRead: null),
@@ -221,7 +221,7 @@ public partial class BPlusLeafGrainTests
             .Select(i => FlushSet(i, $"k{i:D2}"))
             .ToArray();
 
-        var p0 = BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: null, fullEntries);
+        var p0 = BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: null, fullEntries);
         var p1 = BuildObservableCoordinator(head: 0, sliceSize: 4, tail: 0, onRead: null);
 
         var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub, reclassifyEveryN: 1);

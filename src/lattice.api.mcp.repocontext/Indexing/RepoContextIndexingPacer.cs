@@ -500,16 +500,29 @@ internal sealed class RepoContextIndexingPacer
         }
     }
 
-    private string? FindTree(WalSaturationState state)
+    private string? FindTree(WalSaturationState state) => FindVectorTree(_saturation, state);
+
+    /// <summary>
+    /// Reads the platform's own verdict on the vector plane: the first vector tree
+    /// (membership, metadata, or payload) whose <see cref="IWalSaturationSignal"/>
+    /// state is at or above <paramref name="atLeast"/>. This is the one place the
+    /// indexing path names the trees it writes, so the pacer and the ingestor
+    /// consult the same set rather than each keeping a list that can drift
+    /// (issue #2683).
+    /// </summary>
+    /// <param name="saturation">The silo's WAL saturation signal, or <see langword="null"/> in a host that registers none.</param>
+    /// <param name="atLeast">The least severe state that counts as a match.</param>
+    /// <returns>The first matching vector tree id, or <see langword="null"/> when none matches or no signal is registered.</returns>
+    internal static string? FindVectorTree(IWalSaturationSignal? saturation, WalSaturationState atLeast)
     {
-        if (_saturation is null)
+        if (saturation is null)
         {
             return null;
         }
 
         foreach (var tree in VectorTrees)
         {
-            if (_saturation.GetCurrentState(tree) >= state)
+            if (saturation.GetCurrentState(tree) >= atLeast)
             {
                 return tree;
             }

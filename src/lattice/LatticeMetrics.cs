@@ -5780,7 +5780,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All fourteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All sixteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -6749,6 +6749,32 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationOrphaned =
         new(TagOutcome, "orphaned");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a drive the leaf refused
+    /// with a <see cref="LeafProjectionStaleException"/>, because its projection
+    /// is latched stale and activation cannot heal it (issue #3478).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Terminal for the pin, and counted at most once per blocked episode per
+    /// consumer. A latched leaf rethrows the same fault on every drive until an
+    /// operator rebuilds it (issue #3454), so the sweep stops re-driving it
+    /// instead of retrying it on every cooldown. The pin is deliberately left in
+    /// place: it still holds the cursor floor, so no WAL the leaf needs is
+    /// trimmed while it waits for the rebuild.
+    /// </para>
+    /// <para>
+    /// Before this arm existed the rethrown latch was counted as
+    /// <see cref="BlockedLeafReactivationFaulted"/> - refundable, then charged,
+    /// then abandoned and re-armed - which re-drove the same leaf for the life
+    /// of the process. A non-zero value here is a count of leaves awaiting a
+    /// rebuild, not of work the sweep is doing.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationLatchedStale =
+        new(TagOutcome, "latched_stale");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on

@@ -219,6 +219,8 @@ public sealed class DashboardPanelTagDomainTests
             // them on the same reasoning and for a sharper reason: it was
             // previously reported as "completed", so charting it here is what
             // makes the two separable on the panel that draws both.
+            // "latched_stale" (issue #3478) is terminal for its pin and so is a
+            // one-off step per latched leaf, which only a totals panel renders.
             //
             // The six drive arms (issues #2692, #3065) record what a touch achieved
             // rather than that it was issued, and are charted with their full
@@ -238,7 +240,8 @@ public sealed class DashboardPanelTagDomainTests
             //
             // This list grew by three (completed, faulted, unresolvable) when
             // issue #2938 armed them, and by one (orphaned) when issue #3101
-            // armed that. That growth is the whole hazard of a
+            // armed that, and by one (latched_stale) when issue #3478 armed that.
+            // That growth is the whole hazard of a
             // declared-omission list: it is a statement about the complement of
             // a domain, so widening the domain silently makes every existing
             // list short without touching a line of it. Nothing here changed,
@@ -246,7 +249,7 @@ public sealed class DashboardPanelTagDomainTests
             ["Replication|2692|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 [
                     "abandoned", "attempted", "completed", "faulted", "healed",
-                    "orphaned", "rearmed", "undelivered", "unresolvable",
+                    "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
                 ],
 
             // Panel 34 alerts on entry into saturation only. The healthy,
@@ -587,15 +590,15 @@ public sealed class DashboardPanelTagDomainTests
             // hop is what keeps a newly added arm in scope for the charting
             // gate below. Issue #2692 added a second such mapping over a second
             // enum, so the domain is now the union of three disjoint groups:
-            // four lifecycle arms, five terminal arms, and six drive verdicts.
-            // All fifteen are derivable; a drop here means the hop stopped
+            // four lifecycle arms, six terminal arms, and six drive verdicts.
+            // All sixteen are derivable; a drop here means the hop stopped
             // resolving for one of the two mappings.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
                 [
                     "abandoned", "attempted", "completed", "drove_already_driving",
                     "drove_lifted", "drove_memory_refused", "drove_no_advance",
                     "drove_not_driven", "drove_timed_out", "faulted", "healed",
-                    "orphaned", "rearmed", "undelivered", "unresolvable",
+                    "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
                 ]);
 
             // Collection-built tag list plus a static string-returning helper
