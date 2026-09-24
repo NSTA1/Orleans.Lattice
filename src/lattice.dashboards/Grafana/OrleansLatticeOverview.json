@@ -1700,7 +1700,21 @@
         { "refId": "A", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "mean admission wait (ms)" },
         { "refId": "R", "expr": "sum(rate(orleans_lattice_registry_admission_wait_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gated reads/s (secondary)" }
       ]
-    },    {
+    },
+    {
+      "id": 77,
+      "title": "Tree-registry calls - caller-observed duration and outcome",
+      "description": "How long each ILatticeRegistry call took as seen by its CALLER, by interface method and outcome (orleans_lattice_registry_caller_duration, issue #3088). Recorded on every silo by an always-on outgoing call filter, for every registry call dispatched, whatever became of it - so unlike registry.call.duration, which only sees calls the grain admitted, it also records the calls that were never served. That is what separates the three readings the Orleans timeout diagnostic used to be relied on for, and which it stops providing under saturation (its CurrentlyExecuting block vanishes silo-wide, and its absence reads as an idle registry). Every series is split by method AND outcome. FINE: only completed series, with a short mean. SLOW: completed series with a long mean. UNREACHABLE: a timeout series appears, its mean pinned at the response deadline - and a timeout series on a method here while the service-time panel shows no admitted calls for it means those calls were never served, not served slowly. Timeout samples sit at the deadline, which is why timeout is its own outcome rather than folded into the completed distribution. Per-silo, and a platform-tenant series: the registry spans every tenant, so there is no per-tree breakdown to filter. Conditionally-emitted series here carry no 'or vector(0)' zero-fill: a timeout or faulted series exists only once such a call occurred, so its absence is the healthy reading, not a measured zero (issue #2520).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1042 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "D", "expr": "sum by (method, outcome) (rate(orleans_lattice_registry_caller_duration_milliseconds_sum{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (method, outcome) (rate(orleans_lattice_registry_caller_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{method}} {{outcome}} mean caller wait (ms)" },
+        { "refId": "R", "expr": "sum by (method, outcome) (rate(orleans_lattice_registry_caller_duration_milliseconds_count{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{method}} {{outcome}} calls/s (secondary)" }
+      ]
+    },
+    {
       "id": 74,
       "title": "Deployed build (version / commit)",
       "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",

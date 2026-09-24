@@ -168,6 +168,13 @@ public sealed class TenantMetricDimensionHygieneTests
         "RegistryAdmissionWait",
         "RegistryCallDuration",
         "RegistryCallInFlight",
+        // Caller-side twin of RegistryCallDuration (issue #3088), recorded by the
+        // always-on outgoing filter for every registry call this silo dispatches.
+        // A sentinel for the same reason: the registry is one activation shared
+        // by every tenant's trees, so a caller-observed wait on it - and above
+        // all a timeout, which is a property of the singleton's reachability -
+        // belongs to no single tenant.
+        "RegistryCallerDuration",
         "ResolutionCacheHits",
         "ResolutionCacheMisses",
         "RestoreDuration",
