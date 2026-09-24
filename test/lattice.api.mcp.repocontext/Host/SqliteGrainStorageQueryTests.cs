@@ -46,7 +46,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class SqliteGrainStorageQueryTests
+public sealed partial class SqliteGrainStorageQueryTests
 {
     private const string ServiceId = "repo-context";
     private const string StateName = "leaf";
@@ -323,8 +323,18 @@ public sealed class SqliteGrainStorageQueryTests
     private List<int> Run(string sql, int? version, bool payload)
     {
         using var connection = Open();
+        return RunOn(connection, sql, version, payload);
+    }
+
+    private static List<int> RunOn(SqliteConnection connection, string sql, int? version, bool payload, int? commandTimeoutSeconds = null)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = sql;
+        if (commandTimeoutSeconds.HasValue)
+        {
+            command.CommandTimeout = commandTimeoutSeconds.Value;
+        }
+
         command.Parameters.AddWithValue("@GrainIdHash", 1234);
         command.Parameters.AddWithValue("@GrainIdN0", N0);
         command.Parameters.AddWithValue("@GrainIdN1", N1);
