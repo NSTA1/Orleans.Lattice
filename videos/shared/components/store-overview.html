@@ -1,0 +1,247 @@
+<template id="store-overview-template">
+  <!--
+    What the store is: sorted keys held inside your own Orleans cluster, with
+    nothing beside it. The keys sit on one chain in order, because the store
+    is sorted; the frame is the cluster; the pale nodes outside are what the
+    store does not need, struck as it is said. On the beat after the keys'
+    cue the scene gives way to a list of statements on a spine - the
+    positions an episode goes on to take - each a node, in order.
+
+    Variables: heading; frame (the cluster's label); keys (comma-separated,
+    already in order); keysBeat (the beat whose cue introduces the store: the
+    frame is up from the first beat, the keys draw on this one); absent
+    (comma-separated), struck through as the end of the keys' cue says so;
+    absentLead (how many seconds before the next beat that phrase begins);
+    statements ("|"-separated, shown on the beat after the keys' cue); beats
+    and end are stamped by npm run timeline.
+  -->
+  <div
+    data-composition-id="store-overview"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"A sorted key-value store, in your cluster"},
+      {"id":"frame","type":"string","label":"Cluster label","default":"Your Orleans cluster"},
+      {"id":"keys","type":"string","label":"Keys, in order (comma-separated)","default":"order/1001,order/1002,user/41,user/42"},
+      {"id":"keysBeat","type":"number","label":"Beat on which the keys draw","default":0},
+      {"id":"absent","type":"string","label":"Not needed beside it (comma-separated)","default":"External database,Coordinator,Queue"},
+      {"id":"absentLead","type":"number","label":"Seconds before the next beat that the absent items are named","default":3.8},
+      {"id":"statements","type":"string","label":"Statements for the beat after the keys (|-separated)","default":""},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading so-heading"></h2>
+
+    <div class="so-store">
+      <div class="so-frame"><span class="lv-label so-frame-label"></span></div>
+      <div class="so-chain"></div>
+      <div class="so-keys"></div>
+      <div class="so-absent"></div>
+    </div>
+
+    <ol class="so-statements"></ol>
+
+    <style>
+      [data-composition-id="store-overview"] .so-store {
+        position: absolute;
+        inset: 0;
+      }
+      [data-composition-id="store-overview"] .so-frame {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 280px;
+        width: 1180px;
+        height: 460px;
+        box-sizing: border-box;
+        border: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-radius: var(--lv-radius);
+      }
+      [data-composition-id="store-overview"] .so-frame-label {
+        position: absolute;
+        left: 40px;
+        top: 28px;
+      }
+      /* The keys, in order along one hairline: the store is sorted. */
+      [data-composition-id="store-overview"] .so-chain {
+        position: absolute;
+        left: 236px;
+        top: 509px;
+        width: 900px;
+        height: var(--lv-hairline);
+        background: var(--lt-rule-strong);
+        transform-origin: left center;
+      }
+      [data-composition-id="store-overview"] .so-key {
+        position: absolute;
+        top: 510px;
+        width: 0;
+      }
+      [data-composition-id="store-overview"] .so-key .lv-node {
+        position: absolute;
+        left: calc(-0.5 * var(--lv-node));
+        top: calc(-0.5 * var(--lv-node));
+      }
+      [data-composition-id="store-overview"] .so-key-label {
+        position: absolute;
+        top: 38px;
+        transform: translateX(-50%);
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-state);
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      [data-composition-id="store-overview"] .so-absent {
+        position: absolute;
+        left: 1400px;
+        top: 330px;
+        display: flex;
+        flex-direction: column;
+        gap: 64px;
+      }
+      [data-composition-id="store-overview"] .so-absent-item {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+        white-space: nowrap;
+      }
+      [data-composition-id="store-overview"] .so-absent-item .lv-node {
+        box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-rule-strong);
+      }
+      /* Struck through as the narration says it is not needed. The line sits
+         beneath the name, so the name stays the topmost thing at its own
+         position and reads as struck through rather than covered. */
+      [data-composition-id="store-overview"] .so-strike {
+        position: absolute;
+        z-index: 0;
+        left: -14px;
+        right: -14px;
+        top: 50%;
+        height: var(--lv-hairline);
+        background: var(--lt-ink-2);
+        transform-origin: left center;
+      }
+      [data-composition-id="store-overview"] .so-absent-name {
+        position: relative;
+        z-index: 1;
+      }
+      /* Statements on a spine, one node each. */
+      [data-composition-id="store-overview"] .so-statements {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 20px);
+        top: 290px;
+        margin: 0;
+        padding: 0 0 0 64px;
+        list-style: none;
+        border-left: var(--lv-hairline) solid var(--lt-rule-strong);
+      }
+      [data-composition-id="store-overview"] .so-statement {
+        position: relative;
+        margin: 0 0 84px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.2;
+        letter-spacing: -0.012em;
+      }
+      [data-composition-id="store-overview"] .so-statement:last-child {
+        margin-bottom: 0;
+      }
+      [data-composition-id="store-overview"] .so-statement .lv-node {
+        position: absolute;
+        left: calc(-64px - 0.5 * var(--lv-node) - 0.5 * var(--lv-hairline));
+        top: calc(0.6em - 0.5 * var(--lv-node));
+        background: var(--lt-surface);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="store-overview"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const list = (value, separator) => String(scene.site(value) || "").split(separator).map((part) => part.trim()).filter(Boolean);
+
+        q(".so-heading").textContent = scene.site(vars.heading);
+        q(".so-frame-label").textContent = scene.site(vars.frame);
+
+        const keys = list(vars.keys, ",");
+        const chainLeft = 236;
+        const chainWidth = 900;
+        keys.forEach((key, i) => {
+          const item = document.createElement("div");
+          item.className = "so-key";
+          item.style.left = chainLeft + (keys.length === 1 ? chainWidth / 2 : (chainWidth * i) / (keys.length - 1)) + "px";
+          item.innerHTML = '<span class="lv-node"></span><span class="so-key-label"></span>';
+          item.querySelector(".so-key-label").textContent = key;
+          q(".so-store").appendChild(item);
+        });
+
+        for (const name of list(vars.absent, ",")) {
+          const item = document.createElement("div");
+          item.className = "so-absent-item";
+          item.innerHTML = '<span class="lv-node"></span><span class="so-absent-name"></span><span class="so-strike"></span>';
+          item.querySelector(".so-absent-name").textContent = name;
+          q(".so-absent").appendChild(item);
+        }
+
+        for (const statement of list(vars.statements, "|")) {
+          const item = document.createElement("li");
+          item.className = "so-statement";
+          item.innerHTML = '<span class="lv-node"></span><span class="so-statement-text"></span>';
+          item.querySelector(".so-statement-text").textContent = statement;
+          q(".so-statements").appendChild(item);
+        }
+
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+        const slow = duration.slow;
+        const keysBeat = Math.max(0, Math.round(Number(vars.keysBeat) || 0));
+        const keysAt = timing.at(keysBeat, 0.3);
+        const next = timing.at(keysBeat + 1, keysAt + 6);
+
+        tl.from(q(".so-heading"), { opacity: 0, duration: slow, ease }, 0);
+        tl.from(q(".so-frame"), { opacity: 0, duration: slow, ease }, Math.min(timing.at(0, 0.3), keysAt));
+        tl.from(q(".so-chain"), { scaleX: 0, duration: 1.1, ease: "lattice-draw" }, keysAt + 0.3);
+        all(".so-key").forEach((key, i) => {
+          tl.from(key, { opacity: 0, y: 14, duration: duration.base, ease }, keysAt + 0.45 + i * 0.22);
+        });
+
+        // "no external database, coordinator or queue beside it" closes the
+        // keys' cue, so the pale nodes are timed back from the next beat: they
+        // arrive as the phrase begins, then are struck.
+        const lead = Number(vars.absentLead) > 0 ? Number(vars.absentLead) : 3.8;
+        const absentAt = Math.max(keysAt + 2.2, next - lead);
+        all(".so-absent-item").forEach((item, i) => {
+          tl.from(item, { opacity: 0, x: 24, duration: duration.base, ease }, absentAt + i * 0.28);
+          tl.from(item.querySelector(".so-strike"), { scaleX: 0, duration: duration.base, ease }, absentAt + 0.9 + i * 0.28);
+        });
+        tl.to(all(".so-absent-item"), { opacity: 0.4, duration: duration.base, ease }, absentAt + 2);
+
+        const statements = all(".so-statement");
+        tl.set(q(".so-statements"), { opacity: 0 }, 0);
+        if (statements.length > 0) {
+          tl.to(q(".so-store"), { opacity: 0, y: -24, duration: slow, ease }, next - 0.2);
+          tl.set(q(".so-statements"), { opacity: 1 }, next);
+          statements.forEach((item, i) => {
+            tl.from(item, { opacity: 0, x: -20, duration: slow, ease }, next + 0.25 + i * 0.35);
+          });
+        }
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["store-overview"] = tl;
+      })();
+    </script>
+  </div>
+</template>

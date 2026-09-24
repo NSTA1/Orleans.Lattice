@@ -25,6 +25,7 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 </div>
 <!-- lattice:join-figure -->
 </section>
+<!-- lattice:introduction -->
 <section class="lt-paths" aria-labelledby="lt-paths-title">
 <h2 id="lt-paths-title">Three ways in</h2>
 <p class="lt-section-lede">Each way in is a chain of pages in reading order. Start at its first node, or join it wherever you already are.</p>

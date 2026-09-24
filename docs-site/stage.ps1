@@ -13,7 +13,9 @@
 #      URL, so no page 404s;
 #   4. generates the navigation, grouping packages by the seam PACKAGES.md files
 #      them under, so the nav cannot drift as packages are added;
-#   5. stages the site's own authored pages (docs-site/pages: the home page)
+#   5. turns docs/videos into the Videos section, playing each published
+#      episode from docs-site/media and leaving unpublished ones out;
+#   6. stages the site's own authored pages (docs-site/pages: the home page)
 #      AFTER step 3, so a broken link in them is never rewritten away and fails
 #      the zero-warning link gate instead.
 #
@@ -119,6 +121,150 @@ if (Test-Path $changelog) {
 
 # Site branding - the mark, favicon, fonts, and theme - lives in the DocFX
 # template (docs-site/template/public), which DocFX copies into the output.
+
+# --- Videos: the companion pages ---
+# docs/videos/<slug>.md is an episode's companion page - its transcript and the
+# code it shows - written by the videos/ workspace. Each carries exactly one
+# generated block,
+#
+#   <!-- video:begin episode="<slug>" path="<path>" order="<n>" length="<m:ss>" cut="<hex>" -->
+#   ...a note for github.com readers...
+#   <!-- video:end -->
+#
+# which is replaced here, from begin to end inclusive, by the player when
+# docs-site/media holds the cut's three files (<slug>-<cut>.mp4, .vtt and .jpg),
+# and removed otherwise. An episode is published only when it has a cut AND its
+# media is present, and a page whose episode is not published is left out of the
+# site altogether. That happens here, BEFORE the link rewrite below, so a link to
+# such a page falls back to the repository instead of reaching a page with no
+# video.
+#
+# The media is copied into the staged site once, under media/, and every page
+# that plays an episode uses that copy. docfx.json lists media/** as a resource,
+# so the link gate checks every <source> and <track> a player points at. A poster
+# is not a link DocFX follows, which is why a player is only emitted once all
+# three files are known to exist.
+#
+# docs/videos is not a package directory: the navigation below gives it a tab,
+# an index and a TOC of its own instead of a place in the documentation map.
+$videoPaths = [ordered]@{
+    'front-door'   = 'Front door'
+    'build'        = 'Build'
+    'evaluate'     = 'Evaluate'
+    'operate'      = 'Operate'
+    'secure'       = 'Deep dive: Secure'
+    'how-it-works' = 'Deep dive: How it works'
+}
+$videoBlock = [regex]'(?s)<!--[ \t]*video:begin\b(?<attributes>.*?)-->.*?<!--[ \t]*video:end[ \t]*-->'
+$videoMedia = Join-Path $PSScriptRoot 'media'
+$videoMediaStaged = Join-Path $Staging 'media'
+$videosStaged = Join-Path (Join-Path $Staging 'docs') 'videos'
+$episodes = New-Object System.Collections.Generic.List[object]
+
+# m:ss or h:mm:ss, as the ISO 8601 duration a <time datetime> takes.
+function ConvertTo-IsoDuration([string]$Length) {
+    $parts = @($Length.Split(':') | ForEach-Object { [int]$_ })
+    if ($parts.Count -eq 2) { $parts = @(0) + $parts }
+    $iso = 'PT'
+    if ($parts[0]) { $iso += "$($parts[0])H" }
+    if ($parts[1]) { $iso += "$($parts[1])M" }
+    return "$iso$($parts[2])S"
+}
+
+# The one piece of markup that plays an episode, on its companion page and on the
+# home page alike. $MediaPath is the path from the page to the staged media/.
+# Nothing loads until the reader presses play, and the width and height reserve
+# the 16:9 frame before the poster arrives.
+function Get-VideoPlayer($Episode, [string]$MediaPath, [string]$CaptionHtml) {
+    $base = "$MediaPath/$($Episode.Slug)-$($Episode.Cut)"
+    $label = [System.Net.WebUtility]::HtmlEncode("$($Episode.Title), video, $($Episode.Length)")
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('<figure class="lt-video">')
+    $lines.Add('<div class="lt-video-frame">')
+    $lines.Add("<video controls preload=`"none`" playsinline poster=`"$base.jpg`" width=`"1920`" height=`"1080`" aria-label=`"$label`">")
+    $lines.Add("<source src=`"$base.mp4`" type=`"video/mp4`">")
+    $lines.Add("<track kind=`"captions`" srclang=`"en`" label=`"English`" src=`"$base.vtt`">")
+    $lines.Add("<p>This browser cannot play the video here. <a href=`"$base.mp4`">Download it</a> (MP4, $($Episode.Size)).</p>")
+    $lines.Add('</video>')
+    $lines.Add('</div>')
+    if ($CaptionHtml) { $lines.Add("<figcaption class=`"lt-video-caption`">$CaptionHtml</figcaption>") }
+    $lines.Add('</figure>')
+    return $lines -join "`n"
+}
+
+if (Test-Path $videosStaged) {
+    foreach ($page in @(Get-ChildItem $videosStaged -Filter *.md | Sort-Object Name)) {
+        # The index is generated below; it is never a companion page.
+        if ($page.Name -ieq 'index.md') { Remove-Item -LiteralPath $page.FullName; continue }
+
+        $text = Get-Content -LiteralPath $page.FullName -Raw
+        $blocks = $videoBlock.Matches($text)
+        if ($blocks.Count -ne 1) {
+            throw "docs/videos/$($page.Name) must carry exactly one video block, from <!-- video:begin ... --> to <!-- video:end -->, and it has $($blocks.Count)."
+        }
+        $attributes = @{}
+        foreach ($m in [regex]::Matches($blocks[0].Groups['attributes'].Value, '(?<name>[a-z-]+)="(?<value>[^"]*)"')) {
+            $attributes[$m.Groups['name'].Value] = $m.Groups['value'].Value
+        }
+
+        # Fail on a malformed block rather than guess, so a contract drift in the
+        # videos/ generator surfaces here instead of as a quietly missing episode.
+        $slug = $page.BaseName
+        $where = "The video block in docs/videos/$($page.Name)"
+        if ($attributes['episode'] -ne $slug) {
+            throw "$where names episode '$($attributes['episode'])', but a companion page's episode is its file name, '$slug'."
+        }
+        if (-not $videoPaths.Contains([string]$attributes['path'])) {
+            throw "$where has path '$($attributes['path'])', which is not one of: $($videoPaths.Keys -join ', ')."
+        }
+        $order = 0
+        if (-not [int]::TryParse([string]$attributes['order'], [ref]$order) -or $order -lt 1) {
+            throw "$where has order '$($attributes['order'])'; it must be an integer from 1."
+        }
+        $length = [string]$attributes['length']
+        if ($length -notmatch '^(\d+:)?\d{1,2}:\d{2}$') {
+            throw "$where has length '$length'; it must read m:ss or h:mm:ss."
+        }
+
+        $cut = [string]$attributes['cut']
+        $files = @()
+        if ($cut) { $files = @('mp4', 'vtt', 'jpg' | ForEach-Object { Join-Path $videoMedia "$slug-$cut.$_" }) }
+        $missing = @($files | Where-Object { -not (Test-Path -LiteralPath $_) })
+        if (-not $cut -or $missing.Count -gt 0) {
+            Remove-Item -LiteralPath $page.FullName
+            $reason = if (-not $cut) { 'it has no cut yet' } else { "docs-site/media has no $(Split-Path $missing[0] -Leaf)" }
+            Write-Host "Left docs/videos/$($page.Name) out of the site: $reason"
+            continue
+        }
+
+        New-Item -ItemType Directory -Path $videoMediaStaged -Force | Out-Null
+        foreach ($file in $files) { Copy-Item -LiteralPath $file -Destination $videoMediaStaged -Force }
+
+        $heading = [regex]::Match($text, '(?m)^#[ \t]+(.+?)[ \t]*#*[ \t]*\r?$')
+        $episode = [pscustomobject]@{
+            Slug          = $slug
+            Page          = $page.Name
+            Path          = [string]$attributes['path']
+            Order         = $order
+            Length        = $length
+            Cut           = $cut
+            Title         = if ($heading.Success) { $heading.Groups[1].Value -replace '`', '' } else { $slug }
+            Size          = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:N1} MB', ((Get-Item -LiteralPath $files[0]).Length / 1e6))
+            HasTranscript = $text -match '(?m)^##[ \t]+Transcript[ \t]*\r?$'
+            Idea          = $null
+        }
+
+        $base = "../../media/$slug-$cut"
+        $facts = "<span><time datetime=`"$(ConvertTo-IsoDuration $length)`">$length</time></span><span>English captions</span><span><a href=`"$base.mp4`">Download the MP4</a> ($($episode.Size))</span>"
+        $player = Get-VideoPlayer $episode '../../media' $facts
+        $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $block = $blocks[0]
+        $text = $text.Substring(0, $block.Index) + ($player -replace "`n", $newline) + $text.Substring($block.Index + $block.Length)
+        Set-Content -LiteralPath $page.FullName -Value $text -NoNewline -Encoding utf8
+        $episodes.Add($episode)
+    }
+}
+Write-Host "Staged $($episodes.Count) published video episode(s)"
 
 # --- Rewrite every link that does not resolve inside the site to github.com ---
 # Resolution-based rather than pattern-based: any relative target absent from the
@@ -564,7 +710,8 @@ function Get-PackageCatalogue([string]$Path) {
 
 $catalogue = Get-PackageCatalogue (Join-Path $RepoRoot 'PACKAGES.md')
 $docsRoot = Join-Path $Staging 'docs'
-$packageDirs = Get-ChildItem $docsRoot -Directory | Sort-Object Name
+# docs/videos is the video series' own section (see Videos below), not a package.
+$packageDirs = Get-ChildItem $docsRoot -Directory | Where-Object { $_.Name -ne 'videos' } | Sort-Object Name
 
 # docs/crdt is a docs-only conceptual topic with no src/ counterpart, so it is
 # absent from PACKAGES.md and lands in this catch-all.
@@ -932,6 +1079,91 @@ if ($sampleDirs) {
     Set-Content -Path (Join-Path $samplesStaged 'index.md') -Value $samplesIndex -Encoding utf8
 }
 
+# --- Videos: the tab, its index, and the home page's introduction ---
+# Published episodes only, grouped by path in a fixed order and ordered within a
+# path by `order`. Each is listed with its title, its idea (the first sentence
+# of its companion page), and its length. The index draws each path as a chain
+# of episodes, as the home page draws each way in as a chain of pages. With
+# nothing published there is no Videos tab and no index at all.
+foreach ($episode in $episodes) {
+    $episode.Idea = Get-FirstSentence (Get-FirstParagraph (Join-Path $videosStaged $episode.Page))
+}
+
+if ($episodes.Count -gt 0) {
+    $videosToc = New-Object System.Collections.Generic.List[string]
+    $videosIndex = New-Object System.Collections.Generic.List[string]
+    $videosToc.Add('- name: Videos')
+    $videosToc.Add('  href: index.md')
+    $videosIndex.Add('---')
+    $videosIndex.Add('title: Videos')
+    $videosIndex.Add('---')
+    $videosIndex.Add('')
+    $videosIndex.Add('# Videos')
+    $videosIndex.Add('')
+    $videosIndex.Add('Each video explains one idea about Orleans.Lattice in a few minutes, with English')
+    $videosIndex.Add('captions. Its companion page has the full transcript, and any code on screen is')
+    $videosIndex.Add('compiled with the rest of the documentation.')
+    $videosIndex.Add('')
+
+    foreach ($path in $videoPaths.Keys) {
+        $members = @($episodes | Where-Object { $_.Path -eq $path } | Sort-Object Order)
+        if ($members.Count -eq 0) { continue }
+        $label = $videoPaths[$path]
+        $videosToc.Add("- name: $(ConvertTo-YamlString $label)")
+        $videosToc.Add('  items:')
+        $videosIndex.Add("## $label")
+        $videosIndex.Add('')
+        $videosIndex.Add('<ol class="lt-episodes">')
+        foreach ($episode in $members) {
+            $videosToc.Add("  - name: $(ConvertTo-YamlString $episode.Title)")
+            $videosToc.Add("    href: $($episode.Page)")
+            # The poster is a second way to the same page, so it is kept out of
+            # the tab order and the accessibility tree; the title is the link.
+            $poster = "<a class=`"lt-episode-poster`" href=`"$($episode.Page)`" tabindex=`"-1`" aria-hidden=`"true`"><img src=`"../../media/$($episode.Slug)-$($episode.Cut).jpg`" alt=`"`" width=`"1920`" height=`"1080`" loading=`"lazy`"></a>"
+            $idea = if ($episode.Idea) { "<span class=`"lt-episode-idea`">$(ConvertTo-HtmlText $episode.Idea)</span>" } else { '' }
+            $length = "<span class=`"lt-episode-length`"><time datetime=`"$(ConvertTo-IsoDuration $episode.Length)`">$($episode.Length)</time></span>"
+            $videosIndex.Add("<li>$poster<div class=`"lt-episode-body`"><a class=`"lt-episode-title`" href=`"$($episode.Page)`">$(Get-EncodedHtml $episode.Title)</a>$idea$length</div></li>")
+        }
+        $videosIndex.Add('</ol>')
+        $videosIndex.Add('')
+    }
+
+    Set-Content -Path (Join-Path $videosStaged 'toc.yml') -Value $videosToc -Encoding utf8
+    Set-Content -Path (Join-Path $videosStaged 'index.md') -Value $videosIndex -Encoding utf8
+}
+elseif (Test-Path $videosStaged) {
+    Remove-Item $videosStaged -Recurse -Force
+}
+
+# The home page's introduction: the front door's first published episode, placed
+# after the first viewport, or nothing at all when none is published.
+function Get-IntroductionSection {
+    $front = @($episodes | Where-Object { $_.Path -eq 'front-door' } | Sort-Object Order)
+    if ($front.Count -eq 0) { return '' }
+    $episode = $front[0]
+    $companion = "docs/videos/$($episode.Page)"
+    $transcript = if ($episode.HasTranscript) { "$companion#transcript" } else { $companion }
+    $lines = @(
+        '<section class="lt-watch" aria-labelledby="lt-watch-title">',
+        "<h2 id=`"lt-watch-title`">$(Get-EncodedHtml $episode.Title)</h2>",
+        "<p class=`"lt-section-lede`">$(ConvertTo-HtmlText $episode.Idea)</p>",
+        '<div class="lt-watch-grid">',
+        (Get-VideoPlayer $episode 'media' ''),
+        '<div class="lt-watch-notes">',
+        '<dl class="lt-watch-facts">',
+        "<dt>Length</dt><dd><time datetime=`"$(ConvertTo-IsoDuration $episode.Length)`">$($episode.Length)</time></dd>",
+        '<dt>Captions</dt><dd>English</dd>',
+        "<dt>Transcript</dt><dd><a href=`"$transcript`">On its companion page</a>, with the code it shows</dd>",
+        "<dt>Download</dt><dd><a href=`"media/$($episode.Slug)-$($episode.Cut).mp4`">MP4</a>, $($episode.Size)</dd>",
+        '</dl>',
+        '<p class="lt-watch-more"><a href="docs/videos/index.md">All videos</a></p>',
+        '</div>',
+        '</div>',
+        '</section>'
+    )
+    return $lines -join "`n"
+}
+
 # --- Site root TOC, which becomes the navbar ---
 # "href: docs/" is a FOLDER reference, so DocFX treats docs/toc.yml as a separate
 # navigation scope that drives the sidebar. Pointing at "docs/toc.yml" instead
@@ -941,13 +1173,23 @@ if ($sampleDirs) {
 #
 # The home page (index.md, authored under docs-site/pages) is reached from the
 # brand mark, so the navbar starts at the overview.
-$rootToc = @(
+#
+# Videos is a folder reference too, so docs/videos/toc.yml drives its sidebar,
+# and it appears only when at least one episode is published.
+$rootToc = New-Object System.Collections.Generic.List[string]
+$rootToc.AddRange([string[]]@(
     '- name: Overview',
     '  href: README.md',
     '- name: Docs',
     '  href: docs/',
     '- name: Samples',
-    '  href: samples/',
+    '  href: samples/'
+))
+if ($episodes.Count -gt 0) {
+    $rootToc.Add('- name: Videos')
+    $rootToc.Add('  href: docs/videos/')
+}
+$rootToc.AddRange([string[]]@(
     '- name: Features',
     '  href: FEATURES.md',
     '- name: Packages',
@@ -956,7 +1198,7 @@ $rootToc = @(
     '  href: reference-architecture.md',
     '- name: Changelog',
     '  href: CHANGELOG.md'
-)
+))
 Set-Content -Path (Join-Path $Staging 'toc.yml') -Value $rootToc -Encoding utf8
 
 # --- The site's own pages, staged last ---
@@ -992,8 +1234,9 @@ if (Test-Path $pagesSource) {
     if (-not $homeSpec) { throw 'docs-site/figures/join-figures.json has no gcounter figure, which the home page draws.' }
     $homeCaption = 'The <a href="docs/crdt/gcounter.md">G-Counter</a> example from the CRDT guide. ' + (Get-EncodedHtml $homeSpec.rule)
     $generated = @{
-        'seams'       = (Get-SeamSummary)
-        'join-figure' = (Get-JoinFigure -Spec $homeSpec -Width 460 -CaptionHtml $homeCaption)
+        'seams'        = (Get-SeamSummary)
+        'join-figure'  = (Get-JoinFigure -Spec $homeSpec -Width 460 -CaptionHtml $homeCaption)
+        'introduction' = (Get-IntroductionSection)
     }
     Get-ChildItem $pagesSource -Recurse -File | ForEach-Object {
         $destination = Join-Path $Staging (ConvertTo-SiteRelative $_.FullName $pagesSource)

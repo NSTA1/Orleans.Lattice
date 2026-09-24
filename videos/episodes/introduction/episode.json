@@ -1,0 +1,13 @@
+{
+  "path": "front-door",
+  "order": 1,
+  "poster": {
+    "scene": "in-more-than-one-place",
+    "beat": 5,
+    "offset": -0.5
+  },
+  "published": {
+    "cut": "dc2de3eb792f",
+    "bytes": 11556114
+  }
+}

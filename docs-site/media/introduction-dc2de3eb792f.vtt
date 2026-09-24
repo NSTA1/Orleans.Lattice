@@ -1,0 +1,240 @@
+WEBVTT
+
+1
+00:00:01.500 --> 00:00:05.873
+Orleans.Lattice, in three minutes: why it
+exists, what it is, and where to start.
+
+2
+00:00:06.873 --> 00:00:10.900
+Almost every application has
+to remember things: what is in a basket,
+
+3
+00:00:10.900 --> 00:00:13.935
+who may open a document,
+how often a page is viewed.
+
+4
+00:00:14.285 --> 00:00:16.375
+Developers call that memory state.
+
+5
+00:00:17.375 --> 00:00:20.355
+Many applications run
+in more than one place at once,
+
+6
+00:00:20.355 --> 00:00:22.773
+so that they keep going
+if one place fails.
+
+7
+00:00:23.123 --> 00:00:26.280
+Then two places can change the same thing
+at the same moment.
+
+8
+00:00:26.630 --> 00:00:30.229
+The usual answer is to make them
+take turns, with a lock or a vote,
+
+9
+00:00:30.229 --> 00:00:33.990
+and to keep the memory in a separate
+database, beside the application.
+
+10
+00:00:34.340 --> 00:00:36.721
+Orleans.Lattice takes
+a different approach.
+
+11
+00:00:36.721 --> 00:00:39.545
+It keeps the working memory
+inside the application.
+
+12
+00:00:39.895 --> 00:00:44.035
+And it records each change so
+that every place reaches the same answer,
+
+13
+00:00:44.035 --> 00:00:46.192
+in whatever order the changes arrive.
+
+14
+00:00:46.192 --> 00:00:47.533
+Neither waits its turn.
+
+15
+00:00:47.883 --> 00:00:50.428
+It runs on one machine
+with no cloud account,
+
+16
+00:00:50.428 --> 00:00:52.917
+and grows to many regions
+without a rewrite.
+
+17
+00:00:53.917 --> 00:00:58.191
+In technical terms, Orleans.Lattice
+is a platform for building durable,
+
+18
+00:00:58.191 --> 00:01:01.021
+distributed state systems
+on Microsoft Orleans.
+
+19
+00:01:01.371 --> 00:01:05.945
+At its centre is a sorted key-value store
+that runs inside your own cluster,
+
+20
+00:01:05.945 --> 00:01:09.435
+with no external database,
+coordinator or queue beside it.
+
+21
+00:01:09.785 --> 00:01:11.364
+It takes three positions.
+
+22
+00:01:13.564 --> 00:01:15.816
+First: the store lives in the cluster.
+
+23
+00:01:15.816 --> 00:01:19.964
+State is held by grains, in the same
+cluster as the code that uses it.
+
+24
+00:01:20.314 --> 00:01:24.268
+So a read is a grain call, not a round
+trip to a separate database tier
+
+25
+00:01:24.268 --> 00:01:26.607
+with its own scaling and its own failures.
+
+26
+00:01:27.607 --> 00:01:30.317
+Second: conflict resolution is algebraic.
+
+27
+00:01:30.667 --> 00:01:32.809
+Two clusters write at the same time.
+
+28
+00:01:32.809 --> 00:01:35.785
+Cluster A adds three,
+and cluster B, concurrently,
+
+29
+00:01:35.785 --> 00:01:37.748
+adds five, each to its own count.
+
+30
+00:01:37.748 --> 00:01:39.712
+Neither state is above the other.
+
+31
+00:01:40.062 --> 00:01:44.179
+Each merges the other's update
+by taking the larger value per replica,
+
+32
+00:01:44.179 --> 00:01:46.825
+so both arrive at the same state:
+their join.
+
+33
+00:01:47.175 --> 00:01:49.841
+Deliver that update twice,
+and nothing changes.
+
+34
+00:01:50.191 --> 00:01:55.022
+Merges are commutative, associative
+and idempotent, so any cluster can accept
+
+35
+00:01:55.022 --> 00:01:59.350
+a write to any key, with no lock manager
+and no consensus round trip.
+
+36
+00:01:59.350 --> 00:02:01.797
+For plain values, the last writer wins.
+
+37
+00:02:02.797 --> 00:02:04.877
+Third: everything else is a seam.
+
+38
+00:02:04.877 --> 00:02:08.534
+Storage, identity, governance,
+replication, administration
+
+39
+00:02:08.534 --> 00:02:12.631
+and observability are companion
+packages behind documented seams.
+
+40
+00:02:12.981 --> 00:02:17.589
+A host takes only what it registers, and
+a capability it leaves out costs nothing.
+
+41
+00:02:18.589 --> 00:02:21.171
+So a deployment can grow
+without a rewrite.
+
+42
+00:02:21.171 --> 00:02:23.752
+Start local: one machine,
+no cloud account.
+
+43
+00:02:24.102 --> 00:02:27.643
+Add a team: identity,
+authorization, schemas and tenants.
+
+44
+00:02:27.993 --> 00:02:32.751
+Go global: active-active across regions,
+with backup and an autoscaling signal.
+
+45
+00:02:33.101 --> 00:02:35.999
+At every stage,
+the programming model is the same.
+
+46
+00:02:35.999 --> 00:02:38.434
+Your code resolves ILattice, and calls it.
+
+47
+00:02:39.434 --> 00:02:41.461
+The documentation has three ways in.
+
+48
+00:02:41.811 --> 00:02:44.371
+Build,
+if you are writing code against ILattice.
+
+49
+00:02:44.721 --> 00:02:47.281
+Evaluate,
+if you are deciding whether it fits.
+
+50
+00:02:47.631 --> 00:02:49.591
+Operate, if you are running an estate.
+
+51
+00:02:49.591 --> 00:02:50.468
+Pick your way in.

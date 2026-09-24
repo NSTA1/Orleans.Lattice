@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Orleans.Lattice in three minutes</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+      }
+      /* The code that stays the same, laid over the journey once its
+         invariant has risen (journey.html leaves the lower half clear). */
+      #same-code {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 596px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Orleans.Lattice in three minutes: the front door of the series
+      (episodes/introduction/BRIEF.md), narrated from SCRIPT.md. Its first
+      minute is for everyone and uses no technical terms; "What it is" is
+      where the technical half begins.
+
+      Every scene is a shared component; this file only chooses them, gives
+      them the episode's words, and says which script scene each one shows
+      (data-scene). The timing - each clip's data-start and data-duration, its
+      beats, the episode's length and the narration track - is stamped from
+      the narration by `npm run timeline -- introduction`. Never edit those by
+      hand: change SCRIPT.md, narrate, and stamp again.
+    -->
+    <div
+      id="root"
+      data-composition-id="introduction"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="172.468"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="opening"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Orleans.Lattice","title":"site:home.thesis","subtitle":"An introduction in three minutes","beats":"1.5","end":6.273}'
+        data-start="0"
+        data-duration="6.273"
+      ></div>
+      <div
+        id="remember"
+        data-composition-id="remember"
+        data-composition-src="shared/components/remember.html"
+        data-scene="software-that-remembers"
+        data-track-index="0"
+        data-start="6.273"
+        data-duration="10.502"
+        data-variable-values='{"beats":"0.6,8.012","end":10.502}'
+      ></div>
+      <div
+        id="many-places"
+        data-composition-id="many-places"
+        data-composition-src="shared/components/many-places.html"
+        data-scene="in-more-than-one-place"
+        data-track-index="0"
+        data-start="16.775"
+        data-duration="36.542"
+        data-variable-values='{"beats":"0.6,6.348,9.855,17.565,23.12,31.108","end":36.542}'
+      ></div>
+      <div
+        id="what-it-is"
+        data-composition-id="store-overview"
+        data-composition-src="shared/components/store-overview.html"
+        data-scene="what-it-is"
+        data-track-index="0"
+        data-variable-values='{"keysBeat":1,"statements":"The store lives in the cluster|Conflict resolution is algebraic|Everything else is a seam","beats":"0.6,8.054,16.468","end":19.647}'
+        data-start="53.317"
+        data-duration="19.647"
+      ></div>
+      <div
+        id="in-the-cluster"
+        data-composition-id="cluster"
+        data-composition-src="shared/components/cluster.html"
+        data-scene="the-store-lives-in-the-cluster"
+        data-track-index="0"
+        data-start="72.964"
+        data-duration="14.043"
+        data-variable-values='{"beats":"0.6,7.35","end":14.043}'
+      ></div>
+      <div
+        id="algebraic"
+        data-composition-id="join-diagram"
+        data-composition-src="shared/components/join-diagram.html"
+        data-scene="conflict-resolution-is-algebraic"
+        data-track-index="0"
+        data-variable-values='{"scenario":"gcounter","heading":"Conflict resolution is algebraic","redeliver":true,"note":"Commutative, associative and idempotent|No lock manager, no consensus round trip","beats":"0.6,3.66,13.055,20.168,23.184","end":35.19}'
+        data-start="87.007"
+        data-duration="35.19"
+      ></div>
+      <div
+        id="seams"
+        data-composition-id="seams"
+        data-composition-src="shared/components/seams.html"
+        data-scene="everything-else-is-a-seam"
+        data-track-index="0"
+        data-start="122.197"
+        data-duration="15.792"
+        data-variable-values='{"beats":"0.6,10.784","end":15.792}'
+      ></div>
+      <div
+        id="journey"
+        data-composition-id="journey"
+        data-composition-src="shared/components/journey.html"
+        data-scene="local-to-global"
+        data-track-index="0"
+        data-start="137.989"
+        data-duration="20.845"
+        data-variable-values='{"beats":"0.6,6.113,10.004,15.112","end":20.845}'
+      ></div>
+      <div id="same-code" class="clip" data-scene="local-to-global" data-from-beat="3" data-track-index="2" data-start="153.101" data-duration="5.733">
+        <pre class="lv-code"><code data-snippet="introduction/same-code">var lattice = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");
+await lattice.SetAsync("user/42", new User("Ada", 36));
+var user = await lattice.GetAsync&lt;User&gt;("user/42");</code></pre>
+      </div>
+      <div
+        id="ways"
+        data-composition-id="ways"
+        data-composition-src="shared/components/ways.html"
+        data-scene="three-ways-in"
+        data-track-index="0"
+        data-start="158.834"
+        data-duration="13.634"
+        data-variable-values='{"beats":"0.6,2.977,5.887,8.797","end":13.634}'
+      ></div>
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/introduction/narration.wav" data-start="0" data-duration="172.468" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+        window.LatticeCode.highlightAll(document);
+
+        // The overlay's window is stamped into its attributes; its motion is
+        // read from them, so it cannot drift from the narration.
+        const code = document.getElementById("same-code");
+        const start = Number(code.dataset.start);
+        const end = start + Number(code.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        tl.fromTo(code, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: duration.slow, ease: "lattice-out" }, start + 0.9);
+        tl.to(code, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end - duration.fast);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["introduction"] = tl;
+      })();
+    </script>
+  </body>
+</html>

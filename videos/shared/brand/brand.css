@@ -1,0 +1,165 @@
+/*
+  Orleans.Lattice video series - the brand seam.
+
+  Colour, type and the order-diagram roles come from the documentation site's
+  design system and are used by the site's own names (--lt-*): the tokens in
+  docs-site/template/public/tokens.css, documented in DESIGN.md at the
+  repository root. tools/hf.js copies them, the @font-face rules of the site's
+  main.css, its self-hosted fonts, its mark and its join-figure scenarios into
+  shared/brand/site/ (ignored by git) before every preview, check and render,
+  and the two imports below read that copy. Nothing in this workspace restates
+  one of those values, so a change to the site's design reaches the videos on
+  the next render.
+
+  What this file owns is the camera (--lv-*): sizes for a 1920x1080 frame
+  watched on a laptop, which web values cannot supply. See frame.md. The
+  camera font stacks, --lv-font-sans and --lv-font-mono, are generated into
+  site/fonts.css by the same sync: the site's own self-hosted family and a
+  generic, without the system and web fallbacks the site's stacks go on to
+  name, which the renderer would otherwise fetch from the network.
+
+  Material: paper (light) by default, as on the site. A composition, or any
+  element in one, renders on the board (dark) with data-bs-theme="dark".
+*/
+
+@import url("site/tokens.css");
+@import url("site/fonts.css");
+
+:root {
+  /* Camera type scale, in pixels at 1920x1080. One family carries every
+     voice, as on the site; weight (--lt-weight-*) marks importance. Nothing
+     smaller than the label step is ever put on screen. */
+  --lv-type-hero: 112px;
+  --lv-type-title: 80px;
+  --lv-type-heading: 56px;
+  --lv-type-body: 44px;
+  --lv-type-code: 36px;
+  --lv-type-state: 34px;
+  --lv-type-caption: 36px;
+  --lv-type-label: 32px;
+
+  /* Title-safe area: 5% of each frame edge. */
+  --lv-safe-x: 96px;
+  --lv-safe-y: 54px;
+
+  /* Order diagrams are the site's figures at twice their size: the site draws
+     the join figure in a 460x420 viewBox, and the camera needs it large. */
+  --lv-diagram-scale: 2;
+
+  /* The site's hairlines, nodes and corners at the same scale. Rules are 1px
+     and heavy rules 2px on the site, which has no token for them; nodes, rings
+     and corners come from its tokens. */
+  --lv-hairline: calc(1px * var(--lv-diagram-scale));
+  --lv-rule-heavy: calc(2px * var(--lv-diagram-scale));
+  --lv-ring: calc(var(--lt-diagram-ring-width) * var(--lv-diagram-scale));
+  --lv-node-sm: calc(var(--lt-diagram-node-size) * var(--lv-diagram-scale));
+  --lv-node: calc(var(--lt-diagram-node-size-lg) * var(--lv-diagram-scale));
+  --lv-radius: calc(var(--lt-radius-md) * var(--lv-diagram-scale));
+}
+
+/*
+  The notation at camera scale, shared by every scene: DESIGN.md's order
+  diagram (nodes, spines, chains and joins in hairlines) and the site's own
+  devices built from it. Scenes add layout, never new devices.
+*/
+
+/* A whole scene: the frame, on paper, in the site's one proportional family. */
+.lv-scene {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font-family: var(--lv-font-sans);
+}
+
+/* A scene heading, as the site's section heading: a hairline with a hollow
+   node at its left end and the heading beneath, so each scene reads as the
+   next node on the episode's chain. */
+.lv-heading {
+  position: absolute;
+  top: var(--lv-safe-y);
+  left: var(--lv-safe-x);
+  right: var(--lv-safe-x);
+  margin: 0;
+  padding-top: 30px;
+  border-top: var(--lv-hairline) solid var(--lt-rule);
+  color: var(--lt-ink);
+  font-size: var(--lv-type-heading);
+  font-weight: var(--lt-weight-heading);
+  line-height: var(--lt-leading-tight);
+  letter-spacing: -0.016em;
+}
+
+.lv-heading::before {
+  content: "";
+  position: absolute;
+  top: calc(-0.5 * var(--lv-node-sm) - 0.5 * var(--lv-hairline));
+  left: 0;
+  width: var(--lv-node-sm);
+  height: var(--lv-node-sm);
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-ink);
+}
+
+/* A node: hollow and ringed in ink unless a scene fills it. Scenes tween its
+   background between token values; "you are here" is the marker in its ring. */
+.lv-node {
+  display: block;
+  box-sizing: border-box;
+  width: var(--lv-node);
+  height: var(--lv-node);
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-ink);
+}
+
+.lv-label {
+  color: var(--lt-ink-2);
+  font-size: var(--lv-type-label);
+  font-weight: var(--lt-weight-label);
+  line-height: 1.3;
+}
+
+/* Mono is for code, data and states only (DESIGN.md). */
+.lv-mono {
+  font-family: var(--lv-font-mono);
+}
+
+/* The site's status pill, for anything named before it has shipped. */
+.lv-status {
+  display: inline-block;
+  padding: 0 16px;
+  border: var(--lv-hairline) solid var(--lt-rule-strong);
+  border-radius: 999px;
+  color: var(--lt-ink-2);
+  font-size: var(--lv-type-label);
+  font-weight: var(--lt-weight-label);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* Code: sunken paper in a hairline frame, coloured in the site's syntax roles
+   by shared/brand/code.js. */
+.lv-code {
+  margin: 0;
+  padding: 34px 44px;
+  border: var(--lv-hairline) solid var(--lt-rule);
+  border-radius: var(--lv-radius);
+  background: var(--lt-code-bg);
+  color: var(--lt-code-ink);
+  font-family: var(--lv-font-mono);
+  font-size: var(--lv-type-code);
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.lv-syn-keyword { color: var(--lt-syn-keyword); }
+.lv-syn-type { color: var(--lt-syn-type); }
+.lv-syn-string { color: var(--lt-syn-string); }
+.lv-syn-number { color: var(--lt-syn-number); }
+.lv-syn-comment { color: var(--lt-syn-comment); }
+.lv-syn-meta { color: var(--lt-syn-meta); }

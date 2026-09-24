@@ -14,12 +14,17 @@ on:
     # .github/copilot-instructions.md, and is not restated here.
     branches: [main, '*/epic/**', 'release/**']
     # The workspace reads the docs site's design system (docs-site/template/public
-    # and docs-site/figures), so a change to it is re-checked here too.
+    # and docs-site/figures), its home page's words (docs-site/pages) and the
+    # package catalogue (PACKAGES.md), so a change to any of them is re-checked
+    # here too.
     paths:
       - 'videos/**'
       - 'docs/videos/**'
       - 'docs-site/template/public/**'
       - 'docs-site/figures/**'
+      - 'docs-site/pages/**'
+      - 'docs-site/media/**'
+      - 'PACKAGES.md'
       - '.github/workflows/videos.yml'
 
   # Integration-branch lane, mirroring ci.yml's push trigger (#2972). ADVISORY,
@@ -33,6 +38,9 @@ on:
       - 'docs/videos/**'
       - 'docs-site/template/public/**'
       - 'docs-site/figures/**'
+      - 'docs-site/pages/**'
+      - 'docs-site/media/**'
+      - 'PACKAGES.md'
       - '.github/workflows/videos.yml'
 
   workflow_dispatch:
@@ -95,7 +103,13 @@ jobs:
       - name: Snippets match their companion pages
         run: npm run snippets:check
 
-      - name: Lint every composition
+      # Each companion page carries its episode's video block (what the docs
+      # site lists and plays) and its transcript, word for word as the script
+      # has it; both are written from the episode.
+      - name: Companion pages match their episodes
+        run: npm run companions:check
+
+      - name: Lint the smoke test
         run: npm run lint
 
       # Downloaded explicitly so a network failure is reported as itself rather
@@ -106,6 +120,13 @@ jobs:
       # Lint, runtime, layout, motion and WCAG AA contrast on the smoke test.
       - name: Check the workspace smoke test
         run: npm run check
+
+      # The same check on every episode. Narration audio is never committed (a
+      # published episode's MP4 carries its sound), so each episode is checked
+      # against silence of its stamped length: its pictures, timing and
+      # structure, not its sound.
+      - name: Check every episode
+        run: npm run check:episodes
 
       - name: Draft-render the smoke test
         run: npm run render -- --quality draft --workers 1 -o renders/smoke.mp4

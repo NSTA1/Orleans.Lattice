@@ -4,12 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1920, height=1080" />
     <title>Orleans.Lattice video workspace - smoke test</title>
-    <link rel="stylesheet" href="assets/brand/brand.css" />
+    <link rel="stylesheet" href="shared/brand/brand.css" />
     <script src="node_modules/gsap/dist/gsap.min.js"></script>
     <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
     <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
-    <script src="assets/brand/motion.js"></script>
-    <script src="assets/brand/site/join-figures.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
     <style>
       html,
       body {
@@ -28,8 +32,9 @@
       composition to prove the toolchain end to end: the site's design system
       read through the brand seam, a variable-driven shared component, the
       site's canonical join figure at camera scale, and GSAP and its plugins
-      served from node_modules rather than a CDN. Episodes are standalone
-      compositions under compositions/episodes/.
+      served from node_modules rather than a CDN. Episodes live in
+      episodes/<slug>/composition.html and are swapped in over this file to
+      run a project command (npm run check -- --episode <slug>).
     -->
     <div
       id="root"
@@ -43,7 +48,7 @@
       <div
         id="title-card"
         data-composition-id="title-card"
-        data-composition-src="compositions/components/title-card.html"
+        data-composition-src="shared/components/title-card.html"
         data-start="0"
         data-duration="3"
         data-track-index="0"
@@ -52,7 +57,7 @@
       <div
         id="join-diagram"
         data-composition-id="join-diagram"
-        data-composition-src="compositions/components/join-diagram.html"
+        data-composition-src="shared/components/join-diagram.html"
         data-start="3"
         data-duration="7"
         data-track-index="0"

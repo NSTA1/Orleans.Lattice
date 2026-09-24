@@ -7,23 +7,20 @@
 //
 //   npm run snippets          rewrite every composition from the pages
 //   npm run snippets:check    fail if any composition has drifted (CI)
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { workspaceRoot } from "./lib/hyperframes.js";
-import { applySnippets, collectSnippets, listFiles } from "./lib/snippets.js";
+import { compositionFiles, listFiles } from "./lib/layout.js";
+import { applySnippets, collectSnippets } from "./lib/snippets.js";
 
 const check = process.argv.includes("--check");
 const repoRoot = path.resolve(workspaceRoot, "..");
 const relative = (file) => path.relative(repoRoot, file).split(path.sep).join("/");
 
-const pagesDir = path.join(repoRoot, "docs", "videos");
-const pages = existsSync(pagesDir) ? listFiles(pagesDir, (file) => file.endsWith(".md")) : [];
+const pages = listFiles(path.join(repoRoot, "docs", "videos"), (file) => file.endsWith(".md"));
 const snippets = collectSnippets(pages.map((file) => ({ source: relative(file), text: readFileSync(file, "utf8") })));
 
-const compositions = [
-  path.join(workspaceRoot, "index.html"),
-  ...listFiles(path.join(workspaceRoot, "compositions"), (file) => file.endsWith(".html")),
-];
+const compositions = compositionFiles();
 
 const problems = [];
 const used = new Set();

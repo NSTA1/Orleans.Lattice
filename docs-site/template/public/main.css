@@ -2342,3 +2342,251 @@ article .lt-close h2 {
     animation: none;
   }
 }
+
+/* ==========================================================================
+   15. Video - the player, the home page's introduction, the Videos index
+   ========================================================================== */
+
+/* The player is the browser's own: native controls, captions and keyboard
+   handling, and nothing loads until the reader presses play. The frame
+   reserves the 16:9 space before the poster arrives and sets the video on a
+   hairline, like every other exhibit on the page. */
+.lt-video {
+  margin: 0;
+}
+
+article .lt-video {
+  max-width: 48rem;
+  margin: 1.5rem 0 2rem;
+}
+
+article .lt-home .lt-video {
+  max-width: none;
+  margin: 0;
+}
+
+.lt-video-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-video-frame video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.lt-video-frame video:focus-visible {
+  outline: 2px solid var(--lt-focus);
+  outline-offset: -2px;
+}
+
+.lt-video-caption {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+  line-height: 1.6;
+}
+
+.lt-video-caption > span + span::before {
+  content: "\00B7";
+  margin: 0 0.55rem;
+  color: var(--lt-rule-strong);
+}
+
+.lt-video-caption time,
+.lt-watch-facts time,
+.lt-episode-length time {
+  font-family: var(--lt-font-mono);
+}
+
+.lt-video-caption time {
+  color: var(--lt-ink-2);
+}
+
+/* --- The home page's introduction: the player beside its facts ------------- */
+
+.lt-watch-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+  gap: 1.75rem clamp(1.5rem, 3.5vw, 3.5rem);
+  align-items: start;
+}
+
+article .lt-watch-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  max-width: none;
+  margin: 0 0 1.25rem;
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+article .lt-watch-facts dt,
+article .lt-watch-facts dd {
+  margin: 0;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--lt-rule);
+}
+
+article .lt-watch-facts dt:first-of-type,
+article .lt-watch-facts dt:first-of-type + dd {
+  border-top: 0;
+}
+
+article .lt-watch-facts dt {
+  padding-right: 1.25rem;
+  color: var(--lt-ink-3);
+  font-weight: var(--lt-weight-label);
+}
+
+article .lt-watch-facts dd {
+  color: var(--lt-ink);
+}
+
+article .lt-watch-more {
+  margin: 0;
+}
+
+article .lt-watch-more a {
+  font-weight: var(--lt-weight-strong);
+}
+
+@media (max-width: 999.98px) {
+  .lt-watch-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- The Videos index: each path a chain of episodes ------------------------ */
+
+article .lt-episodes {
+  position: relative;
+  max-width: 48rem;
+  margin: 0 0 2.25rem;
+  padding: 0 0 0 1.5rem;
+  list-style: none;
+}
+
+article .lt-episodes::before {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  top: 0.75rem;
+  bottom: 1.75rem;
+  width: 1px;
+  background: var(--lt-rule-strong);
+}
+
+/* One episode is a node, not a chain. */
+article .lt-episodes:has(> li:only-child)::before {
+  display: none;
+}
+
+article .lt-episodes > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  gap: 0 1.1rem;
+  align-items: start;
+  margin: 0 0 1.25rem;
+}
+
+article .lt-episodes > li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1.2rem - 4px);
+  top: 0.45rem;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-2);
+  transition: background var(--lt-duration-fast) var(--lt-ease-out), box-shadow var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+article .lt-episodes > li:first-child::before {
+  background: var(--lt-ink);
+  box-shadow: none;
+}
+
+article .lt-episodes > li:hover::before,
+article .lt-episodes > li:focus-within::before {
+  background: var(--lt-marker);
+  box-shadow: 0 0 0 var(--lt-diagram-ring-width) var(--lt-diagram-join-ring);
+}
+
+article a.lt-episode-poster {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+  line-height: 0;
+}
+
+article a.lt-episode-poster:hover {
+  border-color: var(--lt-rule-strong);
+  background: var(--lt-surface-sunken);
+}
+
+article .lt-episode-poster img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0;
+}
+
+.lt-episode-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+article a.lt-episode-title {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-strong);
+  line-height: 1.35;
+  text-decoration-color: var(--lt-rule-strong);
+}
+
+article a.lt-episode-title:hover {
+  color: var(--lt-link);
+  text-decoration-color: currentColor;
+  background: none;
+}
+
+.lt-episode-idea {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+.lt-episode-length {
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+@media (max-width: 559.98px) {
+  article .lt-episodes > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  article a.lt-episode-poster {
+    max-width: 18rem;
+    margin-bottom: 0.6rem;
+  }
+}

@@ -1,0 +1,171 @@
+<template id="seams-template">
+  <!--
+    A core plus seams, as the site's home page draws it: the core, then one
+    node per section of PACKAGES.md on a spine beneath it, each with its
+    package count and its first packages. The list is generated (DESIGN.md's
+    Generated Map Rule): it comes from shared/brand/site/packages.js, which the
+    sync writes from PACKAGES.md keeping only released packages and leaving the
+    Explorer off camera, so a new package appears here without an edit.
+
+    On its second beat a host registers some seams and leaves the rest: those
+    it takes stay filled in ink, and those it leaves out empty and fade,
+    because a capability left out costs nothing.
+
+    Variables: heading (default the site's own); registered (comma-separated
+    section names, beat 1); beats and end are stamped by npm run timeline.
+  -->
+  <div
+    data-composition-id="seams"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"site:home.seams.title"},
+      {"id":"registered","type":"string","label":"Sections a host registers (beat 1)","default":"Storage,Identity and Security,Replication"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading se-heading"></h2>
+    <div class="se-spine"></div>
+    <ol class="se-rows"></ol>
+
+    <style>
+      [data-composition-id="seams"] .se-spine {
+        position: absolute;
+        left: 160px;
+        top: 262px;
+        width: var(--lv-hairline);
+        height: 560px;
+        background: var(--lt-rule-strong);
+        transform-origin: top center;
+      }
+      [data-composition-id="seams"] .se-rows {
+        position: absolute;
+        left: 0;
+        top: 0;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      [data-composition-id="seams"] .se-row {
+        position: absolute;
+        left: 161px;
+        width: 1663px;
+        height: 0;
+      }
+      [data-composition-id="seams"] .se-row .lv-node {
+        position: absolute;
+        left: calc(-0.5 * var(--lv-node));
+        top: calc(-0.5 * var(--lv-node));
+        background: var(--lt-ink);
+      }
+      [data-composition-id="seams"] .se-row > span:not(.lv-node) {
+        position: absolute;
+        top: 0;
+        transform: translateY(-50%);
+        white-space: nowrap;
+      }
+      [data-composition-id="seams"] .se-name {
+        left: 44px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-caption);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="seams"] .se-row.is-core .se-name {
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-heading);
+      }
+      [data-composition-id="seams"] .se-count {
+        left: 520px;
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+      }
+      [data-composition-id="seams"] .se-members {
+        left: 760px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="seams"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+        const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+
+        const catalogue = window.LatticePackages;
+        if (!catalogue || !catalogue.sections || catalogue.sections.length < 2) {
+          throw new Error("seams: the package catalogue is not loaded; the root composition must load shared/brand/site/packages.js");
+        }
+        q(".se-heading").textContent = scene.site(vars.heading);
+
+        // As many names as fit the line, then how many more, as the site does.
+        const members = (names) => {
+          const shown = [];
+          for (const name of names) {
+            const rest = names.length - shown.length - 1;
+            const line = [...shown, name].join(", ") + (rest > 0 ? ", and " + rest + " more" : "");
+            if (shown.length > 0 && line.length > 52) break;
+            shown.push(name);
+          }
+          const more = names.length - shown.length;
+          return shown.join(", ") + (more > 0 ? ", and " + more + " more" : "");
+        };
+        const top = 262;
+        const gap = (822 - top) / (catalogue.sections.length - 1);
+        catalogue.sections.forEach((section, i) => {
+          const row = document.createElement("li");
+          row.className = "se-row" + (i === 0 ? " is-core" : "");
+          row.dataset.section = section.name;
+          row.style.top = top + gap * i + "px";
+          row.innerHTML = '<span class="lv-node"></span><span class="se-name"></span><span class="se-count"></span><span class="se-members"></span>';
+          row.querySelector(".se-name").textContent = section.name;
+          const count = section.packages.length;
+          row.querySelector(".se-count").textContent = count + (count === 1 ? " package" : " packages");
+          row.querySelector(".se-members").textContent = members(section.packages);
+          q(".se-rows").appendChild(row);
+        });
+
+        const tl = gsap.timeline({ paused: true });
+        const first = timing.at(0, 0.3);
+        const rows = all(".se-row");
+        tl.from(q(".se-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.from(rows[0], { opacity: 0, x: -20, duration: duration.slow, ease }, first);
+        tl.from(q(".se-spine"), { scaleY: 0, duration: 1.4, ease: "lattice-draw" }, first + 0.5);
+        rows.slice(1).forEach((row, i) => {
+          tl.from(row, { opacity: 0, x: -20, duration: duration.base, ease }, first + 0.9 + i * 0.28);
+        });
+
+        const registered = new Set(
+          String(vars.registered || "")
+            .split(",")
+            .map((name) => name.trim())
+            .filter(Boolean),
+        );
+        const host = timing.at(1, null);
+        if (host !== null && registered.size > 0) {
+          const leftOut = rows.slice(1).filter((row) => !registered.has(row.dataset.section));
+          for (const name of registered) {
+            if (!rows.some((row) => row.dataset.section === name)) {
+              throw new Error("seams: no section '" + name + "' in the package catalogue");
+            }
+          }
+          tl.to(leftOut.map((row) => row.querySelector(".lv-node")), { backgroundColor: token("--lt-surface"), duration: duration.slow, ease }, host + 0.5);
+          tl.to(leftOut, { opacity: 0.32, duration: duration.slow, ease }, host + 0.5);
+        }
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["seams"] = tl;
+      })();
+    </script>
+  </div>
+</template>
