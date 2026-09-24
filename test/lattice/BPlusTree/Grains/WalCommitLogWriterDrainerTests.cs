@@ -120,8 +120,7 @@ public class WalCommitLogWriterDrainerTests
         var counter = new DispatchCounter();
         dispatches = counter;
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
+        shard.StubPointAppend(_ =>
             {
                 counter.Increment();
                 return release.Task;

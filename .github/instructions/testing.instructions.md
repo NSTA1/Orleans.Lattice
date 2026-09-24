@@ -939,7 +939,7 @@ dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.cspro
 - `publish.yml` resolves a package's test project from the package directory, so publishing never runs it either.
 - `.github/workflows/ui-tests.yml` is its only runner. It is **path-filtered to the Explorer UI**, so an unrelated PR never provisions a browser, and it caches both NuGet and the pinned browser build.
 
-**Coverage does run them.** `coverage.yml` (main only, post-merge) builds the solution and runs every test project, and the browser suite is included: it installs chromium and deliberately does **not** exclude the `UI` category. The suite hosts the Explorer in-process on Kestrel, so coverlet instruments the same process that serves the app and the server-side render path is genuinely counted - real production coverage, not just test code.
+**Coverage does run them.** `coverage.yml` (main only, nightly) builds the solution and runs every test project, and the browser suite is included: it installs chromium and deliberately does **not** exclude the `UI` category. The suite hosts the Explorer in-process on Kestrel, so coverlet instruments the same process that serves the app and the server-side render path is genuinely counted - real production coverage, not just test code.
 
 Two traps there, both of which silently cost coverage rather than failing:
 

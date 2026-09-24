@@ -23,7 +23,9 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// <para>
 /// Every wait is a Playwright web-first assertion or locator wait, so the driver
 /// auto-retries against a settling DOM and contains no fixed delay, no polling loop,
-/// and no wall-clock dependence.
+/// and no wall-clock dependence. The one wait that is not a locator wait,
+/// <see cref="WaitForMotionToSettleAsync"/>, waits on the page's own
+/// animation-finished promises and is bounded, so it adds no fixed delay either.
 /// </para>
 /// </summary>
 internal static class ExplorerShell
@@ -60,6 +62,16 @@ internal static class ExplorerShell
     /// hang instead of a single failed test.
     /// </summary>
     internal const float RailReadTimeoutMs = 15_000;
+
+    /// <summary>
+    /// The longest <see cref="WaitForMotionToSettleAsync"/> waits for in-flight motion
+    /// before reporting it as a defect. The design system's slowest motion token is
+    /// 320ms, so this bound trips only on motion far outside the design system or on a
+    /// page that has stopped advancing its animations. It is below
+    /// <see cref="RailReadTimeoutMs"/>, so the page reports what is still moving before
+    /// the locator read that carries the wait gives up.
+    /// </summary>
+    internal const int MotionSettleTimeoutMs = 10_000;
 
     /// <summary>
     /// The username the harness signs in as. The seeded endpoint is deliberately
@@ -163,6 +175,43 @@ internal static class ExplorerShell
         })
         """;
 
+    /// <summary>
+    /// Waits for every running, finite animation on the page - CSS transitions included -
+    /// to finish, and returns how many were still running when the bound ran out.
+    /// </summary>
+    /// <remarks>
+    /// <c>document.getAnimations()</c> flushes pending style first, so a transition that a
+    /// style change has only just triggered is already in the list. Only running, finite
+    /// animations are awaited: an infinite one (a spinner) never finishes, so waiting on
+    /// it could only ever time out, and a paused one is not moving. A transition that is
+    /// superseded mid-flight rejects its <c>finished</c> promise, which is settling too, and
+    /// the list is re-read after each wave because a finishing animation can start another.
+    /// </remarks>
+    private const string SettleMotionScript =
+        """
+        async (element, timeoutMs) => {
+            const deadline = performance.now() + timeoutMs;
+            const moving = () => document.getAnimations().filter(animation =>
+                animation.playState === 'running'
+                && animation.effect !== null
+                && Number.isFinite(animation.effect.getComputedTiming().endTime));
+
+            for (let running = moving(); running.length > 0; running = moving()) {
+                const left = deadline - performance.now();
+                if (left <= 0) {
+                    return running.length;
+                }
+
+                await Promise.race([
+                    Promise.all(running.map(animation => animation.finished.catch(() => undefined))),
+                    new Promise(resolve => setTimeout(resolve, left)),
+                ]);
+            }
+
+            return 0;
+        }
+        """;
+
     /// <summary>The viewport width that lands squarely inside <paramref name="breakpoint"/>'s band.</summary>
     /// <param name="breakpoint">The band to size for.</param>
     internal static int ViewportWidth(LatticeBreakpoint breakpoint) => breakpoint switch
@@ -208,6 +257,42 @@ internal static class ExplorerShell
     /// <param name="page">The page to check.</param>
     internal static Task AssertShellRenderedAsync(IPage page) =>
         Assertions.Expect(page.Locator("[role=tab]").First).ToBeAttachedAsync();
+
+    /// <summary>
+    /// Waits for the page's in-flight motion to finish, so that what is measured next is
+    /// the state a user sees rather than a frame part-way through a transition.
+    /// <para>
+    /// A measurement that reads computed style - axe's <c>color-contrast</c> rule most of
+    /// all - reads it at the instant it runs. The shell's tabs transition their text
+    /// colour over 120ms, and <see cref="ApplyThemeAsync"/> flips the palette immediately
+    /// before a sweep, so a sweep that reached the tabs before their transition finished
+    /// read a colour part-way between the two palettes' muted text against the new
+    /// palette's surface - under 3:1 at the light end, against the 4.5:1 minimum. That
+    /// failed the dark-theme home cells intermittently on CI, on different cells from run
+    /// to run and on colours no user ever sees settle, which is indistinguishable from a
+    /// real contrast regression until someone reads the node list.
+    /// </para>
+    /// <para>
+    /// The wait is on the page's own animation-finished promises, not a delay, so it
+    /// costs nothing when nothing is moving. It fails rather than returning when motion is
+    /// still running after <see cref="MotionSettleTimeoutMs"/>, because a measurement taken
+    /// then would be exactly the mid-transition reading this exists to prevent.
+    /// </para>
+    /// </summary>
+    /// <param name="page">The page to settle.</param>
+    internal static async Task WaitForMotionToSettleAsync(IPage page)
+    {
+        var stillMoving = await page.Locator(":root").EvaluateAsync<int>(
+            SettleMotionScript,
+            MotionSettleTimeoutMs,
+            new LocatorEvaluateOptions { Timeout = RailReadTimeoutMs });
+
+        Assert.That(stillMoving, Is.Zero, () =>
+            $"{stillMoving} animation(s) were still running {MotionSettleTimeoutMs}ms after the "
+            + "shell was asked to settle, so anything measured now would read a frame part-way "
+            + "through them. The design system's slowest motion token is 320ms; motion this long "
+            + "is either outside the design system or a page that has stopped animating.");
+    }
 
     /// <summary>
     /// Applies <paramref name="theme"/> and proves the palette genuinely took effect

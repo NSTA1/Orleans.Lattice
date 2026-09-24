@@ -57,12 +57,17 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// as committed rather than re-added. It runs in two places - the
 /// grain's <c>OnActivateAsync</c>, before the grain accepts traffic,
 /// and the grain's post-failure resync, which first waits for every
-/// other in-flight flush on the shard to settle. Neither can rule out
-/// a phase-2 transaction the provider abandoned on a deadline landing
-/// late, so the commit is conditional on the TAIL it read and on the
-/// manifest rows it adds not existing; losing that race fails the
-/// transaction and the pass is re-planned, never lowering TAIL
-/// (#3348).
+/// other in-flight flush on the shard to settle. Both first wait for
+/// every phase-2 transaction this provider instance abandoned on its
+/// commit deadline to reach a real outcome, because such a transaction
+/// can still land after its callers were faulted, and resyncing
+/// underneath it rewinds the producer beneath rows it then writes
+/// (#3458). A committer this instance cannot see (another process, or
+/// a transaction the transport gave up on after the service accepted
+/// it) is still possible, so the commit is also conditional on the
+/// TAIL it read and on the manifest rows it adds not existing; losing
+/// that race fails the transaction and the pass is re-planned, never
+/// lowering TAIL (#3348).
 /// </para>
 /// </summary>
 public sealed partial class AzureTableWalStorageProvider
@@ -95,12 +100,14 @@ public sealed partial class AzureTableWalStorageProvider
             // 1 and accepted phase-2 commits can still be queued in the
             // worker; the scan below would read either as an orphan and
             // roll it back under a commit that is about to reference it,
-            // or race that commit for the same M-row (#3348).
+            // or race that commit for the same M-row (#3348). A phase-2
+            // transaction abandoned on its deadline is waited for too: it
+            // may still land its M-rows and TAIL after this scan (#3458).
             await WaitForShardWritesToSettleAsync(activity, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
 
-            // A committer this instance cannot see (a phase-2
-            // transaction abandoned on its deadline but landing late, or
-            // another process) can still add a manifest row or move TAIL
+            // A committer this instance cannot see (another process, or
+            // a transaction the transport gave up on after the service
+            // had accepted it) can still add a manifest row or move TAIL
             // between this pass's reads and its commit. The commit is
             // conditional on both, so it fails with 409 / 412 instead of
             // regressing TAIL; re-planning from fresh reads then treats
@@ -135,9 +142,10 @@ public sealed partial class AzureTableWalStorageProvider
     /// <summary>
     /// Waits until no append against the shard is in motion on this
     /// provider instance and the shard's phase-2 worker, if any, has
-    /// settled every commit it accepted. Appends are drained first
-    /// because an append in phase 1 enqueues its commit only when phase
-    /// 1 lands.
+    /// settled every commit it accepted and every submit it abandoned on
+    /// its commit deadline has completed (#3458). Appends are drained
+    /// first because an append in phase 1 enqueues its commit only when
+    /// phase 1 lands.
     /// </summary>
     private async Task WaitForShardWritesToSettleAsync(
         WalShardActivity activity,
@@ -148,6 +156,7 @@ public sealed partial class AzureTableWalStorageProvider
         if (_phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker))
         {
             await worker.OutstandingCommits.WhenIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+            await worker.AbandonedSubmits.WhenIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 

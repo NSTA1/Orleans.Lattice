@@ -36,6 +36,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public class WalShardGrainSingleEntryAppendInterleaveTests
 {
     private const string ClusterId = "wal-single-entry-site";
+    private const string BatchedPointTree = "writer-point-batched";
+    private const string ExclusivePointTree = "writer-point-exclusive";
 
     private TestCluster _cluster = null!;
 
@@ -243,6 +245,89 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             "The next sequence must account for every interleaved append exactly once.");
     }
 
+    /// <summary>
+    /// The #812 set-point ceiling, measured end to end through the real
+    /// commit-log writer and a real shard activation: with one point append
+    /// parked in the provider, a second point append to the same partition
+    /// reaches the provider concurrently only when
+    /// <see cref="LatticeOptions.WalBatchedSingleEntryAppends"/> routes point
+    /// appends onto the interleaving overload.
+    /// </summary>
+    /// <remarks>
+    /// On the exclusive overload the shard awaits its own provider ack inside
+    /// the turn, so the second append queues behind the whole round trip and
+    /// the partition sustains one point append per provider call. That is
+    /// the mechanism, so it is asserted directly: a throughput-level
+    /// assertion would pass on a fast in-memory provider either way.
+    /// </remarks>
+    [Test]
+    public async Task Writer_point_appends_pipeline_on_one_partition_only_when_batched()
+    {
+        var enteredWhenBatched = await ProviderCallsWhileFirstPointAppendParkedAsync(BatchedPointTree);
+        var enteredWhenExclusive = await ProviderCallsWhileFirstPointAppendParkedAsync(ExclusivePointTree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(enteredWhenBatched, Is.EqualTo(2),
+                "With the option on, a second point append must reach the provider while the " +
+                "first is still parked. If it does not, point appends are still serialised " +
+                "behind one provider round trip per partition and #812 has regressed.");
+            Assert.That(enteredWhenExclusive, Is.EqualTo(1),
+                "With the option off, point appends keep the exclusive overload, so the second " +
+                "must queue behind the parked round trip. If this stops being true the option " +
+                "is no longer a real off-switch for point appends.");
+        });
+    }
+
+    private async Task<int> ProviderCallsWhileFirstPointAppendParkedAsync(string tree)
+    {
+        var writer = _cluster.Silos
+            .OfType<InProcessSiloHandle>()
+            .First()
+            .SiloHost.Services
+            .GetRequiredService<ICommitLogWriter>();
+
+        // Seed ungated so shard activation and recovery are never the calls
+        // under observation.
+        await writer.AppendAsync(MakeEntry(tree, "seed")).WaitAsync(TimeSpan.FromSeconds(15));
+
+        GatingAppendWalStorageProvider.Arm(tree);
+        Task<long>? first = null;
+        Task<long>? second = null;
+        try
+        {
+            first = writer.AppendAsync(MakeEntry(tree, "first"));
+            await GatingAppendWalStorageProvider.AppendEntered!.Task
+                .WaitAsync(TimeSpan.FromSeconds(15));
+
+            second = writer.AppendAsync(MakeEntry(tree, "second"));
+
+            // Bounded wait for the second provider call. The batched route
+            // gets there almost immediately; the exclusive route never does
+            // while the first is parked, so the deadline is the verdict.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+            while (GatingAppendWalStorageProvider.EnteredCount < 2 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20));
+            }
+
+            return GatingAppendWalStorageProvider.EnteredCount;
+        }
+        finally
+        {
+            GatingAppendWalStorageProvider.Release();
+            if (first is not null)
+            {
+                await first.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            if (second is not null)
+            {
+                await second.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            GatingAppendWalStorageProvider.Reset();
+        }
+    }
+
     private async Task<bool> ReaderBlocksWhileAppendParkedAsync(
         string tree, bool batchedSingleEntryAppends)
     {
@@ -293,6 +378,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
+            siloBuilder.ConfigureLattice(ExclusivePointTree, o => o.WalBatchedSingleEntryAppends = false);
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
             siloBuilder.Services.Replace(
                 ServiceDescriptor.Singleton<IWalStorageProvider>(
@@ -318,10 +404,15 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
         internal static volatile TaskCompletionSource? AppendGate;
         internal static volatile TaskCompletionSource? AppendEntered;
         private static volatile string? _gatedTree;
+        private static int _enteredCount;
+
+        /// <summary>Provider appends that have reached the gate since the last <see cref="Arm"/>.</summary>
+        internal static int EnteredCount => Volatile.Read(ref _enteredCount);
 
         internal static void Arm(string tree)
         {
             _gatedTree = tree;
+            Interlocked.Exchange(ref _enteredCount, 0);
             AppendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             AppendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
@@ -333,6 +424,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             _gatedTree = null;
             AppendGate = null;
             AppendEntered = null;
+            Interlocked.Exchange(ref _enteredCount, 0);
         }
 
         private static async Task GateAsync(string treeId, CancellationToken cancellationToken)
@@ -340,6 +432,7 @@ public class WalShardGrainSingleEntryAppendInterleaveTests
             var gate = AppendGate;
             if (gate is not null && string.Equals(treeId, _gatedTree, StringComparison.Ordinal))
             {
+                Interlocked.Increment(ref _enteredCount);
                 AppendEntered?.TrySetResult();
                 await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }

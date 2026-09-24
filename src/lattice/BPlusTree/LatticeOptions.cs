@@ -2519,11 +2519,29 @@ public class LatticeOptions
     public const int DefaultWalAppendCoalescingInFlightThreshold = 4;
 
     /// <summary>
-    /// When <c>true</c> (the default), a bulk WAL append carrying exactly one
-    /// entry is dispatched through the interleaving batched grain method
-    /// rather than the exclusive-turn per-entry overload.
+    /// When <c>true</c> (the default), every single-entry WAL append - a
+    /// point append on the internal commit-log writer as well
+    /// as a bulk append carrying exactly one entry - is dispatched through the
+    /// interleaving batched grain method rather than the exclusive-turn
+    /// per-entry overload.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Point appends are the leaf point-write path (<c>SetAsync</c>,
+    /// <c>DeleteAsync</c> and their conditional forms), CRDT merge apply,
+    /// pending-transaction staging, and inline saga terminal records. Before
+    /// issue #812 they always took the exclusive-turn overload, whatever this
+    /// option said, so a partition admitted one point append per provider
+    /// round trip: batch occupancy pinned at one entry, the pending queue
+    /// never grew past one, and caller-visible latency equalled the provider
+    /// duration. On a two-silo set-point run that capped throughput at
+    /// roughly <see cref="WalPartitions"/> divided by the provider round
+    /// trip; raising the shard count had no effect, while raising the
+    /// partition count lifted it to the offered rate. Routing point appends
+    /// through the batched method lets <see cref="WalMaxPendingBatches"/>
+    /// pipelining and <see cref="WalAppendCoalescingInFlightThreshold"/>
+    /// coalescing engage for them.
+    /// </para>
     /// <para>
     /// A bulk append of one entry historically collapsed onto the singular
     /// per-entry grain overload to match its per-call allocation cost. That
@@ -2543,8 +2561,11 @@ public class LatticeOptions
     /// offset assignment, pending-list mutation, and in-flight cap
     /// enforcement are serialised by the shard's internal state gate rather
     /// than by turn exclusivity. Ordering, durability, and offset density are
-    /// unchanged, and a bulk append of one entry becomes semantically
-    /// identical to a bulk append of two.
+    /// unchanged, and a single-entry append becomes semantically identical to
+    /// a bulk append of two. The batched method runs the same origin, move
+    /// fence, sticky-failure, and quiesce checks as the per-entry overload,
+    /// and every point-append caller awaits its append before issuing the
+    /// next, so none relied on turn exclusivity for ordering.
     /// </para>
     /// <para>
     /// The exclusive turn conferred no read guarantee that is being given up.
@@ -2565,12 +2586,17 @@ public class LatticeOptions
     /// <para>
     /// Set to <c>false</c> to restore the historical exclusive-turn dispatch.
     /// This exists as an escape hatch and as the control arm for throughput
-    /// A/B measurement; it is not a safety switch.
+    /// A/B measurement; it is not a safety switch. The
+    /// <c>orleans.lattice.wal.append.turn_wait</c> and
+    /// <c>orleans.lattice.wal.append.queue_depth</c> histograms are recorded
+    /// only by the per-entry overload, so with this option on they no longer
+    /// observe single-entry appends; the writer-side dispatch histograms and
+    /// the flush batch-occupancy histogram still do.
     /// </para>
     /// </remarks>
     public bool WalBatchedSingleEntryAppends { get; set; } = DefaultWalBatchedSingleEntryAppends;
 
-    /// <summary>Default value for <see cref="WalBatchedSingleEntryAppends"/> (<c>true</c>). A bulk append of one entry must not hold a WAL partition exclusively for a whole provider round trip, because the wide-fan-out shape that dominates batched writes produces one-entry slices almost exclusively.</summary>
+    /// <summary>Default value for <see cref="WalBatchedSingleEntryAppends"/> (<c>true</c>). A single-entry append must not hold a WAL partition exclusively for a whole provider round trip: point writes are single-entry by construction, and the wide-fan-out shape that dominates batched writes produces one-entry slices almost exclusively, so either path would otherwise cap a partition at one append per round trip (#812).</summary>
     public const bool DefaultWalBatchedSingleEntryAppends = true;
 
 
