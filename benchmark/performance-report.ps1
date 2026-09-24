@@ -190,6 +190,14 @@ param(
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
 	[switch] $KeepAca,
 
+	# Layer 3 only: resume an interrupted sweep from the rig's state.json.
+	# Every (workload, silo count) cell that already holds -N cohorts is kept
+	# as-is and not re-run. A cell holding fewer is re-run in full, so it is
+	# never a blend of two partial attempts. Without this, re-invoking a
+	# 90-cohort sweep that died at cohort 60 starts from cohort 1 and pays
+	# for the first 60 again.
+	[switch] $Resume,
+
 	# (#3348) Layer 3 only. The two saturation budgets the rig sets rather than
 	# inheriting from the library, in seconds; 0 means infinite, i.e. run at
 	# the SHIPPED default.
@@ -544,81 +552,115 @@ $Layer2Rows = @(
 )
 
 # ────────────────────────────────────────────────────────────────────────────
-# Layer 3 rows. Layer 3 answers a different question from Layer 2, so it is a
-# different (and deliberately much smaller) set of workloads.
+# Layer 3 rows: the SAME nine workloads as $Layer2Rows, at the SAME per-silo
+# rungs.
 #
-# Layer 2 asks "what does one silo sustain, per operation?" and therefore has
-# to cover the whole public surface. Layer 3 asks "what happens to throughput
-# as silos are added?", and every workload it carries multiplies the whole
-# silo-count sweep: the grid is |workloads| x |SiloCounts| x N cohorts, so a
-# seventh row is not a seventh row - it is another five cells, another hour,
-# and another slice of the spend cap.
+# Layer 2 asks "what does one silo sustain, per operation?"; Layer 3 asks
+# "what happens to that number as silos are added?". An earlier revision
+# carried only get-many / set-many / set-point to hold the sweep's cost down.
+# That left the atomic, cross-tree and materialised-view paths with no
+# multi-silo evidence at all, and those are the paths whose coordination
+# (saga coordinator + per-tree sub-sagas, view maintainer tailing the WAL)
+# most plausibly behaves differently once its grains are spread across hosts.
+# The grid is |workloads| x |SiloCounts| x N cohorts; at 9 x 5 x 2 that is
+# 90 cohorts, which is the cost of covering the whole public surface.
 #
-# The three chosen here are the ones that answer distinct questions about
-# scaling, rather than the three that happen to be fastest:
+# RungPerSilo matches each workload's Layer 2 Rung exactly (the Layer 2 rows
+# that carry no Rung take the sweep-wide '4000:5:45' default). That equality
+# is load-bearing: it is what makes the N=1 Layer 3 cell directly comparable
+# to the published Layer 2 cell, which in turn is the anchor that tells a
+# reader whether the ACA host is a fair stand-in for the Layer 2 VM. The rung
+# is PER SILO and multiplied by the silo count at cohort time, so per-silo
+# demand is constant as the cluster grows and the curve measures capacity
+# rather than a fixed load spread thinner. The rationale for each rung's
+# value lives on the matching $Layer2Rows entry and is not repeated here.
 #
-#   get-many   - the pure read path. No WAL, no Azure Tables write, so it is
-#                bounded by grain dispatch and silo CPU alone. This is the
-#                row that demonstrates the *compute* tier scales, and it is
-#                the control against which the write rows are read. If this
-#                row does not scale, the finding is about Orleans or the
-#                client fan-out, not about storage.
-#   set-many   - the batched write path, and the headline Layer 2 number.
-#                Bounded by the WAL, which in this rig funnels into ONE
-#                shared Azure Storage account for every silo count (see the
-#                document's caveat section). Its knee is therefore expected
-#                earlier than get-many's, and is the single most important
-#                thing this sweep measures.
-#   set-point  - the most account-bound write mode: one WAL append and one
-#                Tables operation per key, with no batching to amortise them.
-#                It bounds the pessimistic end of the curve, and it is the
-#                row where a shared-account ceiling should bite first and
-#                hardest. Including it is what lets a reader distinguish
-#                "Lattice stops scaling" from "this storage account does".
+# ChartGroup places each workload on one of the absolute-throughput charts.
+# The nine span four orders of magnitude (tens of keys/s for 2-key cross-tree
+# sagas, ~100k keys/s for batched reads), so a single linear axis would
+# flatten every write mode onto zero. The normalised speedup chart plots all
+# nine together, because speedup is dimensionless.
 #
-# Deliberately excluded: the atomic and cross-tree saga modes. They run at a
-# fraction of the batched rate (750-900 keys/s on one silo), so their curves
-# would be dominated by saga coordination cost rather than by the topology,
-# and they would double the sweep's wall-clock to say something the Layer 2
-# table already says better.
-#
-# ThroughputUnit and WorkloadMode match $Layer2Rows exactly for the shared
-# workloads, because the whole design of Layer 3 is that a cell means the
-# same thing in both documents.
+# ThroughputUnit and WorkloadMode match $Layer2Rows exactly, because the whole
+# design of Layer 3 is that a cell means the same thing in both documents.
 # ────────────────────────────────────────────────────────────────────────────
+$Layer3ChartGroups = @(
+	@{ Id = 'reads';  Title = 'Reads: sustained throughput vs silo count' },
+	@{ Id = 'writes'; Title = 'Point and batched writes: sustained throughput vs silo count' },
+	@{ Id = 'atomic'; Title = 'Atomic and cross-tree sagas: sustained throughput vs silo count' }
+)
 $Layer3Rows = @(
+	@{
+		Label = '`GetAsync` (point read)';
+		WorkloadId = 'get-point';
+		WorkloadMode = 'get-point';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'reads';
+		RungPerSilo = '4000:5:45';
+	},
 	@{
 		Label = '`GetManyAsync` (4,096 keys/call)';
 		WorkloadId = 'get-many';
 		WorkloadMode = 'get-many';
 		ThroughputUnit = 'keys/s';
-		# Per-silo offered rung, multiplied by the silo count at cohort time.
-		# The read path has no WAL, so it takes the sweep-wide rung.
+		ChartGroup = 'reads';
 		RungPerSilo = '4000:5:45';
-	},
-	@{
-		Label = '`SetManyAsync` (4,096 keys/call)';
-		WorkloadId = 'set-many';
-		WorkloadMode = 'set-many';
-		ThroughputUnit = 'keys/s';
-		# Matches the Layer 2 `set-many` row's rung EXACTLY (1200 veh x 5 Hz
-		# = 6,000 keys/s offered), per silo. That equality is load-bearing:
-		# it is what makes the N=1 Layer 3 cell directly comparable to the
-		# published Layer 2 cell, which is in turn the anchor that tells a
-		# reader whether the ACA host is a fair stand-in for the Layer 2 VM.
-		# Scaling the offered load with N keeps the per-silo demand constant
-		# as the cluster grows, so the curve measures the cluster's capacity
-		# rather than a fixed load being spread thinner.
-		RungPerSilo = '1200:5:45';
 	},
 	@{
 		Label = '`SetAsync` (point write)';
 		WorkloadId = 'set-point';
 		WorkloadMode = 'set-point';
 		ThroughputUnit = 'keys/s';
-		# Matches the Layer 2 `set-point` rung (200 veh x 5 Hz = 1,000
-		# keys/s offered), per silo, for the same comparability reason.
+		ChartGroup = 'writes';
 		RungPerSilo = '200:5:45';
+	},
+	@{
+		Label = '`SetAsync` (point write + async materialised view)';
+		WorkloadId = 'set-point-mv';
+		WorkloadMode = 'set-point-mv';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'writes';
+		RungPerSilo = '200:5:45';
+	},
+	@{
+		Label = '`SetManyAsync` (4,096 keys/call)';
+		WorkloadId = 'set-many';
+		WorkloadMode = 'set-many';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'writes';
+		RungPerSilo = '1200:5:45';
+	},
+	@{
+		Label = '`SetManyAtomicAsync` (64 keys/saga)';
+		WorkloadId = 'set-many-atomic';
+		WorkloadMode = 'set-many-atomic';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'atomic';
+		RungPerSilo = '100:5:45';
+	},
+	@{
+		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree)';
+		WorkloadId = 'set-many-atomic-2';
+		WorkloadMode = 'set-many-atomic-2';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'atomic';
+		RungPerSilo = '20:5:45';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-2';
+		WorkloadMode = 'cross-tree-atomic-2';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'atomic';
+		RungPerSilo = '8:5:45';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-64';
+		WorkloadMode = 'cross-tree-atomic-64';
+		ThroughputUnit = 'keys/s';
+		ChartGroup = 'atomic';
+		RungPerSilo = '150:5:45';
 	}
 )
 
@@ -1254,6 +1296,10 @@ function Invoke-Layer3Cohorts {
 		[int] $WalAdmissionCallBudgetSec = 15,
 		[int] $WalAppendCoalescingInFlightThreshold = -1,
 		[int] $WalSaturationRecoveryReleaseBatch = -1,
+		# Cells from an earlier run of this sweep (state.layer3.cohorts),
+		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
+		# over and skipped; see -Resume.
+		[hashtable] $ExistingCells = @{},
 		[scriptblock] $OnCellComplete
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
@@ -1273,16 +1319,33 @@ function Invoke-Layer3Cohorts {
 	# cells[mode][siloCount] = @(cohort, cohort, ...)
 	$cells = @{}
 	foreach ($row in $rows) { $cells[$row.WorkloadMode] = @{} }
+	foreach ($mode in @($ExistingCells.Keys)) {
+		if (-not $cells.ContainsKey($mode)) { $cells[$mode] = @{} }
+		foreach ($k in @($ExistingCells[$mode].Keys)) { $cells[$mode]["$k"] = @($ExistingCells[$mode][$k]) }
+	}
 
 	foreach ($silos in ($SiloCounts | Sort-Object)) {
 		foreach ($row in $rows) {
 			$mode = $row.WorkloadMode
+			if ($cells[$mode].ContainsKey("$silos") -and @($cells[$mode]["$silos"]).Count -ge $N) {
+				Write-Host "[layer3] silos=$silos mode=${mode}: $(@($cells[$mode]["$silos"]).Count) cohort(s) already recorded; skipping (resume)" -ForegroundColor DarkGray
+				continue
+			}
 			$perSilo = Resolve-Rung -Spec $row.RungPerSilo
 			$vehicles = $perSilo.Vehicles * $silos
 			Write-Host "[layer3] silos=$silos mode=$mode rung=${vehicles}veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $($perSilo.Vehicles) veh/silo)" -ForegroundColor Cyan
 
-			$cohortList = New-Object System.Collections.Generic.List[hashtable]
-			for ($i = 1; $i -le $N; $i++) {
+			$cohortList = New-Object System.Collections.Generic.List[object]
+			# A cell resumed with fewer than N cohorts is topped up rather
+			# than re-run: its recorded cohorts are kept and numbering
+			# continues after them, so raising -N on -Resume adds tie-break
+			# cohorts to a cell without discarding what it already paid for.
+			$firstCohort = 1
+			if ($cells[$mode].ContainsKey("$silos")) {
+				foreach ($existing in @($cells[$mode]["$silos"])) { if ($existing) { $cohortList.Add($existing) } }
+				$firstCohort = $cohortList.Count + 1
+			}
+			for ($i = $firstCohort; $i -le $N; $i++) {
 				Write-Host "[layer3] cohort $i/$N silos=$silos mode=$mode ..." -ForegroundColor DarkGray
 				# `| Out-Host` for exactly the reason Invoke-Layer2Cohorts
 				# gives: run-cohort-aca.ps1 emits a lot of az/cohort progress
@@ -1557,6 +1620,14 @@ function Read-SiloLogStats {
 			# per-call p50 matches plain set-point. Anchor the cell on the
 			# source tree by dropping any tree=view-* row.
 			($_.Line -notmatch ' tree=view-[^\s]*') -and
+			# Exclude the library's own system trees (tree=_lattice_trees, the
+			# tree registry, and any other _lattice_* tree). They emit the same
+			# duration instruments for registry lookups, and after the producer
+			# stops the final window can carry ONLY those rows, so the last-
+			# window pick published a ~120 us registry read as the get-point
+			# per-call latency (the bench tree's own p50 in the same cohort was
+			# ~3 ms).
+			($_.Line -notmatch ' tree=_lattice_[^\s]*') -and
 			($_.Line -match '\[phaseA\] t=\s*([\d.]+)s') -and ([double]$Matches[1] -ge 15)
 		})
 		if ($productive.Count -eq 0) { continue }
@@ -2109,62 +2180,102 @@ function Render-Layer3Table {
 function Render-Layer3Chart {
 	<#
 	.SYNOPSIS
-		Render the scaling curve as a Mermaid xychart-beta block, one line
-		series per workload.
+		Render the scaling curves as Mermaid xychart-beta blocks: one
+		normalised speedup chart carrying every workload, then one
+		absolute-throughput chart per $Layer3ChartGroups entry.
 	.DESCRIPTION
 		Mermaid's xychart-beta takes a single shared x-axis, so every series
-		must be sampled at the SAME silo counts. A workload missing a cell
-		at some silo count cannot simply be given a gap - xychart has no
-		null - so it is dropped from the chart entirely rather than plotted
-		against a shifted axis, which would draw a confident, wrong curve.
-		The table above it always carries every measured cell, so nothing is
+		in a chart must be sampled at the SAME silo counts. A workload
+		missing a cell at some silo count cannot simply be given a gap -
+		xychart has no null - so it is dropped from that chart rather than
+		plotted against a shifted axis, which would draw a confident, wrong
+		curve. The table always carries every measured cell, so nothing is
 		lost by that exclusion.
 
-		The y-axis is throughput in thousands of keys/s to keep the tick
-		labels short.
+		The speedup chart comes first because it is the one chart on which
+		all nine workloads are comparable: throughput spans four orders of
+		magnitude across them, but speedup over the workload's own 1-silo
+		cell is dimensionless. It carries an ideal-linear reference series
+		(y = N) as its FIRST line, so the gap between each workload and
+		linear scaling is visible without arithmetic. A workload with no
+		measured 1-silo cell has no speedup and is left off that chart.
+
+		Absolute charts use thousands of keys/s, except a group whose peak
+		is below 10k keys/s, which is plotted in plain keys/s so its tick
+		labels are not all fractional.
 	#>
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg)
 	$nl = "`r`n"
-	# The x-axis is the set of silo counts every plottable row shares.
-	$plottable = @()
-	foreach ($row in $Layer3Rows) {
-		if (-not $RowsAgg.ContainsKey($row.Label)) { continue }
-		$plottable += ,@{ Row = $row; Counts = @($RowsAgg[$row.Label].Keys | ForEach-Object { [int]$_ } | Sort-Object) }
-	}
-	if ($plottable.Count -eq 0) { return '_No multi-silo cells measured yet._' }
-	$axis = @($plottable[0].Counts)
-	foreach ($p in $plottable) { $axis = @($axis | Where-Object { $_ -in $p.Counts }) }
-	if ($axis.Count -lt 2) {
-		return '_Scaling chart needs at least two silo counts measured for every workload; see the table below._'
-	}
-	$series = @($plottable | Where-Object { $true })
 
-	$maxVal = 0.0
-	foreach ($p in $series) {
-		foreach ($c in $axis) {
-			$v = $RowsAgg[$p.Row.Label]["$c"].sustainedThroughput / 1000.0
-			if ($v -gt $maxVal) { $maxVal = $v }
+	$renderChart = {
+		param([string] $Title, [string] $YLabel, [int[]] $Axis, [object[]] $Series, [double] $YMax)
+		$sb = [System.Text.StringBuilder]::new()
+		[void]$sb.Append('```mermaid').Append($nl)
+		[void]$sb.Append('xychart-beta').Append($nl)
+		[void]$sb.Append(('    title "{0}"' -f $Title)).Append($nl)
+		[void]$sb.Append(('    x-axis "Silos" [{0}]' -f (($Axis | ForEach-Object { '"' + $_ + '"' }) -join ', '))).Append($nl)
+		[void]$sb.Append(('    y-axis "{0}" 0 --> {1}' -f $YLabel, $YMax)).Append($nl)
+		foreach ($s in $Series) {
+			[void]$sb.Append(('    line [{0}]' -f ($s.Values -join ', '))).Append($nl)
+		}
+		[void]$sb.Append('```').Append($nl).Append($nl)
+		# xychart-beta has no legend, so the series order has to be stated in
+		# prose or the chart is unreadable.
+		[void]$sb.Append(('Series order (xychart-beta renders no legend): {0}.' -f (($Series | ForEach-Object { $_.Name }) -join ', then ')))
+		return $sb.ToString()
+	}
+	$sharedAxis = {
+		param([object[]] $Rows)
+		$axis = $null
+		foreach ($r in $Rows) {
+			$counts = @($RowsAgg[$r.Label].Keys | ForEach-Object { [int]$_ } | Sort-Object)
+			$axis = if ($null -eq $axis) { $counts } else { @($axis | Where-Object { $_ -in $counts }) }
+		}
+		return ,@($axis)
+	}
+
+	$measured = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
+	if ($measured.Count -eq 0) { return '_No multi-silo cells measured yet._' }
+
+	$blocks = New-Object System.Collections.Generic.List[string]
+
+	# 1. Normalised speedup, every workload that has an N=1 anchor.
+	$anchored = @($measured | Where-Object { $RowsAgg[$_.Label].ContainsKey('1') })
+	if ($anchored.Count -gt 0) {
+		$axis = & $sharedAxis $anchored
+		if ($axis.Count -ge 2) {
+			$series = @(@{ Name = 'ideal linear scaling (y = silos)'; Values = @($axis | ForEach-Object { $_ }) })
+			$maxVal = [double]($axis | Measure-Object -Maximum).Maximum
+			foreach ($r in $anchored) {
+				$vals = @($axis | ForEach-Object { [double](Get-StateOr $RowsAgg[$r.Label]["$_"] 'speedup' 0) })
+				foreach ($v in $vals) { if ($v -gt $maxVal) { $maxVal = $v } }
+				$series += ,@{ Name = $r.Label; Values = $vals }
+			}
+			$blocks.Add((& $renderChart 'Speedup over 1 silo vs silo count' 'Speedup (x)' $axis $series ([math]::Ceiling($maxVal * 1.1))))
 		}
 	}
-	$yMax = [math]::Ceiling($maxVal * 1.1)
 
-	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('```mermaid').Append($nl)
-	[void]$sb.Append('xychart-beta').Append($nl)
-	[void]$sb.Append('    title "Sustained throughput vs silo count"').Append($nl)
-	[void]$sb.Append(('    x-axis "Silos" [{0}]' -f (($axis | ForEach-Object { '"' + $_ + '"' }) -join ', '))).Append($nl)
-	[void]$sb.Append(('    y-axis "Thousand keys/s" 0 --> {0}' -f $yMax)).Append($nl)
-	foreach ($p in $series) {
-		$vals = @($axis | ForEach-Object { [math]::Round($RowsAgg[$p.Row.Label]["$_"].sustainedThroughput / 1000.0, 2) })
-		[void]$sb.Append(('    line [{0}]' -f ($vals -join ', '))).Append($nl)
+	# 2. Absolute throughput, one chart per group.
+	foreach ($g in $Layer3ChartGroups) {
+		$rows = @($measured | Where-Object { (Get-StateOr $_ 'ChartGroup' 'writes') -eq $g.Id })
+		if ($rows.Count -eq 0) { continue }
+		$axis = & $sharedAxis $rows
+		if ($axis.Count -lt 2) {
+			$blocks.Add(('_{0}: needs at least two silo counts measured for every workload in the group; see the table below._' -f $g.Title))
+			continue
+		}
+		$peak = 0.0
+		foreach ($r in $rows) { foreach ($c in $axis) { $v = [double]$RowsAgg[$r.Label]["$c"].sustainedThroughput; if ($v -gt $peak) { $peak = $v } } }
+		$div = if ($peak -ge 10000) { 1000.0 } else { 1.0 }
+		$yLabel = if ($div -gt 1) { 'Thousand keys/s' } else { 'keys/s' }
+		$series = @()
+		foreach ($r in $rows) {
+			$series += ,@{ Name = $r.Label; Values = @($axis | ForEach-Object { [math]::Round($RowsAgg[$r.Label]["$_"].sustainedThroughput / $div, 2) }) }
+		}
+		$blocks.Add((& $renderChart $g.Title $yLabel $axis $series ([math]::Ceiling(($peak / $div) * 1.1))))
 	}
-	[void]$sb.Append('```').Append($nl).Append($nl)
-	# xychart-beta has no legend, so the series order has to be stated in
-	# prose or the chart is unreadable. Series are emitted in $Layer3Rows
-	# order, which is the same order the table is grouped in.
-	$legend = (($series | ForEach-Object { $_.Row.Label }) -join ', then ')
-	[void]$sb.Append(('Series order (xychart-beta renders no legend): {0}.' -f $legend))
-	return $sb.ToString()
+
+	return ($blocks -join ($nl + $nl))
 }
 
 function New-MetaHeaderForLayer3 {
@@ -2217,7 +2328,7 @@ function New-MetaHeaderForLayer3 {
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL. That account''s own metrics were checked for this sweep and it is NOT the write-side limit: zero throttling responses at any silo count, and server-side latency falling from 9.7 ms at N=1 to 6.7 ms at N=8. Read the write-mode collapse as a cluster-side defect, not a storage ceiling - see the caveats section.'
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
 	return $meta
 }
 
@@ -2299,7 +2410,7 @@ function Render-ProvenanceNote {
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL, but that account was measured and is NOT the write-side limit - see the caveats below."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand), and every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed."
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
@@ -2505,11 +2616,28 @@ function Main {
 			}
 			# Re-aggregate from the raw cells for the same reason Layer 2 does:
 			# replaying is how an aggregator fix is validated without paying for
-			# a fresh sweep. Layer 3 does not re-parse the cohort logs, because
-			# Read-SiloLogStats already froze the FINAL-line throughput into the
-			# cohort record and the raw logs are harvested per cell rather than
-			# per silo.
+			# a fresh sweep.
 			if ($state.layer3.ContainsKey('cohorts') -and $state.layer3.cohorts -is [System.Collections.IDictionary] -and $state.layer3.cohorts.Count -gt 0) {
+				# Re-derive the per-call quantiles (only) from each retained
+				# cohort log, so a fix to the [phaseA] instrument/tree selection
+				# reaches the published latency columns without a fresh sweep.
+				# Throughput stays frozen: it is FINAL-line derived and a
+				# re-parse would reproduce it exactly.
+				$l3BatchSize = [int](Get-StateOr $state 'batchSize' 4096)
+				foreach ($mode in @($state.layer3.cohorts.Keys)) {
+					foreach ($siloKey in @($state.layer3.cohorts[$mode].Keys)) {
+						foreach ($cohort in @($state.layer3.cohorts[$mode][$siloKey])) {
+							$cohortLog = Get-StateOr $cohort 'siloLog' $null
+							if ($cohortLog -and (Test-Path $cohortLog)) {
+								$reparsed = Read-SiloLogStats -SiloLogPath $cohortLog -WorkloadMode $mode -BatchSize $l3BatchSize
+								$cohort.perCallP50Ms = $reparsed.PerCallP50Ms
+								$cohort.perCallP75Ms = $reparsed.PerCallP75Ms
+								$cohort.perCallP90Ms = $reparsed.PerCallP90Ms
+								$cohort.perCallP99Ms = $reparsed.PerCallP99Ms
+							}
+						}
+					}
+				}
 				$state.layer3.rows = Aggregate-Layer3Cells -Cells $state.layer3.cohorts
 			}
 			$l3Replayed = Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $state -WhatIf:$Diff
@@ -2673,6 +2801,10 @@ function Main {
 			$l3State.layer3ShardCount           = $l3ShardCount
 			$l3State.layer3WalPartitions        = $l3WalPartitions
 			$l3State.layer3WalMaxPendingBatches = $l3WalMaxPendingBatches
+			# run-cohort-aca.ps1's own -ResponseTimeoutSec default, which this
+			# driver does not override. Recorded so the header states the value
+			# that ran rather than New-EmptyState's Layer 2 default of 180.
+			$l3State['responseTimeoutSec']      = 420
 
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
@@ -2687,6 +2819,7 @@ function Main {
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 				-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
 				-OnCellComplete $checkpoint
 
 			$l3State.layer3.cohorts = $l3Cells

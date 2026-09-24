@@ -380,6 +380,48 @@ function Set-AcaSiloCount {
 	return $replicas
 }
 
+function Reset-AcaBenchTables {
+	<#
+	.SYNOPSIS
+		Delete every table in the rig's storage account except the ones named
+		in -Keep, so the next cohort starts against empty storage.
+	.DESCRIPTION
+		Each cohort mints a fresh tree, but that tree used to land in the same
+		WAL and grain-state tables as every tree before it. The old trees
+		never go away: their registry entries and grain state stay in the
+		shared grain-state table, so every new cluster enumerates them and
+		runs background work against them (WAL GC floor retries, the storage
+		usage fan-out) during the measured window. With about 17-19 such trees
+		accumulated, that work correlated with the multi-second stalls
+		tracked in #3458, and the effect grew from cohort to cohort.
+
+		Deletion runs through the ARM management plane
+		(Microsoft.Storage/.../tableServices/default/tables), so the operator
+		needs no data-plane role on the account. It MUST only run while the
+		silos are parked: deleting a table under a live silo produces
+		arbitrary faults rather than a clean slate. The caller guarantees that.
+
+		Azure Tables refuses to recreate a just-deleted name for a while
+		(TableBeingDeleted), so the caller is expected to point the next
+		cohort at fresh table names rather than the ones deleted here.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[string[]] $Keep = @('OrleansSiloInstances')
+	)
+	$sub = (Invoke-Az @('account', 'show', '--query', 'id', '-o', 'tsv')).Trim()
+	$base = "https://management.azure.com/subscriptions/$sub/resourceGroups/$($Context.resourceGroup)/providers/Microsoft.Storage/storageAccounts/$($Context.storage)/tableServices/default/tables"
+	$api = 'api-version=2023-05-01'
+	$listJson = Invoke-Az @('rest', '--method', 'get', '--url', "${base}?$api", '-o', 'json')
+	$names = @(($listJson | ConvertFrom-Json).value | ForEach-Object { [string]$_.name })
+	$doomed = @($names | Where-Object { $_ -notin $Keep })
+	foreach ($n in $doomed) {
+		Invoke-Az @('rest', '--method', 'delete', '--url', "$base/${n}?$api", '-o', 'none') | Out-Null
+	}
+	Write-Host "[aca] storage reset: deleted $($doomed.Count) table(s), kept $(@($names | Where-Object { $_ -in $Keep }).Count)" -ForegroundColor DarkGray
+	return $doomed
+}
+
 function Get-AcaActiveSiloRevision {
 	<#
 	.SYNOPSIS
