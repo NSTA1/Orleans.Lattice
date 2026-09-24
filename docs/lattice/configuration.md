@@ -165,6 +165,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
 | [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
 | [`MinTombstoneRatioForCompaction`](tombstone-compaction.md) | `double` | 0.0 (disabled) | Yes |
+| [`OptimisticShardRootPointReads`](#optimisticshardrootpointreads) | `bool` | `true` | Yes (on next activation) |
 | [`PrefetchEntriesScan`](#prefetchentriesscan) | `bool` | `false` | Yes |
 | [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
 | [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
@@ -1016,6 +1017,20 @@ siloBuilder.ConfigureLattice(o => o.MaxValueSizeBytes = 1024 * 1024);
 ```
 
 This option can be changed freely at any time. It is enforced per write, so a new value takes effect on the next write.
+
+### `OptimisticShardRootPointReads`
+
+When enabled (the default), a point read (`GetAsync`) first tries an optimistic read that is allowed to interleave with other reads on the same shard root, rather than queueing behind them. Without it, each shard root serves one point read per full leaf round trip, which caps point-read throughput at roughly the shard count divided by the leaf round-trip time.
+
+The optimistic read is validated rather than trusted. The shard root keeps an in-memory routing epoch that every call other than a pure read bumps as it starts and finishes. An optimistic read refuses to start while such a call is in flight, snapshots the epoch in one synchronous step, and accepts the leaf's answer only when the epoch is unchanged afterwards. Otherwise, including when a root promotion, split, or move-away landed during the read, the call falls back to the serial read path, which returns the correct value. Reads therefore never observe a half-applied routing change.
+
+Point reads gain the most on read-heavy workloads. While writes are in flight on a shard root, its point reads take the serial path as before. Disable the option to restore the fully serial read path:
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.OptimisticShardRootPointReads = false);
+```
+
+This option can be changed freely at any time. It is resolved when a grain activation first reads the tree's options, so a new value takes effect as activations are recycled.
 
 ### `PrefetchEntriesScan`
 

@@ -29,6 +29,48 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<byte[]?> GetAsync(string key);
 
     /// <summary>
+    /// Interleavable, optimistic counterpart of <see cref="GetAsync"/> (issue #3474).
+    /// Returns the value for <paramref name="key"/> when the read can be validated,
+    /// or a result whose <see cref="OptimisticReadResult.IsValidated"/> is <c>false</c>, in
+    /// which case the caller MUST repeat the read through the serial
+    /// <see cref="GetAsync"/>. Exceptions the serial read would raise for the same
+    /// state (for example <see cref="StaleShardRoutingException"/> on a moved slot)
+    /// are raised here too.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so concurrent point reads on
+    /// one shard root overlap their leaf round trips instead of queueing one per
+    /// round trip. This does not reintroduce the U9h-C "key missing mid-chaos"
+    /// violation documented on <see cref="GetAsync"/>, because the value is only
+    /// returned when no other call that could change routing overlapped the read:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>The shard root counts every incoming call other than the pure point
+    /// reads in a grain-level call filter, and bumps a monotonic in-memory routing
+    /// epoch when each such call starts and finishes. Every writer of
+    /// <c>RootNodeId</c>, <c>RootIsLeaf</c>, <c>MovedAwaySlots</c>,
+    /// <c>SplitInProgress</c>, pending promotion / bulk graft state and the leaf
+    /// moved-away seal runs inside such a call (or inside the bracketed read
+    /// prepare slow path), so the guard does not depend on an audit of individual
+    /// writers staying complete.</item>
+    /// <item>The read captures the epoch and checks, in one synchronous block with
+    /// no await, that no such call is in flight, that the routing state needs no
+    /// prepare work, that no split is in progress and that the key's slot has not
+    /// moved away.</item>
+    /// <item>After the leaf returns, the epoch is compared again. Any change means a
+    /// routing mutation overlapped the read, so the value (including a
+    /// <c>null</c>) is discarded and a serial retry is requested.</item>
+    /// </list>
+    /// <para>
+    /// A validated read therefore observed routing state that no other call touched
+    /// for its whole duration, which is a stronger isolation than the serial
+    /// <see cref="GetAsync"/> itself has (it can already overlap the interleaved
+    /// <see cref="SetManyAsync"/>).
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<OptimisticReadResult> TryGetOptimisticAsync(string key);
+
+    /// <summary>
     /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
     /// <para>
     /// NOT marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason

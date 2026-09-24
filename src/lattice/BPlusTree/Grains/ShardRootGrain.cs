@@ -2770,10 +2770,22 @@ internal sealed partial class ShardRootGrain(
 
     private async Task PrepareForOperationSlowAsync()
     {
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
-        await ResumePendingChildLinksAsync();
+        // Bracketed as a routing mutation (issue #3474): the serial reads that
+        // reach here are exempt from the call-filter bracket, yet this path can
+        // reload state, create the root, and complete a pending promotion or
+        // bulk graft, all of which change the routing an optimistic read uses.
+        BeginRoutingMutation();
+        try
+        {
+            await EnsureRootAsync();
+            await ResumePendingPromotionAsync();
+            await ResumePendingBulkGraftAsync();
+            await ResumePendingChildLinksAsync();
+        }
+        finally
+        {
+            EndRoutingMutation();
+        }
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
