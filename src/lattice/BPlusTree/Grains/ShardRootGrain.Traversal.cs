@@ -387,11 +387,40 @@ internal sealed partial class ShardRootGrain
     /// existing internal node's children list. The method is a no-op when
     /// the entry is absent (e.g. the very first split before any read
     /// traversed through the parent).
+    /// <para>
+    /// Every call also advances <see cref="_routingGeneration"/>, the cheap
+    /// local signal <see cref="MergeGroupAsync"/> reads to decide whether a
+    /// batch grouped earlier may now straddle a leaf boundary (issue #2125).
+    /// Internal rather than private so the merge re-grouping tests can move
+    /// routing under a batch without a real split.
+    /// </para>
     /// </summary>
-    private void InvalidateRoutingTable(GrainId internalId)
+    internal void InvalidateRoutingTable(GrainId internalId)
     {
         _routingTableCache.TryRemove(internalId, out _);
+        Interlocked.Increment(ref _routingGeneration);
     }
+
+    /// <summary>
+    /// Advances on every <see cref="InvalidateRoutingTable"/> call. Read by
+    /// <see cref="MergeManyAsync"/> when it groups a batch and re-read by
+    /// <see cref="MergeGroupAsync"/> before it dispatches a group, so a group
+    /// built against routing that has since moved is re-grouped instead of
+    /// being handed wholesale to the leaf its first key routed to. It is a
+    /// plain in-memory counter: reading it adds no grain call, and it resets
+    /// with the activation, which is harmless because a group never outlives
+    /// the call that built it.
+    /// </summary>
+    private long _routingGeneration;
+
+    /// <summary>
+    /// How many times <see cref="MergeGroupAsync"/> took the re-grouping path.
+    /// A test seam only: it lets a unit test prove the normal path (first
+    /// attempt, unchanged routing) never re-groups.
+    /// </summary>
+    internal long MergeRegroupCount => Volatile.Read(ref _mergeRegroupCount);
+
+    private long _mergeRegroupCount;
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<byte[]?> TraverseForReadAsync(string key)

@@ -127,6 +127,15 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the write origin that reached a leaf (<c>client_write</c>,
+    /// <c>merge</c>, or <c>cross_shard_migration</c>) on
+    /// <see cref="LeafSpanFailOpenCommits"/>, which separates a deliberate
+    /// migration graft from an accidental fall-back on the foreground or merge
+    /// path.
+    /// </summary>
+    public const string TagOrigin = "origin";
+
+    /// <summary>
     /// Tag key for the cache surface that released a leaf's lazily hydrated
     /// snapshot frame. Paired with <see cref="TagReason"/> on
     /// <see cref="LeafBisectRefusals"/>, where it is what separates a leaf that
@@ -7437,6 +7446,73 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafDeferredTerminalsDroppedAtCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deferred_terminals_dropped_at_cap", unit: "{terminal}",
             description: "Deferred terminals (TxCommit, TxAbort, DeleteRange) dropped by replay pass 1 because the durable UnresolvedReplayWork ledger was at the MaxDurableUnresolvedReplayWork cap, falling back to the in-memory clamp that can pin the replay checkpoint. Tagged by tree and WAL partition.");
+
+    /// <summary>
+    /// Canonical name of <see cref="LeafSpanFailOpenCommits"/>.
+    /// </summary>
+    public const string LeafSpanFailOpenCommitsName = "orleans.lattice.leaf.span_fail_open_commits";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// the key is out of the leaf's declared span and the chain pointer on the
+    /// relevant side is null, so there is no leaf to forward it to.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenReasonNoSibling = new(TagReason, "no_sibling");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// the key is out of the leaf's declared span and the chain pointer on the
+    /// relevant side names the leaf itself, so forwarding would spin on the
+    /// same grain.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenReasonSelfReference = new(TagReason, "self_reference");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a foreground set, delete, or batched set (conditional or unconditional).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginClientWrite = new(TagOrigin, "client_write");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a <c>MergeManyAsync</c> batch that is not a cross-shard migration
+    /// (replication apply, restore, consolidation, tree merge).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginMerge = new(TagOrigin, "merge");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a <c>MergeManyAsync</c> batch flagged as a cross-shard migration import,
+    /// which is the deliberate graft shape rather than an accidental fall-back.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginCrossShardMigration = new(TagOrigin, "cross_shard_migration");
+
+    /// <summary>
+    /// Keys a leaf committed <b>locally</b> although its declared
+    /// <c>[LowKeyInclusive, HighKeyExclusive)</c> span excludes them, because
+    /// declared-span admission found no leaf to forward them to (issue #2125).
+    /// <para>
+    /// Declared-span admission forwards an out-of-span key to the neighbouring
+    /// leaf and <b>fails open</b> - commits here - when no neighbour resolves.
+    /// The row is then held by a leaf whose own replay filter refuses to
+    /// reinstate it, so its survival across a rebuild depends on the declaring
+    /// leaf's checkpoint position. Before this instrument that fall-back was
+    /// silent. Tagged <see cref="TagTree"/>, <see cref="TagReason"/>
+    /// (<c>no_sibling</c> or <c>self_reference</c>) and <see cref="TagOrigin"/>
+    /// (<c>client_write</c>, <c>merge</c>, or <c>cross_shard_migration</c>),
+    /// so a deliberate migration graft reads apart from an accidental one.
+    /// </para>
+    /// <para>
+    /// A leaf that declares no span at all (both bounds null: a single-leaf
+    /// tree or a bulk-loaded leaf) owns every key and never advances it. The
+    /// counter is not pre-minted, so an absent series reads "has never fallen
+    /// open on this silo", which is the healthy state. Observability only: the
+    /// fail-open behaviour itself is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSpanFailOpenCommits =
+        Meter.CreateCounter<long>(LeafSpanFailOpenCommitsName, unit: "{key}",
+            description: "Keys a leaf committed locally although its declared span excludes them, because declared-span admission found no neighbouring leaf to forward them to (fail-open). Tagged by tree, reason (no_sibling or self_reference) and origin (client_write, merge or cross_shard_migration). A leaf with no declared span never advances it.");
 
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //

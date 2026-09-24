@@ -1147,19 +1147,8 @@ public class LeafReclaimConcurrencyIntegrationTests
         // restructured the chain-tiling check sat after the loss assertion and
         // so had never once been evaluated on a failing run, which is the only
         // kind of run whose tiling anyone wants to know about.
-        var tilingBreaks = new List<string>();
+        var tilingBreaks = await LeafChainTiling.FindBreaksAsync(_cluster.GrainFactory, shard);
         var postRebuildChain = await WalkChainAsync(shard);
-        for (var i = 0; i < postRebuildChain.Count - 1; i++)
-        {
-            var here = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(postRebuildChain[i]).GetKeyRangeAsync();
-            var next = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(postRebuildChain[i + 1]).GetKeyRangeAsync();
-
-            if (here.HighKeyExclusive != next.LowKeyInclusive)
-            {
-                tilingBreaks.Add(
-                    $"leaf {i} ends at '{here.HighKeyExclusive ?? "+inf"}' but leaf {i + 1} begins at '{next.LowKeyInclusive ?? "-inf"}'");
-            }
-        }
 
         // Ground truth for the replay predicate. ShouldApplyDuringReplay is a
         // conjunction over two independent axes - the key-span axis
