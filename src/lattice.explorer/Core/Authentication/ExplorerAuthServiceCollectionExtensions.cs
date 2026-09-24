@@ -23,7 +23,18 @@ public static class ExplorerAuthServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<ICredentialStore, InMemoryCredentialStore>();
+        // Scoped, not singleton. InMemoryCredentialStore holds one credential in a
+        // field, so as a singleton it is a process-global sign-in: in a multi-user
+        // web head every Blazor circuit would read the credential the last operator
+        // to sign in wrote, which is the cross-circuit credential leak the
+        // per-circuit isolation invariant forbids. Scoping it to the circuit makes
+        // the default safe on its own rather than safe only because a head happens
+        // to register a platform store first - the shipped web head does register
+        // CookieCredentialStore before this call, and TryAdd still lets it (or any
+        // other store, at any lifetime) win, so this changes nothing for a head
+        // that supplies one. Only IExplorerAuthSession consumes the store and it is
+        // itself scoped, so no singleton captures it.
+        services.TryAddScoped<ICredentialStore, InMemoryCredentialStore>();
 
         // Re-authentication configuration for the UI trap-and-redirect. Registered
         // with TryAdd so a sign-in provider package (for example the hosted-web
@@ -49,9 +60,11 @@ public static class ExplorerAuthServiceCollectionExtensions
 
         // The auth session is scoped per Blazor circuit so each circuit signs in
         // (and drives its connection) independently, keyed on its own cookie
-        // credential, rather than inheriting a process-global sign-in. The
-        // credential store, auth methods, and scheme probe are stateless across
-        // circuits and stay singletons.
+        // credential, rather than inheriting a process-global sign-in. The auth
+        // methods and scheme probe are stateless across circuits and stay
+        // singletons; the credential store is not stateless, so its in-memory
+        // default is scoped with the session (a head-supplied store chooses its
+        // own lifetime - the cookie store is per-request by construction).
         services.TryAddScoped<IExplorerAuthSession, ExplorerAuthSession>();
 
         return services;
