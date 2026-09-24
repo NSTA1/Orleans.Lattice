@@ -16,4 +16,27 @@ public readonly record struct WalCursorSnapshot(
     HybridLogicalClock Cursor,
     long LastReportedAtTicks,
     VersionVector? Vector = null,
-    HybridLogicalClock? BlockedAtHlc = null);
+    HybridLogicalClock? BlockedAtHlc = null)
+{
+    /// <summary>
+    /// UTC tick count (<see cref="DateTime.Ticks"/>) of the most recent report that
+    /// strictly <b>advanced</b> <see cref="Cursor"/>, as opposed to
+    /// <see cref="LastReportedAtTicks"/>, which moves on every report including a
+    /// re-report of an unchanged position. <c>0</c> when the registry has not seen the
+    /// position move since the consumer registered (the registering report only asserts
+    /// a position, it does not show the consumer draining). <see langword="null"/> when
+    /// the registry that produced the snapshot does not track position age, in which
+    /// case the saturation classifier falls back to <see cref="LastReportedAtTicks"/>
+    /// alone.
+    /// <para>
+    /// The saturation classifier's drain-lag input reads this for leaf-materialiser
+    /// consumers only (issue #3131). A leaf's cursor is the highest HLC applied to its
+    /// own key range, so a leaf whose range has received no write keeps an old cursor
+    /// while fully caught up, and re-reports that persisted position with a fresh
+    /// <see cref="LastReportedAtTicks"/> on every activation. For such a consumer the
+    /// distance to the tree-wide WAL head is not undrained work. The WAL GC trim floor
+    /// ignores this value.
+    /// </para>
+    /// </summary>
+    public long? CursorAdvancedAtTicks { get; init; }
+}
