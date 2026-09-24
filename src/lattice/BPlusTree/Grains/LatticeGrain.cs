@@ -54,6 +54,26 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// and read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/>, which
 /// records at dispatch on every call and requires no timeout to exist.
 /// </para>
+/// <para>
+/// <b>The atomic entry points interleave, and the pool size is not what makes
+/// them live.</b> <c>SetManyAtomicAsync</c> (every overload) and
+/// <c>SetManyAtomicWhereAsync</c> (every overload) await an
+/// <see cref="IAtomicWriteGrain"/> saga for its whole duration, and the saga
+/// calls back into <see cref="ILattice"/> on the same tree (routing, and one
+/// <c>SetManyAsync</c> per prepare leg). A stateless worker is placed local to
+/// its caller, so those inner calls land in this same per-silo pool. Were the
+/// entry points non-reentrant, 32 concurrent sagas on one silo would occupy
+/// every worker with an outer call waiting on an inner call that has no worker
+/// to run on, and the pool would self-deadlock until the response timeout
+/// (reproduced deterministically: 31 concurrent sagas complete, 33 hang). They
+/// therefore carry <see cref="AlwaysInterleaveAttribute"/> on
+/// <see cref="ILattice"/>, so an outer call parked on its saga never holds a
+/// worker's turn. Their bodies are pure dispatchers - request-context reads
+/// and idempotent lazy service resolution - so interleaving them breaks no
+/// per-activation invariant. Resizing the pool moves that cliff; it does not
+/// remove it. <c>LatticeAtomicEntryPointInterleaveContractTests</c> fails if
+/// any saga-awaiting entry point loses the attribute.
+/// </para>
 /// </remarks>
 [StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(
