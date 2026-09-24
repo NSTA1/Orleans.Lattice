@@ -1,0 +1,363 @@
+{
+  "$comment": "Join figures: the animated order diagrams on the home page and on every CRDT explainer. stage.ps1 turns each entry into an SVG figure and main.js animates it. Each scenario mirrors the Behaviour example on its page. Layouts: 'diamond' draws two incomparable writes and their join; 'chain' with a 'middle' node draws comparable values, where 'direct' names the writer whose write lands on the top node; 'chain' without a middle node draws a write that changes nothing, where 'noop' names that writer. Plain ASCII only.",
+  "figures": [
+    {
+      "id": "gcounter",
+      "page": "docs/crdt/gcounter.md",
+      "layout": "diamond",
+      "title": "Two concurrent G-Counter increments meeting at their join",
+      "description": "An order diagram shaped like a diamond. At the bottom is the shared starting state, A=0 and B=0, value 0. Cluster A adds 3 to its own component, reaching A=3, B=0, value 3. Cluster B, at the same time, adds 5 to its own, reaching A=0, B=5, value 5. Neither of those states is above the other. Merging takes the larger value for each replica, so both paths rise to the same top state, A=3, B=5, value 8.",
+      "nodes": {
+        "bottom": { "state": ["A=0, B=0"], "note": "start, value 0" },
+        "a": { "state": ["A=3, B=0"], "note": "value 3" },
+        "b": { "state": ["A=0, B=5"], "note": "value 5" },
+        "join": { "state": ["A=3, B=5"], "note": "join, value 8" }
+      },
+      "edges": { "lowerLeft": "A adds 3", "lowerRight": "B adds 5", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A increments its own component by 3; cluster B, concurrently, by 5.",
+        "Each merges the other's delta: take the larger value per replica."
+      ],
+      "settled": "Both clusters hold A=3, B=5, value 8. Either order of delivery reaches the same join.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's delta arrives again, as a retry would deliver it...",
+        "done": "max(5, 5) is 5: merging it again changes nothing. Still value 8.",
+        "reduced": "B's delta arrives again. max(5, 5) is 5: the join is unchanged, still value 8."
+      },
+      "rule": "Merge takes the larger value per replica, so it is commutative, associative, and idempotent."
+    },
+    {
+      "id": "pncounter",
+      "page": "docs/crdt/pncounter.md",
+      "layout": "diamond",
+      "title": "Concurrent PN-Counter updates meeting at their join",
+      "description": "An order diagram shaped like a diamond. At the bottom every P and N entry is 0, so the value is 0. Cluster A adds 5, reaching P[A]=5 and N[A]=0, value 5. Cluster B, at the same time, adds 2 and subtracts 1, reaching P[B]=2 and N[B]=1, value 1. Neither state is above the other. Merging takes the larger value of every entry, so both paths rise to the same top state: P[A]=5, P[B]=2, N[A]=0, N[B]=1, value (5 + 2) - (0 + 1) = 6.",
+      "nodes": {
+        "bottom": { "state": ["P: all 0", "N: all 0"], "note": "start, value 0" },
+        "a": { "state": ["P[A]=5", "N[A]=0"], "note": "value 5" },
+        "b": { "state": ["P[B]=2", "N[B]=1"], "note": "value 1" },
+        "join": { "state": ["P[A]=5, P[B]=2", "N[A]=0, N[B]=1"], "note": "join, value 6" }
+      },
+      "edges": { "lowerLeft": "A adds 5", "lowerRight": "B adds 2, subtracts 1", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A adds 5 to its own P entry; cluster B, concurrently, adds 2 to its P entry and 1 to its N entry.",
+        "Each merges the other's delta: take the larger value of every P and N entry."
+      ],
+      "settled": "Both clusters hold P[A]=5, P[B]=2 and N[A]=0, N[B]=1: value (5 + 2) - (0 + 1) = 6.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's delta arrives again, as a retry would deliver it...",
+        "done": "Every entry is already at least that large, so merging it again changes nothing. Still value 6.",
+        "reduced": "B's delta arrives again. Every entry is already at least that large, so the join is unchanged: still value 6."
+      },
+      "rule": "A replica only ever grows its own entries and merge takes the per-entry maximum, so a re-delivered update changes nothing."
+    },
+    {
+      "id": "gset",
+      "page": "docs/crdt/gset.md",
+      "layout": "diamond",
+      "title": "Two concurrent G-Set adds meeting at their join",
+      "description": "An order diagram shaped like a diamond, ordered by set inclusion. At the bottom is the empty set. Cluster A adds alice, reaching {alice}. Cluster B, at the same time, adds bob, reaching {bob}. Neither set contains the other. Merging takes the union, so both paths rise to the same top state, {alice, bob}.",
+      "nodes": {
+        "bottom": { "state": ["{}"], "note": "start, empty" },
+        "a": { "state": ["{alice}"], "note": "cluster A" },
+        "b": { "state": ["{bob}"], "note": "cluster B" },
+        "join": { "state": ["{alice, bob}"], "note": "join, the union" }
+      },
+      "edges": { "lowerLeft": "A adds alice", "lowerRight": "B adds bob", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A adds alice; cluster B, concurrently, adds bob.",
+        "Each merges the other's delta: take the union of the two sets."
+      ],
+      "settled": "Both clusters hold {alice, bob}. Union keeps every add, so no concurrent add is lost.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's delta {bob} arrives again, as a retry would deliver it...",
+        "done": "The union already holds bob, so merging it again changes nothing. Still {alice, bob}.",
+        "reduced": "B's delta {bob} arrives again. The union already holds bob, so the join is unchanged."
+      },
+      "rule": "Merge is plain set union, which is commutative, associative, and idempotent."
+    },
+    {
+      "id": "maxregister",
+      "page": "docs/crdt/maxregister.md",
+      "layout": "chain",
+      "direct": "a",
+      "title": "Two concurrent Max-Register writes converging on the greater",
+      "description": "An order diagram drawn as a chain, because the values are totally ordered. At the bottom the register is unset. Cluster B writes 1007, one step up the chain. Cluster A, at the same time, writes 1013, which sits above 1007 in the order. Merging keeps the greater value, so B rises to 1013 and A stays there: the join of two comparable values is simply the greater one.",
+      "nodes": {
+        "bottom": { "state": ["unset"], "note": "start" },
+        "middle": { "state": ["1007"], "note": "cluster B" },
+        "top": { "state": ["1013"], "note": "cluster A, and the join" }
+      },
+      "edges": { "direct": "A sets 1013", "lower": "B sets 1007", "upper": "merge A: max" },
+      "steps": [
+        "Cluster A sets 1013; cluster B, concurrently, sets 1007.",
+        "Each merges the other's candidate and keeps the greater: A stays at 1013, B rises to it."
+      ],
+      "settled": "Both clusters hold 1013. 1007 sits below 1013 in the total order, so the join is the greater write itself.",
+      "redeliver": {
+        "label": "Deliver 1007 again",
+        "from": "middle",
+        "pending": "B's candidate 1007 arrives again, as a retry would deliver it...",
+        "done": "max(1013, 1007) is still 1013, so merging it again changes nothing.",
+        "reduced": "B's candidate 1007 arrives again. max(1013, 1007) is still 1013: the join is unchanged."
+      },
+      "rule": "The fold keeps the greater value under the total order, so it is commutative, associative, and idempotent."
+    },
+    {
+      "id": "minregister",
+      "page": "docs/crdt/minregister.md",
+      "layout": "chain",
+      "direct": "b",
+      "title": "Two concurrent Min-Register writes converging on the smaller",
+      "description": "An order diagram drawn as a chain. A Min-Register orders values downward, so a smaller value sits higher. At the bottom the register is unset. Cluster A writes 42, one step up the chain. Cluster B, at the same time, writes 37, which is smaller and so sits above 42. Merging keeps the smaller value, so A rises to 37 and B stays there.",
+      "nodes": {
+        "bottom": { "state": ["unset"], "note": "start" },
+        "middle": { "state": ["42"], "note": "cluster A" },
+        "top": { "state": ["37"], "note": "cluster B, and the join" }
+      },
+      "edges": { "direct": "B sets 37", "lower": "A sets 42", "upper": "merge B: min" },
+      "steps": [
+        "Cluster A sets 42; cluster B, concurrently, sets 37.",
+        "Each merges the other's candidate and keeps the smaller: B stays at 37, A rises to it."
+      ],
+      "settled": "Both clusters hold 37. Under the min order the smaller value is the higher state, so the join is the smaller write itself.",
+      "redeliver": {
+        "label": "Deliver 42 again",
+        "from": "middle",
+        "pending": "A's candidate 42 arrives again, as a retry would deliver it...",
+        "done": "min(37, 42) is still 37, so merging it again changes nothing.",
+        "reduced": "A's candidate 42 arrives again. min(37, 42) is still 37: the join is unchanged."
+      },
+      "rule": "The fold keeps the smaller value under the total order, so it is commutative, associative, and idempotent."
+    },
+    {
+      "id": "mvregister",
+      "page": "docs/crdt/mvregister.md",
+      "layout": "diamond",
+      "title": "Two concurrent MV-Register writes, both kept at their join",
+      "description": "An order diagram shaped like a diamond. At the bottom the register holds todo. Cluster A, having seen todo, writes in-progress. Cluster B, having also seen only todo, writes resolved. Neither write observed the other, so neither state is above the other. Merging keeps every value the other side has not observed and replaced, so both paths rise to the same top state, holding both in-progress and resolved.",
+      "nodes": {
+        "bottom": { "state": ["{todo}"], "note": "start" },
+        "a": { "state": ["{in-progress}"], "note": "cluster A" },
+        "b": { "state": ["{resolved}"], "note": "cluster B" },
+        "join": { "state": ["{in-progress, resolved}"], "note": "join, both kept" }
+      },
+      "edges": { "lowerLeft": "A writes", "lowerRight": "B writes", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A writes in-progress; cluster B, concurrently, writes resolved. Each replaces todo, which it had observed.",
+        "Each merges the other's write. Neither observed the other, so neither value is replaced and both stay."
+      ],
+      "settled": "Both clusters hold {in-progress, resolved}: a genuine conflict, surfaced rather than lost. A later write that has observed both, such as closed, collapses it back to one value.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's write arrives again, as a retry would deliver it...",
+        "done": "Its dot is already held, so merging it again changes nothing. Still {in-progress, resolved}.",
+        "reduced": "B's write arrives again. Its dot is already held, so the join is unchanged."
+      },
+      "rule": "Each write records the dots it has observed, and a merge drops only the values the other side observed and replaced."
+    },
+    {
+      "id": "orflag",
+      "page": "docs/crdt/orflag.md",
+      "layout": "chain",
+      "noop": "b",
+      "title": "A concurrent OR-Flag enable and disable: enable wins",
+      "description": "An order diagram drawn as a chain of two states. At the bottom the flag is off, with no enable dots. Cluster A enables it, minting dot A1, which moves A up. Cluster B, at the same time, disables it, but it has observed no enable dots, so there is nothing to tombstone and B's state stays at the bottom. Merging lifts B to A's state: the flag is on, because B's disable never saw A1.",
+      "nodes": {
+        "bottom": { "state": ["no dots"], "note": "start, and B after its disable" },
+        "top": { "state": ["enable A1"], "note": "A's enable, and the join" }
+      },
+      "edges": { "lower": "A enables, dot A1" },
+      "steps": [
+        "Cluster A enables the flag, minting dot A1. Cluster B, concurrently, disables it, but has observed no enable dots, so it tombstones nothing.",
+        "Each merges the other's delta. B receives A1; A receives an empty set of tombstones."
+      ],
+      "settled": "Both clusters hold enable A1: ENABLED. A disable cancels only the enable dots it has observed, and B's had observed none.",
+      "redeliver": {
+        "label": "Deliver A1 again",
+        "from": "bottom",
+        "pending": "A's enable dot A1 arrives again, as a retry would deliver it...",
+        "done": "A1 is already held, so merging it again changes nothing. Still enabled.",
+        "reduced": "A1 arrives again. It is already held, so the join is unchanged: still enabled."
+      },
+      "rule": "Disable tombstones only the enable dots it has observed, so a concurrent enable always survives: enable-wins."
+    },
+    {
+      "id": "orset",
+      "page": "docs/crdt/orset.md",
+      "layout": "chain",
+      "noop": "b",
+      "title": "A concurrent OR-Set add and remove: add wins",
+      "description": "An order diagram drawn as a chain of two states. The set starts empty. Cluster A adds apple, minting dot A1, which moves A up. Cluster B, at the same time, removes apple, but it has observed no dots for it, so there is nothing to tombstone and B's state stays at the bottom. Merging lifts B to A's state: apple is in the set, because B's remove never saw A1.",
+      "nodes": {
+        "bottom": { "state": ["{}"], "note": "start, and B after its remove" },
+        "top": { "state": ["{apple: A1}"], "note": "A's add, and the join" }
+      },
+      "edges": { "lower": "A adds apple, dot A1" },
+      "steps": [
+        "Cluster A adds apple with dot A1. Cluster B, concurrently, removes apple, but has observed no dots for it, so it tombstones nothing.",
+        "Each merges the other's delta. B receives dot A1; A receives an empty set of tombstones."
+      ],
+      "settled": "Both clusters hold {apple}. A remove cancels only the dots it has observed, and B's had observed none: add-wins.",
+      "redeliver": {
+        "label": "Deliver A1 again",
+        "from": "bottom",
+        "pending": "A's add, dot A1, arrives again, as a retry would deliver it...",
+        "done": "A1 is already held, so merging it again changes nothing. Still {apple}.",
+        "reduced": "A1 arrives again. It is already held, so the join is unchanged: still {apple}."
+      },
+      "rule": "A remove tombstones only the dots it has observed, so an add it never saw survives the merge: add-wins."
+    },
+    {
+      "id": "rwflag",
+      "page": "docs/crdt/rwflag.md",
+      "layout": "diamond",
+      "title": "A concurrent RW-Flag enable and disable: disable wins",
+      "description": "An order diagram shaped like a diamond. At the bottom the flag is off, with no dots. Cluster A enables it with dot A1, which reads on. Cluster B, at the same time, disables it with dot B1, having observed no enable. Neither state is above the other. Merging keeps both dots, and because no enable has observed and cancelled B1, the join reads off: disable wins.",
+      "nodes": {
+        "bottom": { "state": ["no dots"], "note": "start, off" },
+        "a": { "state": ["enable A1"], "note": "reads on" },
+        "b": { "state": ["disable B1"], "note": "reads off" },
+        "join": { "state": ["enable A1, disable B1"], "note": "join, reads off" }
+      },
+      "edges": { "lowerLeft": "A enables", "lowerRight": "B disables", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A enables the flag with dot A1. Cluster B, concurrently, disables it with dot B1, having observed no enable.",
+        "Each merges the other's delta. Both dots survive: no enable has observed B1, so none cancels it."
+      ],
+      "settled": "Both clusters hold enable A1 and disable B1: DISABLED. A surviving disable dot keeps the flag off, so a revoke is never resurrected by a concurrent enable.",
+      "redeliver": {
+        "label": "Deliver B1 again",
+        "from": "b",
+        "pending": "B's disable dot B1 arrives again, as a retry would deliver it...",
+        "done": "B1 is already held, so merging it again changes nothing. Still disabled.",
+        "reduced": "B1 arrives again. It is already held, so the join is unchanged: still disabled."
+      },
+      "rule": "The flag is on only while an enable dot exists and no disable dot survives, so the disable wins the race."
+    },
+    {
+      "id": "rwset",
+      "page": "docs/crdt/rwset.md",
+      "layout": "diamond",
+      "title": "A concurrent RW-Set add and remove: remove wins",
+      "description": "An order diagram shaped like a diamond, for the element user:88. At the bottom there are no dots, so user:88 is not a member. Cluster A adds it with dot A1, making it a member. Cluster B, at the same time, removes it with dot B1, having observed no add. Neither state is above the other. Merging keeps both dots, and because no add has observed and cancelled B1, user:88 is not a member at the join: remove wins.",
+      "nodes": {
+        "bottom": { "state": ["no dots"], "note": "start, not a member" },
+        "a": { "state": ["add A1"], "note": "a member" },
+        "b": { "state": ["remove B1"], "note": "not a member" },
+        "join": { "state": ["add A1, remove B1"], "note": "join, not a member" }
+      },
+      "edges": { "lowerLeft": "A adds user:88", "lowerRight": "B removes user:88", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A adds user:88 with dot A1. Cluster B, concurrently, removes it with dot B1, having observed no add.",
+        "Each merges the other's delta. Both dots survive: no add has observed B1, so none cancels it."
+      ],
+      "settled": "Both clusters hold add A1 and remove B1, so user:88 is not a member. A surviving remove keeps the element out: remove-wins.",
+      "redeliver": {
+        "label": "Deliver B1 again",
+        "from": "b",
+        "pending": "B's remove dot B1 arrives again, as a retry would deliver it...",
+        "done": "B1 is already held, so merging it again changes nothing. Still not a member.",
+        "reduced": "B1 arrives again. It is already held, so the join is unchanged."
+      },
+      "rule": "An element is a member only while it has an add dot and no remove dot survives, so the remove wins the race."
+    },
+    {
+      "id": "ormap",
+      "page": "docs/crdt/ormap.md",
+      "layout": "diamond",
+      "title": "Two concurrent OR-Map writes to one key, merged value by value",
+      "description": "An order diagram shaped like a diamond. At the bottom the map is empty. Cluster A increments the PN-Counter under the key alice, so its entry holds P[A]=1. Cluster B, at the same time, increments the same key's counter, so its entry holds P[B]=1. Neither state is above the other. Merging keeps the key, add-wins, and merges the two counters as a PN-Counter, so both paths rise to the same top state: alice holds P[A]=1 and P[B]=1, value 2.",
+      "nodes": {
+        "bottom": { "state": ["{}"], "note": "start, empty map" },
+        "a": { "state": ["alice: P[A]=1"], "note": "alice = 1" },
+        "b": { "state": ["alice: P[B]=1"], "note": "alice = 1" },
+        "join": { "state": ["alice: P[A]=1, P[B]=1"], "note": "join, alice = 2" }
+      },
+      "edges": { "lowerLeft": "A increments alice", "lowerRight": "B increments alice", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A increments the counter under alice; cluster B, concurrently, increments the same key.",
+        "Each merges the other's delta. The key merges add-wins, and its value merges as a PN-Counter, per replica."
+      ],
+      "settled": "Both clusters hold alice with P[A]=1 and P[B]=1: value 2. The values were folded together through the counter's own merge, not overwritten.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's delta arrives again, as a retry would deliver it...",
+        "done": "The key and P[B]=1 are already held, so merging it again changes nothing. Still alice = 2.",
+        "reduced": "B's delta arrives again. It is already held, so the join is unchanged: alice = 2."
+      },
+      "rule": "Keys merge with add-wins OR-Set semantics, and each value merges recursively through its own CRDT."
+    },
+    {
+      "id": "sequence",
+      "page": "docs/crdt/sequence.md",
+      "layout": "diamond",
+      "title": "Two concurrent Sequence inserts converging on one order",
+      "description": "An order diagram shaped like a diamond. At the bottom the list is empty, just HEAD. Cluster A inserts Design after HEAD, with dot A1. Cluster B, at the same time, inserts Research after HEAD, with dot B1. Neither state is above the other. Merging keeps both elements and breaks the tie between siblings of the same parent by descending (Counter, ReplicaId), so both paths rise to the same top state: Research, then Design.",
+      "nodes": {
+        "bottom": { "state": ["[ ]"], "note": "start, empty" },
+        "a": { "state": ["[Design]"], "note": "dot A1" },
+        "b": { "state": ["[Research]"], "note": "dot B1" },
+        "join": { "state": ["[Research, Design]"], "note": "join, one order" }
+      },
+      "edges": { "lowerLeft": "A inserts after HEAD", "lowerRight": "B inserts after HEAD", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither is above the other",
+      "steps": [
+        "Cluster A inserts Design after HEAD with dot A1; cluster B, concurrently, inserts Research after HEAD with dot B1.",
+        "Each merges the other's insert. Same parent, so the tie breaks by descending (Counter, ReplicaId): (1, B) sorts before (1, A)."
+      ],
+      "settled": "Both clusters list [Research, Design]. The tie-break is deterministic, so every replica materialises the same order.",
+      "redeliver": {
+        "label": "Deliver B1 again",
+        "from": "b",
+        "pending": "B's insert B1 arrives again, as a retry would deliver it...",
+        "done": "B1 is already in the list, so merging it again changes nothing. Still [Research, Design].",
+        "reduced": "B1 arrives again. It is already in the list, so the join is unchanged."
+      },
+      "rule": "Concurrent siblings of one parent are ordered by descending (Counter, ReplicaId), so every replica converges on the same list."
+    },
+    {
+      "id": "versionvector",
+      "page": "docs/crdt/versionvector.md",
+      "layout": "diamond",
+      "title": "Two concurrent version-vector updates meeting at their join",
+      "description": "An order diagram shaped like a diamond. At the bottom is a history both replicas share, A:1 and B:1. Cluster A ticks its own entry, reaching A:2, B:1. Cluster B ticks its own twice, reaching A:1, B:3. Neither vector dominates the other: each has an entry the other lacks. Merging takes the per-entry maximum, so both paths rise to the same top state, A:2, B:3.",
+      "nodes": {
+        "bottom": { "state": ["A:1, B:1"], "note": "shared history" },
+        "a": { "state": ["A:2, B:1"], "note": "cluster A" },
+        "b": { "state": ["A:1, B:3"], "note": "cluster B" },
+        "join": { "state": ["A:2, B:3"], "note": "join, per-entry max" }
+      },
+      "edges": { "lowerLeft": "A ticks", "lowerRight": "B ticks twice", "upperLeft": "merge B", "upperRight": "merge A" },
+      "concurrent": "concurrent: neither dominates the other",
+      "steps": [
+        "Cluster A ticks its own entry to A:2; cluster B, concurrently, ticks its own twice, to B:3.",
+        "Each merges the other's vector: take the larger clock per entry."
+      ],
+      "settled": "Both clusters hold A:2, B:3. A had A:2 > 1 and B had B:3 > 1, so neither dominated: the updates were concurrent and need reconciling.",
+      "redeliver": {
+        "label": "Deliver B again",
+        "from": "b",
+        "pending": "B's vector arrives again, as a late or duplicate delivery would...",
+        "done": "Every entry is already at least that large, so merging it again changes nothing. Still A:2, B:3.",
+        "reduced": "B's vector arrives again. Every entry is already at least that large, so the join is unchanged."
+      },
+      "rule": "Merge takes the per-entry maximum, so late or duplicate delivery is a harmless no-op."
+    }
+  ]
+}

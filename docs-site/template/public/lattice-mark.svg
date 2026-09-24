@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Orleans.Lattice">
+  <!--
+    The Orleans.Lattice mark: the four-element lattice drawn as a Hasse
+    diagram. The hollow node at the bottom is the shared starting state, the
+    two side nodes are concurrent writes (neither is above the other), and the
+    marked node at the top is their join - the one state both replicas reach,
+    whichever order the writes arrive in.
+  -->
+  <style>
+    .edge { stroke: #15191f; }
+    .node { fill: #15191f; }
+    .bottom { fill: #ffffff; stroke: #15191f; }
+    .join { fill: #ffd23f; stroke: #15191f; }
+    @media (prefers-color-scheme: dark) {
+      .edge { stroke: #e4e9e5; }
+      .node { fill: #e4e9e5; }
+      .bottom { fill: #101613; stroke: #e4e9e5; }
+      .join { fill: #f2d04b; stroke: #f2d04b; }
+    }
+  </style>
+  <g fill="none" stroke-width="2" stroke-linecap="round">
+    <path class="edge" d="M16 27.5 L5.5 16 M16 27.5 L26.5 16 M5.5 16 L16 4.5 M26.5 16 L16 4.5"/>
+  </g>
+  <circle class="node" cx="5.5" cy="16" r="3.3"/>
+  <circle class="node" cx="26.5" cy="16" r="3.3"/>
+  <circle class="bottom" cx="16" cy="27.5" r="3.1" stroke-width="1.8"/>
+  <circle class="join" cx="16" cy="4.5" r="4" stroke-width="1.8"/>
+</svg>
