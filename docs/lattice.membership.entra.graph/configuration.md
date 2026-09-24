@@ -28,3 +28,9 @@ Bind it through `AddEntraGraphGroupResolver(configure)`.
 | `SecurityEnabledOnly` | `bool` | `false` | Whether the transitive-group query returns only security-enabled groups. `false` returns all groups and directory roles. |
 | `TokenRefreshSkew` | `TimeSpan` | `5 minutes` | How long before the token's actual expiry it is proactively refreshed, so a call never uses a token that expires mid-flight. |
 | `DirectorySubjectIdSource` | `EntraDirectorySubjectIdSource` | `ObjectId` | Which Entra identifier the Graph-backed identity directory records as a directory principal id, so directory validation matches the active authenticator's subject claim. `ObjectId` (the `oid`) aligns with a typical Entra deployment whose subject claim resolves to the object id. |
+
+### Methods
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `ResolveAuthority()` | `string` | The MSAL authority, `AuthorityHost` joined to `TenantId`; an empty string when either is missing. |

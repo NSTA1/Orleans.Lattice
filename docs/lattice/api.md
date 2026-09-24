@@ -225,6 +225,7 @@ Callers never see those exceptions.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `GetManyAsync` | `Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)` | Fetches multiple keys in parallel. Missing or tombstoned keys are omitted from the result. A concurrent `SetManyAtomicAsync` is observed atomically tree-wide. |
+| `GetManyWithGateAccountingAsync` | `Task<GatedMultiReadResult> GetManyWithGateAccountingAsync(List<string> keys)` | Returns exactly what `GetManyAsync` returns (`GatedMultiReadResult.Values`) plus `PrunedByAccessGate`, the number of requested keys the read-path access gate removed before fan-out. Use it instead of `GetManyAsync` when you draw a conclusion from a key's absence: absence is sound only when the count is `0`. The count never names the pruned keys. See [Reading an empty range read under a gate](#reading-an-empty-range-read-under-a-gate). |
 | `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Writes multiple entries in parallel. **Not atomic** - partial failure leaves the batch half-applied with no rollback. Use `SetManyAtomicAsync` when all-or-nothing semantics are required. **Fails fast**: the first branch to fault surfaces at once rather than after the slowest branch settles, and sibling branches are deliberately not cancelled, so they may still be in flight when the exception is observed - re-read the affected keys rather than assuming the batch has quiesced. When no branch faults every branch is still awaited, because the per-entry `Set` events publish only once all shard writes have committed. Per-leaf batches collapse their per-key WAL grain hops into a single batched dispatch (see [WAL - Batched leaf write path](wal.md#batched-leaf-write-path)). Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `ApplyCrdtDeltaManyAsync` | `Task ApplyCrdtDeltaManyAsync(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)` | Applies multiple typed CRDT deltas, fanning out to shards in parallel and collapsing each leaf's slice into a single batched WAL dispatch, so an N-key batch costs one commit-log round trip per leaf instead of N. The batched counterpart of `ApplyCrdtDeltaAsync` and the CRDT counterpart of `SetManyAsync`. The merge mode is declared once for the whole batch rather than per entry, because a tree resolves exactly one CRDT shape - mixing shapes within a tree converges locally but diverges at replication. **Not atomic** - a partial failure leaves the batch half-applied; because every entry folds a delta rather than overwriting a value, a caller retry converges instead of clobbering a concurrent writer. Use the staged cross-tree atomic path (`LatticeAtomicWriteBuilder.SetMany`) when all-or-nothing semantics are required. `LatticeMergeMode.LwwRegister` is rejected with `ArgumentException` - use `SetManyAsync` for LWW. |
 | `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries: on success every key holds its new value, on any failure every key holds its pre-saga value. Concurrent readers observe the saga atomically tree-wide and across every cluster the tree replicates to. Throws `ArgumentException` on duplicate keys or null values; throws `InvalidOperationException` when compensation completes for a failed write. After completion, saga state is retained for `LatticeOptions.AtomicWriteRetention` (default 48 h). See [Atomic Writes](atomic-writes.md). Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
@@ -631,6 +632,14 @@ For subscribing to published events on the cluster client, see
 `SubscribeToEventsAsync` under
 [`LatticeExtensions`](#latticeextensions).
 
+#### Change history
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `ScanEntryHistoryAsync` | `Task<EntryHistoryPage> ScanEntryHistoryAsync(string key, HybridLogicalClock? fromHlc, HybridLogicalClock? toHlc, int limit, string? continuation)` | Reads one page of a key's revision timeline between optional inclusive HLC bounds. Served from the durable history view when one is enabled (`EntryHistoryPage.Source` is `View`); otherwise falls back, best-effort, to the retained WAL window, reporting truncation through `Truncated` / `EarliestAvailable` (`WalWindow`), or an empty `None` page when the commit-log read seam is not registered. Non-mutating. See [Change history](change-history.md). |
+| `SetHistoryRetentionAsync` | `Task SetHistoryRetentionAsync(HistoryRetentionMode? mode, TimeSpan? window)` | Sets this tree's durable-history retention: the `HistoryRetentionMode` applied to LWW value bytes in revision rows (`null` clears the override, falling back to `MetadataOnly`) and the age after which a row expires (`null` removes the age bound; a supplied window must be positive). Persisted on the registry entry; absorbed forward without a view rebuild. See [History views](history-views.md). |
+| `GetHistoryRetentionAsync` | `Task<HistoryRetentionSettings> GetHistoryRetentionAsync()` | Returns the effective retention policy - the persisted override, or the defaults (`MetadataOnly`, no age bound). Authorized as a whole-tree `Read`. |
+
 ## `ILatticeAdmin`
 
 `ILatticeAdmin` is the cluster-wide administrative surface. Resolve the
@@ -647,9 +656,9 @@ singleton with `grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin")`
 | `AuditWalPlacementAsync` | `Task<WalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` | Like `GetWalPlacementAsync` but additionally reports, **for the silo serving this call**, whether every pinned catalogue key is registered there (`AllResolvableOnThisSilo`) plus the silo's known key set. The cheapest way to catch a missing-key misconfiguration before it fails a partition closed. |
 | `PlanWalMoveAsync` | `Task<WalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)` | Read-only dry run. Reports what moving `partition` to `targetProviderKey` would copy (offset range, entry count), whether the partition is already at the target, and whether the target key resolves on the serving silo. Mutates nothing. |
 | `PlanWalMoveAsync` (batch) | `Task<WalMoveBatchPlan> PlanWalMoveAsync(string treeId, IEnumerable<(int Partition, string TargetProviderKey)> moves, CancellationToken cancellationToken = default)` | Batch dry run: one `WalMovePlan` per requested `(partition, targetProviderKey)` pair, plus `AllTargetsResolvableOnThisSilo`. Rejects an empty batch or a repeated partition with `ArgumentException`. Mutates nothing. |
-| `ExecuteWalMoveAsync` | `Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default)` | Performs the quiesce-copy-cutover move saga: fences the partition's WAL grain, offset-preservingly copies the retained range to the target provider, re-converges on any appends that landed during the copy, flips the durable pin under compare-and-swap, then forces the WAL grain to deactivate so its next activation (any silo) binds the new provider. Non-destructive (`WalMoveReceipt.SourceRetained`); fails closed if the target key is unregistered on the serving silo. Single partition per call; see the batch overload for multi-partition moves. |
+| `ExecuteWalMoveAsync` | `Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default)` | Performs the quiesce-copy-cutover move saga: fences the partition's WAL grain, offset-preservingly copies the retained range to the target provider, re-converges on any appends that landed during the copy, flips the durable pin under compare-and-swap, then forces the WAL grain to deactivate so its next activation (any silo) binds the new provider. Non-destructive (`WalMoveReceipt.SourceRetained`); fails closed if the target key is unregistered on the serving silo, and throws `InvalidOperationException` without flipping the pin when the target cannot continue the partition's offsets (a reclaimed former source whose high-water mark covers retained offsets, or a fully-trimmed partition whose high-water mark the target does not record). Single partition per call; see the batch overload for multi-partition moves. |
 | `ExecuteWalMoveAsync` (batch) | `Task<WalMoveBatchReceipt> ExecuteWalMoveAsync(string treeId, IEnumerable<(int Partition, string TargetProviderKey)> moves, WalMoveOptions? options = null, CancellationToken cancellationToken = default)` | Moves several partitions all-or-nothing: each runs the same quiesce-copy-verify phases (bounded by `WalMoveOptions.MaxConcurrentPartitionMoves`), then the pin flips **once** under a single compare-and-swap so every partition reaches the same new placement version. Any phase failure aborts the whole batch with the pin unflipped and partial copies retained for a resumable retry; fails closed (`LatticeWalProviderMissingException`) if any target key is unresolvable. `WalMoveBatchReceipt.Moves` carries one receipt per partition in request order. |
-| `ReclaimMovedWalSourceAsync` | `Task<WalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` | Reclaims the now-redundant copy left on the **source** provider after a permanent move by trimming it. Refuses (throws) if the partition is still pinned to `sourceProviderKey` - you can only reclaim a placement the pin has already moved away from. |
+| `ReclaimMovedWalSourceAsync` | `Task<WalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` | Reclaims the now-redundant copy left on the **source** provider after a permanent move by trimming it. Refuses (throws) if the partition is still pinned to `sourceProviderKey` - you can only reclaim a placement the pin has already moved away from. Reports `NoOp` and trims nothing when the source already holds no live entries, so a re-run is idempotent. |
 
 ```csharp verify
 var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
@@ -1270,6 +1279,14 @@ opt-out makes the digest API unavailable), and
 [Projection Rebuild](projection-rebuild.md) for the determinism
 contract, the cost model, and the related `ProjectionRebuildPolicy`
 recovery options.
+
+`GetLeafProjectionDigestForRangeAsync(int shardIndex, string? startKeyInclusive, string? endKeyExclusive, CancellationToken cancellationToken = default)`
+folds the same digest over only the half-open key range of one physical
+shard; a `null` bound is unbounded on that side, so `(null, null)` is
+byte-identical to the whole-shard digest. It is the primitive behind the
+cross-cluster anti-entropy Merkle-walk localisation, which narrows a
+divergent shard to a leaf or key range. It throws the same exceptions as
+`GetLeafProjectionDigestAsync`.
 
 ## Operator tooling: projection rebuild and materialiser lag
 
@@ -2012,9 +2029,9 @@ their aliases are wire-format contracts.
 | `TreeRegistryEntry` | `ol.tre` | internal | Per-tree metadata record. |
 | `SnapshotMode` | `ol.snm` | public | Enum: `Offline`, `Online`. |
 | `TreeResizeState` | `ol.trs` | internal | Persistent state tracking resize progress. |
-| `ResizePhase` | `ol.rp` | internal | Enum: `Snapshot`, `Swap`, `Cleanup`. |
+| `ResizePhase` | `ol.rp` | internal | Enum: `Snapshot`, `Swap`, `Cleanup`, `Reject`. |
 | `TreeSnapshotState` | `ol.tss` | internal | Persistent state tracking snapshot progress. |
-| `SnapshotPhase` | `ol.snp` | internal | Enum: `Locking`, `Copying`, `Unlocking`, `Completed`. |
+| `SnapshotPhase` | `ol.snp` | internal | Enum: `Lock`, `Copy`, `Unmark`, `ShadowBegin`. |
 | `TreeDeletionState` | `ol.tds` | internal | Persistent state for soft-delete / purge tracking. |
 | `TreeMergeState` | `ol.tms` | internal | Persistent state tracking merge progress. |
 | `CasResult` | `ol.cas` | internal | Result of a compare-and-swap operation. |
@@ -2083,6 +2100,9 @@ The types and members in this category are:
 | `RangeDeleteResult` | Return shape of an internal range-delete primitive that surfaces through DI plumbing. |
 | `ILattice.KeysAsync` / `EntriesAsync` | Raw streaming overloads that omit the resume/reconnect handshake. Use `LatticeExtensions.ScanKeysAsync` / `ScanEntriesAsync` instead. |
 | `ILattice.GetRoutingAsync` (both overloads) | Direct shard-addressing primitive used by infrastructure helpers. |
+| `ILattice.KeysWherePredicateAsync` / `EntriesWherePredicateAsync`, the `Open*CursorWherePredicateAsync` family, `SetManyWherePredicateAsync`, `SetManyAtomicWhereAsync`, `DeleteRangeWherePredicateAsync`, and the ranged `CountAsync` | Raw primitives behind the typed predicate and aggregation surfaces; call the typed [predicate operations](#predicate-operations) instead. |
+| `GatedMultiReadResult` | Return shape of `ILattice.GetManyWithGateAccountingAsync`. |
+| `LeafKeyRange` | Leaf key-range bounds returned by an internal leaf-grain call; public only so Orleans can serialize it. |
 
 `ShardMap` is also `public` (it is reachable through `RoutingInfo`)
 but is not marked hidden because it has no useful caller-facing

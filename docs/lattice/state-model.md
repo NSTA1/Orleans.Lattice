@@ -33,10 +33,13 @@ storage provider's per-row ceiling into the sizing model.
 The collapsed leaf state row carries only:
 
 - Topology fields (sibling pointers, parent reference, key range,
-  shard index, split lifecycle).
+  shard index, split lifecycle), plus the sticky moved-away slot seal
+  an adaptive shard split records.
 - The projection-digest XOR fold (`ProjectionHash`, 16 bytes).
 - The `ProjectionCheckpointOffset` pointing into the WAL, plus a
-  per-partition offset array on a multi-partition tree.
+  per-partition offset array on a multi-partition tree and a flag
+  recording that partition 0's checkpoint was actually assigned rather
+  than defaulted.
 - The HLC clock and version vector.
 - The last-compaction version.
 - The durable high-water mark of the digest-publish sequence, so a
@@ -45,6 +48,8 @@ The collapsed leaf state row carries only:
   terminals the flush ceiling has advanced past - which is empty in the
   steady state and lets a partition bank forward progress instead of
   re-reading the same WAL range on every activation.
+- The byte size the leaf's persisted snapshot last occupied, a hint
+  the next activation uses to reserve hydration budget up front.
 
 See [Tree Storage](tree-storage.md) for exact byte-level sizing.
 

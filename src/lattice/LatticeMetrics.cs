@@ -886,7 +886,7 @@ public static class LatticeMetrics
             description: "Leaf-node splits triggered by MaxLeafKeys or MaxLeafBytes overflow.");
 
     /// <summary>
-    /// Counter of leaves observed over the <see cref="BPlusTree.LatticeOptions.MaxLeafBytes"/>
+    /// Counter of leaves observed over the <see cref="LatticeOptions.MaxLeafBytes"/>
     /// byte bound, tagged with <see cref="TagOutcome"/> = <c>split</c> when the
     /// leaf was divided back under the bound, or <c>irreducible</c> when it
     /// could not be, because a split pivots on a median key and a leaf holding
@@ -1699,7 +1699,7 @@ public static class LatticeMetrics
     /// can be lost ratchets the series permanently and makes real waste
     /// indistinguishable from accumulated drift. Present-truth occupancy is
     /// reported instead by
-    /// <see cref="BPlusTree.TreeStorageUsageReport.WalPhysicalBytes"/>, which is
+    /// <see cref="TreeStorageUsageReport.WalPhysicalBytes"/>, which is
     /// derived on each sample and so cannot drift.
     /// </para>
     /// <para>

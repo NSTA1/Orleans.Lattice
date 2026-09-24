@@ -71,11 +71,11 @@ internal sealed class AzureBlobDistributedCache : IDistributedCache
         var now = _timeProvider.GetUtcNow();
         if (BlobCacheEntryExpiration.IsExpired(expiration, now))
         {
-            await TryDeleteAsync(blob, token).ConfigureAwait(false);
+            await TryDeleteAsync(blob, download.Details.ETag, token).ConfigureAwait(false);
             return null;
         }
 
-        await TrySlideAsync(blob, expiration, now, token).ConfigureAwait(false);
+        await TrySlideAsync(blob, download.Details.ETag, expiration, now, token).ConfigureAwait(false);
         return download.Content.ToArray();
     }
 
@@ -131,11 +131,11 @@ internal sealed class AzureBlobDistributedCache : IDistributedCache
         var now = _timeProvider.GetUtcNow();
         if (BlobCacheEntryExpiration.IsExpired(expiration, now))
         {
-            await TryDeleteAsync(blob, token).ConfigureAwait(false);
+            await TryDeleteAsync(blob, properties.ETag, token).ConfigureAwait(false);
             return;
         }
 
-        await TrySlideAsync(blob, expiration, now, token).ConfigureAwait(false);
+        await TrySlideAsync(blob, properties.ETag, expiration, now, token).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -154,8 +154,17 @@ internal sealed class AzureBlobDistributedCache : IDistributedCache
 
     private string BlobName(string key) => BlobCacheKeyMap.ToBlobName(_keyPrefix, key);
 
+    // Both best-effort writes below are conditional on the ETag of the version
+    // that was read. Without it a concurrent Set that lands between the read and
+    // the write is clobbered: the slide would stamp the old entry's expiry onto
+    // the new value, and the eviction would delete the fresh entry outright. With
+    // it that race fails with 412, which the catch treats as a lost slide or a
+    // no-longer-needed eviction.
+    private static BlobRequestConditions IfUnchanged(ETag etag) => new() { IfMatch = etag };
+
     private async Task TrySlideAsync(
         BlobClient blob,
+        ETag etag,
         BlobCacheEntryExpiration.Values expiration,
         DateTimeOffset now,
         CancellationToken token)
@@ -169,7 +178,7 @@ internal sealed class AzureBlobDistributedCache : IDistributedCache
         var updated = BlobCacheEntryExpiration.ToMetadata(expiration with { Effective = slid });
         try
         {
-            await blob.SetMetadataAsync(updated, cancellationToken: token).ConfigureAwait(false);
+            await blob.SetMetadataAsync(updated, IfUnchanged(etag), token).ConfigureAwait(false);
         }
         catch (RequestFailedException)
         {
@@ -179,17 +188,17 @@ internal sealed class AzureBlobDistributedCache : IDistributedCache
         }
     }
 
-    private static async Task TryDeleteAsync(BlobClient blob, CancellationToken token)
+    private static async Task TryDeleteAsync(BlobClient blob, ETag etag, CancellationToken token)
     {
         try
         {
-            await blob.DeleteIfExistsAsync(cancellationToken: token).ConfigureAwait(false);
+            await blob.DeleteIfExistsAsync(conditions: IfUnchanged(etag), cancellationToken: token).ConfigureAwait(false);
         }
         catch (RequestFailedException)
         {
-            // Best-effort eviction of an expired entry; a concurrent delete or a
-            // transient failure is harmless because the entry already read as a
-            // miss.
+            // Best-effort eviction of an expired entry; a concurrent delete or
+            // rewrite, or a transient failure, is harmless because the entry
+            // already read as a miss.
         }
     }
 

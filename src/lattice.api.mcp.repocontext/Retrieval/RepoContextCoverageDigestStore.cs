@@ -132,6 +132,8 @@ internal enum RepoContextCoverageDigestPresence
 }
 
 
+/// <summary>
+/// The vector-coverage digest store: a
 /// compacted mirror of the membership tree, partitioned into
 /// <see cref="RepoContextCoveragePage.PageCount"/> fixed pages, held in its own
 /// <see cref="RepoContextTrees.VectorCoverage"/> tree.

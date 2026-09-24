@@ -152,6 +152,7 @@ internal sealed partial class BPlusLeafGrain
     /// driver passes through, so a leaf is divided before its payload is
     /// materialised whichever driver brought it to capture - including on a
     /// tree that has stopped taking writes entirely.
+    /// </para>
     /// <para>
     /// It was previously reached only from the zero-coverage repair driver,
     /// behind that driver's <c>HasCheckpointedPartitionWithoutCoverage</c>
@@ -614,7 +615,7 @@ internal sealed partial class BPlusLeafGrain
     /// remaining sites rather than routing around them again.
     /// </para>
     /// <para>
-    /// <see cref="LeafNodeState.SplitInFlight"/> is the discriminator, and it
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitInFlight"/> is the discriminator, and it
     /// is a dedicated field rather than an inference because every field that
     /// could have been inferred from is overloaded. <c>OldNextSibling</c> is a
     /// verbatim copy of <c>NextSibling</c>, so it is null during a division of

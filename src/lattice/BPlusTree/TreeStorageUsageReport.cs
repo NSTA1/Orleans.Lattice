@@ -123,7 +123,7 @@ public readonly record struct TreeStorageUsageReport
     /// the moment the report was sampled, or <see langword="null"/> when the
     /// byte-pressure policy is disabled for it. This is the fully resolved
     /// value, so it already reflects the per-tree runtime override
-    /// (<see cref="ILatticeRegistry.SetWalMaxRetainedBytesAsync(string, long?)"/>)
+    /// (<c>ILatticeRegistry.SetWalMaxRetainedBytesAsync</c>)
     /// layered over named per-tree options layered over the silo-wide
     /// <see cref="LatticeOptions.WalMaxRetainedBytes"/> default.
     /// <para>

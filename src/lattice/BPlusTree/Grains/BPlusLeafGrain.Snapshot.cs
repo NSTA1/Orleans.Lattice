@@ -165,7 +165,7 @@ internal sealed partial class BPlusLeafGrain
     /// Number of zero-coverage repair captures attempted since the budget was
     /// last armed. Reset on every activation because it is a plain instance
     /// field, never persisted - and, since issue #3194, also re-armed in place
-    /// after <see cref="ZeroCoverageRepairRearmDelay"/> so that an activation
+    /// after the re-arm backoff (<see cref="NextZeroCoverageRepairRearmBackoff"/>) so that an activation
     /// which is never replaced still recovers the repair.
     /// <para>
     /// That second reset is load-bearing, not a refinement. Reset-on-activation
@@ -191,7 +191,7 @@ internal sealed partial class BPlusLeafGrain
     /// budget that never re-arms instead retires the repair permanently. The
     /// re-arm keeps both bounds: at most
     /// <see cref="MaxZeroCoverageRepairAttempts"/> attempts per
-    /// <see cref="ZeroCoverageRepairRearmDelay"/>, for ever.
+    /// re-arm backoff period (<see cref="NextZeroCoverageRepairRearmBackoff"/>), for ever.
     /// </para>
     /// </summary>
     private DateTimeOffset? _zeroCoverageRepairRearmAtUtc;
@@ -255,7 +255,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Test hook that brings a pending zero-coverage repair re-arm forward to
     /// now, so a fixture can prove the budget recovers without waiting out
-    /// <see cref="ZeroCoverageRepairRearmDelay"/>.
+    /// the re-arm backoff (<see cref="NextZeroCoverageRepairRearmBackoff"/>).
     /// <para>
     /// Deliberately only brings the existing deadline forward and does nothing
     /// when no budget is spent, so it cannot be used to manufacture a re-arm

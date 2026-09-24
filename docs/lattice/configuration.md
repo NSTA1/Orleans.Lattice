@@ -109,6 +109,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CompactionTriggerCooldown`](tombstone-compaction.md) | `TimeSpan` | 5 minutes | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
+| [`DefaultLockLeaseDuration`](#defaultlockleaseduration) | `TimeSpan` | 30 seconds | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
 | [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
 | [`DigestPublishTimeout`](#digestpublishtimeout) | `TimeSpan` | 15 seconds | Yes (on next publish) |
@@ -129,7 +130,9 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`LeafRetirementRetryDeadline`](#leafretirementretrydeadline) | `TimeSpan` | 2 seconds | Yes |
 | [`LeafSnapshotBinaryEncodingEnabled`](#leafsnapshotbinaryencodingenabled) | `bool` | `true` | Yes (write side only; reads are always dual) |
 | [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
+| [`LeafSnapshotMaxCoverageLagSeconds`](#leafsnapshotmaxcoveragelagseconds) | `int` | 300 | Yes |
 | [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
+| [`LeafSnapshotSegmentBytes`](#leafsnapshotsegmentbytes) | `long` | 4 MiB | Yes (next capture) |
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
 | [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
@@ -152,6 +155,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxLeafEntriesBeforeForcedCompaction`](#maxleafentriesbeforeforcedcompaction) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
 | [`MaxLiveKeys`](#maxlivekeys) | `long?` | `null` (unbounded) | Yes |
+| [`MaxLockLeaseDuration`](#maxlockleaseduration) | `TimeSpan` | 5 minutes | Yes |
 | [`MaxLeavesPerScanPage`](#maxleavesperscanpage) | `int` | 64 | Yes |
 | [`MaxPhysicalShardsPerTree`](#maxphysicalshardspertree) | `int` | 256 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
@@ -200,11 +204,16 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
 | [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
+| [`WalMaterialiserPinShedCeiling`](#walmaterialiserpinshedceiling) | `TimeSpan?` | `null` (disarmed) | Yes |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) | `int` | 4 | Yes |
+| [`WalBatchedSingleEntryAppends`](#walbatchedsingleentryappends) | `bool` | `true` | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
+| [`WalDurabilityHoldCeilingBytes`](#waldurabilityholdceilingbytes) | `long?` | 256 MiB | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
+| [`WalReplayPermitQueueDepthPerPermit`](#walreplaypermitqueuedepthperpermit) | `int` | 4 | Yes |
+| [`WalReplayPermitMaxQueueWait`](#walreplaypermitmaxqueuewait) | `TimeSpan` | 5 seconds | Yes |
 | [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
 | [`WalReplaySliceBudget`](#walreplayslicebudget) | `int` | 256 | Yes |
 | [`WalSaturationAcuteOnly`](#walsaturationacuteonly) | `bool` | true | Yes |
@@ -213,6 +222,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationMaterialiserLagSampleWindows`](#walsaturationmaterialiserlagsamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationMaterialiserLagThreshold`](#walsaturationmaterialiserlagthreshold) | `TimeSpan?` | 30 seconds | Yes |
+| [`WalDrainLagConsumerFreshness`](#waldrainlagconsumerfreshness) | `TimeSpan` | 5 minutes | Yes |
 | [`WalSaturationMaterialiserPinLatencySampleWindows`](#walsaturationmaterialiserpinlatencysamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationMaterialiserPinLatencyThreshold`](#walsaturationmaterialiserpinlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
@@ -377,6 +387,14 @@ For the worked-example trade-off table, the activation-pressure model, the relat
 Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup - cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
 
 This option can be changed freely at any time.
+
+### `DefaultLockLeaseDuration`
+
+The lease `ILatticeLockGrain` grants when an acquire supplies a non-positive `LockAcquireRequest.LeaseDuration`, or passes a non-positive duration to `TryAcquireAsync` - that is, when the caller defers to the server default (default: 30 seconds). A holder that neither renews nor releases before its lease elapses has the lock reclaimed and handed to the next FIFO waiter, so this value bounds how long a crashed holder can wedge a lock. The validator requires it to be positive. See [Distributed lock](distributed-lock.md).
+
+### `MaxLockLeaseDuration`
+
+The ceiling every granted or renewed lease is clamped to (default: 5 minutes). A caller cannot pin a lock for longer than this even by requesting a larger duration - the grant is silently capped - so a misconfigured client cannot hold a contended lock for hours. The validator requires it to be positive and at least `DefaultLockLeaseDuration`.
 
 ### `DiagnosticsCacheTtl`
 
@@ -618,6 +636,14 @@ The legacy shape persists each row as an object, which under the default JSON gr
 **When off:** captures persist the legacy row graph again, byte for byte. Blobs already written as frames stay readable, because the read path does not consult this switch.
 
 **When an operator would turn it off - and this is the case that matters.** Set it to `false` **before** rolling back to a build that predates the frame. Such a build has no dual-read and would see a frame-carrying blob as an **empty row set**, which is data loss rather than a slow start, because the coverage-gated WAL garbage collector has been authorised to trim the prefix that snapshot covers. Turning the switch off pins new captures to the legacy shape so the rollback target can read them; leave it off until every leaf has captured at least once, then roll back.
+
+### `LeafSnapshotMaxCoverageLagSeconds`
+
+Upper bound, in seconds, on how long an active leaf may leave its durable snapshot coverage lagging behind its projection checkpoint (default: 300; `0` disables). A leaf that has been active this long with any partition's checkpoint ahead of the coverage its durable snapshot records drives a capture, closing the gap. It exists for the leaf that serves only reads: every other capture driver is activation-scoped or write-driven, and reads keep the grain from deactivating, so without this bound its coverage - and with it the WAL GC offset floor for the whole tree - could lag without limit. The validator accepts `0` to `86400`.
+
+### `LeafSnapshotSegmentBytes`
+
+Largest encoded snapshot frame, in bytes, persisted as a single BLOB column (default: 4 MiB). A capture whose frame exceeds it is split into row-aligned segments of at most this size, each in its own `leaf-snapshot-segment` grain-state row, and hydration decodes one segment at a time. This bounds the contiguous allocation on the hydration read path - the storage provider materialises a BLOB column as one array before lattice code runs - rather than the total bytes a leaf holds. The default sits above the Large Object Heap threshold, so ordinary leaves are never segmented. Values below 64 KiB are clamped up rather than rejected. See [Tree storage](tree-storage.md#sizing-surface-3---leaf-snapshot-blob).
 
 ### `MaintainProjectionDigest`
 
@@ -1424,6 +1450,10 @@ The input is purely additive. Leaving the threshold at its default `null` is a z
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
+### `WalDrainLagConsumerFreshness`
+
+Freshness window a WAL cursor report must fall inside to contribute to the materialiser drain-lag input of the saturation classifier (default: 5 minutes; `TimeSpan.Zero` disables the exclusion and restores the historical all-consumers behaviour). A consumer whose latest report is older stays fully registered - it still pins the WAL GC trim floor - but is left out of the lag-plane minimum, so an idle leaf in a live tree cannot hold the tree permanently `Throttled`. The classifier gates only the advisory [`WalThrottledAdmissionPace`](#walthrottledadmissionpace), so the exclusion cannot permit trimming or lose data. The validator rejects a negative value.
+
 ### `WalSaturationMaterialiserLagSampleWindows`
 
 Number of consecutive saturation-sampler windows that must each observe a materialiser drain-lag level at or above `WalSaturationMaterialiserLagThreshold` before the classifier holds the tree at `WalSaturationState.Throttled` (default: 3). Acts as the noise floor for the drain-lag input, mirroring `WalSaturationFlushLatencySampleWindows`, so a single sampler tick cannot flip the regime.
@@ -1509,9 +1539,9 @@ Without this budget the wait is unbounded, which means the fan-out queues load i
 
 **Refusal sheds the caller; it does not roll anything back.** `SetManyAsync` is not atomic across shards, so branches that already committed stay committed, and outstanding branches keep running to completion. The durable outcome is identical to the unbounded wait - only the moment the caller is told changes. This is the same contract the fan-out already had for a *faulted* branch. Callers that need all-or-nothing semantics across shards should use the atomic-write saga instead.
 
-**Sizing.** Set the budget above the fan-out latency a healthy cluster actually exhibits and below the latency that characterises collapse, so it discriminates rather than fires indiscriminately. Thirty seconds is the recommended starting point, taken from the multi-silo measurements in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) on the reference rig: healthy four- and six-silo cohorts observed a per-call p99 of 5.5 s and 11.5 s, while collapsed eight-silo cohorts observed a per-call p50 of 34.7-60.2 s. Thirty seconds sits in the gap - roughly 2.6x above the healthy ceiling and below the collapsed floor - so it is inert on a healthy cluster and engages on a collapsed one. It also matches the `WalAppendDispatchTimeout` default, so a single stuck branch surfaces as a saturation refusal rather than an opaque dispatch timeout. Re-measure for your own cluster rather than porting that figure blindly: a deployment with a larger `MaxKeysPerBatch`, slower storage, or a much wider shard map has a different healthy ceiling.
+**Sizing.** Set the budget above the fan-out latency a healthy cluster actually exhibits and below the latency that characterises collapse, so it discriminates rather than fires indiscriminately. Thirty seconds is the recommended starting point, taken from the multi-silo measurements in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) on the reference rig: healthy four- and six-silo cohorts observed a per-call p99 of 5.5 s and 11.5 s, while collapsed eight-silo cohorts observed a per-call p50 of 34.7-60.2 s. Thirty seconds sits in the gap - roughly 2.6x above the healthy ceiling and below the collapsed floor - so it is inert on a healthy cluster and engages on a collapsed one. It also matches the `WalAppendDispatchTimeout` default, so a single stuck branch surfaces as a saturation refusal rather than an opaque dispatch timeout. Re-measure for your own cluster rather than porting that figure blindly: a deployment that sends larger `SetManyAsync` batches, has slower storage, or runs a much wider shard map has a different healthy ceiling.
 
-**The default is unbounded, so this option is opt-in on the 9.x line.** `Orleans.Lattice` has shipped release tags, and a finite default is a behaviour change a *conforming* caller can be caught by: a batch that legitimately takes longer than the budget - a wide shard map, a large `MaxKeysPerBatch`, or slow storage - would newly throw where it previously blocked and then succeeded. The repository has shipped a breaking change in a minor only where no conforming deployment could regress, which this does not clear, so the default stays at `Timeout.InfiniteTimeSpan` and the flip to a finite default is deferred to the next major ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). Until then, an unbounded fan-out remains the out-of-the-box behaviour and the collapse in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) is only mitigated on deployments that set a finite budget. Set one.
+**The default is unbounded, so this option is opt-in on the 9.x line.** `Orleans.Lattice` has shipped release tags, and a finite default is a behaviour change a *conforming* caller can be caught by: a batch that legitimately takes longer than the budget - a wide shard map, a large batch, or slow storage - would newly throw where it previously blocked and then succeeded. The repository has shipped a breaking change in a minor only where no conforming deployment could regress, which this does not clear, so the default stays at `Timeout.InfiniteTimeSpan` and the flip to a finite default is deferred to the next major ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). Until then, an unbounded fan-out remains the out-of-the-box behaviour and the collapse in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) is only mitigated on deployments that set a finite budget. Set one.
 
 Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **not** a disable sentinel and is rejected by the validator: a zero budget would refuse every batch immediately, which is never a useful configuration and is far more likely to be a mistake than an intention. `Timeout.InfiniteTimeSpan` is the default and awaits every branch however long it takes. The validator rejects every other non-positive value.
 
@@ -1571,6 +1601,10 @@ The option is **self-disabling below its threshold**: until that many flushes ar
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
+### `WalBatchedSingleEntryAppends`
+
+When `true` (the default), a bulk WAL append carrying exactly one entry is dispatched through the interleaving batched grain method instead of the exclusive-turn per-entry overload. Under a wide fan-out whose per-leaf slices are one entry each - the dominant shape for uniformly distributed keys - the exclusive turn serialised every append on a partition for its whole provider round trip, collapsing concurrency to one and keeping [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) from ever being reached. Ordering, durability, and offset density are unchanged, because the shard's internal state gate, not turn exclusivity, serialises offset assignment and the pending list. Set to `false` to restore the per-entry overload.
+
 ### `WalMaxRetainedBytes`
 
 Optional advisory ceiling on retained WAL bytes per tree (default: `null`, disabled). When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (surfaced as the `lattice.storage.policy.trim.triggered` counter and `LatticeWalGcReport.BytePressureTriggered`), trimming toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget`. The policy is **advisory only**: the GC never trims past the safe frontier (the slowest consumer's cursor and any `WalRetention` floor) to honour it, so a tree pinned by a lagging consumer can remain over the ceiling - `LatticeWalGcReport.BytePressureOverThreshold` and the `lattice.storage.policy.over_threshold` gauge report that condition. `null` disables the policy. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
@@ -1584,6 +1618,10 @@ This option can be changed freely at any time. The new value takes effect on the
 Leaving it off does not blind an operator. `orleans.lattice.wal.gc.passes` is emitted unconditionally with a `reclaimed | blocked | no_consumer | idle | over_ceiling | stranded | unclassified | failed` outcome tag, and reclaimed volume is visible through `orleans.lattice.wal.entries_trimmed`, so a tree reporting passes but no `orleans.lattice.wal.gc.backlog_bytes` samples is knowably "not measured" rather than "no backlog". The `stranded` arm in particular is reachable with this option off (issue #3213): it is decided by the trim scan's stop reason rather than by a byte sample, so a tree that reclaims nothing while its scan keeps stopping on WAL it must retain is distinguishable from a quiet one even where nothing accounts bytes. Set `WalMaxRetainedBytes` when the WAL volume has a hard size budget **and** the WAL provider accounts bytes; that is also what makes the backlog histogram emit.
 
 **Setting it also changes the collection cadence, not only the reporting (issue #3119).** A tree that is over the ceiling and reclaims nothing holds the adaptive interval at `WalGcMinInterval` instead of relaxing toward `WalGcInterval`, and reports the `over_ceiling` outcome rather than `idle`. This is deliberate and is what makes the ceiling enforceable at all: the trim itself can never cross the safe frontier, so when a lagging consumer pins that frontier, pass frequency is the only lever the policy has left, and the previous rule removed it at exactly the moment it was needed. Budget for it as a cost: the per-partition byte probe noted above is then paid at the floor rate for as long as the breach lasts, which is the same rate a reclaiming tree already sustains. It clears on its own once the tree drops back under the ceiling, so a ceiling set below what the tree can ever reach will hold that tree at the floor indefinitely; size the ceiling against a footprint the tree can actually return to. **Leaving it off no longer forfeits the cadence correction entirely (issue #3213).** A tree that reclaims nothing while retaining WAL is now held below the fault-retry ceiling rather than relaxing all the way to `WalGcInterval`, on every deployment and with no option set. Setting `WalMaxRetainedBytes` still buys the stronger guarantee - the cadence *floor* rather than a capped backoff - and it buys it against a budget the operator chose rather than against the mere presence of retained bytes.
+
+### `WalDurabilityHoldCeilingBytes`
+
+Byte ceiling up to which the WAL garbage collector holds back a tree whose durable materialiser offset floor is **absent** - that is, when it cannot establish that any leaf has durably applied anything (default: 256 MiB, so the hold is on; `0` or any non-positive value disables it). Below the ceiling such a partition is not trimmed; past it the collector trims anyway, because an unbounded WAL is the worse outage, and records each forced trim on `orleans.lattice.wal.gc.durability_hold_forced`. The hold engages only where the floor is absent, never where a floor exists but has stopped advancing, so a deployment with a materialiser wired never enters it; and where the provider cannot report retained bytes the hold declines rather than retaining without a bound. It is deliberately separate from the advisory [`WalMaxRetainedBytes`](#walmaxretainedbytes), which never blocks a trim. See [Metrics](metrics.md) for `durability_hold_forced` and `durability_hold_engaged`.
 
 ### `WalPartitions`
 
@@ -1616,6 +1654,10 @@ Set to `0` to disable coalescing so every advancing report persists synchronousl
 
 This option can be changed freely at any time. The new value takes effect on the next pin report.
 
+### `WalMaterialiserPinShedCeiling`
+
+Maximum time a durable leaf-materialiser pin shard may shed coalescible reports continuously before one is forced through (default: `null`, disarmed, which preserves the historical shedding exactly). Under sustained leaf-activation churn the non-sheddable pin writes can hold a shed window open indefinitely and starve the path that restamps materialiser coverage, so the durable pin stops advancing and the retained WAL grows. With a ceiling set, once a shard has shed for that long the next report is issued regardless and `orleans.lattice.materialiser.pin.shed_forced` records it, bounding pin staleness at the cost of at most one enqueued write per ceiling period per shard. Arming it cannot lose data. The validator requires a positive value, or `null`.
+
 ### `WalMaterialiserMaxConcurrentReplays`
 
 Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves at runtime to the **lesser** of `Environment.ProcessorCount` and the container's enforced CPU grant). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
@@ -1634,6 +1676,14 @@ That matters because both ends of the one dial you do have are failure modes, so
 The configured width is a starting point, not a floor: a replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742), a reactive, per-replay, per-activation adaptation that widens back towards the configured width on success and starts afresh at it on the next activation. Setting the option lowers the ceiling that adaptation works down from; it does not disable it. Whether it is engaging at all is visible in `orleans.lattice.wal.replay.slice_narrowings`, tagged by tree and partition and primed at zero, which is the instrument to read before concluding that a memory-pressure failure was caused by the slice width - a flat zero alongside climbing activation failures means the failing allocation was somewhere else and the width is not the lever. See [Metrics](metrics.md).
 
 The narrowing reached only the **activation-time** replay when it was introduced. Two further replay sites - the snapshot-cursor rebuild and the frozen-baseline tail fold - kept a constant of the same name and the same value and passed it straight through, so for a period the recovery path was the one without the resilience, and every check that compared the two *values* passed while the *behaviour* had diverged. All three sites now read through one shared reader that owns the width, the retry, the widening and the counter's priming together (issue #2899), and all three honour this option.
+
+### `WalReplayPermitQueueDepthPerPermit`
+
+How many activations may queue for a WAL replay permit, per permit the replay gate was sized to (default: 4; `0` admits an unbounded queue, the historical shape). The admitted-waiter bound is this figure multiplied by the resolved ceiling (see [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays)), so it scales with the deployment's own CPU grant. An activation refused admission gets a fast, attributable [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) to retry after a backoff instead of a silent wait that would outlive its request deadline. Admission is refused only when this depth bound **and** [`WalReplayPermitMaxQueueWait`](#walreplaypermitmaxqueuewait) both say the queue is unhealthy. The validator rejects a negative value.
+
+### `WalReplayPermitMaxQueueWait`
+
+The longest smoothed WAL replay-permit queue wait treated as healthy (default: 5 seconds; `TimeSpan.Zero` disables this half of the admission decision and restores the pure depth bound). It is the demand-side half of the admission rule: depth alone says the queue is long, while this says it is not draining, which is what separates a wide but healthy fan-out from a self-sustaining backlog. Both halves must hold before an activation is refused. The validator rejects a negative value.
 
 ### `WalReplayMaxRecordsPerTurn`
 
@@ -1797,6 +1847,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
 | `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Clamped to `[1, BatchSize]`. |
 | `SaturatedPauseMs` | 500 | Milliseconds background drain ticks are skipped after a pass that saw a `Saturated` source. `<= 0` disables the deferral. |
+| `HistoryHybridFullValueWindow` | 5 minutes | Durable history views under `HistoryRetentionMode.Hybrid` only: the maximum apply-time age of a revision for which full LWW value bytes are kept; an older revision (drained from a backlog or a catch-up replay) is shaped to metadata only. A non-positive value degrades hybrid to metadata-only. See [History views](history-views.md). |
 
 See [Materialised views](materialised-views.md) for the full behaviour of each
 option, including what registrations a view needs (`AddLattice` +

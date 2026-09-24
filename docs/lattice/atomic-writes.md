@@ -36,12 +36,13 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
 
 1. **All-or-nothing commit.** On successful return every `ki` holds `vi` as
    its last-writer-wins (LWW) value, or - if the saga failed - every `ki`
-   holds the value it had before the saga started (its pre-saga value; for
-   keys that did not exist before the saga, the key is tombstoned).
+   holds the value it had before the saga started (its pre-saga value; a
+   key that did not exist before the saga stays absent).
 2. **Sequential per-key ordering.** Each key is written at most once by the
    saga, with a monotonically-increasing [Hybrid Logical Clock](state-primitives.md)
-   timestamp. Compensation writes use a fresh HLC tick, so LWW merge resolves
-   the rollback as the winner even if an external writer raced the saga.
+   timestamp. An abort issues no rollback writes - the saga's prepared writes
+   were never visible - so a write an external writer raced in during the
+   saga is never overwritten by a rollback.
 3. **Crash recovery.** If the silo hosting the saga grain crashes mid-flight,
    a keepalive reminder resumes the saga on reactivation and drives it to a
    terminal state (either Completed or Compensated + Completed).
@@ -70,11 +71,12 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
 - **Ordering across distinct sagas.** Two concurrent `SetManyAtomicAsync`
   calls touching overlapping keys are resolved pairwise by LWW - the later
   HLC tick wins per key. There is no global transaction order.
-- **Compensation durability in every failure mode.** If compensation itself
-  fails persistently (every retry attempt throws), the saga is marked
-  *poisoned* and the keepalive reminder continues firing; operators can
-  inspect `AtomicWriteState.FailureMessage` via persistent state. This is
-  rare in practice and limited to total-storage-outage scenarios.
+- **Abort durability in every failure mode.** If recording the abort
+  decision or broadcasting the abort terminals fails, the saga stays in
+  `Compensate` and the keepalive reminder keeps re-driving it until it
+  completes; operators can inspect `AtomicWriteState.FailureMessage` via
+  persistent state. This is rare in practice and limited to
+  total-storage-outage scenarios.
 
 ## Usage
 
@@ -215,8 +217,10 @@ The coordinator registers a **keepalive reminder** (1-minute period) so that a
 silo crash during any subsequent phase triggers reactivation and resumption
 on the next reminder tick. It then issues `GetAsync(key)` for every key in
 the batch and records each pre-saga value (including absence) in
-`AtomicWriteState.PreValues`. Persisting the full pre-saga snapshot before
-any write is the prerequisite for bounded-time compensation. The phase ends
+`AtomicWriteState.PreValues`, alongside the sorted set of touched shards
+that later drives the terminal broadcast. A guarded batch evaluates its
+predicate against this persisted snapshot once, so a reminder-driven replay
+re-derives the identical verdict. The phase ends
 with a `WriteStateAsync` that flips the persisted phase to `Execute`.
 
 ### Phase 2 - Execute
@@ -243,12 +247,15 @@ below.
 
 ### Phase 3 - Compensate (failure path only)
 
-The coordinator walks already-committed entries in **reverse** order. For
-each previously-existing key it calls `SetAsync(key, preValue)`; for each
-previously-absent key it calls `DeleteAsync(key)`. Every compensation write
-receives a fresh HLC tick from the target leaf grain, so LWW merge resolves
-the compensating write as the winner even if an external writer modified the
-key during the saga's execution window.
+No per-key compensation writes are issued. The prepare-phase writes were
+bucketed into each leaf's pending-tx map, so they were never visible to
+readers - and a non-prepared rollback write would itself land as a fresh
+visible entry that overlays the pre-saga state once the abort terminal drops
+the pending bucket. Compensation therefore records the abort decision on the
+per-tree `ITxRegistryGrain` and then broadcasts `MutationKind.TxAbort`
+terminal marks (see [Tree-wide visibility flip](#tree-wide-visibility-flip)),
+which discard each leaf's pending bucket. Readers resolve against the
+recorded abort in between, so they never observe a partial rollback.
 
 On reminder-driven re-entry, the per-step retry counter is reset so a
 transient fault that outlived the previous activation can be retried
@@ -379,19 +386,24 @@ same conservative branch it already took for `InFlight`.
 |---|---|---|
 | Before `Prepare` persists | `Phase = NotStarted` | Reminder tick unregisters itself and deactivates. Client's pending call returns a transport error; client retries with a fresh `operationId`. |
 | During `Execute`, after *k* writes committed | `Phase = Execute`, `NextIndex = k` | Reminder tick calls `RunSagaAsync`; the saga resumes at entry *k* and drives to completion. |
-| During `Compensate`, after *m* rollbacks | `Phase = Compensate`, `NextIndex = N - m` | Reminder tick resets `RetriesOnCurrentStep`, continues compensation, then completes. |
+| During `Compensate` | `Phase = Compensate` | Reminder tick resets `RetriesOnCurrentStep`, re-drives the abort decision and the abort-terminal broadcast, then completes. |
 | After `Completed` persists | `Phase = Completed` | Reminder tick unregisters itself and deactivates. |
 
 ## Performance Notes
 
-- A saga of size *N* issues approximately *2N* + 3 Orleans calls: *N*
-  pre-saga reads, *N* writes, and 3 `WriteStateAsync` calls on the saga's own
-  state - plus one registry write (`MarkCommittedAsync` /
-  `MarkAbortedAsync`), one per-shard terminal fan-out RPC, and one
-  registry `ForgetAsync` cleanup. For large batches where atomicity is
-  not required, prefer the parallel `SetManyAsync`.
+- A saga's Orleans traffic scales with the shards it touches rather than
+  with its size *N*: the prepare phase reads every key's pre-saga value
+  with one batched read per touched shard (issued in parallel), and the
+  execute phase dispatches the whole unwritten remainder as one
+  `SetManyAsync` fan-out whose per-leaf slices collapse into batched WAL
+  dispatches. Around that sit the saga's own `WriteStateAsync` persists,
+  one registry write (`MarkCommittedAsync` / `MarkAbortedAsync`), one
+  per-shard terminal fan-out RPC, and one registry `ForgetAsync` cleanup.
+  For large batches where atomicity is not required, prefer the parallel
+  `SetManyAsync`.
 - The saga's persisted state is stored under the Lattice storage provider
-  (`"OrleansLattice"`). The saga grain deactivates on completion, so the
+  (`LatticeOptions.StorageProviderName`, `"lattice"`) with the
+  `atomic-write` state name. The saga grain deactivates on completion, so the
   storage row is typically read exactly once (on activation) and written
   four times (Prepare -> Execute -> ... -> Completed). The final
   (`Completed`) write also releases the staged batch payload, so a
@@ -538,10 +550,8 @@ cost of unbounded growth in the number of retained outcome rows).
 A caller that wraps `SetManyAtomicAsync` in
 `LatticeVectorClockContext.With(...)` (or `LatticeOriginContext.With(...)`)
 has the ambient frontier captured **once** on the saga's first `Prepare`
-and re-stamped onto every per-key write the saga issues during `Execute`
-- including any compensation rewrites, which restore each key's
-pre-saga origin and frontier captured alongside its pre-saga value. The
-saga guarantees that every emit in the batch carries the **identical**
+and re-stamped onto every per-key write the saga issues during `Execute`.
+The saga guarantees that every emit in the batch carries the **identical**
 `VectorClock` (and identical `OriginClusterId`), closing per-key drift a
 remote replication consumer would otherwise see as a partial-set state
 where the writer's frontier said all N keys should be visible together.
@@ -578,10 +588,8 @@ batch). The size is captured once on the first `Prepare` from
 `Entries.Count`, persisted on the saga grain's state alongside the
 existing capture-once slots, and re-stamped onto Orleans
 `RequestContext` via the ambient `LatticeAtomicBatchContext` helper at
-the head of every per-key call the saga issues - including
-compensation rolls, which inherit the original prepare's index for
-each key. Single-key writes outside a saga emit `0` / `0` (the
-"not-in-a-saga" sentinel).
+the head of every per-key call the saga issues. Single-key writes outside
+a saga emit `0` / `0` (the "not-in-a-saga" sentinel).
 
 These two slots are **observability metadata about the saga's shape**
 - they let a downstream observer (a change-feed consumer, a
@@ -813,8 +821,12 @@ A staged CRDT write lets a typed CRDT mutation ride a cross-tree atomic
 write so it commits all-or-nothing alongside sibling last-writer-wins
 (LWW) writes on other trees.
 
-Each CRDT accessor exposes a `Stage*` counterpart for every live
-mutator. A `Stage*` call:
+The `GCounter`, `GSet`, `PnCounter`, `OrSet`, `OrFlag`, `RwFlag`,
+`MvRegister`, `Rga`, and `VersionVector` accessors expose a `Stage*`
+counterpart for each of their live mutators other than `MergeAsync` (for
+example `StageIncrementAsync`, `StageAddAsync`, `StageTickAsync`); the
+`OrMap`, `RwSet`, `MaxRegister`, and `MinRegister` accessors expose none.
+A `Stage*` call:
 
 1. reads the key's current snapshot once,
 2. mints the typed CRDT delta **once** (the same dot-minting logic the
@@ -1027,8 +1039,8 @@ the chaos suite - see
 
 - [API Reference](api.md) - full `SetManyAtomicAsync` signature and typed
   extensions.
-- [State Primitives](state-primitives.md) - HLC and LWW semantics the saga
-  relies on for compensation correctness.
+- [State Primitives](state-primitives.md) - HLC and LWW semantics the saga's
+  per-key writes resolve under.
 - [Chaos Tests](chaos-tests.md) - atomic-write workload exercised under
   concurrent splits and fault injection.
 - [Atomic Action](atomic-action.md) - the generic saga / TCC coordinator that

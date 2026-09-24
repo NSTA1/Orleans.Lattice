@@ -13,10 +13,11 @@ services.AddExplorerDataPlugin();
 
 Withholding the call ships no data surface at all; nothing else has to change.
 
-The per-key **History** button hands off to the revision-timeline surface by
-plugin id through `ISelectionSurfaceSwitcher`, so this package does not
-reference, render or know the shape of that one. If a head does not register the
-history surface, the button is simply not shown.
+The per-key **History** button opens the revision timeline inline in the key's
+detail panel, resolved by stable id (`SelectionNestedSurfaceKeys.EntryHistory`)
+through `ISelectionNestedSurfaceRegistry`, so this package does not reference or
+know the shape of the history package. If a head does not register the history
+surface, the button is simply not shown.
 
 It reaches the cluster only through the `IDataSurface` domain contract it
 declares - never the raw state-API connection - and carries its own scoped

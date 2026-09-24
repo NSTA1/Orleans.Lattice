@@ -194,10 +194,11 @@ Three sample-specific seams sit alongside the package:
 Blazor Server components own an `IAsyncEnumerable<T>` subscription
 acquired in `OnInitializedAsync` and cancelled in `Dispose`. The
 subscription is backed by a `System.Threading.Channels.Channel<T>`
-owned by the underlying service (`InventoryService`, `SiteRegistry`,
-`DivergenceTracker`, `DashboardBroadcaster`). The service pushes
-whenever domain state changes; the component applies the message to
-its local view-model and calls `InvokeAsync(StateHasChanged)`.
+owned by `DashboardBroadcaster`, which keeps one channel per
+subscriber for part-summary updates, the chaos overview, divergence
+events, and site activity. It pushes whenever domain state changes;
+the component applies the message to its local view-model and calls
+`InvokeAsync(StateHasChanged)`.
 
 `DashboardBroadcaster` additionally publishes every routed or
 replicated `Fact` to a cluster-wide Orleans stream backed by Azure

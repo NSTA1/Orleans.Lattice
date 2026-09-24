@@ -63,8 +63,8 @@ The workloads (and therefore the sub-labels) mirror `BenchWorkloadMode` in `benc
 | `perf.set-many` | `set-many` | batched multi-key `SetManyAsync` |
 | `perf.set-many-atomic` | `set-many-atomic` | atomic batched write |
 | `perf.set-many-atomic-2` | `set-many-atomic-2` | fixed-shape 2-key atomic batch |
-| `perf.cross-tree-atomic-2` | `cross-tree-atomic-2` | 2-tree atomic write |
-| `perf.cross-tree-atomic-64` | `cross-tree-atomic-64` | 64-tree atomic write |
+| `perf.cross-tree-atomic-2` | `cross-tree-atomic-2` | 2-key cross-tree atomic write (1 key in each of two trees) |
+| `perf.cross-tree-atomic-64` | `cross-tree-atomic-64` | 64-key cross-tree atomic write (32 keys in each of two trees) |
 | `perf.get-point` | `get-point` | single-key read |
 | `perf.get-many` | `get-many` | batched read |
 

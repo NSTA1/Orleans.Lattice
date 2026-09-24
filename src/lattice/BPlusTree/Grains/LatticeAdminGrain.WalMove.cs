@@ -417,6 +417,19 @@ internal sealed partial class LatticeAdminGrain
                         + $"{dstHighestBefore}, beyond the source highest {srcHighest}. The target is not a clean "
                         + "prefix of the source; resolve the divergence before retrying.");
                 }
+                if (dstHighestBefore >= srcLowest)
+                {
+                    var dstLowestBefore = await dstProvider.GetLowestOffsetAsync(physicalTreeId, partition, cancellationToken);
+                    if (!WalMoveResumeCore.TargetHoldsResumedPrefix(dstHighestBefore, dstLowestBefore, srcLowest))
+                    {
+                        throw new InvalidOperationException(
+                            $"WAL move of {physicalTreeId}/{partition} aborted: the target's high-water mark "
+                            + $"{dstHighestBefore} covers source offsets from {srcLowest} that the target no longer "
+                            + $"holds (its lowest live offset is {dstLowestBefore}), typically because it was reclaimed "
+                            + "after an earlier placement. Resuming past that mark would skip live entries. Move to a "
+                            + $"different provider key, or retry once the source's retained range starts above {dstHighestBefore}.");
+                    }
+                }
                 if (WalMoveResumeCore.NeedsFloorReserve(dstHighestBefore, srcLowest))
                 {
                     // Reserve the destination trim floor so the first append's
@@ -425,6 +438,19 @@ internal sealed partial class LatticeAdminGrain
                 }
 
                 await CopyRangeAsync(WalMoveResumeCore.ResumeCursor(srcLowest, dstHighestBefore), srcHighest);
+            }
+            else if (srcHighest >= 0)
+            {
+                // Fully trimmed source: nothing to copy, but the target must still
+                // carry the source's high-water mark, because the WAL grain that
+                // activates on the target allocates its next offset from the
+                // target's highest. Reserve it as a trim point; a provider that does
+                // not raise its mark for a reservation is refused at step 4.
+                var dstHighestBefore = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
+                if (dstHighestBefore < srcHighest)
+                {
+                    await dstProvider.TrimAsync(physicalTreeId, partition, srcHighest, cancellationToken);
+                }
             }
 
             // 3. Convergence: re-quiesce with a fresh lease right before the
@@ -467,6 +493,18 @@ internal sealed partial class LatticeAdminGrain
                 throw new InvalidOperationException(
                     $"WAL move of {physicalTreeId}/{partition} failed verification: source highest offset {srcHighest} "
                     + $"but target highest offset {dstHighest} after copy. The pin was not flipped; the source remains live.");
+            }
+            if (!hasLiveRange && srcHighest >= 0 && dstHighest < srcHighest)
+            {
+                // Runs even when content verification is off: this is not about
+                // content (there is none to copy) but about allocation. Flipping
+                // here would restart the partition's offsets beneath offsets its
+                // consumers have already passed.
+                throw new InvalidOperationException(
+                    $"WAL move of {physicalTreeId}/{partition} aborted: the source holds no live entries but has assigned "
+                    + $"offsets through {srcHighest}, and the target did not record that high-water mark (target highest "
+                    + $"{dstHighest}). After the cutover the target would reuse offsets from {dstHighest + 1}. The pin was "
+                    + "not flipped; the source remains live. Retry once the partition holds live entries.");
             }
         }
         catch
@@ -743,8 +781,13 @@ internal sealed partial class LatticeAdminGrain
         }
 
         var highest = await sourceProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
+        var lowest = await sourceProvider.GetLowestOffsetAsync(physicalTreeId, partition, cancellationToken);
         var outcome = WalMoveOutcome.NoOp;
-        if (highest >= 0)
+
+        // Gate on the LIVE range, not on the high-water mark alone: a trim never
+        // lowers GetHighestOffsetAsync, so an already-reclaimed source still
+        // reports a non-negative highest while holding nothing to reclaim.
+        if (lowest >= 0 && highest >= lowest)
         {
             await sourceProvider.TrimAsync(physicalTreeId, partition, highest, cancellationToken);
             outcome = WalMoveOutcome.SourceReclaimed;

@@ -64,6 +64,7 @@ Capture phases: `PhaseSnapshotOpen` (`snapshot-open`), `PhaseExport` (`export`),
 | `CaptureRetries` | `orleans.lattice.backup.capture.retries` | Counter | `reason` | Capture retries / fallbacks (for example an incremental falling back to a full). |
 | `SchedulerSkipped` | `orleans.lattice.backup.scheduler.skipped` | Counter | `scope` | Capture cycles skipped because one was already in flight for the scope. |
 | `SchedulerOverruns` | `orleans.lattice.backup.scheduler.overruns` | Counter | `scope` | Scheduled cycles that fired while a capture was still in flight for the scope. |
+| `SchedulerFailures` | `orleans.lattice.backup.scheduler.failures` | Counter | `scope`, `reason` | Scheduled capture cycles that faulted, with the reason classified from the fault. A gate denial on a gated host is recorded as `permission-denied`, so a refused scope is a rising series rather than an absence of successes. |
 
 ### Inventory (observable gauges)
 
@@ -98,6 +99,7 @@ These gauges read from the in-memory inventory registry on scrape without touchi
 - `RecordRestoreSuccess(double durationMs, long entriesApplied)` - records the restore success-path instruments.
 - `RecordRetention(string scopeKey, long bytesReclaimed, int prunedCount)` - records the bytes reclaimed and backups pruned by a retention pass (zero increments are skipped).
 - `RecordSchedulerSkipped(string scopeKey)` / `RecordSchedulerOverrun(string scopeKey)` - record the per-scope overlap-guard and overrun tallies.
+- `RecordSchedulerFailure(string scopeKey, string reason)` - records a faulted capture cycle for the scope with a classified reason (a `Reason*` constant).
 - `RecordCaptureRetry(string reason)` - records a capture retry / fallback with a classified reason.
 - `EmitCaptureFailure(BackupKind kind, string phase, Exception exception)` / `EmitRestoreFailure(string phase, Exception exception)` - record a failure with the phase and a reason classified from the exception, and always return `false` so they can be used as the condition of an exception filter that records the metric without catching the exception.
 - `MapReason(Exception exception)` - classifies an exception into a `reason` tag value.

@@ -6,7 +6,7 @@ Each shard is a standard B+ tree with a configurable branching factor (default: 
 
 ### Internal Nodes
 
-An internal node stores a sorted list of `(SeparatorKey, ChildGrainId)` entries. The first entry always has a `null` separator and acts as the leftmost catch-all:
+An internal node stores a sorted list of `(SeparatorKey, ChildId)` entries. The first entry always has a `null` separator and acts as the leftmost catch-all:
 
 ```mermaid
 block-beta
@@ -193,7 +193,7 @@ Reclaim is a multi-grain sequence while the split gate is per-grain, so reclaim 
 
 ### How fast a shard actually heals
 
-Reclaim is bounded three times over, and the bounds compose into a healing rate rather than a repair that completes. Each pass folds at most `CompactionLeafBatchSize` leaves (64 by default), walks a bounded number of leaves to find them, and stops when it has spent `BackgroundDrainMaxDuration` (10 seconds by default) regardless of how far the leaf bounds would have let it go. The pass is driven by the compaction reminder, which fires every `TombstoneGracePeriod` (one hour by default). A shard therefore sheds on the order of 64 leaves an hour, so a range that grew to several thousand leaves and was then emptied takes **days** to give that space back, not minutes.
+Reclaim is bounded three times over, and the bounds compose into a healing rate rather than a repair that completes. Each pass folds at most `CompactionLeafBatchSize` leaves (64 by default), walks a bounded number of leaves to find them, and stops when it has spent `BackgroundDrainMaxDuration` (10 seconds by default) regardless of how far the leaf bounds would have let it go. The pass is driven by the compaction reminder, which fires every `TombstoneGracePeriod` (24 hours by default, floored at one minute). A shard therefore sheds on the order of 64 leaves per reminder period - 64 a day at the default - so a range that grew to several thousand leaves and was then emptied takes **weeks** to give that space back at the default cadence, not minutes.
 
 The wall-clock bound is the one that decides how long user traffic waits, and it is the only one that can. The leaf bounds count probes, and the cost of a probe is not a constant: the same 1024-probe budget is a fraction of a second against warm activations and, on a cold shard rehydrating each leaf from storage, minutes. A pass has been observed in the field holding a shard root for **59.2 seconds** with a scan enqueued behind it, which no probe budget can prevent without also crippling the warm case it was tuned for. A clock measures the quantity that actually matters. It also fails safe in the direction that matters: set `BackgroundDrainMaxDuration` to `TimeSpan.Zero` and the bound is disabled, restoring the leaf-bounded walk rather than truncating a pass to nothing.
 

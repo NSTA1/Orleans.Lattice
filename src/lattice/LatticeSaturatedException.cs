@@ -194,7 +194,7 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     /// Initialises a new instance with the specified diagnostic message,
     /// originating tree id, and the admission seam that refused the operation.
     /// Preferred over <see cref="LatticeSaturatedException(string, string)"/>
-    /// at any throw site, because <see cref="Source"/> is what lets a caller
+    /// at any throw site, because <see cref="SaturationSource"/> is what lets a caller
     /// retry the one refusal that is safe to retry without also retrying the
     /// three that amplify.
     /// </summary>

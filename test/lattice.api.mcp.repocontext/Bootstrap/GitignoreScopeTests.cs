@@ -176,6 +176,55 @@ public sealed class GitignoreScopeTests
     }
 
     [Test]
+    public void A_backslash_escapes_the_next_character_in_the_emacs_template_patterns()
+    {
+        // GitHub's Emacs.gitignore template ships these two lines to ignore auto-save
+        // files ('#notes.txt#') and lock files ('.#notes.txt'). gitignore(5): a
+        // backslash escapes the character that follows it, so neither pattern
+        // contains a backslash to match.
+        var scope = GitignoreScope.Empty.Add(string.Empty, "\\#*\\#\n.\\#*\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.IsIgnored("#notes.txt#", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("src/#draft.cs#", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored(".#notes.txt", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("#notes.txt", isDirectory: false), Is.False);
+            Assert.That(scope.IsIgnored(".\\#notes.txt", isDirectory: false), Is.False);
+        });
+    }
+
+    [Test]
+    public void An_escaped_wildcard_matches_only_the_literal_character()
+    {
+        var scope = GitignoreScope.Empty.Add(string.Empty, "report\\*.txt\nfile\\?\n\\[draft]\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.IsIgnored("report*.txt", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("report-final.txt", isDirectory: false), Is.False);
+            Assert.That(scope.IsIgnored("file?", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("file1", isDirectory: false), Is.False);
+            Assert.That(scope.IsIgnored("[draft]", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("d", isDirectory: false), Is.False);
+        });
+    }
+
+    [Test]
+    public void An_escaped_trailing_space_is_a_literal_space()
+    {
+        // gitignore(5): trailing spaces are ignored unless quoted with a backslash.
+        var scope = GitignoreScope.Empty.Add(string.Empty, "notes\\ \n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.IsIgnored("notes ", isDirectory: false), Is.True);
+            Assert.That(scope.IsIgnored("notes", isDirectory: false), Is.False);
+            Assert.That(scope.IsIgnored("notes\\ ", isDirectory: false), Is.False);
+        });
+    }
+
+    [Test]
     public void An_empty_file_adds_no_layer()
     {
         var scope = GitignoreScope.Empty.Add(string.Empty, "# only a comment\n");

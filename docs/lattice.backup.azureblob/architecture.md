@@ -13,13 +13,15 @@ The sink is constructed once from the resolved `LatticeBackupAzureBlobOptions`: 
 Manifests and artifacts live under two distinct, lexicographically ordered prefixes:
 
 - `manifests/{backupId}` - one **block blob** per manifest, keyed by backup id.
-- `artifacts/{artifactId}` - one **append blob** per content-addressed artifact.
+- `artifacts/{artifactId}` - one **append blob** per artifact.
 
-Azure Blob Storage returns listings in lexicographical name order, and the ids never contain a `/`, so listing a prefix yields ids in id order - exactly the ordering the `ILatticeBackupSink` contract requires of its manifest and artifact enumerations. Reading or listing a chain is therefore a single ordered prefix scan.
+Azure Blob Storage returns listings in lexicographical name order, so listing a prefix yields ids in id order - exactly the ordering the `ILatticeBackupSink` contract requires of its manifest and artifact enumerations. Reading or listing a chain is therefore a single ordered prefix scan.
+
+An id may contain a `/` - a tenant-composed tree id of the form `t/{tenant}/{name}` is embedded verbatim in every artifact id - so the separator itself is permitted. What the sink rejects, before concatenating an id onto its prefix, is any id whose resolved blob address would escape that prefix: an id that starts with `/`, contains a backslash or a control character, or has an empty, `.` or `..` segment. The check runs on the id as written and again after one percent-decode, because the Azure SDK resolves blob addresses through `Uri`, which removes dot segments after decoding.
 
 ## Streaming artifacts
 
-The sink's artifact surface is chunk-streaming on both write and read, matching the seam contract, so a large tree is captured and restored without buffering the payload whole. On write, the ordered chunk stream is appended to the artifact's append blob chunk by chunk. On read, the blob is streamed back as an ordered chunk sequence. Artifact ids are content-addressed (lowercase hex SHA-256), so an identical artifact resolves to the same blob name and a retry does not duplicate content.
+The sink's artifact surface is chunk-streaming on both write and read, matching the seam contract, so a large tree is captured and restored without buffering the payload whole. On write, the ordered chunk stream is appended to the artifact's append blob chunk by chunk. On read, the blob is streamed back as an ordered chunk sequence. The capture engine names each artifact with a per-capture id and records the artifact's SHA-256 digest in the manifest rather than in the blob name, so a retried write of the same artifact id lands on the same blob and the commit protocol below decides whether it is a no-op.
 
 ## The append-blob commit protocol
 

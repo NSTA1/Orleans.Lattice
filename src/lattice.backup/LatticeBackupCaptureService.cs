@@ -965,7 +965,6 @@ internal sealed class LatticeBackupCaptureService(
     private static string IncrementalConsumerId(string treeId) => $"backup:{treeId}";
 
     /// <summary>
-    /// <summary>
     /// Builds the per-origin provenance list from the captured entries'
     /// per-origin causal high-water, in origin-id order. Empty for a
     /// single-origin (local-only) tree.

@@ -27,8 +27,9 @@ snapshot, write-ahead-log, and merge machinery:
   per scope, and a chain-aware retention policy that never prunes the base chain
   of a retained increment.
 
-Every artifact is content-addressed (SHA-256), so a retried capture that produces
-identical bytes is stored once and a restore is idempotent under retry. Backups
+Every backup id is the SHA-256 content address of its captured payload, so a
+retried capture that produces identical bytes re-registers the same backup rather
+than a duplicate, and a restore is idempotent under retry. Backups
 are written to a pluggable `ILatticeBackupSink`, defaulting to an in-cluster
 dogfooded tree, with a durable
 [Azure Blob Storage sink](https://www.nuget.org/packages/Orleans.Lattice.Backup.AzureBlob)

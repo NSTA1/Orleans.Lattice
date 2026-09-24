@@ -193,6 +193,36 @@ public sealed class TelemetryQueryAuthorizerTests
     }
 
     [Test]
+    public void Deny_all_rejects_a_keyword_named_metric_joined_to_an_admitted_one()
+    {
+        // Prometheus reads a bare aggregation keyword in operand position as a metric
+        // selector, so this evaluates the metric named 'min' alongside 'up'.
+        var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
+            DenyAll("up"), "up or min", out var denial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(denial, Is.EqualTo(TelemetryQueryAuthorizer.DeniedMessage("min")));
+        });
+    }
+
+    [Test]
+    public void Deny_all_still_admits_aggregations_and_set_operators_over_admitted_metrics()
+    {
+        var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
+            DenyAll("up", "down"),
+            "sum by (job) (rate(up[5m])) or max(down offset 5m) unless up",
+            out var denial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.True);
+            Assert.That(denial, Is.Null);
+        });
+    }
+
+    [Test]
     public void Deny_all_admits_an_exact_name_matcher_for_an_allow_listed_metric()
     {
         var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
