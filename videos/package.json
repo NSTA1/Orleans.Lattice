@@ -1,0 +1,28 @@
+{
+  "name": "orleans-lattice-videos",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Orleans.Lattice educational video series: a HyperFrames (HTML-to-video) workspace.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "preview": "node tools/hf.js preview",
+    "lint": "node tools/hf.js lint .",
+    "check": "node tools/hf.js check .",
+    "snapshot": "node tools/hf.js snapshot .",
+    "render": "node tools/hf.js render .",
+    "ascii": "node tools/ascii-check.js",
+    "snippets": "node tools/snippets.js",
+    "snippets:check": "node tools/snippets.js --check",
+    "voice:samples": "node tools/voice-samples.js",
+    "narrate": "node tools/narrate.js",
+    "test": "node --test \"tools/test/*.test.js\""
+  },
+  "devDependencies": {
+    "gsap": "3.14.2",
+    "hyperframes": "0.8.46"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$comment": "Voices auditioned by 'npm run voice:samples'. Grades are Kokoro-82M's own published estimates of each voice's training data (hexgrad/Kokoro-82M VOICES.md), not a judgement of how the voice sounds.",
+  "candidates": [
+    { "voice": "bf_emma", "lang": "en-gb", "label": "Emma", "style": "British English, female; upstream grade B-" },
+    { "voice": "bf_isabella", "lang": "en-gb", "label": "Isabella", "style": "British English, female; upstream grade C" },
+    { "voice": "bm_george", "lang": "en-gb", "label": "George", "style": "British English, male; upstream grade C" },
+    { "voice": "bm_fable", "lang": "en-gb", "label": "Fable", "style": "British English, male; upstream grade C" },
+    { "voice": "af_heart", "lang": "en-us", "label": "Heart", "style": "American English, female; upstream grade A" },
+    { "voice": "af_bella", "lang": "en-us", "label": "Bella", "style": "American English, female; upstream grade A-" },
+    { "voice": "am_michael", "lang": "en-us", "label": "Michael", "style": "American English, male; upstream grade C+" },
+    { "voice": "am_fenrir", "lang": "en-us", "label": "Fenrir", "style": "American English, male; upstream grade C+" }
+  ]
+}
