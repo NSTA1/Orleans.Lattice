@@ -157,6 +157,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Auth - An exact-key deny hid a readable prefix grant.** The existence probe judged a prefix grant at the prefix string itself, so a deny on that one key hid a tree whose other keys under the prefix stayed readable. A prefix grant is now judged as enforcement judges the keys beneath it. ([#3467](https://github.com/NSTA1/Orleans.Lattice/issues/3467)) (`Orleans.Lattice.Auth`)
 
+- **Core - A failed view unregister was never retried.** A runtime view delete that hit a storage fault dropped the view from memory only, so a retried delete reported success while storage kept it and the next silo start restored the view. A failed write now restores the entry. ([#3469](https://github.com/NSTA1/Orleans.Lattice/issues/3469)) (`Orleans.Lattice`)
+
+- **Replication - A failed receive-fence write was never retried.** A storage fault during a saga pause or resume changed only memory, so the retry was a no-op: a lost pause let inbound apply resume mid-saga, and a lost resume left the tree paused with no owner. A failed write now restores the owner. ([#3470](https://github.com/NSTA1/Orleans.Lattice/issues/3470)) (`Orleans.Lattice.Replication`)
+
+- **Backup - A schedule could outlive an unpersisted scope.** A storage fault while recording a backup scope changed only memory, so a retried `EnsureScheduleAsync` registered reminders that later found no scope and captured nothing. A failed write now restores the scope, so the retry persists it. ([#3471](https://github.com/NSTA1/Orleans.Lattice/issues/3471)) (`Orleans.Lattice.Backup`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, the Explorer's default credential store is no longer process-global, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer`)

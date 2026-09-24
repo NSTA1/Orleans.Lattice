@@ -569,8 +569,21 @@ internal sealed class BackupSchedulerGrain(
         ArgumentNullException.ThrowIfNull(scope);
         if (!ScopeMatches(state.State.Scope, scope))
         {
+            var previous = state.State.Scope;
             state.State.Scope = scope;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                // Restore the scope storage still holds: the ScopeMatches guard
+                // would otherwise skip the write on a retry, and a schedule
+                // registered over an unpersisted scope captures nothing once a
+                // reminder reaches a fresh activation.
+                state.State.Scope = previous;
+                throw;
+            }
         }
     }
 

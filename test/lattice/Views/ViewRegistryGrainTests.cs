@@ -83,6 +83,49 @@ public sealed class ViewRegistryGrainTests
         Assert.That(state.WriteCount, Is.Zero);
     }
 
+    [Test]
+    public async Task UnregisterAsync_failed_persist_keeps_the_registration()
+    {
+        var registration = Registration("runtime");
+        var state = new FakePersistentState<ViewRegistryState>();
+        state.State.Registrations[registration.ViewName] = registration;
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+        var grain = CreateGrain(state);
+
+        Assert.That(
+            async () => await grain.UnregisterAsync(registration.ViewName),
+            Throws.TypeOf<InvalidOperationException>());
+
+        Assert.That((await grain.ListAsync()).Single(), Is.SameAs(registration));
+    }
+
+    [Test]
+    public async Task UnregisterAsync_retry_after_failed_persist_writes_again()
+    {
+        // The removal is guarded by Remove's return value, so a failed persist
+        // that left the entry removed in memory would turn every retry from the
+        // same activation into a no-op: the caller sees success while storage
+        // still holds the view, which the next silo start re-hydrates.
+        var registration = Registration("runtime");
+        var state = new FakePersistentState<ViewRegistryState>();
+        state.State.Registrations[registration.ViewName] = registration;
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+        var grain = CreateGrain(state);
+
+        Assert.That(
+            async () => await grain.UnregisterAsync(registration.ViewName),
+            Throws.TypeOf<InvalidOperationException>());
+
+        await grain.UnregisterAsync(registration.ViewName);
+        var registrations = await grain.ListAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(registrations, Is.Empty);
+        });
+    }
+
     private static ViewRegistryGrain CreateGrain(FakePersistentState<ViewRegistryState> state) =>
         new(Substitute.For<IGrainContext>(), state);
 

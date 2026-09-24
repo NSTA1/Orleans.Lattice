@@ -55,9 +55,22 @@ internal sealed class ViewRegistryGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
 
-        if (state.State.Registrations.Remove(viewName))
+        if (!state.State.Registrations.Remove(viewName, out var removed))
+        {
+            return;
+        }
+
+        try
         {
             await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore the entry so a retry from this activation re-attempts the
+            // write: the Remove guard above would otherwise short-circuit it while
+            // storage still holds the view, which the next silo start re-hydrates.
+            state.State.Registrations[viewName] = removed;
+            throw;
         }
     }
 
