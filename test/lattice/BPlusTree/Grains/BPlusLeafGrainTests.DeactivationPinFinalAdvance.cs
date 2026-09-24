@@ -7,6 +7,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -488,6 +489,73 @@ public partial class BPlusLeafGrainTests
                 "the pin ran on a live activation and must not be counted as skipped or faulted.");
             Assert.That(leaf.State.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
                 "control: the teardown persist committed the final advance.");
+        });
+    }
+
+    /// <summary>
+    /// Change 3 must keep the <c>deactivation_flush</c> outcome. Before the
+    /// reorder the leading <c>digest_publish</c> barrier drained a pending
+    /// coalesced publish and recorded <c>deactivation_flush</c>; the deferred
+    /// teardown publish now supersedes that barrier, so it must record the same
+    /// outcome exactly once when a coalesced publish was pending at entry, and
+    /// hit the parent once, not twice.
+    /// <para>
+    /// The zero-window case is the control that keeps the assertion honest:
+    /// coalescing is off, nothing was pending, and the same publish is the
+    /// ordinary <c>inline</c> one. A fixture that recorded
+    /// <c>deactivation_flush</c> on every deferred publish, or on none, fails
+    /// one of the two cases.
+    /// </para>
+    /// </summary>
+    [TestCase(LatticeOptions.DefaultDigestCoalescingWindowMs, 1, 0)]
+    [TestCase(0, 0, 1)]
+    public async Task OnDeactivateAsync_deferred_digest_records_deactivation_flush_only_when_a_coalesced_publish_was_pending(
+        int windowMs, int expectedDeactivationFlush, int expectedInline)
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(3);
+        var leaf = CreateFinalAdvanceLeaf(wal.Coordinator, digestCoalescingWindowMs: windowMs);
+        await ActivateAsync(leaf.Grain);
+        leaf.Calls.Clear();
+
+        var paths = new List<string>();
+        using (MeterListening.StartForInstrument(
+            LatticeMetrics.LeafDigestPublishes,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                string? tree = null;
+                string? path = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeMetrics.TagTree) tree = tag.Value as string;
+                    else if (tag.Key == LatticeMetrics.TagPath) path = tag.Value as string;
+                }
+
+                if (tree != FinalAdvanceTreeId || path is null) return;
+                lock (paths)
+                {
+                    for (var i = 0; i < value; i++) paths.Add(path);
+                }
+            })))
+        {
+            await DeactivateFinalAdvanceLeafAsync(leaf, CancellationToken.None);
+        }
+
+        List<string> recorded;
+        lock (paths) recorded = [.. paths];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaf.State.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
+                "control: the teardown persist ran, so the deferred digest publish had work to do.");
+            Assert.That(recorded.Count(p => p == (string)LatticeMetrics.PathDeactivationFlushTag.Value!),
+                Is.EqualTo(expectedDeactivationFlush),
+                "deactivation_flush must be recorded exactly when a coalesced publish was pending at entry.");
+            Assert.That(recorded.Count(p => p == (string)LatticeMetrics.PathInlineTag.Value!),
+                Is.EqualTo(expectedInline),
+                "the deferred publish is recorded under one outcome, never both.");
+            Assert.That(leaf.Calls.Count(c => c == "digest"), Is.EqualTo(1),
+                "the parent must receive the teardown digest exactly once.");
         });
     }
 

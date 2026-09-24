@@ -143,6 +143,13 @@ internal sealed partial class BPlusLeafGrain(
 
         try
         {
+            // Whether a coalesced digest publish is pending, read HERE because
+            // this is where the digest_publish barrier used to evaluate it
+            // before the reorder below (issue #3393): the teardown persist marks
+            // the digest dirty itself, so a later read cannot tell a pending
+            // coalesced publish from the persist's own delta.
+            var coalescedDigestPendingAtEntry = HasPendingCoalescedDigestPublish;
+
             // Durability work runs FIRST (issue #3393). The upward digest
             // publish used to lead this hook, and it is the slow step: in the
             // recorded drain it consumed the deactivation deadline, so by the
@@ -200,8 +207,10 @@ internal sealed partial class BPlusLeafGrain(
                 // inside the tail, so LeafCheckpointFlushTailFailures keeps its
                 // meaning. It supersedes the coalesced drain below: both publish
                 // the same dirty digest, and a slow parent must not be hit twice
-                // inside one deadline.
-                await PublishDeferredDeactivationDigestAsync(cancellationToken);
+                // inside one deadline. When a coalesced publish was pending at
+                // entry this publish IS its drain, and is recorded as the
+                // deactivation_flush it was before the reorder.
+                await PublishDeferredDeactivationDigestAsync(coalescedDigestPendingAtEntry, cancellationToken);
             }
             else if (_digestCoalescingWindowMs > 0)
             {

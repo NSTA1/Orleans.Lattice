@@ -664,18 +664,34 @@ internal sealed partial class BPlusLeafGrain
     /// failed publish leaves the digest dirty; it is staleness-tolerant and the
     /// next mutation after reactivation republishes it.
     /// </remarks>
+    /// <param name="drainsPendingCoalescedPublish">
+    /// Whether a coalesced digest publish was pending when the hook started.
+    /// Before the reorder the leading <c>digest_publish</c> barrier drained it
+    /// and recorded <c>deactivation_flush</c>, after which the tail's inline
+    /// publish had nothing left to send; this one publish now carries both, so
+    /// it is recorded as that drain to keep the outcome's meaning.
+    /// </param>
     /// <param name="cancellationToken">
     /// The deactivation deadline. The publish is not started once it has
     /// expired: the activation is torn down by then and the hop could only
     /// fault, so it is counted as a failed inline-digest step instead.
     /// </param>
-    private async Task PublishDeferredDeactivationDigestAsync(CancellationToken cancellationToken)
+    private async Task PublishDeferredDeactivationDigestAsync(
+        bool drainsPendingCoalescedPublish,
+        CancellationToken cancellationToken)
     {
         _deactivationInlineDigestDeferred = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await PublishDigestUpwardInlineAsync();
+            if (drainsPendingCoalescedPublish && TryBeginPendingDigestDrain(cancellationToken, out var parentId))
+            {
+                await PublishDrainedDigestAsync(parentId, cancellationToken);
+            }
+            else
+            {
+                await PublishDigestUpwardInlineAsync();
+            }
         }
         catch (Exception ex)
         {
