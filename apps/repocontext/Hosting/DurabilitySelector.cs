@@ -2,6 +2,7 @@ using System.Data.Common;
 using Azure.Data.Tables;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Orleans.Configuration;
 using Orleans.Hosting;
@@ -171,7 +172,6 @@ public static class DurabilitySelector
                     services.AddAdoNetGrainStorage(name, options =>
                     {
                         options.Invariant = SqliteSchemaInitializer.InvariantName;
-                        options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(config.SqlitePath);
 
                         // Delete the grain row on clear rather than nulling its
                         // payload and keeping it. Without this, nothing in this
@@ -190,6 +190,10 @@ public static class DurabilitySelector
                         // migration step.
                         options.DeleteStateOnClear = true;
                     });
+                    services.Services.AddOptions<AdoNetGrainStorageOptions>(name)
+                        .Configure<IOptions<SiloMessagingOptions>>((options, messaging) =>
+                            options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(
+                                config.SqlitePath, messaging.Value.ResponseTimeout));
                     break;
             }
         });
@@ -232,8 +236,11 @@ public static class DurabilitySelector
                 silo.UseAdoNetReminderService(options =>
                 {
                     options.Invariant = SqliteSchemaInitializer.InvariantName;
-                    options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(config.SqlitePath);
                 });
+                silo.Services.AddOptions<AdoNetReminderTableOptions>()
+                    .Configure<IOptions<SiloMessagingOptions>>((options, messaging) =>
+                        options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(
+                            config.SqlitePath, messaging.Value.ResponseTimeout));
                 break;
         }
     }

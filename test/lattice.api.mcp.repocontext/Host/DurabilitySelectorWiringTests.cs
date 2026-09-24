@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,11 @@ public sealed class DurabilitySelectorWiringTests
     }
 
     private static ServiceProvider Wire(params (string Key, string Value)[] pairs)
+        => Wire(null, pairs);
+
+    private static ServiceProvider Wire(
+        Action<IServiceCollection>? configure,
+        params (string Key, string Value)[] pairs)
     {
         var dict = pairs.ToDictionary(p => p.Key, p => (string?)p.Value);
         IConfiguration configuration = new ConfigurationBuilder()
@@ -49,7 +55,29 @@ public sealed class DurabilitySelectorWiringTests
         var services = new ServiceCollection();
         services.AddLogging();
         new CollectingSiloBuilder(services, configuration).ConfigureDurability(config);
+        configure?.Invoke(services);
         return services.BuildServiceProvider();
+    }
+
+    [TestCase(2, 1)]
+    [TestCase(10, 5)]
+    [TestCase(31, 15)]
+    public void ConfigureDurability_sqlite_timeouts_follow_the_resolved_request_budget(
+        int requestSeconds, int busySeconds)
+    {
+        using var provider = Wire(
+            services => services.Configure<SiloMessagingOptions>(
+                options => options.ResponseTimeout = TimeSpan.FromSeconds(requestSeconds)));
+
+        var grainStorage = ResolveAdoNetGrainStorage(provider);
+        var reminders = provider.GetRequiredService<IOptions<AdoNetReminderTableOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(new SqliteConnectionStringBuilder(grainStorage.ConnectionString).DefaultTimeout,
+                Is.EqualTo(busySeconds), "Grain storage must use the configured request timeout.");
+            Assert.That(new SqliteConnectionStringBuilder(reminders.ConnectionString).DefaultTimeout,
+                Is.EqualTo(busySeconds), "Reminders must use the same bounded retry window.");
+        });
     }
 
     [Test]
