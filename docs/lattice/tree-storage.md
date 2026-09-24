@@ -71,7 +71,7 @@ The single-mutation worst case is the real sizing constraint for value bytes: pi
 
 ## Sizing surface 3 - Leaf snapshot blob
 
-`LeafSnapshotBlob` is written exactly once per snapshot capture and stored under a separate `leaf-snapshot` Orleans storage name (the same lattice storage provider, but a distinct grain row). It carries:
+`LeafSnapshotBlob` is written exactly once per snapshot capture and stored under a separate `leaf-snapshot` Orleans storage name (the same lattice storage provider, but a distinct grain row), persisted through the Orleans binary serializer. Current captures carry their rows as one compact binary frame (`EncodedRows`, while `LeafSnapshotBinaryEncodingEnabled` is on) rather than the legacy `Rows` list, and a frame larger than `LeafSnapshotSegmentBytes` (default 4 MiB, clamped to at least 64 KiB) is split into row-aligned segments persisted in separate `leaf-snapshot-segment` grain rows - the blob row then becomes a manifest carrying `SegmentCount`, `SegmentFrameBytes`, and `SegmentGeneration` but none of the rows. The table below describes the legacy row-list shape, which is still read. It carries:
 
 | Field | Approximate size |
 |---|---|
@@ -108,7 +108,7 @@ Two operational levers control the snapshot blob's worst-case size:
 - **`MaxLeafKeys`** caps the maximum number of live keys per leaf via the structural split policy. A leaf cannot exceed `MaxLeafKeys` live entries at rest, so the snapshot blob is bounded by `MaxLeafKeys * average row size`.
 - **The storage provider for the `leaf-snapshot` Orleans storage name** can be configured independently of the rest of the tree. Azure Blob Storage is the recommended provider for the snapshot grain when the tree's working set has large values, even when the leaf state row itself sits on Azure Table Storage.
 
-If snapshot captures are not viable for a given workload, the snapshot path can be skipped by configuring `ProjectionRebuildPolicy` to `FullRebuild` - the leaf then rebuilds its projection from the WAL on every fall-off-log event instead of capturing a snapshot first. See [Projection rebuild](projection-rebuild.md) for the rebuild contract.
+If proactive snapshot captures are not viable for a given workload, set `LeafSnapshotMargin` to `0.0`, which disables the proactive-capture advisory (the hard fall-off triggers continue to apply). `ProjectionRebuildPolicy` does not switch capture off: it only decides what a leaf does when the WAL has genuinely been trimmed past its checkpoint and no snapshot covers the gap (`SnapshotThenWal`, `FullRebuildFromWal`, or `Fail`). See [Projection rebuild](projection-rebuild.md) for the rebuild contract.
 
 ## Storage provider per-row limits
 
@@ -179,7 +179,7 @@ With a larger `MaxLeafKeys`:
 - **DynamoDB:** the most constrained provider. With the default `MaxLeafKeys = 128` and 2 KB values, the blob lands at ~268 KB; reduce `MaxLeafKeys` to 64 or 32 for larger values, or host the snapshot grain on a different provider (see below).
 - **ADO.NET / Redis:** practical 5-10 MB ceiling is far above default workloads.
 
-If the snapshot blob would exceed the provider's per-row limit, the simplest remedy is to host the snapshot grain on a higher-capacity provider while leaving the rest of the tree on the original provider. The snapshot grain uses the same lattice storage provider name (`LatticeOptions.StorageProviderName`) under a distinct `leaf-snapshot` Orleans storage name, so a host can register two storage providers under the same lattice storage name configuration if the underlying Orleans setup allows it - or, more simply, disable snapshot capture via `ProjectionRebuildPolicy = FullRebuild`.
+If the snapshot blob would exceed the provider's per-row limit, the simplest remedy is to host the snapshot grain on a higher-capacity provider while leaving the rest of the tree on the original provider. The snapshot grain uses the same lattice storage provider name (`LatticeOptions.StorageProviderName`) under a distinct `leaf-snapshot` Orleans storage name, so a host can register two storage providers under the same lattice storage name configuration if the underlying Orleans setup allows it - or, more simply, disable the proactive capture advisory with `LeafSnapshotMargin = 0.0`.
 
 ## Picking `MaxLeafKeys`
 

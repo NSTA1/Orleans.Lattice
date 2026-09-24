@@ -841,8 +841,8 @@ suite tables at the top of this document.
 | Process-shared `IGrainStorage` isolates membership churn from storage disappearance | - | - | - | ✅ | - | - | - | - | - | - |
 | Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
 | Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | ⏭ | ✅ | - | - |
-| Per-peer `IPeerStats` liveness probe flips Unhealthy on isolation and Healthy on heal | - | - | - | - | - | ✅ | - | - | - | - |
-| Receiver-side fault-injection records inbound-error counter without inflating success counter | - | - | - | - | - | ✅ | - | - | - | - |
+| Outbound liveness probe: `peer.last_contact_seconds` climbs while a peer edge is isolated and resets within one probe interval of the heal | - | - | - | - | - | ✅ | - | - | - | - |
+| Budget-driven receiver-side apply faults drain in full, the receiver still converges, and the inbound peer-stats row records contact with no outbound-only backlog or in-flight counts | - | - | - | - | - | ✅ | - | - | - | - |
 | OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ✅ | - | - | - |
 | Per-tree typed-CRDT shape resolution end-to-end on producer + receiver dispatch | - | - | - | - | - | - | ✅ | - | - | - |
 | `ReplicationShipperGrain.ShouldShip` keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |

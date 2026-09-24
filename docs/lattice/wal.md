@@ -350,7 +350,7 @@ Two batch limits are enforced at append time:
 | Option | Default | Trigger |
 |---|---|---|
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
-| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain measures every captured `WalRecord` through the registered `IWalRecordSizer` (default: `OrleansBinaryWalRecordSizer`, which serialises through the canonical Orleans-binary codec via a counting `IBufferWriter<byte>` so no payload buffer is materialised). The budget is an exact ceiling, suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain encodes every captured `WalRecord` once through the registered `IWalRecordEncoder` (default: `OrleansBinaryWalRecordEncoder`, the canonical Orleans-binary codec) into a pooled buffer; the encoded length feeds the byte budget, and the same bytes are handed to the provider's `AppendEncodedBatchAsync` on flush without a second encode. The budget is an exact ceiling, suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). |
 | `WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The pre-6.1.0 default was `1`, which reproduced the original single-in-flight protocol bit-for-bit; the v6.1.0-v6.2.x default of `8` raised pipeline depth so writer-side bursts coalesced against higher-latency durable providers (e.g. Azure Tables). The post-v6.2 default of `16` was measured on Standard_D4as_v5 + Azure Tables Standard at 4,000 keys/s offered load to give a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression; see [WAL tuning](wal-tuning.md) for the storage-account-throughput envelope above which the dual-knob fan-out collapses to `429` throttling. The cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. Set explicitly to `1` to opt back into the legacy strict-serial-per-shard shape. |
 | `WalFlushTimeout` | `15 s` | Upper bound on how long a single flush may take before the grain abandons the wait, faults the flush, resynchronises the dense-offset tail from the provider, and drains the chain so callers retry. Set to `Timeout.InfiniteTimeSpan` to restore the historical unbounded await. See [Flush deadline](#flush-deadline). |
 
@@ -408,7 +408,7 @@ through this path are:
 
 | Entry point | Caller |
 |---|---|
-| `BPlusLeafGrain.SetManyAsync` | Foreground `Lattice.SetManyAsync` / `TypedLattice.SetManyAsync`. |
+| `BPlusLeafGrain.SetManyAsync` | Foreground `ILattice.SetManyAsync` / `TypedLatticeExtensions.SetManyAsync`. |
 | `BPlusLeafGrain.MergeEntriesAsync` | Sibling redistribute, snapshot restore, replication-apply, and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
 | `BPlusLeafGrain.MergeManyAsync` | Cross-shard migration on shard split and online-reshard. |
 

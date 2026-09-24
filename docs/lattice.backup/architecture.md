@@ -20,7 +20,7 @@ The backup engine is a set of silo-singleton services and per-scope coordination
 1. **Authorize.** The scope is authorized fail-closed at its root against the `Backup` capability before any data is touched. A whole-tree scope is a whole-tree check; a prefix or key scope is a point check at the prefix or key.
 2. **Snapshot open.** A point-in-time cursor is opened over the scope. This is the phase that sheds under saturation or is rejected by the replay-budget guard.
 3. **Export.** In-scope entries are streamed out of the pinned snapshot, page by page, with their full last-writer-wins / CRDT metadata. The stream is content-addressed as it flows, so a large tree is never materialized whole.
-4. **Sink write.** The streamed bytes are written to the configured sink as one or more content-addressed artifacts, and the self-describing manifest is written alongside them.
+4. **Sink write.** The streamed bytes are written to the configured sink as an artifact under a per-capture artifact id, and the self-describing manifest - whose id is the payload's SHA-256 content address - is written alongside it.
 5. **Manifest commit.** The manifest is registered in the catalog, keyed by the backup id. Committing the manifest is the point at which the backup becomes enumerable and restorable.
 
 The manifest that results records the consistency cut (WAL sequence, HLC timestamp, per-origin frontier, and per-partition WAL offsets), the shard topology, a per-key shape and merge-mode map, per-origin provenance high-water marks, and an optional compression-dictionary reference. The id is the content address of the backup, so an identical retry derives the same id and stores once.
@@ -62,7 +62,7 @@ Per-scope schedule registration and last-run status are tracked so the control f
 
 ## The sink seam
 
-`ILatticeBackupSink` is the storage boundary. It stores two kinds of content - streamed, content-addressed artifacts and self-describing manifests - and its artifact surface is chunk-streaming on both write and read so a large payload never buffers whole. `AddLatticeBackup` installs the default in-cluster sink, which dogfoods the reserved `sys-backup-store` tree, storing manifests and streamed artifact chunks as ordinary rows. A durable external sink (for example [Azure Blob Storage](../lattice.backup.azureblob/architecture.md)) implements the same interface and replaces the registration; because the engine talks only to the seam, it stays unaware of the sink's backend.
+`ILatticeBackupSink` is the storage boundary. It stores two kinds of content - streamed artifacts and self-describing, content-addressed manifests - and its artifact surface is chunk-streaming on both write and read so a large payload never buffers whole. `AddLatticeBackup` installs the default in-cluster sink, which dogfoods the reserved `sys-backup-store` tree, storing manifests and streamed artifact chunks as ordinary rows. A durable external sink (for example [Azure Blob Storage](../lattice.backup.azureblob/architecture.md)) implements the same interface and replaces the registration; because the engine talks only to the seam, it stays unaware of the sink's backend.
 
 Content addressing (`BackupContentHash`, lowercase hex SHA-256) is what makes the whole pipeline idempotent: identical artifact bytes derive an identical id, so a retried write is a no-op rather than a duplicate, and re-registering a manifest is harmless.
 

@@ -16,9 +16,9 @@ share one code path and cannot drift:
 
 - **`AddLatticeExplorerWeb(...)`** on the service collection registers the Razor
   interactive-server components, the shared explorer UI, the state-API connection
-  seam, the configuration backing store, and the Backups and Access areas (and
-  the Schema area, hidden by default) with their capability probes and auth
-  plumbing.
+  seam, the configuration backing store, and the Backups, Access, Tenants, My
+  Tenant, and Telemetry areas (and the Schema area, hidden by default) with their
+  capability probes and auth plumbing.
 - **`MapLatticeExplorer(...)`** on the endpoint route builder maps the Razor
   components, the UI static assets, and the sign-in/sign-out endpoints, under the
   configured base path.

@@ -30,3 +30,9 @@ Bind it through `AddEntraCredentialAuthenticator(configure)`.
 | `ClockSkew` | `TimeSpan` | `5 minutes` | The permitted clock skew during lifetime validation. |
 | `AutomaticRefreshInterval` | `TimeSpan` | `12 hours` | How often the discovered JWKS metadata is proactively refreshed. |
 | `RefreshInterval` | `TimeSpan` | `5 minutes` | The minimum interval between forced JWKS refreshes. |
+
+### Methods
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `ResolveMetadataAddress()` | `string` | The OIDC discovery document address: `MetadataAddress` when set, otherwise `Authority` with `/.well-known/openid-configuration` appended; an empty string when neither is set. |

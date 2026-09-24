@@ -88,7 +88,7 @@ All are immutable, serializable value types.
 ISiloBuilder AddLatticeScalingSignal(this ISiloBuilder builder, Action<LatticeScalingSignalOptions>? configure = null)
 ```
 
-Registers the facade and its hosted collector on the silo. Optional `configure`
+Declared on `LatticeScalingServiceCollectionExtensions`. Registers the facade and its hosted collector on the silo. Optional `configure`
 callback binds `LatticeScalingSignalOptions`.
 
 ### `MapLatticeScalingSignal`
@@ -97,7 +97,7 @@ callback binds `LatticeScalingSignalOptions`.
 IEndpointConventionBuilder MapLatticeScalingSignal(this IEndpointRouteBuilder endpoints, string? path = null)
 ```
 
-Maps the scrape endpoint on the co-hosted web host. Serves the `ScalingSignal` as
+Declared on `LatticeScalingEndpointRouteBuilderExtensions`. Maps the scrape endpoint on the co-hosted web host. Serves the `ScalingSignal` as
 JSON with a stable, camelCase top-level `scaleValue` property (plus
 `rawScaleValue`, the compute and storage breakdown, and the reason). `path`
 overrides `LatticeScalingSignalOptions.EndpointPath` for this mapping. The
@@ -113,6 +113,10 @@ IHealthChecksBuilder AddLatticeScalingHealthCheck(this IHealthChecksBuilder buil
 Registers the health check that projects the signal onto a single `HealthStatus`.
 `name` defaults to `LatticeScalingHealthCheckOptions.DefaultName`. See
 [configuration](configuration.md#latticescalinghealthcheckoptions).
+
+## Serialization aliases
+
+`ScalingTypeAliases` holds the stable Orleans serialization aliases for the snapshot DTOs above: `ScalingSignal` (`ol.scs`), `ComputePressure` (`ol.scp`), `StoragePressure` (`ol.stp`), `WalAccountPressure` (`ol.wap`), `WalRebalanceRecommendation` (`ol.wrr`), and `WalPressureClassification` (`ol.wpc`). They are part of the wire format and never change.
 
 ## Metrics
 

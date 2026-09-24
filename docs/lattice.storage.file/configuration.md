@@ -15,7 +15,7 @@ Every knob on `FileWalStorageOptions`, its default, and the validation rules the
 
 ## Validation
 
-Construction fails fast when `RootDirectory` is null, empty, or whitespace. The paired options validator additionally rejects an invalid configuration at first resolve, so a misconfigured host surfaces the error at startup rather than on the first write. The validator rejects a `CompactionThreshold` that is `NaN` or less than or equal to zero (use `1.0` or greater to disable trim-triggered compaction), rejects a negative `CompactionMinimumDeadBytes`, rejects a negative `CompactionMaximumDeadBytes` (`0` is the valid disabled default), and rejects a `MaxReadBatchBytes` below `1`. `MaxReadBatchBytes` is additionally checked at provider construction, because a host that builds the provider directly from `Options.Create` never runs the registration-time validator.
+Construction fails fast when `RootDirectory` is null, empty, or whitespace. The paired options validator additionally rejects an invalid configuration at first resolve, so a misconfigured host surfaces the error at startup rather than on the first write. The validator rejects a `CompactionThreshold` that is `NaN` or less than or equal to zero (use `1.0` or greater to disable trim-triggered compaction), rejects a negative `CompactionMinimumDeadBytes`, rejects a negative `CompactionMaximumDeadBytes` (`0` is the valid disabled default), rejects a non-zero `CompactionMaximumDeadBytes` below a non-zero `CompactionMinimumDeadBytes`, and rejects a `MaxReadBatchBytes` below `1`. `MaxReadBatchBytes` is additionally checked at provider construction, because a host that builds the provider directly from `Options.Create` never runs the registration-time validator.
 
 ## Full example
 

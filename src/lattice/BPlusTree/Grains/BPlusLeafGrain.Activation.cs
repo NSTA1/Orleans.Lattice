@@ -1562,7 +1562,7 @@ internal sealed partial class BPlusLeafGrain
     /// between, exactly as <c>_snapshotCaptureInFlight</c> is: an Orleans
     /// activation yields only at an await, so the check-and-set cannot be torn
     /// by an interleaved turn even though the drive is
-    /// <see cref="AlwaysInterleaveAttribute"/>.
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>.
     /// </remarks>
     private bool _starvationDriveInFlight;
 

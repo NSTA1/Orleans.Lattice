@@ -685,7 +685,7 @@ internal sealed class LatticeOptionsResolver(
     /// readers took a turn each. That axis is now answered at the registry
     /// rather than here, because
     /// <see cref="ILatticeRegistry.GetEntryAsync"/> is
-    /// <see cref="AlwaysInterleaveAttribute"/> and so is admitted mid-body
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> and so is admitted mid-body
     /// instead of queueing head-of-line behind another read or an enumeration.
     /// A cache at this seam would therefore buy back a cost that has already
     /// been removed at its source, and pay for it with the unbounded staleness

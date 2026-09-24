@@ -104,7 +104,7 @@ static void Configure(IServiceCollection services)
 
 ## Future implementations
 
-The single-method seam is the contract upcoming binary-framing and gRPC-streaming-push items plug into. The binary-framing item hardens the byte layout *inside* `Payload`; the gRPC streaming push item drives `SendAsync` from a long-lived server-streaming RPC and surfaces flow control / reconnect / advance-strictly-on-ack at the transport boundary. Neither changes the call shape established here.
+The single-method seam is the contract the binary framing and the canonical gRPC transport plug into. The binary framing hardens the byte layout *inside* `Payload`; the gRPC transport drives `SendAsync` as one unary RPC per batch over a cached HTTP/2 channel per peer cluster. Neither changes the call shape established here, and a custom transport plugs into the same seam.
 
 The wire format inside `Payload` is the concern of [`IReplicationBatchEncoder`](wire-format.md). The default registration is the Orleans-serializer-backed binary encoder; hosts swap to a different framing (JSON for HTTP debuggability, content-hash-prefixed for deduplication) by replacing the encoder registration via DI. Transports remain agnostic about which encoder produced the bytes.
 

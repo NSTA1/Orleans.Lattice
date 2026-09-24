@@ -32,6 +32,14 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 });
 ```
 
+Map the companion endpoints too, so the core Explorer's "sign in again"
+interstitial and its federated "Sign out" button have live targets:
+
+```csharp
+app.MapLatticeExplorerEntraWebReauth();
+app.MapLatticeExplorerEntraWebSignOut();
+```
+
 On a multi-replica host select the distributed token cache and register a shared
 `IDistributedCache` (for example `Orleans.Lattice.Caching.AzureBlob`):
 

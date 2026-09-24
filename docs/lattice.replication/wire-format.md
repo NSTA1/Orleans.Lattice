@@ -95,7 +95,7 @@ The encode signature is deliberately `void Encode(envelope, IBufferWriter<byte> 
 Forcing the writer-supplied shape pushes buffer ownership to the caller, who can choose:
 
 - A pooled writer (typically `ArrayBufferWriter<byte>` reused across batches, or a custom `IBufferWriter<byte>` backed by `ArrayPool<byte>.Shared`).
-- The transport's own writer - for the gRPC streaming push transport, the gRPC stream's `IBufferWriter<byte>` is handed in directly so the envelope's bytes never round-trip through a per-batch heap allocation.
+- The transport's own writer - for the gRPC push transport, gRPC's serialization-context `IBufferWriter<byte>` is handed in directly so the envelope's bytes never round-trip through a per-batch heap allocation.
 - A fresh `ArrayBufferWriter<byte>` per call for tests and debug-tooling that genuinely want a materialised `byte[]` (read it back via `WrittenMemory` / `WrittenSpan`).
 
 The writer's lifetime is the caller's responsibility - the encoder makes no claim on the bytes after `Encode` returns. This matches the ownership model `ReplicationBatch.Payload` already imposes on the bytes it carries.

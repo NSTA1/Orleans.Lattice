@@ -141,6 +141,14 @@ intent and resumes from the last phase on reactivation.
 Poll a running or last-known remediation with
 `ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`.
 
+To measure compliance without rewriting anything, call
+`ILatticeSchemaComplianceAdmin.ScanComplianceAsync(treeId, cancellationToken)`. It is a
+pure read on ordinary read authority: it scans every current value against the tree's
+current compiled policy and returns a `LatticeSchemaComplianceReport` carrying
+`HasPolicy`, `CompliantCount`, `NonCompliantCount`, `ScannedCount`, and a
+`RuleBreakdown` of `LatticeSchemaComplianceRuleCount` (`Reason`, `Count`) rows. An
+ungoverned tree returns an ungoverned report.
+
 ## Composition with versioning
 
 When a tree uses both enforcement and [versioning](schema-versioning.md), a value

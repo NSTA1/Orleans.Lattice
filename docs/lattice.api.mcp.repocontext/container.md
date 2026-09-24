@@ -125,7 +125,7 @@ Four variables govern the **adaptive indexing pacer** (issue #3447), the silo-wi
 | `LATTICE_REPOCONTEXT_PACING_REST_SECONDS` | `5` | How long the drain rests after each work slice. `0` switches the duty cycle off. |
 | `LATTICE_REPOCONTEXT_PACING_MAX_DELAY_SECONDS` | `5` | The ceiling on the congestion-driven inter-batch delay. |
 
-Two further variables are the kill switches for the approximate index's own housekeeping. Both default on, and both are documented in full under [Scheduling the approximate index build](semantic-search.md#scheduling-the-approximate-index-build):
+The next variables are the kill switches for the approximate index's own housekeeping, which default on, and the cadence of its build sweep. They are documented in full under [Scheduling the approximate index build](semantic-search.md#scheduling-the-approximate-index-build):
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -134,6 +134,16 @@ Two further variables are the kill switches for the approximate index's own hous
 | `LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS` | `900` | How often the build sweep re-arms every registered repository's coordinator. Floored at 60 seconds: a shorter value is raised to the floor, and the startup line says so rather than leaving the setting to look ignored. |
 
 > **The sweep cadence is deliberately not part of the matched set above.** It used to be: the sweep took its interval from `LATTICE_RECONCILE_INTERVAL_SECONDS`, so raising that variable to quiesce walk load - a reasonable action, with nothing in its name to suggest otherwise - throttled index arming by the same factor. That is worse than a slow sweep. Two things arm a coordinator, this sweep and the self-index grain finishing a vectorising pass; a converged repository whose index was never built has no vectorising pass to finish, so the sweep is its **only** arming path, and the vectorising pass was paced by the reconcile interval too. Raising it did not slow one path of two, it slowed the only two there are. The index then serves nothing while the retrieval counter records `state="bootstrapping"`, which at the metric is indistinguishable from a genuine index defect. `LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS` defaults to 900 seconds, which is the reconcile interval's own default, so a host that configures neither variable sweeps at exactly the cadence it always did.
+
+Five more variables bound how long the approximate index may hold its build coordinator's turn while it opens and ingests. An absent or malformed value falls back to the default:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one attempt to open (restore) the durable index. A stopped attempt banks what it walked and the next continues past it, so this slices one long open into short ones. `0` removes the bound. |
+| `LATTICE_REPOCONTEXT_ANN_OPEN_SLICE_MAX_EXTENSIONS` | `6` | How many further open-slice budget periods an open slice that has banked nothing may take before the budget fires anyway. `0` reproduces the elapsed-only bound. |
+| `LATTICE_REPOCONTEXT_ANN_INGEST_SLICE_BUDGET_SECONDS` | `5` | Wall-clock ceiling on one ingest slice of the build, so the coordinator's keep-alive reminder and arming calls are answered while a build runs. |
+| `LATTICE_REPOCONTEXT_ANN_OPEN_MAX_CONSECUTIVE_REFUSALS` | `12` | Consecutive admission refusals after which the open declares itself terminally saturated. Declaring does not stop retrying. `0` removes the count bound. |
+| `LATTICE_REPOCONTEXT_ANN_OPEN_REFUSAL_TERMINAL_SECONDS` | `600` | How long an unbroken run of admission refusals may last before the same terminal state is declared, whichever bound is reached first. `0` removes the elapsed bound. |
 
 Two further variables bound resources whose defaults are derived from a runtime fact rather than from the deployment's real limit, so a constrained container can state the limit it actually has:
 

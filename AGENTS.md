@@ -161,7 +161,9 @@ several `Orleans.Lattice.Explorer.*` assemblies.
 ## Hygiene gates (these fail the build at PR time)
 
 These run as ordinary tests in the non-chaos suite, so a violation breaks the
-required `build-and-test` check:
+required `build-and-test` check. The ones prose and documentation edits most
+often trip are below; the complete gate list lives in
+`.github/instructions/testing.instructions.md`:
 
 - No em-dash (U+2014) in any tracked text file - use a plain ASCII hyphen `-`.
 - No byte-level mojibake - author plain ASCII.

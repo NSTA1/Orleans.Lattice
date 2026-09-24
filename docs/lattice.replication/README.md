@@ -21,7 +21,7 @@ It supports:
 - Causal+ delivery - vector-clock-stamped entries with receiver-side dependency satisfaction across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards.
 - Active-active topology: any peer can write to any tree; conflicting updates converge deterministically.
 - Atomic batch delivery - replicated `SetManyAtomicAsync` arrives on every peer as a single visible unit.
-- Long-lived gRPC streaming push transport, with HTTP/2 multiplexing per peer cluster.
+- gRPC push transport - one unary call per batch over a cached HTTP/2 channel per peer cluster.
 - Pluggable `IReplicationTransport` seam - gRPC is the canonical implementation; in-process and custom transports plug into the same contract.
 - Snapshot bootstrap for new and re-seeded peers; auto-bootstrap on fall-off-the-log.
 - Per-tree dead-letter queue for poison entries; replication continues past them.

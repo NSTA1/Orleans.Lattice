@@ -128,7 +128,7 @@ These grains form the structural B+ tree and handle every read/write request:
 
 | Grain | Key Format | Storage |
 |---|---|---|
-| `LatticeRegistryGrain` | `_lattice_trees` (the `LatticeConstants.RegistryTreeId` constant) | **Self-hosting** - stores its data in a Lattice tree keyed `_lattice_trees`, so registry reads/writes flow through the same `LatticeGrain → ShardRootGrain → LeafGrain` path as user data. |
+| `LatticeRegistryGrain` | `_lattice_trees` (the `LatticeConstants.RegistryTreeId` constant) | **Self-hosting** - stores its data in a Lattice tree keyed `_lattice_trees`, so registry reads/writes flow through the same shard router -> shard root -> leaf node path as user data. |
 
 The registry holds a `TreeRegistryEntry` per user tree, containing:
 
@@ -161,10 +161,10 @@ These grains carry the per-shard write-ahead log, leaf-projection replay, cursor
 | Purpose | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
 | Per-shard WAL | `WalShardGrain` | `{treeId}/{partition}` (partition = stable hash of key mod `WalPartitions`) | None as grain state - appends `WalRecord` entries directly to the configured `IWalStorageProvider` (the append is the commit point) and recovers its next offset from the provider on activation |
-| Leaf replay coordinator | `LeafReplayCoordinatorGrain` | `{leafGrainId}` | Per-leaf replay cursor: how far into the WAL the leaf has consumed during activation replay |
+| Leaf replay coordinator | `LeafReplayCoordinatorGrain` | `{treeId}/{shardIndex}` | None - forwards activation-replay WAL slice reads to the registered commit-log reader, caching the last-served slice in memory for a few seconds so leaves of the same shard activating back-to-back share one read |
 | Cursor pagination | `LatticeCursorGrain` | `{treeId}/{cursorId}` | Cursor position (key bound + reverse flag + scan kind); released on `CloseCursorAsync` |
 | Tree stats | `LatticeStatsGrain` | `{treeId}` | None (aggregates over the live shard / leaf grains for `DiagnoseAsync`) |
-| TTL coordinator | `TtlGrain` | `{ownerType}/{ownerId}` | Retention reminder targets for `AtomicWriteGrain` (terminal grace) |
+| TTL self-cleanup base | `TtlGrain<TSelf>` (abstract) | N/A - each concrete grain keeps its own key | None of its own - registers, slides and dispatches the reminder that deletes a transient grain's state after an idle or retention TTL, for grains such as cursors, atomic-write and atomic-action sagas, locks, and cross-tree transactions |
 
 ### Interaction diagram
 

@@ -38,8 +38,8 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Reshard and resize | `ReshardTreeAsync`, `GetReshardStatusAsync`, `ResizeTreeAsync`, `UndoTreeResizeAsync`, `GetResizeStatusAsync` |
 | Snapshot | `SnapshotTreeAsync`, `GetSnapshotStatusAsync` |
 | WAL placement | `GetWalPlacementAsync`, `AuditWalPlacementAsync`, `PlanWalMoveAsync`, `ExecuteWalMoveAsync`, `ReclaimMovedWalSourceAsync` |
-| Orphaned leaves | `AuditOrphanedLeavesAsync`, `RepairOrphanedLeavesAsync` |
-| Views | `ListViewsAsync`, `GetViewStatusAsync`, `RebuildViewAsync`, `ReconcileViewAsync`, `DropViewAsync` |
+| Orphaned leaves | `AuditOrphanedLeavesAsync`, `SurveyOrphanedLeavesAsync`, `RepairOrphanedLeavesAsync` |
+| Views | `ListViewsAsync`, `CreateViewAsync`, `GetViewStatusAsync`, `RebuildViewAsync`, `ReconcileViewAsync`, `DropViewAsync` |
 | Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync`, `ReconcileTagIndexAsync` |
 | Compaction and retention | `TriggerShardCompactionAsync`, `GetHistoryRetentionAsync`, `SetHistoryRetentionAsync` |
 
@@ -84,9 +84,11 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | `PlanWalMoveAsync` | `Task<TreeWalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)` |
 | `ExecuteWalMoveAsync` | `Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)` |
 | `ReclaimMovedWalSourceAsync` | `Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` |
-| `AuditOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `RepairOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `AuditOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
+| `SurveyOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
+| `RepairOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
 | `ListViewsAsync` | `Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)` |
+| `CreateViewAsync` | `Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)` |
 | `GetViewStatusAsync` | `Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `RebuildViewAsync` | `Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `ReconcileViewAsync` | `Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)` |

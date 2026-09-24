@@ -4,10 +4,25 @@
 
 ## The two paths
 
-- **Semantic.** When an embedding provider is bound and vectors exist for the repository, the query is embedded and matched against the stored vectors with an exact nearest-neighbour (kNN) search. The result's `mode` is `semantic`.
+- **Semantic.** When an embedding provider is bound and vectors exist for the repository, the query is embedded and matched against the stored vectors by nearest-neighbour search. By default that search is answered from the persisted approximate index, whose recall is bounded rather than complete; while the index is still building, the exact scan answers in its place within the bounds described under [When the exact fallback is declined](#when-the-exact-fallback-is-declined). Setting `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL=exact` binds the complete-recall exact scan instead. The result's `mode` is `semantic`.
 - **Keyword.** When no embedding provider is bound, the provider is unavailable, or the query fails to embed, search degrades to a deterministic keyword/structural scan over the store. The scan ranks over each record's key, path, topic, tags, and - via the per-file **content projection** - the file's body text, so a keyword query matches file **content**, not just filenames and identifiers. It walks the structural, memory, and content trees; it does not scan the symbol tree, so a symbol's fully-qualified name is not part of the keyword haystack. Ranking is Okapi BM25 (see below), so a distinctive term outweighs a ubiquitous one and no single flooded field can dominate. The result's `mode` is `keyword`.
 
 If nothing matches at all, `mode` is `empty`. The path that answered is always reported, so a caller can tell meaning-based retrieval from a fallback scan.
+
+## Which path answered: `retrievalPath`
+
+Alongside `mode`, every `repocontext_search` and `repocontext_context` result carries a `retrievalPath` value from a closed, server-derived vocabulary (the `RepoContextRetrievalPath` constants). It is additive - `mode` keeps its values and meaning - and it separates an intended keyword-only deployment from a real capability loss, which `mode: keyword` alone cannot:
+
+| `retrievalPath` | Accompanies | Meaning |
+|---|---|---|
+| `semantic.exact` | `mode: semantic` | An exact nearest-neighbour search answered, so recall is complete. Reported only when the bound index explicitly declares exact search. |
+| `semantic.approximate` | `mode: semantic` | An approximate nearest-neighbour search answered, so recall is bounded. Any declaration other than exact resolves here, so the weaker claim is the one reported. |
+| `keyword.no_embedder` | `mode: keyword` or `empty` | No embedding provider is bound. An intended keyword-only deployment, not a fault, and the one keyword cause that still reports the host ready. |
+| `keyword.vector_plane_unavailable` | `mode: keyword` or `empty` | An embedding provider is bound but the vector plane could not serve: the provider was unreachable, the query did not embed, or the plane is still building (including a gather the corpus bound declined). |
+| `keyword.index_degraded` | `mode: keyword` or `empty` | The semantic path ran but the index is degraded: it threw, or it ranked candidates that no longer hydrate from the store of record. |
+| `keyword.exact_fallback_suppressed` | `mode: keyword` or `empty` | The approximate plane is not serving and the exact fallback is being withheld because a gather over this repository already stalled. It retries on its own through the breaker's half-open probe. |
+
+The last three are real capability losses, and readiness folds them the same way.
 
 ## Keyword search over file content
 
@@ -27,7 +42,7 @@ Fields are weighted so a name-like match (title, path, fully-qualified name, tag
 
 ## Warm vector cache behind the exact-kNN index
 
-The semantic path range-scans all vector metadata and decodes every vector payload for a repository on each query. A warm in-memory cache sits behind the exact-kNN index and holds the decoded candidate set per `(repoId, embedding space)`, so repeated queries between writes skip the re-scan and re-decode. The cache is transparent: a hit is filtered by the query's embedding space exactly as the uncached scan is, so it produces byte-identical ranking and recall. It is kept correct two ways - a local write to a repository's vectors invalidates its cached sets immediately and precisely, and a bounded time-to-live (default 30s, configurable via `LATTICE_VECTOR_CACHE_TTL_SECONDS`) backstops any change that bypasses the local writer, such as a vector landing through cross-cluster replication. Setting the TTL to zero disables the cache, reproducing the original scan-every-query behaviour.
+The exact path range-scans all vector metadata and decodes every vector payload for a repository on each query - it is what serves when exact retrieval is bound, and what answers in the approximate index's place while that index is still building. A warm in-memory cache sits behind the exact-kNN index and holds the decoded candidate set per `(repoId, embedding space)`, so repeated queries between writes skip the re-scan and re-decode. The cache is transparent: a hit is filtered by the query's embedding space exactly as the uncached scan is, so it produces byte-identical ranking and recall. It is kept correct two ways - a local write to a repository's vectors invalidates its cached sets immediately and precisely, and a bounded time-to-live (default 30s, configurable via `LATTICE_VECTOR_CACHE_TTL_SECONDS`) backstops any change that bypasses the local writer, such as a vector landing through cross-cluster replication. Setting the TTL to zero disables the cache, reproducing the original scan-every-query behaviour.
 
 ## The embedding seam
 

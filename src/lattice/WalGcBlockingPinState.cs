@@ -17,7 +17,7 @@ namespace Orleans.Lattice;
 /// <para>
 /// <see cref="WalGcCursorFloorState.BlockedByUnusablePin"/> says a pass was
 /// blocked; it cannot say <i>why</i>, because the leaf publishes
-/// <see cref="Primitives.HybridLogicalClock.Zero"/> with offset <c>-1</c> for
+/// <see cref="HybridLogicalClock.Zero"/> with offset <c>-1</c> for
 /// both routes into the block and the durable pin record therefore preserves
 /// no difference between them. The two routes call for opposite responses -
 /// one is correct behaviour that must never be "repaired", the other is a

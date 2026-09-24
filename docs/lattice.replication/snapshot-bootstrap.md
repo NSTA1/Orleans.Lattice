@@ -326,11 +326,15 @@ leaves `Peers` empty; a silo that only receives snapshots omits the
 default is opt-in by registration, not by a separate role flag.
 
 The shared-secret authentication interceptor that gates the existing
-`LatticeReplicationGrpc` push service was widened to recognise the
-new `orleans.lattice.replication.LatticeRemoteSnapshot` service
-prefix and to enforce on both unary and server-streaming RPCs, so the
-same `LATTICE_REPLICATION_SHARED_SECRET` environment variable (or
-`LatticeReplicationSecurityOptions` host configuration) covers
+`orleans.lattice.replication.LatticeReplication` push service also
+recognises the `orleans.lattice.replication.LatticeRemoteSnapshot`
+service (and the `orleans.lattice.replication.LatticeSaga` control
+channel) and enforces on every RPC shape - unary, server-streaming,
+client-streaming, and duplex - so the same shared-secret credential
+(`LATTICE_REPLICATION_SECRET` on the sender, checked against the
+receiver's accepted set, `LATTICE_REPLICATION_ACCEPTED_SECRETS`, or a
+custom `ILatticeReplicationSecretSource`) and the same
+`LatticeReplicationSecurityOptions.RequireAuthentication` switch cover
 inbound snapshot calls without additional wiring.
 
 The client translates `RpcException(StatusCode.Cancelled)` into the

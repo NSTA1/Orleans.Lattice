@@ -41,6 +41,7 @@ Server-side options for the code-first gRPC binding. Bind them through `AddLatti
 | `RequireAuthorization` | `bool` | `true` | Whether the authorization interceptor enforces `ILatticeStateApiAuthorizer` on inbound protected state-API calls. The binding fails closed by default; set this to `false` only when an outer authentication boundary already guards the endpoint. |
 | `CredentialHeaderName` | `string` | `"authorization"` | Inbound request-header (gRPC metadata) name that carries the caller credential token bridged into the ambient Lattice credential. |
 | `CredentialScheme` | `string` | `"Bearer"` | Authentication scheme stamped on the bridged `LatticeCredential`; a matching case-insensitive scheme prefix on the header value is stripped before the token is used. |
+| `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` | Inbound request-header (gRPC metadata) name carrying the caller's asserted active tenant, lifted onto the ambient active-tenant context for the duration of the call so this facade's tenant-scoped name resolution sees the caller's tenant. The assertion is a caller claim, re-validated against the caller's membership by the tenancy add-on; it grants no access. Set to `null` or empty to disable it. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | Empty `List<AuthSchemeDescriptor>` | Auth schemes advertised from the unauthenticated `GetAuthScheme` RPC, in preference order. Populate with public configuration only - never secrets. |
 
 ## `EnvVarCredentialAuthorizerOptions`

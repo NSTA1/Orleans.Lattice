@@ -97,6 +97,15 @@ about what will be evaluated:
   That shuts the bypass where a caller named a denied series only through
   `__name__`.
 
+## Facade surface
+
+`ILatticeTelemetry` has two methods:
+
+| Method | Signature |
+|---|---|
+| `GetCatalogAsync` | `Task<TelemetryQueryCatalog> GetCatalogAsync(CancellationToken cancellationToken = default)` |
+| `QueryAsync` | `Task<TelemetryQueryResponse> QueryAsync(TelemetryQueryRequest request, CancellationToken cancellationToken = default)` |
+
 ## `GetCatalogAsync` degrades; it does not fail
 
 Discovery **never surfaces a backend fault**. An unconfigured backend, and a caller entitled to no query, both receive `TelemetryQueryCatalog.Empty` rather than an exception, so a client renders no panels instead of erroring - and the two cases stay indistinguishable, so a refusal leaks nothing about the deployment.
