@@ -2030,7 +2030,16 @@ internal sealed partial class BPlusLeafGrain
         // any other report would publish, and the pin store merges by
         // monotonic max, so a republish can only ever hold a pin where it is
         // or move it forward.
-        var emptyWalReleases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+        //
+        // Issue #3453: the same holds for a never-written leaf (Clock == Zero),
+        // which previously never reached this publish at all - the flush turned
+        // every Zero-clock leaf away. The FlushCheckpointAsync above has already
+        // persisted the replay's scanned-through advance over entries this leaf
+        // skipped as another leaf's work, so the flush can now publish that
+        // PERSISTED checkpoint as (Zero, X); a never-written leaf whose replay
+        // recorded no advance and whose persisted checkpoint is still -1 has
+        // nothing to release, and the flush stays a no-op for it.
+        var releases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
 
         // Report the property the pin actually depends on, not a proxy for
         // it. `advanced` alone is the same class of mistake this issue is
@@ -2045,9 +2054,11 @@ internal sealed partial class BPlusLeafGrain
         // whose WAL is empty has genuinely lifted a block, but it reaches that
         // outcome without replaying anything, so the replay-based predicate
         // above scores it NoAdvance and the sweep would report a repair it
-        // actually performed as a failure.
+        // actually performed as a failure. The #3453 never-written release is
+        // counted on the same arm for the same reason: a leaf with no applied
+        // data has no coverage to stamp, so the first arm cannot score it.
         return (advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount))
-                || emptyWalReleases > 0
+                || releases > 0
             ? LeafStarvationDriveOutcome.Lifted
             : LeafStarvationDriveOutcome.NoAdvance;
     }
