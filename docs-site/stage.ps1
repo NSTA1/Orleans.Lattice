@@ -1100,10 +1100,9 @@ if ($episodes.Count -gt 0) {
     $videosIndex.Add('')
     $videosIndex.Add('# Videos')
     $videosIndex.Add('')
-    $videosIndex.Add('A video series about Orleans.Lattice, arranged by the same ways in as the')
-    $videosIndex.Add('documentation. Every episode has English captions and a companion page with its')
-    $videosIndex.Add('transcript and the code it shows, which is compiled with the rest of the')
-    $videosIndex.Add('documentation.')
+    $videosIndex.Add('Each video explains one idea about Orleans.Lattice in a few minutes, with English')
+    $videosIndex.Add('captions. Its companion page has the full transcript, and any code on screen is')
+    $videosIndex.Add('compiled with the rest of the documentation.')
     $videosIndex.Add('')
 
     foreach ($path in $videoPaths.Keys) {
