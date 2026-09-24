@@ -83,6 +83,7 @@ public partial class BPlusLeafGrainTests
         long tail,
         params CommitLogSliceEntry[] entries)
     {
+        ReachableWalFixture.EnsureReachable(head, entries);
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
         coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(tail));
@@ -191,7 +192,7 @@ public partial class BPlusLeafGrainTests
         var entries = Enumerable.Range(1, 12)
             .Select(i => Set(i, $"k{i:D2}"))
             .ToArray();
-        var coord = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -220,7 +221,7 @@ public partial class BPlusLeafGrainTests
         var entries = Enumerable.Range(1, 12)
             .Select(i => Set(i, $"k{i:D2}"))
             .ToArray();
-        var coord = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -265,7 +266,7 @@ public partial class BPlusLeafGrainTests
         var fullEntries = Enumerable.Range(1, 12)
             .Select(i => Set(i, $"k{i:D2}"))
             .ToArray();
-        var coord1 = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, fullEntries);
+        var coord1 = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, fullEntries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -295,13 +296,13 @@ public partial class BPlusLeafGrainTests
         var suffixEntries = Enumerable.Range(5, 8)
             .Select(i => Set(i, $"k{i:D2}"))
             .ToArray();
-        var coord2 = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 5, suffixEntries);
+        var coord2 = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 5, suffixEntries);
         var (grain2, _) = BuildResumableLeaf(state, coord2, store.Stub, reclassifyEveryN: 1);
 
         await LeafActivationHarness.ActivateAsync(grain2, CancellationToken.None);
 
         // Resumed strictly past the durable offset, never from zero.
-        await coord2.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await coord2.Received().ReadSliceAsync(4L, 13L, Arg.Any<int>(), Arg.Any<CancellationToken>());
         await coord2.DidNotReceive().ReadSliceAsync(-1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         for (var i = 1; i <= 12; i++)
@@ -329,7 +330,7 @@ public partial class BPlusLeafGrainTests
             Set(4, "a4"),
             Set(5, "a5"),
         };
-        var coord = BuildChunkingCoordinator(head: 5, sliceSize: 2, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 6, sliceSize: 2, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -364,7 +365,7 @@ public partial class BPlusLeafGrainTests
             Set(3, "p3"),
             Set(4, "p4"),
         };
-        var coord = BuildChunkingCoordinator(head: 4, sliceSize: 2, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 5, sliceSize: 2, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 

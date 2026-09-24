@@ -154,6 +154,7 @@ public partial class BPlusLeafGrainTests
 
         var reads = 0;
         var partition0 = Substitute.For<ILeafReplayCoordinatorGrain>();
+        ReachableWalFixture.EnsureReachable(90L, slice);
         partition0.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(90L));
         partition0.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
         partition0.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())

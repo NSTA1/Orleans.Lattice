@@ -537,7 +537,7 @@ public partial class BPlusLeafGrainTests
         // quiesced tree (issue #2692) is precisely one where the data operation
         // that would trigger a lazy replay never arrives.
         var entries = Enumerable.Range(1, 8).Select(i => Set(i, $"k{i:D2}")).ToArray();
-        var coord = BuildChunkingCoordinator(head: 8, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 9, sliceSize: 4, tail: 0, entries);
         var snapshots = new InMemorySnapshotStore();
         var state = NewResumableState();
 

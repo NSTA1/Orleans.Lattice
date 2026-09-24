@@ -164,7 +164,7 @@ public partial class BPlusLeafGrainTests
         GrowingWal wal)
     {
         var projection = AsProjection(grain);
-        var target = wal.Head + 1;
+        var target = wal.Head;
         projection.Apply(BuildSet(
             $"k{target}", Encoding.UTF8.GetBytes("v"), hlcPhysical: 10, treeId: FlushTailTreeId));
 

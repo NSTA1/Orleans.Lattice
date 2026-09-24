@@ -97,7 +97,7 @@ public partial class BPlusLeafGrainTests
             Set(3, "p3"),
             Set(4, "p4"),
         };
-        coordinator = BuildChunkingCoordinator(head: 4, sliceSize: 2, tail: 0, entries);
+        coordinator = BuildChunkingCoordinator(head: 5, sliceSize: 2, tail: 0, entries);
 
         var store = new InMemorySnapshotStore();
         var state = NewResumableState(persistedCheckpoint);
