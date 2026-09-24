@@ -1,0 +1,295 @@
+<template id="join-diagram-template">
+  <!--
+    The join figure: the documentation site's canonical animation (its home
+    page, and every CRDT explainer page), at camera scale. The site draws it in
+    a 460x420 viewBox; every coordinate, radius and stroke here is that figure
+    at --lv-diagram-scale (2), centred on the frame. Its choreography is the
+    site's: the order is shown first; then the lower edges draw in ink, then the
+    upper; a delta travels from the bottom state through each concurrent write
+    to the join; the join, hollow until both arrive, fills with the marker and
+    pulses once. With "redeliver", one delta arrives again and changes nothing.
+    Colours are the site's diagram tokens; timings are LatticeMotion.figure.
+    Every label comes from the site's own scenario for the figure, read by id
+    from docs-site/figures/join-figures.json (synced as join-figures.js), so a
+    figure here always says what the site's does. The diamond layout is
+    ported; the site's chain layouts fail loudly until an episode needs them.
+  -->
+  <div
+    data-composition-id="join-diagram"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"scenario","type":"string","label":"Scenario (join-figures.json id)","default":"gcounter"},
+      {"id":"heading","type":"string","label":"Heading","default":""},
+      {"id":"redeliver","type":"boolean","label":"Re-deliver a delta","default":false}
+    ]'
+  >
+    <h2 class="jd-heading"></h2>
+
+    <svg class="jd-svg" viewBox="0 0 1920 1080" width="1920" height="1080" aria-hidden="true">
+      <g class="jd-base">
+        <line x1="960" y1="800" x2="684" y2="500" />
+        <line x1="960" y1="800" x2="1236" y2="500" />
+        <line x1="684" y1="500" x2="960" y2="200" />
+        <line x1="1236" y1="500" x2="960" y2="200" />
+      </g>
+      <line class="jd-edge jd-edge-low" x1="960" y1="800" x2="684" y2="500" />
+      <line class="jd-edge jd-edge-low" x1="960" y1="800" x2="1236" y2="500" />
+      <line class="jd-edge jd-edge-high" x1="684" y1="500" x2="960" y2="200" />
+      <line class="jd-edge jd-edge-high" x1="1236" y1="500" x2="960" y2="200" />
+      <line class="jd-concurrent-line" x1="732" y1="500" x2="1188" y2="500" />
+      <circle class="jd-pulse" cx="960" cy="200" r="26" />
+      <circle class="jd-node-bottom" cx="960" cy="800" r="18" />
+      <circle class="jd-node-concurrent" cx="684" cy="500" r="18" />
+      <circle class="jd-node-concurrent" cx="1236" cy="500" r="18" />
+      <circle class="jd-node-join" cx="960" cy="200" r="26" />
+      <circle class="jd-token jd-token-a" cx="0" cy="0" r="12" />
+      <circle class="jd-token jd-token-b" cx="0" cy="0" r="12" />
+      <circle class="jd-token jd-token-dup" cx="0" cy="0" r="12" />
+    </svg>
+
+    <div class="jd-group jd-group-join"><div class="jd-state"></div><div class="jd-note"></div></div>
+    <div class="jd-group jd-group-a"><div class="jd-state"></div><div class="jd-note"></div></div>
+    <div class="jd-group jd-group-b"><div class="jd-state"></div><div class="jd-note"></div></div>
+    <div class="jd-group jd-group-bottom"><div class="jd-state"></div><div class="jd-note"></div></div>
+    <div class="jd-label jd-edge-label jd-lower-left"></div>
+    <div class="jd-label jd-edge-label jd-lower-right"></div>
+    <div class="jd-label jd-edge-label jd-upper-left"></div>
+    <div class="jd-label jd-edge-label jd-upper-right"></div>
+    <div class="jd-label jd-concurrent-label"></div>
+
+    <style>
+      [data-composition-id="join-diagram"] {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      [data-composition-id="join-diagram"] .jd-heading {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: var(--lv-safe-y);
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: var(--lt-leading-tight);
+      }
+      [data-composition-id="join-diagram"] .jd-svg { position: absolute; inset: 0; }
+      [data-composition-id="join-diagram"] .jd-base line {
+        stroke: var(--lt-rule-strong);
+        stroke-width: 4;
+        stroke-linecap: round;
+      }
+      [data-composition-id="join-diagram"] .jd-edge {
+        stroke: var(--lt-ink);
+        stroke-width: 4.5;
+        stroke-linecap: round;
+      }
+      [data-composition-id="join-diagram"] .jd-concurrent-line {
+        stroke: var(--lt-ink-3);
+        stroke-width: 2.5;
+        stroke-dasharray: 4 12;
+        stroke-linecap: round;
+      }
+      [data-composition-id="join-diagram"] .jd-node-bottom {
+        fill: var(--lt-surface);
+        stroke: var(--lt-ink);
+        stroke-width: 4.5;
+      }
+      [data-composition-id="join-diagram"] .jd-node-concurrent {
+        fill: var(--lt-diagram-concurrent);
+        stroke: var(--lt-surface);
+        stroke-width: 6;
+      }
+      [data-composition-id="join-diagram"] .jd-node-join {
+        fill: var(--lt-diagram-join);
+        stroke: var(--lt-diagram-join-ring);
+        stroke-width: 5;
+      }
+      [data-composition-id="join-diagram"] .jd-pulse {
+        fill: none;
+        stroke: var(--lt-diagram-join);
+        stroke-width: 4;
+        opacity: 0;
+      }
+      [data-composition-id="join-diagram"] .jd-token {
+        fill: var(--lt-diagram-concurrent);
+        stroke: var(--lt-surface);
+        stroke-width: 5;
+        opacity: 0;
+      }
+      [data-composition-id="join-diagram"] .jd-token-dup {
+        fill: var(--lt-surface);
+        stroke: var(--lt-diagram-concurrent);
+      }
+      [data-composition-id="join-diagram"] .jd-label {
+        position: absolute;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      /* A node's label group - its state lines, then its note - is centred on
+         the node, so a two-line state (the PN-Counter's) grows both ways and
+         stays clear of the caption band. The join and bottom groups sit
+         further out than the site's labels, so a two-line state clears the
+         upper-right and lower-right edges. */
+      [data-composition-id="join-diagram"] .jd-group {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        transform: translateY(-50%);
+        line-height: 1.12;
+        white-space: pre;
+      }
+      [data-composition-id="join-diagram"] .jd-group-join { left: 1032px; top: 200px; }
+      [data-composition-id="join-diagram"] .jd-group-a { right: 1268px; top: 500px; align-items: flex-end; text-align: right; }
+      [data-composition-id="join-diagram"] .jd-group-b { left: 1268px; top: 500px; }
+      [data-composition-id="join-diagram"] .jd-group-bottom { left: 1040px; top: 800px; }
+      [data-composition-id="join-diagram"] .jd-state {
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-state);
+        font-weight: 500;
+      }
+      [data-composition-id="join-diagram"] .jd-note {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="join-diagram"] .jd-group-join .jd-note {
+        color: var(--lt-ink);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="join-diagram"] .jd-edge-label {
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+      }
+      [data-composition-id="join-diagram"] .jd-concurrent-label {
+        left: 960px;
+        top: 458px;
+        transform: translateX(-50%);
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        font-style: oblique 8deg;
+      }
+      /* Edge labels are anchored as the site's SVG text is: 'end' labels by
+         their right edge. */
+      [data-composition-id="join-diagram"] .jd-lower-left { right: 1124px; top: 654px; }
+      [data-composition-id="join-diagram"] .jd-lower-right { left: 1124px; top: 654px; }
+      [data-composition-id="join-diagram"] .jd-upper-left { right: 1124px; top: 310px; }
+      [data-composition-id="join-diagram"] .jd-upper-right { left: 1124px; top: 310px; }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="join-diagram"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+        const { duration, figure } = window.LatticeMotion;
+
+        // The scenario is the site's, read by id; a figure that cannot be
+        // drawn as the site draws it fails the render rather than guessing.
+        const site = window.LatticeJoinFigures;
+        if (!site) {
+          throw new Error("join-diagram: the site's join figures are not loaded; the root composition must load assets/brand/site/join-figures.js");
+        }
+        const spec = site.figures.find((candidate) => candidate.id === vars.scenario);
+        if (!spec) {
+          throw new Error("join-diagram: the site has no join figure '" + vars.scenario + "'");
+        }
+        if (spec.layout !== "diamond") {
+          throw new Error("join-diagram: '" + spec.id + "' is a " + spec.layout + " figure, and only the diamond layout is ported to the camera so far");
+        }
+
+        q(".jd-heading").textContent = vars.heading;
+        if (!vars.heading) q(".jd-heading").style.display = "none";
+        for (const node of ["join", "a", "b", "bottom"]) {
+          q(".jd-group-" + node + " .jd-state").textContent = spec.nodes[node].state.join("\n");
+          q(".jd-group-" + node + " .jd-note").textContent = spec.nodes[node].note;
+        }
+        q(".jd-lower-left").textContent = spec.edges.lowerLeft;
+        q(".jd-lower-right").textContent = spec.edges.lowerRight;
+        q(".jd-upper-left").textContent = spec.edges.upperLeft;
+        q(".jd-upper-right").textContent = spec.edges.upperRight;
+        // The site annotates "concurrent: neither is above the other"; the
+        // camera shows the term and leaves the gloss to the narration.
+        q(".jd-concurrent-label").textContent = spec.concurrent.split(":")[0].trim();
+
+        // Undrawn ink edges are hidden as well as dashed away: a round line
+        // cap paints even a zero-length dash.
+        for (const edge of all(".jd-edge")) {
+          const length = edge.getTotalLength();
+          gsap.set(edge, { strokeDasharray: length, strokeDashoffset: length, opacity: 0 });
+        }
+
+        const bottom = { x: 960, y: 800 };
+        const left = { x: 684, y: 500 };
+        const right = { x: 1236, y: 500 };
+        const join = { x: 960, y: 200 };
+        const joinLabels = [q(".jd-group-join")];
+
+        // A delta travels as the site's does: one eased progress along the
+        // whole path, visible between 6% and 94% of that progress.
+        const ease = gsap.parseEase("lattice-draw");
+        const timeAt = (progress) => {
+          let low = 0;
+          let high = 1;
+          for (let i = 0; i < 40; i++) {
+            const mid = (low + high) / 2;
+            if (ease(mid) < progress) low = mid;
+            else high = mid;
+          }
+          return (low + high) / 2;
+        };
+        const travel = (tl, element, path, length, at) => {
+          tl.set(element, { x: path[0].x, y: path[0].y }, 0);
+          tl.to(element, { motionPath: { path, curviness: 0 }, duration: length, ease: "lattice-draw" }, at);
+          tl.to(element, { opacity: 1, duration: timeAt(0.06) * length, ease: "none" }, at);
+          tl.to(element, { opacity: 0, duration: (1 - timeAt(0.94)) * length, ease: "none" }, at + timeAt(0.94) * length);
+        };
+
+        const tl = gsap.timeline({ paused: true });
+        const run = 0.6;
+        const arrive = run + figure.travel;
+        const entrance = Array.from(root.children).filter(
+          (element) => !["STYLE", "SCRIPT"].includes(element.tagName) && !joinLabels.includes(element),
+        );
+
+        tl.from(entrance, { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+        tl.set(joinLabels, { opacity: 0 }, 0);
+        tl.set(q(".jd-node-join"), { fill: token("--lt-surface") }, 0);
+
+        tl.set(all(".jd-edge-low"), { opacity: 1 }, run);
+        tl.to(all(".jd-edge-low"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run);
+        tl.set(all(".jd-edge-high"), { opacity: 1 }, run + figure.draw);
+        tl.to(all(".jd-edge-high"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run + figure.draw);
+        travel(tl, q(".jd-token-a"), [bottom, left, join], figure.travel, run);
+        travel(tl, q(".jd-token-b"), [bottom, right, join], figure.travel, run);
+
+        tl.to(q(".jd-node-join"), { fill: token("--lt-diagram-join"), duration: duration.base, ease: "lattice-out" }, arrive);
+        tl.to(joinLabels, { opacity: 1, duration: duration.base, ease: "lattice-out" }, arrive);
+        tl.fromTo(
+          q(".jd-pulse"),
+          { opacity: 0.9, scale: 1, transformOrigin: "50% 50%" },
+          { opacity: 0, scale: 2.4, duration: figure.pulse, ease: "lattice-out" },
+          arrive,
+        );
+
+        if (vars.redeliver) {
+          const from = { a: left, b: right }[spec.redeliver.from];
+          if (!from) {
+            throw new Error("join-diagram: '" + spec.id + "' re-delivers from '" + spec.redeliver.from + "', which is not a concurrent write");
+          }
+          travel(tl, q(".jd-token-dup"), [from, join], figure.redeliver, arrive + figure.pulse + 0.6);
+        }
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["join-diagram"] = tl;
+      })();
+    </script>
+  </div>
+</template>

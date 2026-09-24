@@ -1,0 +1,48 @@
+/*
+  Orleans.Lattice video series - the brand seam.
+
+  Colour, type and the order-diagram roles come from the documentation site's
+  design system and are used by the site's own names (--lt-*): the tokens in
+  docs-site/template/public/tokens.css, documented in DESIGN.md at the
+  repository root. tools/hf.js copies them, the @font-face rules of the site's
+  main.css, its self-hosted fonts, its mark and its join-figure scenarios into
+  assets/brand/site/ (ignored by git) before every preview, check and render,
+  and the two imports below read that copy. Nothing in this workspace restates
+  one of those values, so a change to the site's design reaches the videos on
+  the next render.
+
+  What this file owns is the camera (--lv-*): sizes for a 1920x1080 frame
+  watched on a laptop, which web values cannot supply. See frame.md. The
+  camera font stacks, --lv-font-sans and --lv-font-mono, are generated into
+  site/fonts.css by the same sync: the site's own self-hosted family and a
+  generic, without the system and web fallbacks the site's stacks go on to
+  name, which the renderer would otherwise fetch from the network.
+
+  Material: paper (light) by default, as on the site. A composition, or any
+  element in one, renders on the board (dark) with data-bs-theme="dark".
+*/
+
+@import url("site/tokens.css");
+@import url("site/fonts.css");
+
+:root {
+  /* Camera type scale, in pixels at 1920x1080. One family carries every
+     voice, as on the site; weight (--lt-weight-*) marks importance. Nothing
+     smaller than the label step is ever put on screen. */
+  --lv-type-hero: 112px;
+  --lv-type-title: 80px;
+  --lv-type-heading: 56px;
+  --lv-type-body: 44px;
+  --lv-type-code: 36px;
+  --lv-type-state: 34px;
+  --lv-type-caption: 36px;
+  --lv-type-label: 32px;
+
+  /* Title-safe area: 5% of each frame edge. */
+  --lv-safe-x: 96px;
+  --lv-safe-y: 54px;
+
+  /* Order diagrams are the site's figures at twice their size: the site draws
+     the join figure in a 460x420 viewBox, and the camera needs it large. */
+  --lv-diagram-scale: 2;
+}

@@ -1,0 +1,119 @@
+name: Videos
+
+# Advisory (non-required) lane for the `videos/` HyperFrames workspace - the
+# educational video series (see videos/README.md). A change there matches no
+# package, so ci.yml carves `videos/**` out of its package selection rather than
+# fanning out to the full test suite; this lane is what checks the workspace
+# instead. The repository's content gates (em-dash, mojibake) still scan every
+# file under `videos/` from ci.yml, so a stray character fails there as well as
+# in this lane's ASCII check.
+on:
+  pull_request:
+    # Branch list mirrors ci.yml; the rationale for the '*/epic/**' and
+    # 'release/**' patterns is documented there and in
+    # .github/copilot-instructions.md, and is not restated here.
+    branches: [main, '*/epic/**', 'release/**']
+    # The workspace reads the docs site's design system (docs-site/template/public
+    # and docs-site/figures), so a change to it is re-checked here too.
+    paths:
+      - 'videos/**'
+      - 'docs/videos/**'
+      - 'docs-site/template/public/**'
+      - 'docs-site/figures/**'
+      - '.github/workflows/videos.yml'
+
+  # Integration-branch lane, mirroring ci.yml's push trigger (#2972). ADVISORY,
+  # AND IT MUST NEVER BECOME BRANCH PROTECTION. As in explorer-ci.yml, a push
+  # `paths:` filter is evaluated against the push diff, so on a bucket this runs
+  # only when the member that just merged touched the workspace.
+  push:
+    branches: ['*/epic/**']
+    paths:
+      - 'videos/**'
+      - 'docs/videos/**'
+      - 'docs-site/template/public/**'
+      - 'docs-site/figures/**'
+      - '.github/workflows/videos.yml'
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: videos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: videos
+
+    # The same quiet environment tools/hf.js applies, set here as well so that
+    # nothing in this job can reach HyperFrames telemetry, the update check, or
+    # a skill install, whichever way the CLI is started.
+    env:
+      HYPERFRAMES_NO_TELEMETRY: '1'
+      HYPERFRAMES_NO_UPDATE_CHECK: '1'
+      HYPERFRAMES_SKIP_SKILLS: '1'
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: videos/package-lock.json
+
+      # The renderer encodes with the system FFmpeg.
+      - name: Install FFmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+
+      - name: Install the pinned workspace toolchain
+        run: npm ci
+
+      - name: Unit tests for the workspace tools
+        run: npm test
+
+      - name: Plain ASCII
+        run: npm run ascii
+
+      # Code shown on screen must match the compiled snippets on the companion
+      # pages under docs/videos/, which the repository's Roslyn harness builds.
+      - name: Snippets match their companion pages
+        run: npm run snippets:check
+
+      - name: Lint every composition
+        run: npm run lint
+
+      # Downloaded explicitly so a network failure is reported as itself rather
+      # than as a failed check.
+      - name: Fetch the rendering browser
+        run: node tools/hf.js browser ensure
+
+      # Lint, runtime, layout, motion and WCAG AA contrast on the smoke test.
+      - name: Check the workspace smoke test
+        run: npm run check
+
+      - name: Draft-render the smoke test
+        run: npm run render -- --quality draft --workers 1 -o renders/smoke.mp4
+
+      - name: Upload the draft render
+        uses: actions/upload-artifact@v6
+        with:
+          name: videos-smoke-render
+          path: videos/renders/smoke.mp4
+          if-no-files-found: error
+          retention-days: 7
