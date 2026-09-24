@@ -1,9 +1,11 @@
 {
-  "$comment": "The series narration voice, chosen by audition (npm run voice:samples). Generated locally with Kokoro-82M, so narration needs no account, key or network, and is reproducible from the script. See series.md, 'Voice'.",
+  "$comment": "The series narration voice, chosen by audition (npm run voice:samples). Generated locally with Kokoro-82M, so narration needs no account, key or network, and is reproducible from the script. See series.md, 'Voice'. The timing settings lay the cues out (tools/lib/narration.js): silence before the first cue, between cues in a scene, and between scenes; and how long before its first cue a scene's pictures arrive.",
   "provider": "kokoro",
   "voice": "bf_emma",
   "lang": "en-gb",
   "speed": 1.0,
   "leadInSeconds": 0.5,
-  "cueGapSeconds": 0.35
+  "cueGapSeconds": 0.35,
+  "sceneGapSeconds": 1.0,
+  "sceneLeadSeconds": 0.6
 }

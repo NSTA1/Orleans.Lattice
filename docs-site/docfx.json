@@ -9,6 +9,14 @@
         "src": "src"
       }
     ],
+    "resource": [
+      {
+        "files": [
+          "media/**"
+        ],
+        "src": "src"
+      }
+    ],
     "output": "_site",
     "template": [
       "default",

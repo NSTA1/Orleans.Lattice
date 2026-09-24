@@ -13,8 +13,12 @@ system - the order diagram - translated for a 1920x1080 frame.
   `docs-site/figures/join-figures.json`, all documented in `DESIGN.md` at the
   repository root.
 - **Compositions read it, never copy it.** `tools/hf.js` copies it into
-  `assets/brand/site/` (ignored by git) before every preview, check and render,
-  and [assets/brand/brand.css](assets/brand/brand.css) imports that copy.
+  `shared/brand/site/` (ignored by git) before every preview, check and render,
+  and [shared/brand/brand.css](shared/brand/brand.css) imports that copy.
+  The same sync writes the words the site's home page puts on screen
+  (`home.js`, from `docs-site/pages/index.md`) and the package catalogue
+  (`packages.js`, from `PACKAGES.md`), so a scene quotes the site - a variable
+  written `site:home.thesis` - rather than restating it.
   Compositions use the site's tokens by the site's names (`--lt-*`), so a
   change to the site's design reaches the videos on the next render. If the
   tokens are missing, the render stops rather than falling back.
@@ -117,7 +121,7 @@ is also where the project's name comes from.
 
 The site's canonical animation - on its home page and on every CRDT explainer
 page - is the series' signature figure:
-[compositions/components/join-diagram.html](compositions/components/join-diagram.html).
+[shared/components/join-diagram.html](shared/components/join-diagram.html).
 It is the site's figure at twice its size, and it moves as the site's does:
 
 1. The order is on screen first: pale edges, the hollow bottom, the two
@@ -129,6 +133,11 @@ It is the site's figure at twice its size, and it moves as the site's does:
    pulses once (0.9 s).
 5. Optionally, one delta is delivered again (1.4 s) and nothing changes: the
    join already holds it. That is idempotence, shown rather than stated.
+
+In an episode the phases wait for the narration: the writes on the scene's
+second beat, the merges and the join on its third, the re-delivery on its
+fourth, and an optional note on its fifth. On its own, as in the smoke test,
+the figure plays in one run as the site's does.
 
 Its labels are the site's own: a composition names a scenario from
 `docs-site/figures/join-figures.json` (`"scenario": "pncounter"`) and the figure
@@ -148,7 +157,29 @@ figure idea per scene.
 
 System diagrams (silo, grain, shard, write-ahead log, region) use the same
 roles and stroke weights. Each is added as a shared component with the first
-episode that needs it, not ahead of time.
+episode that needs it, not ahead of time. The pilot added the cluster (silos
+as spines, grains as hollow nodes, a grain call in ink), the store in its
+cluster, the core and its seams, the deployment journey and the ways in; the
+notation they share - scene heading, node, status pill, code panel - is in
+[shared/brand/brand.css](shared/brand/brand.css), so a new scene adds layout,
+not new devices.
+
+### Plain-language scenes
+
+A part for viewers with no technical background draws in the same notation,
+with everyday words and one concrete value, so the pictures it teaches are the
+ones the technical part uses:
+
+- **What an application remembers** (`remember`): everyday things as nodes on
+  a spine, each with the value kept for it in mono, closed in a frame
+  labelled "state" once the narration has taught the word.
+- **More than one place** (`many-places`): two places as frames, each holding
+  its copy of one value. Concurrent changes are concurrent blue, joined by a
+  dashed line; the usual answer is a change that waits and a pale, separate
+  database outside both; Lattice's answer is each change travelling to the
+  other place, and both reaching the join in the marker. Its numbers are the
+  G-Counter figure's (add 3, add 5), so the join figure later explains exactly
+  what the viewer has already seen.
 
 ## Code on screen
 
@@ -169,7 +200,7 @@ episode that needs it, not ahead of time.
 
 - Motion explains; it never decorates. Every movement answers "what changed?".
 - **Eases** come from the site through
-  [assets/brand/motion.js](assets/brand/motion.js): `lattice-out` is the site's
+  [shared/brand/motion.js](shared/brand/motion.js): `lattice-out` is the site's
   `--lt-ease-out`, for entrances and state changes; `lattice-draw` is the join
   figure's curve, for anything drawn or travelling along an order.
 - **Durations** are the site's `--lt-duration-*` tokens
@@ -177,8 +208,12 @@ episode that needs it, not ahead of time.
   `LatticeMotion.figure`. A composition that needs a new timing adds it there,
   once.
 - One primary movement at a time; anything secondary is subordinate and slower.
-- Time visual changes to the narration cue timeline
-  (`renders/narration/<slug>/cues.json`), never to guessed durations.
+- Time visual changes to the narration, never to guessed durations. Each cue
+  is a beat: `npm run timeline` stamps a scene's beats into its variables, and
+  the scene reads them through [shared/brand/scene.js](shared/brand/scene.js)
+  (`LatticeScene.cue`). A scene arrives a little before its first word and
+  fades out just before the next scene begins (`LatticeScene.exit`), so scenes
+  never hard-cut.
 - Deterministic by construction: paused GSAP timelines, colours read from the
   tokens once and tweened as values (never CSS transitions), no wall clock, no
   unseeded randomness, no network at render time.
@@ -199,7 +234,10 @@ episode that needs it, not ahead of time.
   and never carries meaning.
 - Sound effects only for events the narration names.
 - Loudness: -16 LUFS integrated, true peak below -1 dBTP, consistent across
-  episodes.
+  episodes, measured on the track as delivered. The render places the mono
+  narration on both channels of a stereo track, which measures 3 LU louder
+  than the mono file, so the narration is mastered to the target as heard in
+  stereo (`npm run narrate`), not as a mono file.
 
 ## Honest status
 

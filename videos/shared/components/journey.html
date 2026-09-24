@@ -1,0 +1,201 @@
+<template id="journey-template">
+  <!--
+    One programming model, Local to Global, as the site's home page draws it:
+    the three deployment stages on one ink chain, each with its caption and
+    what it adds, closed by the invariant - ILattice, unchanged at every stage.
+    Every word is the site's (shared/brand/site/home.js, read from
+    docs-site/pages/index.md), less anything the site marks in progress.
+
+    Stage k arrives on beat k with the marker on its node - "you are here" -
+    and the stages before it filled in ink as passed. On the beat after the
+    last stage the details give way and the invariant rises under the stage
+    names, leaving the lower half of the frame for an episode's own overlay,
+    such as the code that stays the same.
+
+    Variables: heading (default the site's own); beats and end are stamped by
+    npm run timeline.
+  -->
+  <div
+    data-composition-id="journey"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"site:home.journey.title"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading jn-heading"></h2>
+    <div class="jn-chain"></div>
+    <ol class="jn-stages"></ol>
+    <p class="jn-invariant">
+      <span class="jn-invariant-label"></span>
+      <span class="jn-invariant-code lv-mono"></span>
+      <span class="jn-invariant-note"></span>
+    </p>
+
+    <style>
+      [data-composition-id="journey"] .jn-chain {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 11px);
+        top: 298px;
+        width: 1200px;
+        height: var(--lv-rule-heavy);
+        background: var(--lt-ink);
+        transform-origin: left center;
+      }
+      [data-composition-id="journey"] .jn-stages {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 300px;
+        display: grid;
+        grid-template-columns: repeat(3, 528px);
+        gap: 72px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      [data-composition-id="journey"] .jn-stage {
+        position: relative;
+        padding-top: 44px;
+      }
+      [data-composition-id="journey"] .jn-stage .lv-node {
+        position: absolute;
+        left: 0;
+        top: calc(-0.5 * var(--lv-node));
+      }
+      [data-composition-id="journey"] .jn-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: var(--lt-leading-tight);
+      }
+      [data-composition-id="journey"] .jn-caption {
+        margin: 18px 0 0;
+        max-width: 500px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        line-height: 1.3;
+      }
+      [data-composition-id="journey"] .jn-items {
+        margin: 30px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      [data-composition-id="journey"] .jn-items li {
+        position: relative;
+        margin: 0 0 12px;
+        padding-left: 30px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+        line-height: 1.25;
+      }
+      [data-composition-id="journey"] .jn-items li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: calc(0.62em - 0.5 * var(--lv-node-sm));
+        width: var(--lv-node-sm);
+        height: var(--lv-node-sm);
+        border-radius: 50%;
+        background: var(--lt-ink);
+      }
+      /* The invariant, as the site sets it: a heavy ink rule, the label in
+         tertiary ink, the interface in mono, the note in secondary ink. */
+      [data-composition-id="journey"] .jn-invariant {
+        position: absolute;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        top: 470px;
+        display: flex;
+        align-items: baseline;
+        gap: 28px;
+        margin: 0;
+        padding-top: 22px;
+        border-top: var(--lv-rule-heavy) solid var(--lt-ink);
+        font-size: var(--lv-type-body);
+      }
+      [data-composition-id="journey"] .jn-invariant-label {
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+      }
+      [data-composition-id="journey"] .jn-invariant-code {
+        color: var(--lt-ink);
+        font-weight: 600;
+      }
+      [data-composition-id="journey"] .jn-invariant-note {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="journey"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+        const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+
+        const journey = scene.site("site:home.journey");
+        q(".jn-heading").textContent = scene.site(vars.heading);
+        for (const stage of journey.stages) {
+          const item = document.createElement("li");
+          item.className = "jn-stage";
+          item.innerHTML = '<span class="lv-node"></span><h3 class="jn-name"></h3><p class="jn-caption"></p><ul class="jn-items"></ul>';
+          item.querySelector(".jn-name").textContent = stage.name;
+          item.querySelector(".jn-caption").textContent = stage.caption;
+          for (const text of stage.items) {
+            const li = document.createElement("li");
+            li.textContent = text;
+            item.querySelector(".jn-items").appendChild(li);
+          }
+          q(".jn-stages").appendChild(item);
+        }
+        q(".jn-invariant-label").textContent = journey.invariant.label;
+        q(".jn-invariant-code").textContent = journey.invariant.code;
+        q(".jn-invariant-note").textContent = journey.invariant.note;
+
+        const stages = all(".jn-stage");
+        const nodes = stages.map((stage) => stage.querySelector(".lv-node"));
+        const tl = gsap.timeline({ paused: true });
+        tl.from(q(".jn-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.set(stages.map((stage) => [stage.querySelector(".jn-name"), stage.querySelector(".jn-caption"), stage.querySelector(".jn-items")]).flat(), { opacity: 0 }, 0);
+        tl.set(nodes, { opacity: 0 }, 0);
+        tl.set(q(".jn-invariant"), { opacity: 0 }, 0);
+
+        const at = stages.map((_, k) => timing.at(k, 0.4 + k * 2.2));
+        tl.from(q(".jn-chain"), { scaleX: 0, duration: 1.6, ease: "lattice-draw" }, at[0]);
+        stages.forEach((stage, k) => {
+          const start = at[k] + 0.2;
+          tl.to(nodes[k], { opacity: 1, duration: duration.base, ease }, start);
+          tl.to(nodes[k], { backgroundColor: token("--lt-marker"), duration: duration.base, ease }, start);
+          if (k > 0) tl.to(nodes[k - 1], { backgroundColor: token("--lt-ink"), duration: duration.base, ease }, start);
+          tl.to(stage.querySelector(".jn-name"), { opacity: 1, duration: duration.base, ease }, start);
+          tl.to(stage.querySelector(".jn-caption"), { opacity: 1, duration: duration.base, ease }, start + 0.3);
+          tl.to(stage.querySelector(".jn-items"), { opacity: 1, duration: duration.base, ease }, start + 0.7);
+        });
+
+        const invariant = timing.at(stages.length, null);
+        if (invariant !== null) {
+          const details = stages.map((stage) => [stage.querySelector(".jn-caption"), stage.querySelector(".jn-items")]).flat();
+          tl.to(details, { opacity: 0, duration: duration.base, ease }, invariant + 0.1);
+          tl.to(nodes[stages.length - 1], { backgroundColor: token("--lt-ink"), duration: duration.base, ease }, invariant + 0.1);
+          tl.to(q(".jn-invariant"), { opacity: 1, duration: duration.slow, ease }, invariant + 0.4);
+        }
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["journey"] = tl;
+      })();
+    </script>
+  </div>
+</template>

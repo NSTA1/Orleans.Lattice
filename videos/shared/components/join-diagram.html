@@ -8,6 +8,10 @@
     upper; a delta travels from the bottom state through each concurrent write
     to the join; the join, hollow until both arrive, fills with the marker and
     pulses once. With "redeliver", one delta arrives again and changes nothing.
+    Stamped with an episode's beats (npm run timeline), each phase waits for
+    the words about it: the writes on the second beat, the merges and the join
+    on the third, the re-delivery on the fourth, and the note, if any, on the
+    fifth. Without beats it plays in one run, as on the site.
     Colours are the site's diagram tokens; timings are LatticeMotion.figure.
     Every label comes from the site's own scenario for the figure, read by id
     from docs-site/figures/join-figures.json (synced as join-figures.js), so a
@@ -21,10 +25,14 @@
     data-composition-variables='[
       {"id":"scenario","type":"string","label":"Scenario (join-figures.json id)","default":"gcounter"},
       {"id":"heading","type":"string","label":"Heading","default":""},
-      {"id":"redeliver","type":"boolean","label":"Re-deliver a delta","default":false}
+      {"id":"redeliver","type":"boolean","label":"Re-deliver a delta","default":false},
+      {"id":"note","type":"string","label":"Note, shown on the fifth beat (| breaks a line)","default":""},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
     ]'
   >
-    <h2 class="jd-heading"></h2>
+    <h2 class="lv-heading jd-heading"></h2>
+    <div class="jd-rule-note"></div>
 
     <svg class="jd-svg" viewBox="0 0 1920 1080" width="1920" height="1080" aria-hidden="true">
       <g class="jd-base">
@@ -66,17 +74,26 @@
         background: var(--lt-surface);
         font-family: var(--lv-font-sans);
       }
-      [data-composition-id="join-diagram"] .jd-heading {
+      [data-composition-id="join-diagram"] .jd-svg { position: absolute; inset: 0; }
+      /* The rule the figure demonstrates, set under the heading and clear of
+         the upper-left edge. */
+      [data-composition-id="join-diagram"] .jd-rule-note {
         position: absolute;
         left: var(--lv-safe-x);
-        top: var(--lv-safe-y);
-        margin: 0;
-        color: var(--lt-ink);
-        font-size: var(--lv-type-heading);
-        font-weight: var(--lt-weight-heading);
-        line-height: var(--lt-leading-tight);
+        top: 186px;
+        max-width: 700px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+        line-height: 1.3;
       }
-      [data-composition-id="join-diagram"] .jd-svg { position: absolute; inset: 0; }
+      [data-composition-id="join-diagram"] .jd-rule-note div:first-child {
+        color: var(--lt-ink);
+        font-weight: var(--lt-weight-strong);
+      }
       [data-composition-id="join-diagram"] .jd-base line {
         stroke: var(--lt-rule-strong);
         stroke-width: 4;
@@ -195,7 +212,7 @@
         // drawn as the site draws it fails the render rather than guessing.
         const site = window.LatticeJoinFigures;
         if (!site) {
-          throw new Error("join-diagram: the site's join figures are not loaded; the root composition must load assets/brand/site/join-figures.js");
+          throw new Error("join-diagram: the site's join figures are not loaded; the root composition must load shared/brand/site/join-figures.js");
         }
         const spec = site.figures.find((candidate) => candidate.id === vars.scenario);
         if (!spec) {
@@ -246,46 +263,103 @@
           return (low + high) / 2;
         };
         const travel = (tl, element, path, length, at) => {
-          tl.set(element, { x: path[0].x, y: path[0].y }, 0);
+          tl.set(element, { x: path[0].x, y: path[0].y }, at);
           tl.to(element, { motionPath: { path, curviness: 0 }, duration: length, ease: "lattice-draw" }, at);
           tl.to(element, { opacity: 1, duration: timeAt(0.06) * length, ease: "none" }, at);
           tl.to(element, { opacity: 0, duration: (1 - timeAt(0.94)) * length, ease: "none" }, at + timeAt(0.94) * length);
         };
 
         const tl = gsap.timeline({ paused: true });
-        const run = 0.6;
-        const arrive = run + figure.travel;
+        const timing = window.LatticeScene.cue(vars);
+        const ruleNote = q(".jd-rule-note");
+        for (const line of String(vars.note || "").split("|").map((part) => part.trim()).filter(Boolean)) {
+          const div = document.createElement("div");
+          div.textContent = line;
+          ruleNote.appendChild(div);
+        }
         const entrance = Array.from(root.children).filter(
-          (element) => !["STYLE", "SCRIPT"].includes(element.tagName) && !joinLabels.includes(element),
+          (element) => !["STYLE", "SCRIPT"].includes(element.tagName) && !joinLabels.includes(element) && element !== ruleNote,
         );
-
-        tl.from(entrance, { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
-        tl.set(joinLabels, { opacity: 0 }, 0);
-        tl.set(q(".jd-node-join"), { fill: token("--lt-surface") }, 0);
-
-        tl.set(all(".jd-edge-low"), { opacity: 1 }, run);
-        tl.to(all(".jd-edge-low"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run);
-        tl.set(all(".jd-edge-high"), { opacity: 1 }, run + figure.draw);
-        tl.to(all(".jd-edge-high"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run + figure.draw);
-        travel(tl, q(".jd-token-a"), [bottom, left, join], figure.travel, run);
-        travel(tl, q(".jd-token-b"), [bottom, right, join], figure.travel, run);
-
-        tl.to(q(".jd-node-join"), { fill: token("--lt-diagram-join"), duration: duration.base, ease: "lattice-out" }, arrive);
-        tl.to(joinLabels, { opacity: 1, duration: duration.base, ease: "lattice-out" }, arrive);
-        tl.fromTo(
-          q(".jd-pulse"),
-          { opacity: 0.9, scale: 1, transformOrigin: "50% 50%" },
-          { opacity: 0, scale: 2.4, duration: figure.pulse, ease: "lattice-out" },
-          arrive,
-        );
-
-        if (vars.redeliver) {
+        const redeliver = () => {
           const from = { a: left, b: right }[spec.redeliver.from];
           if (!from) {
             throw new Error("join-diagram: '" + spec.id + "' re-delivers from '" + spec.redeliver.from + "', which is not a concurrent write");
           }
-          travel(tl, q(".jd-token-dup"), [from, join], figure.redeliver, arrive + figure.pulse + 0.6);
+          return from;
+        };
+
+        tl.set(joinLabels, { opacity: 0 }, 0);
+        tl.set(ruleNote, { opacity: 0 }, 0);
+        tl.set(q(".jd-node-join"), { fill: token("--lt-surface") }, 0);
+        const arriveAt = (at) => {
+          tl.to(q(".jd-node-join"), { fill: token("--lt-diagram-join"), duration: duration.base, ease: "lattice-out" }, at);
+          tl.to(joinLabels, { opacity: 1, duration: duration.base, ease: "lattice-out" }, at);
+          tl.fromTo(
+            q(".jd-pulse"),
+            { opacity: 0.9, scale: 1, transformOrigin: "50% 50%" },
+            { opacity: 0, scale: 2.4, duration: figure.pulse, ease: "lattice-out" },
+            at,
+          );
+        };
+
+        if (timing.beats.length < 3) {
+          // Self-timed, as on the site: the whole merge in one run.
+          const run = 0.6;
+          const arrive = run + figure.travel;
+          tl.from(entrance, { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+          tl.set(all(".jd-edge-low"), { opacity: 1 }, run);
+          tl.to(all(".jd-edge-low"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run);
+          tl.set(all(".jd-edge-high"), { opacity: 1 }, run + figure.draw);
+          tl.to(all(".jd-edge-high"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, run + figure.draw);
+          travel(tl, q(".jd-token-a"), [bottom, left, join], figure.travel, run);
+          travel(tl, q(".jd-token-b"), [bottom, right, join], figure.travel, run);
+          arriveAt(arrive);
+          if (vars.redeliver) {
+            travel(tl, q(".jd-token-dup"), [redeliver(), join], figure.redeliver, arrive + figure.pulse + 0.6);
+          }
+          if (ruleNote.children.length) {
+            tl.to(ruleNote, { opacity: 1, duration: duration.slow, ease: "lattice-out" }, arrive + figure.pulse + 2.4);
+          }
+        } else {
+          // Timed to the narration, one phase per beat: the writes on the
+          // second, the merges and the join on the third, the re-delivery on
+          // the fourth and the rule on the fifth. Each part of the figure
+          // appears as it is spoken about.
+          const writes = [q(".jd-group-a"), q(".jd-group-b"), q(".jd-lower-left"), q(".jd-lower-right")];
+          const concurrent = [q(".jd-concurrent-line"), q(".jd-concurrent-label")];
+          const merges = [q(".jd-upper-left"), q(".jd-upper-right")];
+          const staged = [...writes, ...concurrent, ...merges];
+          tl.from(entrance.filter((element) => !staged.includes(element)), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+          tl.set(staged, { opacity: 0 }, 0);
+
+          const phaseOne = timing.at(1) + 0.4;
+          tl.set(all(".jd-edge-low"), { opacity: 1 }, phaseOne);
+          tl.to(all(".jd-edge-low"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, phaseOne);
+          travel(tl, q(".jd-token-a"), [bottom, left], figure.draw, phaseOne);
+          travel(tl, q(".jd-token-b"), [bottom, right], figure.draw, phaseOne);
+          tl.to(writes, { opacity: 1, duration: duration.base, ease: "lattice-out" }, phaseOne + figure.draw * 0.6);
+          // "Neither state is above the other" closes the cue.
+          const concurrentAt = Math.max(phaseOne + figure.draw + 0.8, timing.at(1) + (timing.at(2) - timing.at(1)) * 0.72);
+          tl.to(concurrent, { opacity: 1, duration: duration.base, ease: "lattice-out" }, concurrentAt);
+
+          const phaseTwo = timing.at(2) + 0.4;
+          tl.set(all(".jd-edge-high"), { opacity: 1 }, phaseTwo);
+          tl.to(all(".jd-edge-high"), { strokeDashoffset: 0, duration: figure.draw, ease: "lattice-draw" }, phaseTwo);
+          tl.to(merges, { opacity: 1, duration: duration.base, ease: "lattice-out" }, phaseTwo + 0.3);
+          travel(tl, q(".jd-token-a"), [left, join], figure.draw, phaseTwo);
+          travel(tl, q(".jd-token-b"), [right, join], figure.draw, phaseTwo);
+          arriveAt(phaseTwo + figure.draw);
+
+          const again = timing.at(3, null);
+          if (vars.redeliver && again !== null) {
+            travel(tl, q(".jd-token-dup"), [redeliver(), join], figure.redeliver, again + 0.3);
+          }
+          const rule = timing.at(4, null);
+          if (ruleNote.children.length && rule !== null) {
+            tl.to(ruleNote, { opacity: 1, duration: duration.slow, ease: "lattice-out" }, rule + 0.3);
+          }
         }
+        window.LatticeScene.exit(tl, root, timing);
 
         window.__timelines = window.__timelines || {};
         window.__timelines["join-diagram"] = tl;

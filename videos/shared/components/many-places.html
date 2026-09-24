@@ -1,0 +1,469 @@
+<template id="many-places-template">
+  <!--
+    Why keeping state in more than one place is hard, and what Orleans.Lattice
+    does instead, for a viewer with no technical background. Two places each
+    hold a copy of one value (the mono face, as data). Beat by beat:
+
+      0  the two places, each with its copy; one fails for a moment and the
+         other keeps going
+      1  both change the value at the same moment: concurrent, in the site's
+         concurrent blue, joined by a dashed line
+      2  the usual answer: one change waits its turn, and the memory moves out
+         to a pale, separate database
+      3  a different approach: the database goes, and the memory is back
+         inside the places
+      4  each change travels to the other place, and both reach the same
+         answer: the join, in the marker
+      5  the places give way to a chain from one machine to many regions
+
+    Each change on screen is a crossfade between elements, never a text swap,
+    so every frame renders the same way however the timeline is seeked.
+
+    Variables: headings ("|"-separated, the heading shown from each beat; an
+    empty entry keeps the one before); key, start, a, b (the value and each
+    place's change); the labels; beats and end are stamped by npm run
+    timeline.
+  -->
+  <div
+    data-composition-id="many-places"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"headings","type":"string","label":"Heading from each beat (| between beats)","default":"In more than one place|||A different approach"},
+      {"id":"key","type":"string","label":"The value both places hold","default":"page/views"},
+      {"id":"start","type":"number","label":"Its starting value","default":20},
+      {"id":"a","type":"number","label":"Place A adds","default":3},
+      {"id":"b","type":"number","label":"Place B adds","default":5},
+      {"id":"placeA","type":"string","label":"First place","default":"Place A"},
+      {"id":"placeB","type":"string","label":"Second place","default":"Place B"},
+      {"id":"change","type":"string","label":"What a change does ({n} is the amount)","default":"{n} more views"},
+      {"id":"wait","type":"string","label":"A change that waits (beat 2)","default":"waits its turn"},
+      {"id":"concurrent","type":"string","label":"The concurrent line (beat 1)","default":"at the same moment"},
+      {"id":"database","type":"string","label":"The separate database (beat 2)","default":"Separate database"},
+      {"id":"databaseNote","type":"string","label":"Under the database","default":"run and repaired on its own"},
+      {"id":"same","type":"string","label":"The same answer (beat 4)","default":"The same count in both places, and neither waits"},
+      {"id":"from","type":"string","label":"Chain start (beat 5)","default":"One machine"},
+      {"id":"fromNote","type":"string","label":"Under the chain start","default":"no cloud account"},
+      {"id":"to","type":"string","label":"Chain end (beat 5)","default":"Many regions"},
+      {"id":"toNote","type":"string","label":"Under the chain end","default":"without a rewrite"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading mp-heading"></h2>
+
+    <svg class="mp-svg" viewBox="0 0 1920 1080" width="1920" height="1080" aria-hidden="true">
+      <line class="mp-concurrent-line" x1="794" y1="400" x2="1126" y2="400" />
+      <path class="mp-trip" d="M 438 540 C 438 640, 800 700, 946 700" />
+      <path class="mp-trip" d="M 1482 540 C 1482 640, 1120 700, 974 700" />
+    </svg>
+
+    <div class="mp-place mp-place-a"></div>
+    <div class="mp-place mp-place-b"></div>
+    <div class="lv-label mp-concurrent-label"></div>
+    <span class="mp-token mp-token-a"></span>
+    <span class="mp-token mp-token-b"></span>
+
+    <div class="mp-database">
+      <span class="lv-node"></span>
+      <div class="mp-database-name"></div>
+      <div class="lv-label mp-database-note"></div>
+    </div>
+
+    <div class="mp-same"></div>
+
+    <div class="mp-chain">
+      <div class="mp-chain-line"></div>
+      <div class="mp-end mp-end-from"><span class="lv-node"></span><div class="mp-end-name"></div><div class="lv-label mp-end-note"></div></div>
+      <div class="mp-end mp-end-to"><span class="lv-node"></span><div class="mp-end-name"></div><div class="lv-label mp-end-note"></div></div>
+    </div>
+
+    <style>
+      /* The heading's words are stacked absolutely so they can cross-fade;
+         the heading keeps the height of one line so they sit inside it. */
+      [data-composition-id="many-places"] .mp-heading {
+        height: calc(var(--lv-type-heading) * var(--lt-leading-tight));
+      }
+      [data-composition-id="many-places"] .mp-heading-text {
+        position: absolute;
+        left: 0;
+        top: 30px;
+        white-space: nowrap;
+      }
+      [data-composition-id="many-places"] .mp-svg {
+        position: absolute;
+        inset: 0;
+      }
+      [data-composition-id="many-places"] .mp-concurrent-line {
+        stroke: var(--lt-ink-3);
+        stroke-width: 2.5;
+        stroke-dasharray: 4 12;
+        stroke-linecap: round;
+      }
+      [data-composition-id="many-places"] .mp-trip {
+        fill: none;
+        stroke: var(--lt-ink-3);
+        stroke-width: 3;
+        stroke-dasharray: 4 14;
+        stroke-linecap: round;
+      }
+      /* A place: the site's hairline frame, its name at the top, one value
+         inside. Everything in it is placed from the frame's corner. */
+      [data-composition-id="many-places"] .mp-place {
+        position: absolute;
+        top: 250px;
+        width: 684px;
+        height: 290px;
+        box-sizing: border-box;
+        border: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-radius: var(--lv-radius);
+      }
+      [data-composition-id="many-places"] .mp-place-a { left: 96px; }
+      [data-composition-id="many-places"] .mp-place-b { left: 1140px; }
+      [data-composition-id="many-places"] .mp-place-label {
+        position: absolute;
+        left: 36px;
+        top: 22px;
+      }
+      [data-composition-id="many-places"] .mp-row {
+        position: absolute;
+        left: 0;
+        top: 120px;
+        width: 680px;
+        height: 60px;
+      }
+      [data-composition-id="many-places"] .mp-row .lv-node,
+      [data-composition-id="many-places"] .mp-pulse {
+        position: absolute;
+        left: 60px;
+        top: calc(30px - 0.5 * var(--lv-node));
+      }
+      [data-composition-id="many-places"] .mp-pulse {
+        width: var(--lv-node);
+        height: var(--lv-node);
+        border-radius: 50%;
+        box-shadow: inset 0 0 0 4px var(--lt-diagram-join);
+        opacity: 0;
+      }
+      [data-composition-id="many-places"] .mp-state {
+        position: absolute;
+        left: 110px;
+        top: 0;
+        width: 540px;
+        height: 60px;
+        line-height: 60px;
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-state);
+        white-space: nowrap;
+      }
+      [data-composition-id="many-places"] .mp-key {
+        color: var(--lt-ink-2);
+      }
+      [data-composition-id="many-places"] .mp-values {
+        position: relative;
+        display: inline-block;
+        width: 4ch;
+        height: 60px;
+        margin-left: 36px;
+        vertical-align: top;
+      }
+      [data-composition-id="many-places"] .mp-value {
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--lt-ink);
+        font-weight: 600;
+      }
+      [data-composition-id="many-places"] .mp-notes {
+        position: absolute;
+        left: 110px;
+        top: 196px;
+        width: 540px;
+        height: 44px;
+      }
+      [data-composition-id="many-places"] .mp-note {
+        position: absolute;
+        left: 0;
+        top: 0;
+        line-height: 44px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+        white-space: nowrap;
+      }
+      [data-composition-id="many-places"] .mp-note-wait {
+        color: var(--lt-ink-3);
+      }
+      [data-composition-id="many-places"] .mp-concurrent-label {
+        position: absolute;
+        left: 780px;
+        top: 344px;
+        width: 360px;
+        text-align: center;
+        font-style: oblique 8deg;
+        white-space: nowrap;
+      }
+      [data-composition-id="many-places"] .mp-token {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--lt-diagram-concurrent);
+        opacity: 0;
+      }
+      /* The separate database: pale, and outside both places. */
+      [data-composition-id="many-places"] .mp-database {
+        position: absolute;
+        left: 660px;
+        top: calc(700px - 0.5 * var(--lv-node));
+        width: 600px;
+        height: 150px;
+        text-align: center;
+      }
+      [data-composition-id="many-places"] .mp-database .lv-node {
+        position: absolute;
+        left: calc(300px - 0.5 * var(--lv-node));
+        top: 0;
+        box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-rule-strong);
+      }
+      [data-composition-id="many-places"] .mp-database-name {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 40px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="many-places"] .mp-database-note {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 88px;
+        color: var(--lt-ink-3);
+      }
+      [data-composition-id="many-places"] .mp-same {
+        position: absolute;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        top: 640px;
+        text-align: center;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+      }
+      /* One machine to many regions, as the journey draws a chain. */
+      [data-composition-id="many-places"] .mp-chain-line {
+        position: absolute;
+        left: 300px;
+        top: calc(500px - 0.5 * var(--lv-rule-heavy));
+        width: 1320px;
+        height: var(--lv-rule-heavy);
+        background: var(--lt-ink);
+        transform-origin: left center;
+      }
+      [data-composition-id="many-places"] .mp-end {
+        position: absolute;
+        top: calc(500px - 0.5 * var(--lv-node));
+        width: 400px;
+        height: 170px;
+        text-align: center;
+      }
+      [data-composition-id="many-places"] .mp-end-from { left: 100px; }
+      [data-composition-id="many-places"] .mp-end-to { left: 1420px; }
+      [data-composition-id="many-places"] .mp-end .lv-node {
+        position: absolute;
+        left: calc(200px - 0.5 * var(--lv-node));
+        top: 0;
+        background: var(--lt-ink);
+      }
+      [data-composition-id="many-places"] .mp-end-name {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 46px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: var(--lt-leading-tight);
+      }
+      [data-composition-id="many-places"] .mp-end-note {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 122px;
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="many-places"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration, figure } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+        const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+        const text = (selector, value) => (q(selector).textContent = scene.site(value) ?? "");
+
+        // One heading element keeps the hairline and its node; the words
+        // cross-fade inside it as the beats that change them arrive.
+        const headings = String(vars.headings || "").split("|").map((part) => part.trim());
+        const headingTexts = headings.map((words, k) => {
+          if (!words) return null;
+          const span = document.createElement("span");
+          span.className = "mp-heading-text";
+          span.textContent = scene.site(words);
+          q(".mp-heading").appendChild(span);
+          return { k, span };
+        }).filter(Boolean);
+
+        const start = Number(vars.start) || 0;
+        const a = Number(vars.a) || 0;
+        const b = Number(vars.b) || 0;
+        // A change is described by a template with the amount as {n}
+        // ("{n} more views"); without one, the amount follows the words.
+        const changeNote = (added) => {
+          const words = String(scene.site(vars.change) ?? "");
+          return words.includes("{n}") ? words.split("{n}").join(String(added)) : (words + " " + added).trim();
+        };
+        const place = (selector, name, added) => {
+          const element = q(selector);
+          element.innerHTML =
+            '<span class="lv-label mp-place-label"></span>' +
+            '<div class="mp-row"><span class="lv-node"></span><span class="mp-pulse"></span>' +
+            '<span class="mp-state"><span class="mp-key"></span><span class="mp-values">' +
+            '<span class="mp-value mp-before"></span><span class="mp-value mp-changed"></span><span class="mp-value mp-joined"></span>' +
+            "</span></span></div>" +
+            '<div class="mp-notes"><span class="mp-note mp-note-change"></span><span class="mp-note mp-note-wait"></span></div>';
+          element.querySelector(".mp-place-label").textContent = scene.site(name);
+          element.querySelector(".mp-key").textContent = scene.site(vars.key);
+          element.querySelector(".mp-before").textContent = String(start);
+          element.querySelector(".mp-changed").textContent = String(start + added);
+          element.querySelector(".mp-joined").textContent = String(start + a + b);
+          element.querySelector(".mp-note-change").textContent = changeNote(added);
+          element.querySelector(".mp-note-wait").textContent = scene.site(vars.wait);
+          const part = (name) => element.querySelector(name);
+          return {
+            element,
+            node: part(".mp-row .lv-node"),
+            pulse: part(".mp-pulse"),
+            row: part(".mp-row"),
+            before: part(".mp-before"),
+            changed: part(".mp-changed"),
+            joined: part(".mp-joined"),
+            change: part(".mp-note-change"),
+            wait: part(".mp-note-wait"),
+          };
+        };
+        const A = place(".mp-place-a", vars.placeA, a);
+        const B = place(".mp-place-b", vars.placeB, b);
+        text(".mp-concurrent-label", vars.concurrent);
+        text(".mp-database-name", vars.database);
+        text(".mp-database-note", vars.databaseNote);
+        text(".mp-same", vars.same);
+        text(".mp-end-from .mp-end-name", vars.from);
+        text(".mp-end-from .mp-end-note", vars.fromNote);
+        text(".mp-end-to .mp-end-name", vars.to);
+        text(".mp-end-to .mp-end-note", vars.toNote);
+
+        const concurrentColour = token("--lt-diagram-concurrent");
+        const joinColour = token("--lt-diagram-join");
+        const surface = token("--lt-surface");
+        const beat = [0.4, 6.4, 10.4, 19.4, 24.4, 32.4].map((fallback, k) => timing.at(k, fallback));
+        const end = timing.end || beat[5] + 7;
+        const tl = gsap.timeline({ paused: true });
+        const fade = (targets, opacity, at, length = duration.base) => tl.to(targets, { opacity, duration: length, ease }, at);
+
+        // Nothing but the first heading and the places starts on screen.
+        const later = [A.changed, A.joined, A.change, A.wait, B.changed, B.joined, B.change, B.wait];
+        tl.set(later, { opacity: 0 }, 0);
+        tl.set([q(".mp-concurrent-line"), q(".mp-concurrent-label"), q(".mp-database"), q(".mp-same"), q(".mp-chain")], { opacity: 0 }, 0);
+        tl.set(all(".mp-trip"), { opacity: 0 }, 0);
+        headingTexts.forEach(({ k, span }) => tl.set(span, { opacity: k === 0 ? 1 : 0 }, 0));
+        tl.from(q(".mp-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+
+        // 0: two places, each with its copy; one fails for a moment.
+        tl.from([A.element, B.element], { opacity: 0, y: 20, duration: duration.slow, ease, stagger: 0.2 }, beat[0]);
+        tl.from([A.row, B.row], { opacity: 0, duration: duration.base, ease, stagger: 0.2 }, beat[0] + 0.6);
+        const fails = beat[0] + (beat[1] - beat[0]) * 0.62;
+        if (beat[1] - 0.5 > fails + 0.6) {
+          fade(B.element, 0.28, fails);
+          fade(B.element, 1, beat[1] - 0.5);
+        }
+
+        // 1: both change it at the same moment.
+        const change = beat[1] + 0.4;
+        for (const P of [A, B]) {
+          fade(P.before, 0, change, duration.fast);
+          fade(P.changed, 1, change, duration.fast);
+          fade(P.change, 1, change);
+          tl.to(P.node, { backgroundColor: concurrentColour, duration: duration.base, ease }, change);
+        }
+        fade([q(".mp-concurrent-line"), q(".mp-concurrent-label")], 1, beat[1] + 1.1);
+
+        // 2: the usual answer - B waits, and the memory lives elsewhere.
+        fade([q(".mp-concurrent-line"), q(".mp-concurrent-label")], 0, beat[2] + 0.1);
+        fade(B.change, 0, beat[2] + 0.5, duration.fast);
+        fade(B.wait, 1, beat[2] + 0.5);
+        fade(B.changed, 0.35, beat[2] + 0.5);
+        tl.to(B.node, { backgroundColor: surface, duration: duration.base, ease }, beat[2] + 0.5);
+        const elsewhere = beat[2] + (beat[3] - beat[2]) * 0.58;
+        fade([q(".mp-database"), ...all(".mp-trip")], 1, elsewhere, duration.slow);
+        fade([A.row, B.row], 0.3, elsewhere + 0.3, duration.slow);
+
+        // Headings change on the beats that name them.
+        headingTexts.forEach(({ k, span }, index) => {
+          if (k === 0) return;
+          const previous = headingTexts[index - 1].span;
+          fade(previous, 0, beat[k] + 0.1, duration.fast);
+          fade(span, 1, beat[k] + 0.25);
+        });
+
+        // 3: a different approach - the memory is back inside.
+        const inside = beat[3] + (beat[4] - beat[3]) * 0.45;
+        fade([q(".mp-database"), ...all(".mp-trip")], 0, inside, duration.slow);
+        fade([A.row, B.row], 1, inside + 0.2, duration.slow);
+        fade(B.wait, 0, inside + 0.2, duration.fast);
+        fade(B.change, 1, inside + 0.35);
+        fade(B.changed, 1, inside + 0.35);
+        tl.to(B.node, { backgroundColor: concurrentColour, duration: duration.base, ease }, inside + 0.35);
+
+        // 4: each change travels to the other place; both reach the join.
+        const travel = beat[4] + 0.3;
+        const arrive = travel + figure.draw;
+        const cross = (element, fromX, toX, y) => {
+          tl.set(element, { x: fromX - 12, y: y - 12 }, 0);
+          tl.to(element, { opacity: 1, duration: 0.15, ease: "none" }, travel);
+          tl.to(element, { x: toX - 12, duration: figure.draw, ease: "lattice-draw" }, travel);
+          tl.to(element, { opacity: 0, duration: 0.15, ease: "none" }, arrive - 0.15);
+        };
+        cross(q(".mp-token-a"), 794, 1126, 386);
+        cross(q(".mp-token-b"), 1126, 794, 414);
+        for (const P of [A, B]) {
+          fade(P.changed, 0, arrive, duration.fast);
+          fade(P.joined, 1, arrive, duration.fast);
+          tl.to(P.node, { backgroundColor: joinColour, duration: duration.base, ease }, arrive);
+          tl.fromTo(P.pulse, { opacity: 0.9, scale: 1 }, { opacity: 0, scale: 2.6, duration: figure.pulse, ease, immediateRender: false }, arrive);
+        }
+        fade(q(".mp-same"), 1, arrive + 0.8, duration.slow);
+
+        // 5: one machine to many regions.
+        fade([A.element, B.element, q(".mp-same")], 0, beat[5] + 0.1);
+        fade(q(".mp-chain"), 1, beat[5] + 0.5, duration.fast);
+        tl.from(q(".mp-end-from"), { opacity: 0, y: 12, duration: duration.base, ease }, beat[5] + 0.5);
+        tl.from(q(".mp-chain-line"), { scaleX: 0, duration: 1.4, ease: "lattice-draw" }, beat[5] + 0.8);
+        tl.from(q(".mp-end-to"), { opacity: 0, y: 12, duration: duration.base, ease }, beat[5] + Math.max(2, 0.5 * (end - beat[5])));
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["many-places"] = tl;
+      })();
+    </script>
+  </div>
+</template>

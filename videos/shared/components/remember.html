@@ -1,0 +1,178 @@
+<template id="remember-template">
+  <!--
+    What an application remembers, for a viewer who has never heard the word
+    "state": a few everyday things on a spine, each a node with its plain
+    description, and beside each the value the application keeps, in the mono
+    face as data. The examples arrive as the first cue names them; on the
+    second beat a frame closes round the values and is labelled with the word
+    the narration has just taught.
+
+    Variables: heading; items ("|"-separated, each "description::key::value");
+    itemsAt (the moments the items arrive, as comma-separated fractions of the
+    first cue, default evenly from 0.3 to 0.72); label (the frame's label,
+    beat 1); beats and end are stamped by npm run timeline.
+  -->
+  <div
+    data-composition-id="remember"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"What an application remembers"},
+      {"id":"items","type":"string","label":"Items (| between items, :: between description, key and value)","default":"What is in a basket::basket/ada::3 items|Who may open a document::document/plan::4 readers|How often a page is viewed::page/views::20"},
+      {"id":"itemsAt","type":"string","label":"When each item arrives, as fractions of the first cue","default":""},
+      {"id":"label","type":"string","label":"Frame label (beat 1)","default":"state"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading rm-heading"></h2>
+    <div class="rm-spine"></div>
+    <div class="rm-frame"><span class="lv-label rm-frame-label"></span></div>
+    <ol class="rm-items"></ol>
+
+    <style>
+      [data-composition-id="remember"] .rm-spine {
+        position: absolute;
+        left: calc(160px - 0.5 * var(--lv-hairline));
+        top: 330px;
+        width: var(--lv-hairline);
+        height: 380px;
+        background: var(--lt-rule-strong);
+        transform-origin: top center;
+      }
+      [data-composition-id="remember"] .rm-frame {
+        position: absolute;
+        left: 990px;
+        top: 290px;
+        width: 700px;
+        height: 440px;
+        box-sizing: border-box;
+        border: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-radius: var(--lv-radius);
+      }
+      [data-composition-id="remember"] .rm-frame-label {
+        position: absolute;
+        left: 40px;
+        top: 18px;
+      }
+      [data-composition-id="remember"] .rm-items {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      /* One row: a node on the spine, the plain description, and the value
+         the application keeps. Each row is a full-width box one line high. */
+      [data-composition-id="remember"] .rm-item {
+        position: absolute;
+        left: 0;
+        width: 1920px;
+        height: 60px;
+        transform: translateY(-50%);
+      }
+      [data-composition-id="remember"] .rm-item .lv-node {
+        position: absolute;
+        left: calc(160px - 0.5 * var(--lv-node));
+        top: calc(30px - 0.5 * var(--lv-node));
+        background: var(--lt-ink);
+      }
+      [data-composition-id="remember"] .rm-description {
+        position: absolute;
+        left: 210px;
+        top: 0;
+        width: 740px;
+        line-height: 60px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+        white-space: nowrap;
+      }
+      [data-composition-id="remember"] .rm-state {
+        position: absolute;
+        left: 1040px;
+        top: 0;
+        width: 620px;
+        line-height: 60px;
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-state);
+        white-space: nowrap;
+      }
+      [data-composition-id="remember"] .rm-key {
+        color: var(--lt-ink-2);
+      }
+      [data-composition-id="remember"] .rm-value {
+        margin-left: 36px;
+        color: var(--lt-ink);
+        font-weight: 600;
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="remember"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+
+        q(".rm-heading").textContent = scene.site(vars.heading);
+        q(".rm-frame-label").textContent = scene.site(vars.label);
+
+        const items = String(vars.items || "")
+          .split("|")
+          .map((item) => item.split("::").map((part) => part.trim()))
+          .filter((parts) => parts[0]);
+        const rowY = (i) => (items.length === 1 ? 520 : 390 + (260 * i) / (items.length - 1));
+        items.forEach(([description, key, value], i) => {
+          const row = document.createElement("li");
+          row.className = "rm-item";
+          row.style.top = rowY(i) + "px";
+          row.innerHTML =
+            '<span class="lv-node"></span><span class="rm-description"></span>' +
+            '<span class="rm-state"><span class="rm-key"></span><span class="rm-value"></span></span>';
+          row.querySelector(".rm-description").textContent = description;
+          row.querySelector(".rm-key").textContent = key || "";
+          row.querySelector(".rm-value").textContent = value || "";
+          q(".rm-items").appendChild(row);
+        });
+
+        // Each example arrives as the first cue names it: evenly through its
+        // second half unless the episode says exactly where.
+        const first = timing.at(0, 0.3);
+        const span = timing.at(1, first + 8) - first;
+        const given = String(vars.itemsAt || "")
+          .split(",")
+          .map((part) => Number(part.trim()))
+          .filter((fraction) => Number.isFinite(fraction) && fraction >= 0 && fraction < 1);
+        const at = (i) =>
+          first + span * (given[i] !== undefined ? given[i] : items.length === 1 ? 0.3 : 0.3 + (0.42 * i) / (items.length - 1));
+
+        const tl = gsap.timeline({ paused: true });
+        tl.from(q(".rm-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.from(q(".rm-spine"), { scaleY: 0, duration: 1.2, ease: "lattice-draw" }, first);
+        all(".rm-item").forEach((row, i) => {
+          tl.from(row.querySelector(".lv-node"), { opacity: 0, scale: 0.4, duration: duration.base, ease }, at(i));
+          tl.from(row.querySelector(".rm-description"), { opacity: 0, x: -16, duration: duration.base, ease }, at(i));
+          tl.from(row.querySelector(".rm-state"), { opacity: 0, x: -16, duration: duration.base, ease }, at(i) + 0.45);
+        });
+
+        // The word the narration teaches: the values are the state.
+        const named = timing.at(1, null);
+        tl.set(q(".rm-frame"), { opacity: 0 }, 0);
+        if (named !== null) {
+          tl.to(q(".rm-frame"), { opacity: 1, duration: duration.slow, ease }, named + 0.2);
+          tl.to(all(".rm-description"), { color: getComputedStyle(root).getPropertyValue("--lt-ink-2").trim(), duration: duration.slow, ease }, named + 0.2);
+        }
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["remember"] = tl;
+      })();
+    </script>
+  </div>
+</template>

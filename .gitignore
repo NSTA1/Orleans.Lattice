@@ -455,8 +455,9 @@ tools/tla2tools.jar
 samples/RepoContextContainer/backup-sink/
 
 # The videos/ HyperFrames workspace (see videos/README.md). Renders, key-frame
-# snapshots and narration are build output, and none is committed until the
-# hosting decision in videos/series.md is made. assets/brand/site/ is the copy
+# snapshots and narration are build output. A finished video is published by
+# committing it, with its captions and poster, to docs-site/media/, which the
+# site plays (videos/series.md, "Hosting - decided"). shared/brand/site/ is the copy
 # of the docs site's design system (docs-site/template/public) that the
 # workspace makes before every render; the source is the only tracked copy.
 # The remaining entries are what `hyperframes init` and project-scoped skill
@@ -465,7 +466,7 @@ samples/RepoContextContainer/backup-sink/
 # skills per user (`-g`) instead.
 videos/renders/
 videos/snapshots/
-videos/assets/brand/site/
+videos/shared/brand/site/
 videos/.env
 videos/AGENTS.md
 videos/CLAUDE.md
