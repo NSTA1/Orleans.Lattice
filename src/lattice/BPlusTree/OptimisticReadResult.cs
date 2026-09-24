@@ -2,9 +2,10 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Outcome of <see cref="IShardRootGrain.TryGetOptimisticAsync"/>: either a validated
-/// point-read value (which may be <c>null</c> for an absent or tombstoned key) or a
-/// request that the caller repeat the read on the serial
-/// <see cref="IShardRootGrain.GetAsync"/> path.
+/// point-read value or a request that the caller repeat the read on the serial
+/// <see cref="IShardRootGrain.GetAsync"/> path. The shard root never validates an
+/// absent key (a miss is always adjudicated serially), but a validated <c>null</c>
+/// remains representable and callers treat it as authoritative.
 /// <para>
 /// The <c>default</c> instance means "repeat on the serial path", so an
 /// uninitialised or default-returning result can never be mistaken for a

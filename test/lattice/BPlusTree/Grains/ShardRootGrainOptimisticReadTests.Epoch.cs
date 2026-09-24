@@ -26,7 +26,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public void BeginRoutingMutation_and_EndRoutingMutation_each_bump_the_epoch()
     {
-        var (grain, _, _) = CreateGrain();
+        var (grain, _, _, _) = CreateGrain();
         var start = grain.RoutingEpoch;
 
         grain.BeginRoutingMutation();
@@ -119,7 +119,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task Call_filter_brackets_a_suspended_mutating_call_and_refuses_optimistic_reads_meanwhile()
     {
-        var (grain, _, cache) = CreateGrain();
+        var (grain, _, leaf, _) = CreateGrain();
         var filter = (IIncomingGrainCallFilter)grain;
         var mutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = grain.RoutingEpoch;
@@ -129,7 +129,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
         mutation.SetResult();
         await filtered;
-        cache.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetAsync("k1").Returns(Bytes("v1"));
         var afterMutation = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(duringMutation.IsValidated, Is.False);
@@ -140,7 +140,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task Call_filter_brackets_a_synchronously_completing_mutating_call()
     {
-        var (grain, _, _) = CreateGrain();
+        var (grain, _, _, _) = CreateGrain();
         var filter = (IIncomingGrainCallFilter)grain;
         var start = grain.RoutingEpoch;
 
@@ -152,14 +152,14 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task Call_filter_closes_the_bracket_when_the_mutating_call_faults()
     {
-        var (grain, _, cache) = CreateGrain();
+        var (grain, _, leaf, _) = CreateGrain();
         var filter = (IIncomingGrainCallFilter)grain;
         var faulted = Task.FromException(new InvalidOperationException("write failed"));
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
             filter.Invoke(CallContext(typeof(IShardRootGrain), nameof(IShardRootGrain.SetAsync), faulted)));
 
-        cache.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetAsync("k1").Returns(Bytes("v1"));
         var result = await grain.TryGetOptimisticAsync("k1");
         Assert.That(result.IsValidated, Is.True);
     }
@@ -167,7 +167,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task Call_filter_does_not_bracket_a_pure_read()
     {
-        var (grain, _, _) = CreateGrain();
+        var (grain, _, _, _) = CreateGrain();
         var filter = (IIncomingGrainCallFilter)grain;
         var start = grain.RoutingEpoch;
 
@@ -179,7 +179,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task Serial_steady_state_read_leaves_the_epoch_unchanged()
     {
-        var (grain, _, cache) = CreateGrain();
+        var (grain, _, _, cache) = CreateGrain();
         var start = grain.RoutingEpoch;
         cache.GetAsync("k1").Returns(Bytes("v1"));
 
@@ -194,7 +194,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         // An unseeded root sends the serial read through PrepareForOperationSlowAsync
         // (root creation). Under the fakes the root creation faults part-way; the
         // bracket must still have bumped the epoch and released its in-flight count.
-        var (grain, state, cache) = CreateGrain(seedRoot: false);
+        var (grain, state, leaf, _) = CreateGrain(seedRoot: false);
         var start = grain.RoutingEpoch;
 
         try
@@ -210,7 +210,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
         state.State.RootNodeId = RootLeafId;
         state.State.RootIsLeaf = true;
-        cache.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetAsync("k1").Returns(Bytes("v1"));
         var result = await grain.TryGetOptimisticAsync("k1");
         Assert.That(result.IsValidated, Is.True);
     }

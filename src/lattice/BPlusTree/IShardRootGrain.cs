@@ -33,9 +33,12 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns the value for <paramref name="key"/> when the read can be validated,
     /// or a result whose <see cref="OptimisticReadResult.IsValidated"/> is <c>false</c>, in
     /// which case the caller MUST repeat the read through the serial
-    /// <see cref="GetAsync"/>. Exceptions the serial read would raise for the same
-    /// state (for example <see cref="StaleShardRoutingException"/> on a moved slot)
-    /// are raised here too.
+    /// <see cref="GetAsync"/>. The routing gates the serial read enforces (a
+    /// rejecting or deleted tree, a retained redirect, a moved-away slot) never
+    /// raise here: they surface as a serial retry, so the serial read raises or
+    /// settles them against prepared state and the caller's stale-routing retry
+    /// loop cannot re-enter this method indefinitely. A leaf fault while routing
+    /// was stable propagates unchanged.
     /// <para>
     /// Marked <see cref="AlwaysInterleaveAttribute"/> so concurrent point reads on
     /// one shard root overlap their leaf round trips instead of queueing one per
@@ -56,9 +59,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// no await, that no such call is in flight, that the routing state needs no
     /// prepare work, that no split is in progress and that the key's slot has not
     /// moved away.</item>
+    /// <item>The leaf is resolved only from routing tables the serial path already
+    /// cached; a cache miss is a serial retry. The read never fetches or publishes a
+    /// routing table, so it cannot cache a table a concurrent split has superseded
+    /// and misroute later writes.</item>
+    /// <item>The read goes to the primary leaf grain, not the stateless-worker leaf
+    /// cache the serial path uses. A cache replica activated or refreshed from an
+    /// interleaved read during a fold or split can diverge from the shard root's
+    /// routing; the primary leaf is the authority for its own moved-away seal and
+    /// pending-transaction state.</item>
     /// <item>After the leaf returns, the epoch is compared again. Any change means a
-    /// routing mutation overlapped the read, so the value (including a
-    /// <c>null</c>) is discarded and a serial retry is requested.</item>
+    /// routing mutation overlapped the read, so the value is discarded and a serial
+    /// retry is requested.</item>
+    /// <item>An absent (<c>null</c>) result is never validated. A fold can seal a
+    /// leaf's moved-away slots without a shard-root routing mutation, so an
+    /// unchanged epoch does not prove absence; the serial read adjudicates every
+    /// miss.</item>
     /// </list>
     /// <para>
     /// A validated read therefore observed routing state that no other call touched

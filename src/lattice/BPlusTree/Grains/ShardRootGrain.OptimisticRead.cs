@@ -171,25 +171,39 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
             return OptimisticReadResult.SerialRetry;
         }
 
-        // Snapshot block: everything up to the traversal's first await runs in one
+        // Snapshot block: everything from here to the leaf call runs in one
         // synchronous turn slice, so no other turn can mutate routing state between
-        // these checks and the reads of RootNodeId / RootIsLeaf the traversal makes
-        // before it first yields.
-        ThrowIfTreeRejecting();
-        ThrowIfRetainedRedirect();
-        ThrowIfDeleted();
-        if (!CanServeOptimisticRead())
+        // these checks and the leaf resolution. The leaf is resolved from the
+        // already-cached routing tables only: an optimistic read never fetches a
+        // routing table and never publishes into _routingTableCache. A fetch here
+        // would run interleaved with serial writes and could cache a routing table
+        // that a concurrent split / fold had already superseded, misrouting
+        // subsequent WRITES into a leaf that no longer owns the key (lost writes,
+        // not just a false-null read). A cache miss defers to the serial path.
+        if (!CanServeOptimisticRead() || !IsOptimisticReadGateOpen(key))
         {
             return OptimisticReadResult.SerialRetry;
         }
 
         var epoch = _routingEpoch;
-        ThrowIfMovedAwayForReadKey(key);
+        if (!TryResolveReadLeafFromCache(key, out var leafId))
+        {
+            return OptimisticReadResult.SerialRetry;
+        }
 
+        // The optimistic read goes to the PRIMARY leaf, never through the
+        // stateless-worker LeafCacheGrain the serial path uses. A cache replica
+        // activated or refreshed from an interleaved read during a fold / split
+        // window can hold moved-away seal state and pruned rows that diverge from
+        // this shard root's routing, and a later serial read served by that replica
+        // can then miss a key it owns (lost writes and a stale-routing retry loop
+        // observed under the consolidation chaos suite). The primary leaf is the
+        // authority for its own moved-away seal and pending-transaction state, so
+        // its answer needs only the routing-epoch validation below.
         byte[]? value;
         try
         {
-            value = await TraverseForReadAsync(key);
+            value = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetAsync(key);
         }
         catch when (_routingEpoch != epoch)
         {
@@ -208,8 +222,52 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
             return OptimisticReadResult.SerialRetry;
         }
 
+        // An absent result is never validated optimistically. The primary leaf
+        // returns null for a key whose slot it has sealed as moved away, and a
+        // fold / split can seal leaves directly (without a shard-root routing
+        // mutation), so an unchanged epoch does not prove the key is absent. The
+        // serial path adjudicates every null, which keeps the U9h-C "key missing
+        // mid-chaos" invariant exactly as strong as before; the cost is confined
+        // to reads of absent keys.
+        if (value is null)
+        {
+            return OptimisticReadResult.SerialRetry;
+        }
+
         RecordRead();
+        RecordLeafAccess(leafId);
         return OptimisticReadResult.FromValue(value);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when none of the serial read's gates (tree rejecting,
+    /// retained redirect, deleted, moved-away slot) would reject <paramref name="key"/>.
+    /// <para>
+    /// The optimistic read never raises those rejections itself. It defers to the
+    /// serial read, which runs <see cref="PrepareForOperationAsync"/> first and then
+    /// raises (or repairs) them against settled state. Raising them here instead
+    /// would let the caller's stale-routing retry loop re-enter the optimistic read
+    /// indefinitely without ever reaching the serial path that settles the
+    /// condition, which is a livelock observed under interleaved folds and splits.
+    /// Every gate runs synchronously, so this stays inside the snapshot block.
+    /// </para>
+    /// </summary>
+    private bool IsOptimisticReadGateOpen(string key)
+    {
+        try
+        {
+            ThrowIfTreeRejecting();
+            ThrowIfRetainedRedirect();
+            ThrowIfDeleted();
+            ThrowIfMovedAwayForReadKey(key);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Rare by construction (a closing tree, a reshard window): the throw
+            // cost is paid only on reads the serial path must adjudicate anyway.
+            return false;
+        }
     }
 
     /// <summary>

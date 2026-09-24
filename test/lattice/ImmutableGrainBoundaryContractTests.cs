@@ -83,6 +83,7 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.Grains.LatticeQueueByteEntry"] = OpaquePayload,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardShippingEntry"] = OpaquePayload,
             ["Orleans.Lattice.BPlusTree.LwwEntry"] = OpaquePayload,
+            ["Orleans.Lattice.BPlusTree.OptimisticReadResult"] = OpaquePayload,
             ["Orleans.Lattice.BPlusTree.PendingMutationSnapshot"] = OpaquePayload,
             ["Orleans.Lattice.BPlusTree.State.LeafBaselinePendingEntry"] = OpaquePayload,
             ["Orleans.Lattice.EntryRevision"] = OpaquePayload,

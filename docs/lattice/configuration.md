@@ -1024,6 +1024,8 @@ When enabled (the default), a point read (`GetAsync`) first tries an optimistic 
 
 The optimistic read is validated rather than trusted. The shard root keeps an in-memory routing epoch that every call other than a pure read bumps as it starts and finishes. An optimistic read refuses to start while such a call is in flight, snapshots the epoch in one synchronous step, and accepts the leaf's answer only when the epoch is unchanged afterwards. Otherwise, including when a root promotion, split, or move-away landed during the read, the call falls back to the serial read path, which returns the correct value. Reads therefore never observe a half-applied routing change.
 
+The optimistic read resolves its leaf only from routing tables the serial path has already cached, and reads the primary leaf grain directly rather than through the leaf cache, because a cache replica refreshed mid-split can briefly disagree with the shard root's routing. A key that is not found is always re-read on the serial path, so the throughput gain applies to reads of present keys; reads of absent keys cost the same as before plus one extra hop.
+
 Point reads gain the most on read-heavy workloads. While writes are in flight on a shard root, its point reads take the serial path as before. Disable the option to restore the fully serial read path:
 
 ```csharp verify

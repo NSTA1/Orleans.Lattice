@@ -67,6 +67,26 @@ public partial class LatticeGrainTests
     }
 
     [Test]
+    public async Task GetAsync_stale_routing_after_optimistic_retry_reaches_the_serial_read_on_the_next_attempt()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.TryGetOptimisticAsync("k1").Returns(OptimisticReadResult.SerialRetry);
+        shardRoot.GetAsync("k1").Returns(
+            _ => throw new StaleShardRoutingException(0, 1, 5),
+            _ => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes("settled")));
+
+        var result = await grain.GetAsync("k1");
+
+        // Every attempt of the stale-routing retry loop reaches the serial read, so
+        // a condition only the serial path settles cannot pin the loop on the
+        // optimistic read (issue #3474 no-livelock property).
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("settled"));
+        await shardRoot.Received(2).TryGetOptimisticAsync("k1");
+        await shardRoot.Received(2).GetAsync("k1");
+    }
+
+    [Test]
     public void OptimisticReadResult_default_is_a_serial_retry()
     {
         OptimisticReadResult result = default;
