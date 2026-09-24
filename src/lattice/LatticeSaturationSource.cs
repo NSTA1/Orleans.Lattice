@@ -19,10 +19,14 @@ namespace Orleans.Lattice;
 ///   <b>before</b> the caller waits for anything or touches storage, so a
 ///   retry costs one more admission test against a queue that may since have
 ///   drained.</description></item>
-///   <item><description>Every other member refuses <b>after</b> a wait budget
+///   <item><description>Every other member except
+///   <see cref="TxRegistryCapacity"/> refuses <b>after</b> a wait budget
 ///   has already elapsed against a tree that has just reported it is full, so a
 ///   retry re-offers the same work into the regime that refused it and the
 ///   feedback is positive.</description></item>
+///   <item><description><see cref="TxRegistryCapacity"/> also refuses before
+///   any work, but its capacity returns only as the retention window elapses,
+///   so an immediate retry is safe and pointless.</description></item>
 /// </list>
 /// <para>
 /// Retrying the wrong member is therefore not merely wasteful, it amplifies:
@@ -41,7 +45,7 @@ public enum LatticeSaturationSource
     /// take no source - including the framework-contract parameterless
     /// overload - and by any exception deserialised from a host that predates
     /// source attribution. Treat as <b>not</b> automatically retryable: it is
-    /// the conservative reading, because four of the five known seams are
+    /// the conservative reading, because four of the six known seams are
     /// amplifying to retry and an unattributed refusal could be any of them.
     /// </summary>
     Unspecified = 0,
@@ -147,4 +151,34 @@ public enum LatticeSaturationSource
     /// </para>
     /// </summary>
     SetManyFanOut = 5,
+
+    /// <summary>
+    /// The transaction-registry capacity refusal from
+    /// <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when the per-tree
+    /// registry's estimated persisted row size is at or above
+    /// <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/> and reclaiming
+    /// expired tombstones did not bring it back under the budget.
+    /// <para>
+    /// This seam exists because the registry persists its whole state as one
+    /// grain-state row, and the row carries one tombstone per saga completed
+    /// within <see cref="LatticeOptions.TxDecisionRetention"/>. Admitting sagas
+    /// past the budget would grow the row towards the storage provider's
+    /// per-row limit (about 1 MB on Azure Table storage), past which every
+    /// registry write fails and every saga on the tree stalls. Issue #3501
+    /// tracks lifting the ceiling itself.
+    /// </para>
+    /// <para>
+    /// <b>Refused before any work.</b> The refusal is raised before the saga
+    /// persists its execute phase or touches any shard, so the refused caller
+    /// has written nothing and a retry with the same operation id starts
+    /// cleanly. Sagas already admitted are never refused.
+    /// </para>
+    /// <para>
+    /// <b>Not retried inside the library.</b> A retry is safe but is not useful
+    /// immediately: capacity returns only as tombstones age out of the
+    /// retention window, which takes seconds, not milliseconds. Back off, then
+    /// retry.
+    /// </para>
+    /// </summary>
+    TxRegistryCapacity = 6,
 }

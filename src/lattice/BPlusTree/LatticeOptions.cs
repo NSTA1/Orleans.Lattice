@@ -1316,6 +1316,50 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Fail-safe admission bound on the size of the per-tree
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>'s persisted row, in estimated
+    /// serialised bytes. The registry persists its whole state as one grain-state
+    /// row, rewritten on every group-committed write, and that row carries one
+    /// tombstone per saga completed within <see cref="TxDecisionRetention"/>. It
+    /// therefore grows linearly with the sustained saga rate: at the default
+    /// 60-second retention and the measured JSON cost of roughly 116 bytes per
+    /// tombstone, the row reaches the ~1 MB Azure Table entity limit at about
+    /// 8 600 retained tombstones, which is a sustained rate of about 143 sagas/s.
+    /// Past that point every registry write would fail and every atomic saga on
+    /// the tree would stall.
+    /// <para>
+    /// When the registry's running estimate of its own row size (an O(1)
+    /// count-weighted estimate, never a re-serialisation) is at or above this
+    /// budget, a <b>new</b> atomic-write saga is refused with a
+    /// <see cref="LatticeSaturatedException"/> whose
+    /// <see cref="LatticeSaturatedException.SaturationSource"/> is
+    /// <see cref="LatticeSaturationSource.TxRegistryCapacity"/>. The refusal
+    /// happens before the saga persists its execute phase or touches any shard,
+    /// so nothing is written and the caller may retry with the same operation id
+    /// once capacity returns. Sagas already admitted are never refused: commit,
+    /// abort, forget, and status reads always proceed, and expired tombstones are
+    /// reclaimed on the refusal path itself, so admission resumes as soon as
+    /// tombstones age out of <see cref="TxDecisionRetention"/>.
+    /// </para>
+    /// <para>
+    /// The default of 768 KiB (75% of 1 MiB) admits roughly 6 100 retained
+    /// tombstones at the conservative 128-byte weight the estimate uses, which
+    /// caps a tree at about 100 sustained sagas/s under the default retention.
+    /// That is well above today's single-registry throughput, and the bound
+    /// exists to turn a silent storage-limit stall into an attributed,
+    /// retryable back-pressure signal. Lifting the ceiling itself (a compact
+    /// binary row format, or sharding the registry) is tracked by issue #3501.
+    /// Set <see langword="null"/> to disable the bound (the pre-bound behaviour);
+    /// a storage provider with no per-row limit, or a tree that never runs
+    /// atomic sagas, loses nothing by leaving it enabled.
+    /// </para>
+    /// </summary>
+    public long? TxRegistryAdmissionBudgetBytes { get; set; } = DefaultTxRegistryAdmissionBudgetBytes;
+
+    /// <summary>Default value for <see cref="TxRegistryAdmissionBudgetBytes"/> (768 KiB, 786 432 bytes).</summary>
+    public const long DefaultTxRegistryAdmissionBudgetBytes = 768 * 1024;
+
+    /// <summary>
     /// Hard cap on how long the per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>
     /// will retain a point-in-time snapshot pin recorded for a
     /// <see cref="LatticeCursorSpec.PointInTime"/> cursor. The cursor grain

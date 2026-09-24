@@ -1116,6 +1116,73 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.registry.admission.queue.depth", unit: "{tree}",
             description: "Distinct tree ids waiting for a registry fan-in permit when another arrived, counting the arrival.");
 
+    // --- Saga decision registry group commit (TxRegistryGrain) -------------------
+
+    /// <summary>
+    /// Counter of whole-state writes issued by the per-tree saga decision
+    /// registry (<c>TxRegistryGrain</c>), tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> = <c>ok</c> (the write completed durably) or
+    /// <c>fault</c> (the write threw and every mutation it carried, plus any
+    /// queued behind it, was rolled back and failed to its caller), and the
+    /// tenant label.
+    /// <para>
+    /// The registry is one activation per tree and every atomic saga records
+    /// its participants, its decision and its cleanup through it, so its write
+    /// rate is the ceiling on saga throughput. The registry group-commits: at
+    /// most one write is in flight and mutations that arrive meanwhile join the
+    /// next one. Read this counter against
+    /// <see cref="TxRegistryWriteMutations"/>: a write rate that stays flat
+    /// while the mutation rate climbs is coalescing doing its job, and a write
+    /// rate that tracks the mutation rate one for one means there was no
+    /// concurrency to coalesce.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> TxRegistryWrites =
+        Meter.CreateCounter<long>("orleans.lattice.tx_registry.writes", unit: "{write}",
+            description: "Whole-state writes issued by the per-tree saga decision registry, tagged by outcome (ok or fault).");
+
+    /// <summary>
+    /// Histogram of the number of registry mutations one
+    /// <c>TxRegistryGrain</c> state write carried - the group-commit
+    /// coalescing factor. Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> (<c>ok</c> or <c>fault</c>, matching
+    /// <see cref="TxRegistryWrites"/>) and the tenant label. A value of one
+    /// means the write carried a single caller's mutation; larger values mean
+    /// that many callers were acknowledged by one durable write.
+    /// </summary>
+    public static readonly Histogram<int> TxRegistryWriteMutations =
+        Meter.CreateHistogram<int>("orleans.lattice.tx_registry.write.mutations", unit: "{mutation}",
+            description: "Registry mutations carried by one saga decision registry state write (the group-commit coalescing factor).");
+
+    /// <summary>
+    /// Histogram of how long one <c>TxRegistryGrain</c> whole-state write took,
+    /// in milliseconds, measured around the storage call. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagOutcome"/> (<c>ok</c> or
+    /// <c>fault</c>) and the tenant label. Because the registry serialises its
+    /// writes, this duration bounds the registry's write rate: its reciprocal is
+    /// the most writes per second one tree's registry can issue.
+    /// </summary>
+    public static readonly Histogram<double> TxRegistryWriteDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.tx_registry.write.duration", unit: "ms",
+            description: "Duration of one saga decision registry whole-state write, tagged by outcome (ok or fault).");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>ok</c> on <see cref="TxRegistryWrites"/>,
+    /// <see cref="TxRegistryWriteMutations"/> and
+    /// <see cref="TxRegistryWriteDuration"/>: the registry write completed
+    /// durably and every caller it carried was acknowledged.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> TxRegistryWriteOutcomeOk = new(TagOutcome, "ok");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>fault</c> on <see cref="TxRegistryWrites"/>,
+    /// <see cref="TxRegistryWriteMutations"/> and
+    /// <see cref="TxRegistryWriteDuration"/>: the registry write threw, and
+    /// every mutation it carried (plus any queued behind it) was rolled back
+    /// and failed to its caller.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> TxRegistryWriteOutcomeFault = new(TagOutcome, "fault");
+
     // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
 
     /// <summary>

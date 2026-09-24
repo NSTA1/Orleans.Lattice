@@ -163,6 +163,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.MaxEstimatedBytes)} must be greater than or equal to 1 when set "
                 + "(null leaves estimated storage unbounded; a positive value caps the estimated retained bytes per tree, rejecting further writes with LatticeQuotaExceededException).");
         }
+        if (options.TxRegistryAdmissionBudgetBytes is { } txRegistryBudget && txRegistryBudget < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.TxRegistryAdmissionBudgetBytes)} must be greater than or equal to 1 when set "
+                + "(null disables the transaction-registry row-size admission bound; a positive value refuses new atomic-write sagas with LatticeSaturatedException once the registry's estimated row size reaches it).");
+        }
         if (options.AdmissionAdvisoryLiveKeys is { } advisoryLiveKeys && advisoryLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(

@@ -112,7 +112,7 @@ public class LatticeSaturationSourceTests
     }
 
     /// <summary>
-    /// The five attributed seams must be distinct values, since the whole
+    /// The six attributed seams must be distinct values, since the whole
     /// point is to tell them apart when choosing a retry policy.
     /// </summary>
     [Test]
@@ -120,9 +120,30 @@ public class LatticeSaturationSourceTests
     {
         var values = Enum.GetValues<LatticeSaturationSource>();
         Assert.That(values, Is.Unique);
-        Assert.That(values, Has.Length.EqualTo(6),
-            "Unspecified plus the five refusal seams; adding a sixth seam needs a retry-policy decision "
+        Assert.That(values, Has.Length.EqualTo(7),
+            "Unspecified plus the six refusal seams; adding a seventh seam needs a retry-policy decision "
             + "in ShardActivationRetry.IsRetryableSaturation, so this count is deliberately pinned.");
+    }
+
+    /// <summary>
+    /// The registry-capacity seam refuses a new saga before any work, but its
+    /// capacity returns only as tombstones age out of the retention window, so
+    /// it must stay distinct from every other seam and out of the in-library
+    /// retry set.
+    /// </summary>
+    [Test]
+    public void TxRegistryCapacity_is_a_distinct_declared_seam_that_round_trips()
+    {
+        var ex = new LatticeSaturatedException(
+            "registry row at budget", "tree-f", LatticeSaturationSource.TxRegistryCapacity);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Enum.IsDefined(LatticeSaturationSource.TxRegistryCapacity), Is.True);
+            Assert.That((int)LatticeSaturationSource.TxRegistryCapacity, Is.EqualTo(6), "Members are wire-numbered; append only.");
+            Assert.That(ex.SaturationSource, Is.EqualTo(LatticeSaturationSource.TxRegistryCapacity));
+            Assert.That(ex.TreeId, Is.EqualTo("tree-f"));
+        });
     }
 
     /// <summary>

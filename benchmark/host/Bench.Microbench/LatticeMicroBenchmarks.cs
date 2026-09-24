@@ -667,7 +667,13 @@ public class LatticeMicroBenchmarks
         // cached instance, allocating nothing per call (unlike the prior
         // substitute, whose per-call proxy overhead landed in the measured
         // allocation figure).
-        _optionsMonitor = new FakeOptionsMonitor<LatticeOptions>(new LatticeOptions());
+        //
+        // The registry admission bound (TxRegistryAdmissionBudgetBytes, #3475)
+        // is disabled: this harness commits sagas at CPU speed against an
+        // in-memory store with the default 60 s tombstone retention, so the
+        // bound would (correctly) refuse the run within seconds. The rows here
+        // measure the saga vertical's cost, not registry capacity.
+        _optionsMonitor = new FakeOptionsMonitor<LatticeOptions>(new LatticeOptions { TxRegistryAdmissionBudgetBytes = null });
 
         _observers = new MutationObserverDispatcher([], NullLogger<MutationObserverDispatcher>.Instance);
 
