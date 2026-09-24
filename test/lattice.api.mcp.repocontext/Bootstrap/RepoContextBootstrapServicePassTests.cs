@@ -475,6 +475,17 @@ public sealed partial class RepoContextBootstrapServicePassTests
                     Apply(call.ArgAt<List<KeyValuePair<string, byte[]>>>(0), call.ArgAt<IReadOnlyList<string>>(1));
                     return Task.CompletedTask;
                 });
+            Tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    lock (Store)
+                    {
+                        SingleWrites++;
+                        Store[call.ArgAt<string>(0)] = call.ArgAt<byte[]>(1);
+                    }
+
+                    return Task.CompletedTask;
+                });
 
             GrainFactory = Substitute.For<IGrainFactory>();
             GrainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(_ => Tree);
@@ -576,6 +587,40 @@ public sealed partial class RepoContextBootstrapServicePassTests
         internal IReadOnlyList<RepoIndexProgressUpdate> ProgressUpdates => Progress.Updates;
 
         internal int AtomicWrites { get; private set; }
+
+        /// <summary>The number of single-key <c>SetAsync</c> writes the pass issued.</summary>
+        internal int SingleWrites { get; private set; }
+
+        /// <summary>Writes a repository marker a prior pass (or a caller patch) left behind.</summary>
+        internal void SeedRepoNode(RepoNode node)
+        {
+            lock (Store)
+            {
+                Store[RepoContextKeys.Repo(RepoId)] = RepoNodes.SerializeToArray(node);
+            }
+        }
+
+        /// <summary>Writes raw bytes at the repository marker key.</summary>
+        internal void SeedRepoNodeBytes(byte[] bytes)
+        {
+            lock (Store)
+            {
+                Store[RepoContextKeys.Repo(RepoId)] = bytes;
+            }
+        }
+
+        /// <summary>Reads the stored repository marker back, or <see langword="null"/> when absent.</summary>
+        internal RepoNode? ReadRepoNode()
+        {
+            lock (Store)
+            {
+                return Store.TryGetValue(RepoContextKeys.Repo(RepoId), out var bytes)
+                    ? RepoNodes.Deserialize(bytes)
+                    : null;
+            }
+        }
+
+        private Serializer<RepoNode> RepoNodes => SerializerServices.GetRequiredService<Serializer<RepoNode>>();
 
         internal IReadOnlyList<RepoFileEntry> ChangedOfferedToIngestor { get; private set; } = [];
 
