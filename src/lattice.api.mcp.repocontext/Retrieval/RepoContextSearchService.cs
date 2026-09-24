@@ -33,7 +33,15 @@ internal sealed partial class RepoContextSearchService
 {
     private const int DefaultResultCount = 10;
     private const int MaxResultCount = 100;
-    private const int MaxKeywordScan = 5000;
+
+    /// <summary>
+    /// The most candidate records the keyword fallback reads from <b>each</b>
+    /// context tree. The bound is per tree, not shared: the structural tree of a
+    /// large repository holds more records than this on its own, so a shared bound
+    /// was exhausted before the memory and content trees were read, leaving each
+    /// of them exactly one candidate and making memory unsearchable by keyword.
+    /// </summary>
+    internal const int MaxKeywordScanPerTree = 5000;
 
     /// <summary>
     /// The most non-hydrating candidate keys named in the hydration-drift warning.
@@ -488,8 +496,9 @@ internal sealed partial class RepoContextSearchService
 
         // Fold the per-file content projection in so keyword search ranks over file
         // body text, not just filenames and symbol names. The content tree is
-        // separate from the structural tree, so it is scanned explicitly. The shared
-        // MaxKeywordScan bound still caps the total candidate set.
+        // separate from the structural tree, so it is scanned explicitly. Each tree
+        // is read under its own MaxKeywordScanPerTree bound, so a structural tree
+        // larger than the bound cannot starve the memory and content trees.
         await TryScanTreeAsync(
             RepoContextTrees.Content, RepoContextKeys.ContentPrefix(repoId), entries, repoId, cancellationToken)
             .ConfigureAwait(false);
@@ -538,6 +547,7 @@ internal sealed partial class RepoContextSearchService
     {
         var tree = _grainFactory.GetGrain<ILattice>(treeName);
         var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var scanned = 0;
 
         string? token = null;
         do
@@ -560,7 +570,7 @@ internal sealed partial class RepoContextSearchService
                 entries.Add(RepoContextEntryProjection.Project(
                     parsed, record.Value, _serializer, life: null));
 
-                if (entries.Count >= MaxKeywordScan)
+                if (++scanned >= MaxKeywordScanPerTree)
                 {
                     return;
                 }
