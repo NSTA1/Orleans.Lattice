@@ -51,6 +51,7 @@ public sealed class ShardRootGrainPromotionChildTypeTests
         public required ShardRootGrain Grain { get; init; }
         public required IBPlusInternalGrain Internal { get; init; }
         public required FakePersistentState<ShardRootState> State { get; init; }
+        public required IGrainFactory Factory { get; init; }
     }
 
     private static Harness CreateHarness()
@@ -110,7 +111,7 @@ public sealed class ShardRootGrainPromotionChildTypeTests
             context, state, factory, optionsResolver,
             NullLogger<ShardRootGrain>.Instance, TestMutationObservers.NoObservers());
 
-        return new Harness { Grain = grain, Internal = @internal, State = state };
+        return new Harness { Grain = grain, Internal = @internal, State = state, Factory = factory };
     }
 
     [Test]
@@ -206,63 +207,113 @@ public sealed class ShardRootGrainPromotionChildTypeTests
     }
 
     [Test]
-    public async Task Resume_drops_stale_pending_when_root_level_mismatches_bubble()
+    public async Task Resume_links_a_leaf_level_intent_at_its_leaf_parent_when_the_root_is_deeper()
     {
         // Deeper-race resume case: the persisted bubble is leaf-level
         // (ChildIsLeaf = true) but the live root's children are
-        // themselves internal nodes (ChildrenAreLeaves = false). The
-        // bubble's NewSiblingId belongs deeper in the tree than the
-        // resume path can safely splice from here. The fix drops the
-        // stale intent so the caller's write retry envelope re-routes
-        // the user-visible mutation against the current topology, and
-        // does NOT call InitializeAsync (which would seed the new
-        // root with the wrong childrenAreLeaves bit and reproduce
-        // the U9k step 2 InvalidCastException) nor AcceptSplitAsync
-        // (which would inject the leaf at the wrong tree level).
+        // themselves internal nodes (ChildrenAreLeaves = false), so the
+        // sibling belongs under a level-1 parent, not under the root.
+        // Before issue #3523 the resume dropped the intent outright,
+        // which stranded the sibling: spliced into the leaf chain but
+        // reached by no descent, so every key it held was lost. The
+        // intent is now re-recorded as a pending child link and linked
+        // by descent at the parent whose range covers its separator.
+        // It must still never wrap a second root (the U9k step 2
+        // InvalidCastException) nor splice the leaf into the root.
         var h = CreateHarness();
+        var innerId = GrainId.Create("internal", "existing-inner");
+        var sibling = GrainId.Create("leaf", "stale-leaf-sibling");
+        var inner = Substitute.For<IBPlusInternalGrain>();
+        inner.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [GrainId.Create("leaf", "terminating-leaf")],
+            ChildrenAreLeaves = true,
+        });
+        inner.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        h.Factory.GetGrain<IBPlusInternalGrain>(innerId).Returns(inner);
+
         h.State.State.RootNodeId = GrainId.Create("internal", "promoted-root");
         h.State.State.RootIsLeaf = false;
         h.State.State.PendingPromotionRootWasLeaf = false;
         h.State.State.PendingPromotion = new SplitResult
         {
             PromotedKey = "k-mismatch",
-            NewSiblingId = GrainId.Create("leaf", "stale-leaf-sibling"),
+            NewSiblingId = sibling,
             ChildIsLeaf = true,
         };
-        // Live root says its children are internal nodes - bubble's
-        // ChildIsLeaf = true cannot align. The second snapshot below
-        // is what the inner internal child returns once the promotion
-        // path has finished dropping the stale pending and GetAsync
-        // continues with a normal read traversal: NSubstitute returns
-        // the harness's single internal mock for every GrainId, so
-        // without a leaf-bearing follow-up snapshot the descent would
-        // loop forever on the same mock and hang the test host.
-        h.Internal.GetRoutingTableAsync().Returns(
-            new RoutingTableSnapshot
-            {
-                SeparatorKeys = [null],
-                ChildIds = [GrainId.Create("internal", "existing-inner")],
-                ChildrenAreLeaves = false,
-            },
-            new RoutingTableSnapshot
-            {
-                SeparatorKeys = [null],
-                ChildIds = [GrainId.Create("leaf", "terminating-leaf")],
-                ChildrenAreLeaves = true,
-            });
+        h.Internal.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [innerId],
+            ChildrenAreLeaves = false,
+        });
 
-        try { await h.Grain.GetAsync("k-any"); } catch { }
+        await h.Grain.GetAsync("k-any");
 
+        await inner.Received(1).AcceptSplitAsync("k-mismatch", sibling);
+        await h.Internal.DidNotReceive().AcceptSplitAsync(
+            Arg.Any<string>(),
+            Arg.Any<GrainId>());
         await h.Internal.DidNotReceive().InitializeAsync(
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
             Arg.Any<bool>());
-        await h.Internal.DidNotReceive().AcceptSplitAsync(
-            Arg.Any<string>(),
-            Arg.Any<GrainId>());
         Assert.That(h.State.State.PendingPromotion, Is.Null,
-            "Stale pending promotion intent should have been dropped on shape mismatch.");
+            "The promotion intent should have been converted, not left to resume again.");
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty,
+            "The converted child link should have been retired once it landed.");
+    }
+
+    [Test]
+    public async Task Resume_keeps_the_converted_child_link_recorded_when_linking_it_faults()
+    {
+        // The conversion is only safe if the child link it records
+        // survives a failed first attempt: dropping it on a fault would
+        // reintroduce the stranding the conversion exists to prevent.
+        var h = CreateHarness();
+        var innerId = GrainId.Create("internal", "existing-inner");
+        var sibling = GrainId.Create("leaf", "faulted-leaf-sibling");
+        var inner = Substitute.For<IBPlusInternalGrain>();
+        inner.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [GrainId.Create("leaf", "terminating-leaf")],
+            ChildrenAreLeaves = true,
+        });
+        inner.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(Task.FromException<SplitResult?>(new InvalidOperationException("parent unavailable")));
+        h.Factory.GetGrain<IBPlusInternalGrain>(innerId).Returns(inner);
+
+        h.State.State.RootNodeId = GrainId.Create("internal", "promoted-root");
+        h.State.State.RootIsLeaf = false;
+        h.State.State.PendingPromotionRootWasLeaf = false;
+        h.State.State.PendingPromotion = new SplitResult
+        {
+            PromotedKey = "k-fault",
+            NewSiblingId = sibling,
+            ChildIsLeaf = true,
+        };
+        h.Internal.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [innerId],
+            ChildrenAreLeaves = false,
+        });
+
+        await h.Grain.GetAsync("k-any");
+
+        Assert.That(h.State.State.PendingPromotion, Is.Null);
+        Assert.That(h.State.State.PendingChildLinks, Has.Count.EqualTo(1));
+        var link = h.State.State.PendingChildLinks[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(link.PromotedKey, Is.EqualTo("k-fault"));
+            Assert.That(link.ChildId, Is.EqualTo(sibling));
+            Assert.That(link.ChildIsLeaf, Is.True);
+        });
     }
 
     [Test]

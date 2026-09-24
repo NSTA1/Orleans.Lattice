@@ -212,6 +212,28 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<bool> DeleteAsync(string key);
 
     /// <summary>
+    /// Marks <paramref name="key"/> as deleted (tombstone), like
+    /// <see cref="DeleteAsync"/>, and also reports every leaf split the delete
+    /// caused so the shard root can link it (issue #3523).
+    /// <para>
+    /// A split that interleaves with the delete's WAL append can move the key
+    /// to a new sibling before its tombstone is applied. The tombstone is then
+    /// forwarded to the leaf that declares the key rather than being stored
+    /// out of span, and the forwarded merge can divide the receiving leaf; the
+    /// returned <see cref="LeafDeleteResult.Split"/> carries that division.
+    /// A new method rather than a changed return type, so an older shard root
+    /// keeps calling <see cref="DeleteAsync"/> across a rolling upgrade and a
+    /// newer one can fall back to it against an older leaf.
+    /// </para>
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
+    /// same interleave-safety reason as <see cref="DeleteAsync"/>.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<LeafDeleteResult> DeleteTrackedAsync(string key);
+
+    /// <summary>
     /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
     /// Returns a <see cref="RangeDeleteResult"/> containing the number of tombstoned keys
     /// and a <c>PastRange</c> flag indicating whether this leaf has observed any key

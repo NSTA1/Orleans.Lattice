@@ -411,6 +411,112 @@ public sealed class ShardRootGrainBulkLoadGraftTests
             Assert.That(h.State.State.RootIsLeaf, Is.False);
             Assert.That(h.State.State.PendingBulkGraft, Is.Null);
         });
+
+        // The root's division is an internal node: it must be wrapped under the
+        // new root, never handed back to the root as though it were a leaf the
+        // root should adopt.
+        await h.Internal(root).Received(1).AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        await h.Internal(root).DidNotReceive().AcceptSplitAsync("promoted", newSibling);
+    }
+
+    /// <summary>
+    /// Builds a four-level tree whose two upper internal nodes split the
+    /// keyspace at <c>"m"</c>: the rightmost-edge descent a graft takes reaches
+    /// <paramref name="rightMid"/> under <paramref name="upperRight"/>, while a
+    /// separator below <c>"m"</c> belongs under <paramref name="upperLeft"/>.
+    /// A division linked against the captured rightmost path would therefore
+    /// land on the wrong parent, which is what makes a link by descent
+    /// observable here.
+    /// </summary>
+    private static (GrainId Root, GrainId UpperLeft, GrainId UpperRight, GrainId RightMid) SeedSplitKeyspace(Harness h)
+    {
+        var rightMid = h.AddInternal(childrenAreLeaves: true);
+        var upperRight = h.AddInternal(childrenAreLeaves: false, child: rightMid);
+        var leftMid = h.AddInternal(childrenAreLeaves: true);
+        var upperLeft = h.AddInternal(childrenAreLeaves: false, child: leftMid);
+        var root = h.AddInternal(childrenAreLeaves: false, child: upperRight);
+        h.Internal(root).GetRoutingTableAsync().Returns(Task.FromResult(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null, "m"],
+            ChildIds = [upperLeft, upperRight],
+            ChildrenAreLeaves = false,
+        }));
+        h.Internal(root).GetRightmostChildAsync().Returns(Task.FromResult(upperRight));
+        h.Internal(upperRight).GetRightmostChildAsync().Returns(Task.FromResult(rightMid));
+        h.State.State.RootNodeId = root;
+        return (root, upperLeft, upperRight, rightMid);
+    }
+
+    [Test]
+    public async Task A_bubble_carrying_several_divisions_links_every_one_by_descent()
+    {
+        var h = CreateHarness();
+        SeedPendingGraft(h, "op-1", rootWasLeaf: false);
+        var (root, upperLeft, upperRight, rightMid) = SeedSplitKeyspace(h);
+
+        // The parent completed an interrupted split on accepting the graft, so
+        // it reports two divisions of its own level. Carrying only the primary
+        // up the captured path dropped the other, stranding its sibling: in the
+        // chain, reached by no descent (issue #3523). Each division is linked at
+        // the parent whose range covers its separator.
+        var primarySibling = h.AddInternal(childrenAreLeaves: true);
+        var extraSibling = h.AddInternal(childrenAreLeaves: true);
+        h.Internal(rightMid).AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(Task.FromResult<SplitResult?>(new SplitResult
+            {
+                PromotedKey = "t",
+                NewSiblingId = primarySibling,
+                ChildIsLeaf = false,
+                Additional =
+                [
+                    new SplitResult { PromotedKey = "c", NewSiblingId = extraSibling, ChildIsLeaf = false },
+                ],
+            }));
+
+        await h.Grain.BulkAppendAsync("op-1", Pairs(1));
+
+        await h.Internal(upperRight).Received(1).AcceptSplitAsync("t", primarySibling);
+        await h.Internal(upperLeft).Received(1).AcceptSplitAsync("c", extraSibling);
+        await h.Internal(upperRight).DidNotReceive().AcceptSplitAsync("c", Arg.Any<GrainId>());
+        await h.Internal(root).DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.State.RootNodeId, Is.EqualTo(root), "absorbed divisions must not grow the tree.");
+            Assert.That(h.State.State.PendingChildLinks, Is.Empty, "every landed link must be retired.");
+            Assert.That(h.State.State.PendingBulkGraft, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task A_forwarded_bubble_is_linked_by_descent_rather_than_up_the_captured_path()
+    {
+        var h = CreateHarness();
+        SeedPendingGraft(h, "op-1", rootWasLeaf: false);
+        var (root, upperLeft, upperRight, rightMid) = SeedSplitKeyspace(h);
+
+        // A forwarded division is of a node other than the one called, so the
+        // captured rightmost path says nothing about where it belongs. Popping
+        // that path would hand separator "c" to upperRight, whose range does
+        // not cover it: accepted, and routed to by nothing.
+        var sibling = h.AddInternal(childrenAreLeaves: true);
+        h.Internal(rightMid).AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(Task.FromResult(SplitResult.Forward(new SplitResult
+            {
+                PromotedKey = "c",
+                NewSiblingId = sibling,
+                ChildIsLeaf = false,
+            })));
+
+        await h.Grain.BulkAppendAsync("op-1", Pairs(1));
+
+        await h.Internal(upperLeft).Received(1).AcceptSplitAsync("c", sibling);
+        await h.Internal(upperRight).DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        await h.Internal(root).DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.State.PendingChildLinks, Is.Empty);
+            Assert.That(h.State.State.PendingBulkGraft, Is.Null);
+        });
     }
 
     [Test]

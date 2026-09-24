@@ -47,6 +47,9 @@ public sealed class IBPlusInternalGrainInterleavedReadsTests
     [TestCase(nameof(IBPlusInternalGrain.GetRightmostChildWithMetadataAsync))]
     [TestCase(nameof(IBPlusInternalGrain.AreChildrenLeavesAsync))]
     [TestCase(nameof(IBPlusInternalGrain.AcceptSplitAsync))]
+    [TestCase(nameof(IBPlusInternalGrain.SetParentAsync))]
+    [TestCase(nameof(IBPlusInternalGrain.OnChildDigestPublishedAsync))]
+    [TestCase(nameof(IBPlusInternalGrain.GetChildDigestSnapshotAsync))]
     public void Routing_method_is_marked_AlwaysInterleave(string methodName)
     {
         var methods = typeof(IBPlusInternalGrain)
