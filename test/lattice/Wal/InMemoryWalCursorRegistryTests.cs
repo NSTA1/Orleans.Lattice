@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.Wal;
 /// </summary>
 [TestFixture]
 [Category("Unit")]
-public sealed class InMemoryWalCursorRegistryTests
+public sealed partial class InMemoryWalCursorRegistryTests
 {
     private const string Tree = "tree";
 

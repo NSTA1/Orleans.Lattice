@@ -171,6 +171,33 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         return acc;
     }
 
+    // Logs the consumer holding a tree's drain-lag minimum as the tree crosses
+    // the threshold (#3131). Cursor age is head minus the consumer's position;
+    // position age is how long ago the registry last saw that position advance,
+    // which separates a consumer genuinely falling behind (recent) from one
+    // re-reporting a position it has not moved from (old or unknown).
+    private void LogDrainLagMinHolder(
+        string treeId,
+        long lagTicks,
+        int laggingConsumers,
+        in WalCursorSnapshot minHolder,
+        long observedAtTicks)
+    {
+        double? positionAgeSeconds = minHolder.CursorAdvancedAtTicks is { } advancedAt && advancedAt > 0
+            ? TimeSpan.FromTicks(observedAtTicks - advancedAt).TotalSeconds
+            : null;
+
+        _logger.LogWarning(
+            "Materialiser drain lag for tree {TreeId} crossed the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s). Minimum held by {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration).",
+            treeId,
+            TimeSpan.FromTicks(lagTicks).TotalSeconds,
+            laggingConsumers,
+            minHolder.ConsumerId,
+            minHolder.Cursor,
+            TimeSpan.FromTicks(observedAtTicks - minHolder.LastReportedAtTicks).TotalSeconds,
+            positionAgeSeconds);
+    }
+
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
 
@@ -577,14 +604,27 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         .SnapshotAsync(treeId, cancellationToken)
                         .ConfigureAwait(false);
 
+                    // Eligibility is the registry's own lag-plane predicate
+                    // (cold and position-stale consumers excluded, #2446 /
+                    // #3131), so the count decomposes exactly the population
+                    // the aggregate was computed over.
                     var lagging = 0;
+                    WalCursorSnapshot minHolder = default;
+                    var hasMinHolder = false;
                     foreach (var entry in snapshot)
                     {
-                        if (entry.Cursor > HybridLogicalClock.Zero
-                            && entry.LastReportedAtTicks >= drainLagReportedAtOrAfterTicks
-                            && headWallTicks - entry.Cursor.WallClockTicks > lagThreshold.Ticks)
+                        if (!WalDrainLagEligibility.IsEligible(entry, drainLagReportedAtOrAfterTicks))
+                        {
+                            continue;
+                        }
+                        if (headWallTicks - entry.Cursor.WallClockTicks > lagThreshold.Ticks)
                         {
                             lagging++;
+                        }
+                        if (!hasMinHolder || entry.Cursor < minHolder.Cursor)
+                        {
+                            minHolder = entry;
+                            hasMinHolder = true;
                         }
                     }
 
@@ -592,6 +632,18 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         lagging,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
                         LatticeTenantLabel.ForTree(treeId));
+
+                    // Name the consumer holding the minimum once, on the tick a
+                    // tree crosses the threshold, not on every over-threshold
+                    // tick. Unbounded consumer identity stays off metric tags;
+                    // the structured surface for it is issue #2505.
+                    if (hasMinHolder
+                        && _logger.IsEnabled(LogLevel.Warning)
+                        && (!_consecutiveMaterialiserDrainLagWindows.TryGetValue(treeId, out var priorWindows)
+                            || priorWindows == 0))
+                    {
+                        LogDrainLagMinHolder(treeId, lagTicks, lagging, minHolder, observedAt.UtcTicks);
+                    }
                 }
             }
         }
