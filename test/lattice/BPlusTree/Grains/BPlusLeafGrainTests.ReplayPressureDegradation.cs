@@ -56,6 +56,7 @@ public partial class BPlusLeafGrainTests
             int affordableBudget,
             params CommitLogSliceEntry[] entries)
         {
+            ReachableWalFixture.EnsureReachable(head, entries);
             _entries = entries;
             _sliceSize = sliceSize;
             AffordableBudget = affordableBudget;
@@ -141,7 +142,7 @@ public partial class BPlusLeafGrainTests
         // The widest read is unaffordable and a narrow one is not, which is
         // the field condition exactly. The activation must complete.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -164,7 +165,7 @@ public partial class BPlusLeafGrainTests
         // is indistinguishable from a correct fix by outcome alone on a
         // coordinator whose pressure is transient. Pin the widths.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -186,7 +187,7 @@ public partial class BPlusLeafGrainTests
         // stalled: a single blip would pin the partition at one entry per
         // slice for the rest of a multi-million-entry gap.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -210,7 +211,7 @@ public partial class BPlusLeafGrainTests
         // than the old loop is that the checkpoint MOVED: the next activation
         // faces a strictly shorter, strictly cheaper gap.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries)
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries)
         {
             StarveAfterEntries = 4,
         };
@@ -264,12 +265,12 @@ public partial class BPlusLeafGrainTests
         // land short and the leaf would fall through to the Zero branch.
         var entries = PressuredReplayEntries(12);
 
-        var calm = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 256, entries);
+        var calm = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 256, entries);
         var calmState = NewResumableState();
         var (calmGrain, _) = BuildResumableLeaf(calmState, calm.Stub, new InMemorySnapshotStore().Stub, reclassifyEveryN: 1);
         await LeafActivationHarness.ActivateAsync(calmGrain, CancellationToken.None);
 
-        var pressured = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 1, entries);
+        var pressured = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 1, entries);
         var pressuredState = NewResumableState();
         var (pressuredGrain, _) = BuildResumableLeaf(pressuredState, pressured.Stub, new InMemorySnapshotStore().Stub, reclassifyEveryN: 1);
         await LeafActivationHarness.ActivateAsync(pressuredGrain, CancellationToken.None);
@@ -304,7 +305,7 @@ public partial class BPlusLeafGrainTests
         // every arm above while halving read throughput on every healthy
         // deployment in the estate.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: int.MaxValue, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: int.MaxValue, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 

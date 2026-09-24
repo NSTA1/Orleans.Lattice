@@ -53,6 +53,7 @@ public partial class BPlusLeafGrainTests
         Action<int>? onRead,
         params CommitLogSliceEntry[] entries)
     {
+        ReachableWalFixture.EnsureReachable(head, entries);
         var reads = 0;
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
@@ -254,7 +255,7 @@ public partial class BPlusLeafGrainTests
         // must now be durable instead.
         using var cts = new CancellationTokenSource();
         var coord = BuildObservableCoordinator(
-            head: 12,
+            head: 13,
             sliceSize: 4,
             tail: 0,
             onRead: read =>
@@ -292,7 +293,7 @@ public partial class BPlusLeafGrainTests
         {
             using var cts = new CancellationTokenSource();
             var coord = BuildObservableCoordinator(
-                head: 12,
+                head: 13,
                 sliceSize: 4,
                 // The coverage-gated WAL GC trims the snapshot-covered prefix,
                 // so the surviving tail tracks the durable checkpoint. That is
@@ -345,7 +346,7 @@ public partial class BPlusLeafGrainTests
             cts =>
             [
                 BuildObservableCoordinator(
-                    head: 12,
+                    head: 13,
                     sliceSize: 2,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: read =>
@@ -387,7 +388,7 @@ public partial class BPlusLeafGrainTests
             cts =>
             [
                 BuildObservableCoordinator(
-                    head: 12,
+                    head: 13,
                     sliceSize: 2,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: read =>
@@ -426,7 +427,7 @@ public partial class BPlusLeafGrainTests
                 : FlushSet(i, $"k{i:D2}");
         }
 
-        var coord = BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: null, entries);
+        var coord = BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: null, entries);
         var state = NewFlushCeilingState();
         var store = new InMemorySnapshotStore();
 
@@ -464,7 +465,7 @@ public partial class BPlusLeafGrainTests
             FlushSet(8, "s8"),
         };
 
-        var coord = BuildObservableCoordinator(head: 8, sliceSize: 2, tail: 0, onRead: null, entries);
+        var coord = BuildObservableCoordinator(head: 9, sliceSize: 2, tail: 0, onRead: null, entries);
         var state = NewFlushCeilingState();
         var store = new InMemorySnapshotStore();
 
@@ -503,7 +504,7 @@ public partial class BPlusLeafGrainTests
             FlushSet(5, "z5", hlcPhysical: 500),
         };
 
-        var coord = BuildObservableCoordinator(head: 5, sliceSize: 2, tail: 0, onRead: null, entries);
+        var coord = BuildObservableCoordinator(head: 6, sliceSize: 2, tail: 0, onRead: null, entries);
         var state = NewFlushCeilingState();
         var store = new InMemorySnapshotStore();
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
@@ -532,7 +533,7 @@ public partial class BPlusLeafGrainTests
         // this test exists to cover: a partition that must hold its ceiling
         // because its cross-partition dependencies are not yet in the cache.
         var p0 = BuildObservableCoordinator(
-            head: 5,
+            head: 6,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -543,7 +544,7 @@ public partial class BPlusLeafGrainTests
             FlushSet(5, "z5"));
 
         var p1 = BuildObservableCoordinator(
-            head: 8,
+            head: 9,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -603,7 +604,7 @@ public partial class BPlusLeafGrainTests
         // genuinely non-drain-eligible. On the deployed box 7 of 8 partitions
         // are in exactly this position on every activation.
         var p0 = BuildObservableCoordinator(
-            head: 5,
+            head: 6,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -614,7 +615,7 @@ public partial class BPlusLeafGrainTests
             FlushSet(5, "z5"));
 
         var p1 = BuildObservableCoordinator(
-            head: 8,
+            head: 9,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -676,7 +677,7 @@ public partial class BPlusLeafGrainTests
         // position with an unprobed head, and ReplayPartitionAsync re-probes
         // it in its own turn so any persistent fault still surfaces there.
         var p0 = BuildObservableCoordinator(
-            head: 4,
+            head: 5,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -692,10 +693,10 @@ public partial class BPlusLeafGrainTests
         p0.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(_ =>
             headReads++ == 0
                 ? throw new TimeoutException("sweep-order probe fault")
-                : Task.FromResult(4L));
+                : Task.FromResult(5L));
 
         var p1 = BuildObservableCoordinator(
-            head: 2,
+            head: 3,
             sliceSize: 2,
             tail: 0,
             onRead: null,
@@ -739,7 +740,7 @@ public partial class BPlusLeafGrainTests
         var readOrder = new List<int>();
 
         var p0 = BuildObservableCoordinator(
-            head: 4,
+            head: 5,
             sliceSize: 8,
             tail: 0,
             onRead: _ => { if (!readOrder.Contains(0)) readOrder.Add(0); },
@@ -793,7 +794,7 @@ public partial class BPlusLeafGrainTests
             FlushSet(5, "q5"),
         };
 
-        var coord = BuildObservableCoordinator(head: 5, sliceSize: 2, tail: 0, onRead: null, entries);
+        var coord = BuildObservableCoordinator(head: 6, sliceSize: 2, tail: 0, onRead: null, entries);
         var state = NewFlushCeilingState();
         var store = new InMemorySnapshotStore();
 
@@ -862,7 +863,7 @@ public partial class BPlusLeafGrainTests
             cts =>
             [
                 BuildObservableCoordinator(
-                    head: 12,
+                    head: 13,
                     sliceSize: 2,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: read =>
@@ -906,7 +907,7 @@ public partial class BPlusLeafGrainTests
             cts =>
             [
                 BuildObservableCoordinator(
-                    head: 12,
+                    head: 13,
                     sliceSize: 2,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: read =>
@@ -939,7 +940,7 @@ public partial class BPlusLeafGrainTests
         // prefix up to that boundary must be durable.
         using var cts = new CancellationTokenSource();
         var coord = BuildObservableCoordinator(
-            head: 12,
+            head: 13,
             sliceSize: 4,
             tail: 0,
             onRead: read =>
@@ -1180,7 +1181,7 @@ public partial class BPlusLeafGrainTests
                 entries[i - 1] = FlushSet(i, $"k{i:D6}");
 
             var coord = BuildObservableCoordinator(
-                head: recordCount,
+                head: recordCount + 1,
                 sliceSize: recordCount,
                 tail: 0,
                 onRead: null,
@@ -1245,7 +1246,7 @@ public partial class BPlusLeafGrainTests
                 // never swept at all and its backlog never shrinks - which is
                 // what keeps the ordering stable across every attempt.
                 BuildObservableCoordinator(
-                    head: 12,
+                    head: 13,
                     sliceSize: 2,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: read =>
@@ -1261,7 +1262,7 @@ public partial class BPlusLeafGrainTests
                 // Partition 1: a larger, saga-free backlog, so it wins the
                 // drain slot on every sweep and partition 0 never does.
                 BuildObservableCoordinator(
-                    head: 20,
+                    head: 21,
                     sliceSize: 2,
                     tail: 0,
                     onRead: null,
@@ -1356,11 +1357,11 @@ public partial class BPlusLeafGrainTests
                 state,
                 [
                     BuildObservableCoordinator(
-                        head: 12, sliceSize: 4, tail: 0,
+                        head: 13, sliceSize: 4, tail: 0,
                         onRead: read => { if (read == 2) cts.Cancel(); },
                         WindowWithASelfContainedSaga(txId)),
                     BuildObservableCoordinator(
-                        head: 20, sliceSize: 2, tail: 0, onRead: null,
+                        head: 21, sliceSize: 2, tail: 0, onRead: null,
                         [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
                 ],
                 store.Stub,
@@ -1392,12 +1393,12 @@ public partial class BPlusLeafGrainTests
             state,
             [
                 BuildObservableCoordinator(
-                    head: 12, sliceSize: 4,
+                    head: 13, sliceSize: 4,
                     tail: state.State.ProjectionCheckpointOffset,
                     onRead: null,
                     WindowWithASelfContainedSaga(txId)),
                 BuildObservableCoordinator(
-                    head: 20, sliceSize: 20, tail: 0, onRead: null,
+                    head: 21, sliceSize: 20, tail: 0, onRead: null,
                     [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
             ],
             finalStore.Stub,

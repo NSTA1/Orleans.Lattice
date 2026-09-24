@@ -50,9 +50,9 @@ public partial class BPlusLeafGrainTests
     public async Task A_configured_width_is_the_width_the_coordinator_is_asked_for()
     {
         var configured = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
         var control = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
 
         await ConfiguredReader(configured, budget: 64)
             .ReadSliceAsync(-1, 8, onNarrowed: null, CancellationToken.None);
@@ -97,7 +97,7 @@ public partial class BPlusLeafGrainTests
     public async Task A_configured_width_is_also_the_ceiling_the_reader_widens_back_to()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
         var reader = ConfiguredReader(coordinator, budget: 64);
 
         // Narrow: 64 refused, 16 affordable.
@@ -136,7 +136,7 @@ public partial class BPlusLeafGrainTests
     public void A_configured_width_sets_the_depth_of_the_narrowing_ladder()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 0, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 0, PressuredReplayEntries(8));
         var reader = ConfiguredReader(coordinator, budget: 16);
 
         Assert.That(
@@ -173,7 +173,7 @@ public partial class BPlusLeafGrainTests
     public void A_configured_width_below_one_is_clamped_to_a_single_entry(int budget)
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 1024, PressuredReplayEntries(8));
         var reader = ConfiguredReader(coordinator, budget);
 
         Assert.That(
