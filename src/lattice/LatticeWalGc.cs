@@ -230,6 +230,7 @@ public sealed class LatticeWalGc(
         // tree-wide prime would leave the shard dimension absent on exactly
         // the early-return passes a reader is investigating.
         PrimeTrimStopSeries(treeName, partitions);
+        WalGcBlockedConsumerCensus.Prime(treeName);
 
         // Resolve a provider per partition from the durable WAL placement pin so
         // a partition that was moved to a named storage backend is sampled and
@@ -810,6 +811,7 @@ public sealed class LatticeWalGc(
         var factory = GrainFactory;
         if (factory is null)
         {
+            WalGcBlockedConsumerCensus.Record(treeName, 0);
             return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
@@ -818,17 +820,21 @@ public sealed class LatticeWalGc(
         {
             pins = await ReadDurablePinsAsync(factory, treeName).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
             // The durable pin store is unavailable on this pass; fall back to
             // the in-memory floor rather than failing the whole GC run. The
             // next pass retries; a missed floor never trims unsafely because
             // the present in-memory consumers still constrain the trim point.
+            WalGcBlockedConsumerCensus.Record(treeName, -1);
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                ex, "WAL GC blocked-consumer census unavailable for tree {Tree}: durable pins could not be read.", treeName);
             return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
         if (pins.Count == 0)
         {
+            WalGcBlockedConsumerCensus.Record(treeName, 0);
             return DurableMaterialiserFloor.Unblocked(registryMin);
         }
 
@@ -872,6 +878,8 @@ public sealed class LatticeWalGc(
         // Note the gate must NOT be conditioned on a real floor existing: a
         // population where every reporter abstained still proves the plane is
         // live, so a consumer missing from it is a genuine gap.
+        DurableMaterialiserFloor? populationGap = null;
+        long blockingPopulation = 0;
         if (coveredConsumerIds is not null || abstainedConsumerIds is not null)
         {
             bool[]? gapPartitions = null;
@@ -918,17 +926,29 @@ public sealed class LatticeWalGc(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
                     LatticeTenantLabel.ForTree(treeName));
 
-                // Reported as NOT computed for the same reason the "every
-                // partition blocked" early return below does: the uncovered fold
-                // is abandoned, and saying "not computed" keeps the refusal of
-                // offset admission true by construction rather than by
-                // coincidence.
-                return new DurableMaterialiserFloor(
+                // Keep the original gap refusal, independently of the census
+                // computed below. It must not acquire offset trim entitlement.
+                populationGap = new DurableMaterialiserFloor(
                     null, gapPartitions, true, firstUnreported, unreportedConsumerIds, null, false);
+                blockingPopulation = unreportedCount;
             }
         }
 
-        var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<WalCursorSnapshot> snapshot;
+        try
+        {
+            snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The pre-existing gap refusal did not need a registry snapshot.
+            // A diagnostic read failure must not weaken or replace that refusal.
+            WalGcBlockedConsumerCensus.Record(treeName, -1);
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                ex, "WAL GC blocked-consumer census unavailable for tree {Tree}: cursor snapshot could not be read.", treeName);
+            if (populationGap is { } preservedGap) return preservedGap;
+            throw;
+        }
         // Consumers whose registry cursor is a real (> Zero) frontier, and so
         // was folded into registryMin. Only these may have their durable pin
         // skipped by the pins loop below.
@@ -1106,6 +1126,14 @@ public sealed class LatticeWalGc(
 
                 if (!reportExempt)
                 {
+                    // The unioned pin dictionary is already distinct by consumer.
+                    // Population gaps were counted above, including usable pins.
+                    if (populationGap is null
+                        || coveredConsumerIds?.Contains(consumerId) == true
+                        || abstainedConsumerIds?.Contains(consumerId) == true)
+                    {
+                        blockingPopulation++;
+                    }
                     blockingConsumerId ??= consumerId;
                     blockingConsumerIds ??= new List<string>(MaxReportedBlockingConsumers);
                     if (blockingConsumerIds.Count < MaxReportedBlockingConsumers)
@@ -1136,24 +1164,9 @@ public sealed class LatticeWalGc(
                     }
                 }
 
-                // Every partition is blocked AND the reported-blocker set is
-                // full, so no further pin can change the outcome: the floor
-                // that remains is unusable everywhere and no further id would
-                // be carried. This preserves the cheap short-circuit for the
-                // case that used to take it unconditionally; the residual scan
-                // when the set is not yet full walks a dictionary already held
-                // in memory and issues no I/O.
-                if (blockedCount >= partitions
-                    && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
-                {
-                    // The uncovered-cursor fold is abandoned unfinished here, so
-                    // it is reported as NOT computed (issue #3172). Every
-                    // partition is blocked, so no offset admission is granted on
-                    // this path regardless; saying "not computed" keeps that
-                    // true by construction rather than by coincidence.
-                    return new DurableMaterialiserFloor(
-                        null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false);
-                }
+                // Continue after the report fills: the census must include every
+                // blocker, not just eight ids. No extra pin-store reads are needed;
+                // empty-WAL probes remain memoised once per partition.
 
                 // A blocking pin contributes no usable frontier, so it is not
                 // folded into the floor. The enumeration continues rather than
@@ -1177,6 +1190,18 @@ public sealed class LatticeWalGc(
             }
         }
 
+        WalGcBlockedConsumerCensus.Record(treeName, blockingPopulation);
+        if (populationGap is { } gap)
+        {
+            return gap;
+        }
+        if (blockedCount >= partitions
+            && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
+        {
+            // Preserve the former short-circuit's trim/report shape exactly.
+            return new DurableMaterialiserFloor(
+                null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false);
+        }
         return new DurableMaterialiserFloor(
             floor,
             blockedPartitions,
@@ -2827,4 +2852,3 @@ public sealed class LatticeWalGc(
             blockedFloor,
             offsetAdmission);
 }
-
