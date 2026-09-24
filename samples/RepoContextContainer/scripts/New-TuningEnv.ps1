@@ -36,12 +36,15 @@
 
         grant = clamp(corpusRequirement + headroom, FLOOR, hostUsableForContainers)
 
-    When the host ceiling binds BELOW the corpus requirement, this script REFUSES and
-    names both figures. It does not silently grant less. A silent under-grant reproduces
-    the very defect being fixed while reporting success, and an undersized repocontext
-    grant does not present as a container kill - it presents as a STORAGE fault
-    (OutOfMemoryException inside a grain-state read) while `docker ps` still reports the
-    container healthy.
+    When the host ceiling binds BELOW the FLOOR, this script REFUSES and names both
+    figures. It does not silently grant less. When the ceiling binds between the floor
+    and the corpus requirement, it grants the ceiling and WARNS, naming the requirement,
+    the ceiling, and the shortfall - above the floor the stack can start, so the
+    under-grant is reported rather than refused, but it is never silent. A silent
+    under-grant reproduces the very defect being fixed while reporting success, and an
+    undersized repocontext grant does not present as a container kill - it presents as a
+    STORAGE fault (OutOfMemoryException inside a grain-state read) while `docker ps`
+    still reports the container healthy.
 
 .PARAMETER WorkspacePath
     The host directory mounted read-only at /workspace. Defaults to REPO_PATH from an
@@ -78,6 +81,24 @@
     across three checkouts of this repository the tracked count varied by 0.2%, and a
     wrong-tree measurement differed by 106%, so the two are not close together.
 
+.PARAMETER HostMemoryBytes
+    Use this figure as host physical memory instead of reading it from the host.
+
+    This exists so the refusal paths can be driven on a runner of any size (issue
+    #2832): the host clamp, the floor refusal, the shortfall warning, and the
+    free-memory refusal all sit below the -CorpusOnly exit, and without an injected
+    figure a test can only reach whichever branch the runner's own RAM happens to
+    select. An overridden reading is labelled as such in the output and in the
+    generated .env header, so a file derived from a hypothetical host cannot pass for
+    one measured on a real one. Do not use it to talk a real host into a larger grant:
+    that is the silent under-provisioning this script exists to refuse.
+
+.PARAMETER HostAvailableMemoryBytes
+    Use this figure as host FREE memory for the concurrent-load refusal, instead of
+    reading it from the host. Labelled in the output the same way. Like
+    -HostMemoryBytes it is a seam for driving the refusal deterministically, not a
+    tuning knob; -IgnoreHostLoad is the documented way to proceed past a busy host.
+
 .EXAMPLE
     pwsh -File ./scripts/New-TuningEnv.ps1 -DryRun
 #>
@@ -91,7 +112,11 @@ param(
     [int] $ExpectedCorpusFiles,
     [ValidateRange(0.0, 1.0)]
     [double] $CorpusTolerance = 0.02,
-    [switch] $Force
+    [switch] $Force,
+    [ValidateRange(1, [long]::MaxValue)]
+    [long] $HostMemoryBytes,
+    [ValidateRange(0, [long]::MaxValue)]
+    [long] $HostAvailableMemoryBytes
 )
 
 Set-StrictMode -Version Latest
@@ -502,13 +527,15 @@ if (-not (Test-Path $WorkspacePath)) {
     throw "Workspace path '$WorkspacePath' does not exist. Pass -WorkspacePath explicitly."
 }
 
-$hostMemory = Get-HostMemoryBytes
+$hostMemoryOverridden = $PSBoundParameters.ContainsKey('HostMemoryBytes')
+$hostMemory = if ($hostMemoryOverridden) { [double] $HostMemoryBytes } else { Get-HostMemoryBytes }
 $hostCpus = Get-HostCpuCount
 
 Write-Host ''
 Write-Host 'HOST' -ForegroundColor Cyan
 Write-Host ("  logical CPUs      : {0}" -f $hostCpus)
-Write-Host ("  physical memory   : {0}" -f (Format-Bytes $hostMemory))
+Write-Host ("  physical memory   : {0}{1}" -f (Format-Bytes $hostMemory), $(
+    if ($hostMemoryOverridden) { '   [OVERRIDDEN via -HostMemoryBytes, not measured]' } else { '' }))
 
 # ---- Corpus ---------------------------------------------------------------
 # Indexed FILE COUNT is the primary proxy, deliberately in preference to the on-disk
@@ -699,8 +726,14 @@ NOT announce itself as a resource event.
 # false explanation alone, and both obvious responses (raise HOST_MEMORY_SHARE, buy
 # RAM) appear to work. So this message names concurrent load as the cause, says the
 # host size is NOT the constraint, and does not offer the share as a remedy.
-$hostAvailable = Get-HostAvailableMemoryBytes
+$hostAvailableOverridden = $PSBoundParameters.ContainsKey('HostAvailableMemoryBytes')
+$hostAvailable = if ($hostAvailableOverridden) { [double] $HostAvailableMemoryBytes } else { Get-HostAvailableMemoryBytes }
 $totalCommitment = $granted + $EMBEDDER_MEMORY_BYTES
+
+if ($hostAvailableOverridden) {
+    Write-Host ("  free right now    : {0}   [OVERRIDDEN via -HostAvailableMemoryBytes, not measured]" -f `
+        (Format-Bytes $hostAvailable))
+}
 
 if ($null -ne $hostAvailable -and $totalCommitment -gt $hostAvailable -and -not $IgnoreHostLoad) {
     throw @"
@@ -779,7 +812,7 @@ $content = @"
 #
 # Derived from:
 #   host logical CPUs : $hostCpus
-#   host memory       : $(Format-Bytes $hostMemory)
+#   host memory       : $(Format-Bytes $hostMemory)$(if ($hostMemoryOverridden) { '  (OVERRIDDEN via -HostMemoryBytes, not measured)' })
 #   indexable files   : $fileCount  ($corpusMethod)
 #   corpus root       : $WorkspacePath
 #   corpus commit     : $(if ($corpusCommit) { $corpusCommit } else { 'unknown' })
