@@ -755,22 +755,17 @@ internal sealed class RepoContextBootstrapService : IDisposable
             }
             else
             {
-                // A git-ref-sourced generation stamps its commit even when the plan is
-                // a no-op, so the anchor an operator (and every spoke) reads always
-                // names the revision actually served - a commit that only touched
-                // filtered-out paths still moves the anchor forward.
-                if (!string.IsNullOrWhiteSpace(request.CommitSha))
-                {
-                    await tree.SetAsync(
-                        RepoContextKeys.Repo(repoId),
-                        BuildRepoNode(
-                            repoId,
-                            plan.LiveFileCount,
-                            DateTimeOffset.UtcNow.ToString("O"),
-                            request.CommitSha,
-                            HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
-                        cancellationToken).ConfigureAwait(false);
-                }
+                // A no-op plan is still a completed verification: the walk scanned
+                // the tree and the reconcile found every file current. That is
+                // exactly what lastIngested records, so the marker advances on every
+                // such pass, not only on a pass that changed something (#3145) -
+                // otherwise a converged repository reads as progressively staler the
+                // longer it stays correct. A git-ref-sourced generation also stamps
+                // its commit here, so the anchor names the revision actually served;
+                // a mounted-workspace run still writes no commit (see BuildRepoNode).
+                await StampNoOpRepoNodeAsync(
+                    tree, repoId, plan.LiveFileCount, request.CommitSha, cancellationToken)
+                    .ConfigureAwait(false);
 
                 await ReportAsync(
                     progress,
@@ -1952,8 +1947,11 @@ internal sealed class RepoContextBootstrapService : IDisposable
 
     private byte[] BuildRepoNode(
         string repoId, int liveFileCount, string ingestToken, string? commitSha, HybridLogicalClock clock)
-    {
-        var node = new RepoNode
+        => _repoNodeSerializer.SerializeToArray(CreateRepoNode(repoId, liveFileCount, ingestToken, commitSha, clock));
+
+    private static RepoNode CreateRepoNode(
+        string repoId, int liveFileCount, string ingestToken, string? commitSha, HybridLogicalClock clock)
+        => new()
         {
             RepoId = repoId,
             LastIngested = RepoContextValues.Lww(ingestToken, clock),
@@ -1965,7 +1963,59 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 ? new BoundedRegister()
                 : RepoContextValues.Lww(commitSha, clock),
         };
-        return _repoNodeSerializer.SerializeToArray(node);
+
+    /// <summary>
+    /// Re-stamps the repository marker after a pass whose plan was a no-op, so a
+    /// completed verification advances <see cref="RepoNode.LastIngested"/> (#3145).
+    /// Only the index-derived registers are replaced; the authored metadata a caller
+    /// may have patched onto the marker (display name, default branch, tags) is
+    /// carried across, because this write happens on every converged pass and a
+    /// wholesale overwrite would erase that metadata every reconcile interval.
+    /// </summary>
+    private async Task StampNoOpRepoNodeAsync(
+        ILattice tree, string repoId, int liveFileCount, string? commitSha, CancellationToken cancellationToken)
+    {
+        var key = RepoContextKeys.Repo(repoId);
+        var fresh = CreateRepoNode(
+            repoId,
+            liveFileCount,
+            _timeProvider.GetUtcNow().ToString("O"),
+            commitSha,
+            HybridLogicalClock.Tick(HybridLogicalClock.Zero));
+
+        var storedBytes = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        var stored = storedBytes is null ? null : TryDeserializeRepoNode(repoId, storedBytes);
+        var node = stored is null
+            ? fresh
+            : stored with
+            {
+                RepoId = repoId,
+                LastIngested = fresh.LastIngested,
+                FileCount = fresh.FileCount,
+                IndexedCommit = fresh.IndexedCommit,
+            };
+
+        await tree.SetAsync(key, _repoNodeSerializer.SerializeToArray(node), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private RepoNode? TryDeserializeRepoNode(string repoId, byte[] bytes)
+    {
+        try
+        {
+            return _repoNodeSerializer.Deserialize(bytes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // An undecodable marker carries no authored metadata that can be
+            // preserved, so it is replaced with a fresh one - the same outcome a
+            // changing pass already produces - rather than failing every pass.
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: the stored repository marker could not be decoded; replacing it with a fresh marker.",
+                repoId);
+            return null;
+        }
     }
 
     /// <summary>
