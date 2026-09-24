@@ -1871,6 +1871,29 @@ internal sealed partial class BPlusLeafGrain
     {
         var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
 
+        // Issue #3476: make the replay's advance DURABLE before anything below
+        // republishes the pin. The replay advances the checkpoint through
+        // SetCheckpointOffsetAsync, which only records it in the pending map
+        // and defers the persist behind the coalescing window - a window whose
+        // clock restarts at every activation, so a drive over a few hundred
+        // entries on a freshly reactivated dormant leaf routinely ends with its
+        // whole advance still pending. ResolveDurablePinForPartition bounds the
+        // published offset by the PERSISTED checkpoint, which is what keeps the
+        // WAL GC from trimming past the offset the next replay starts from; but
+        // it also means an unpersisted advance would republish the SAME pin,
+        // and the drive - whose whole purpose is to move this consumer's floor
+        // - would move nothing. Persisting here is what lets the flush below
+        // carry the advance.
+        //
+        // This is the same flush the timer, the entry threshold, the
+        // deactivation hook and BankCancelledWarmReplayProgressAsync already
+        // run, over offsets the replay has already clamped behind every
+        // unresolved deferred terminal and saga prepare, so it claims nothing a
+        // later flush would not. It is clock-agnostic: it persists whatever
+        // advance is pending regardless of the leaf's frontier clock, and is a
+        // no-op when the replay recorded none.
+        await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+
         // Advancing the checkpoint is only HALF of what the pin needs. The pin
         // is min(checkpoint, coverage), so a checkpoint that advances over
         // coverage which does not move republishes the SAME offset and the leaf
