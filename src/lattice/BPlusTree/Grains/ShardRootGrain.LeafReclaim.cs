@@ -95,6 +95,19 @@ internal sealed partial class ShardRootGrain
     /// enough to finish, and is truncated into a resumable partial pass where
     /// it is not.
     /// </para>
+    /// <para>
+    /// <b>Every probe counts, and the deadline is consulted before the walk is
+    /// entered.</b> The probe budget covers all of a pass's
+    /// <c>GetReclaimProbeAsync</c> calls - the resume or head probe that enters
+    /// the walk and the re-probe of the predecessor after each fold, as well as
+    /// the per-candidate probe in the loop - so the reported probe count is the
+    /// true count. And entering the walk checks the deadline before each of its
+    /// descents and probes, so a pass whose prologue has already consumed the
+    /// deadline stands down without probing rather than starting a walk it has
+    /// no time left for (issue 2682). What no check between calls can bound is
+    /// a single call already in flight; the deadline limits how many are
+    /// started, not how long one takes.
+    /// </para>
     /// </summary>
     private const int LeafReclaimProbesPerFold = 16;
 
@@ -223,8 +236,6 @@ internal sealed partial class ShardRootGrain
 
         var options = await GetOptionsAsync();
 
-        var (prevId, prevProbe) = await StartLeafReclaimWalkAsync(path);
-
         var reclaimed = 0;
 
         // The walk is allowed to run past its candidates, but not to the end
@@ -251,6 +262,32 @@ internal sealed partial class ShardRootGrain
         // above it the pass fails outright and reclaims nothing, precisely on
         // the large cold trees reclaim exists to tidy.
         var budget = LeafWalkBudget.ForBackgroundDrain(visitBudget, options, startTimestamp);
+
+        // The budget is built BEFORE the walk is entered, not after, because
+        // entering it is itself probing (issue 2682). Every pass enters through
+        // a resume descent and probe or a head descent and probe, and those
+        // used to run ahead of the budget: uncounted, so a pass that reported
+        // "probed 0" had in fact probed once, and unbounded, so the deadline
+        // was first consulted only after that entry had completed however long
+        // it took. Both are closed here - the entry consults the deadline
+        // before each of its grain calls and every probe it issues is counted.
+        var entry = await StartLeafReclaimWalkAsync(path, budget);
+        for (var i = 0; i < entry.ProbesIssued; i++)
+        {
+            budget.RecordLeafVisited();
+        }
+
+        if (!entry.Entered)
+        {
+            // The deadline passed before the walk could be entered. Nothing was
+            // folded and the resume cursor is left where it was, so the next
+            // pass starts from the same position rather than losing it.
+            LogLeafReclaimPass(startTimestamp, reclaimed, budget.LeavesVisited, visitBudget, "deadline");
+            return reclaimed;
+        }
+
+        var prevId = entry.PrevId;
+        var prevProbe = entry.PrevProbe;
 
         // The head leaf is never a reclaim candidate: it owns the range below
         // the first separator in the tree and has no predecessor to inherit
@@ -291,7 +328,10 @@ internal sealed partial class ShardRootGrain
 
                 // The predecessor has absorbed this leaf's range and now points
                 // past it, so re-probe it and carry on from there rather than
-                // stepping onto a leaf that has just been retired.
+                // stepping onto a leaf that has just been retired. It is a probe
+                // like any other and is counted as one (issue 2682): every fold
+                // costs its candidate's probe AND this one.
+                budget.RecordLeafVisited();
                 prevProbe = await ResolveLeafGrain(prevId).GetReclaimProbeAsync();
 
                 // Budget spent. Stop walking, not just folding: probing the
@@ -358,19 +398,29 @@ internal sealed partial class ShardRootGrain
         //
         // Credit for spotting the gate belongs to the worker on issue 2278;
         // it lands here because this method was already being changed.
-        logger.LogInformation(
+        LogLeafReclaimPass(startTimestamp, reclaimed, budget.LeavesVisited, visitBudget, stopReason);
+
+        return reclaimed;
+    }
+
+    /// <summary>
+    /// Emits the one line every reclaim pass reports, whichever exit it took.
+    /// <paramref name="probed"/> is every <c>GetReclaimProbeAsync</c> call the
+    /// pass issued - the entry probe and every post-fold re-probe included -
+    /// so a pass that reports <c>probed 0</c> genuinely probed nothing
+    /// (issue 2682).
+    /// </summary>
+    private void LogLeafReclaimPass(long startTimestamp, int reclaimed, int probed, int visitBudget, string stopReason)
+        => logger.LogInformation(
             "Shard {ShardIndex} of tree '{TreeId}' finished an empty-leaf reclaim pass in {ElapsedMs}ms: "
             + "folded {Reclaimed}, probed {Visited} of a {ProbeBudget}-probe budget, stopped on {StopReason}.",
             MyShardIndex,
             TreeId,
             (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
             reclaimed,
-            budget.LeavesVisited,
+            probed,
             visitBudget,
             stopReason);
-
-        return reclaimed;
-    }
 
     /// <summary>
     /// Chooses the leaf a pass starts from: the recorded resume position when
@@ -382,18 +432,38 @@ internal sealed partial class ShardRootGrain
     /// migrated by the time the next pass runs, whereas routing on a key is a
     /// total function and always lands on whichever leaf owns that span now.
     /// </para>
+    /// <para>
+    /// Entering the walk is itself probing, so it runs under the pass's budget
+    /// (issue 2682). The deadline is consulted before every grain call made
+    /// here - each descent and each probe - and the pass stands down with
+    /// <c>Entered = false</c> the moment it has passed, rather than first
+    /// completing an entry whose cost it cannot bound. <c>ProbesIssued</c>
+    /// reports every probe actually sent, including one whose resume attempt
+    /// then failed and fell back to the head, so the caller can count each of
+    /// them against the budget. The budget is taken by value because this
+    /// method only reads it; the caller does the counting.
+    /// </para>
     /// </summary>
-    private async Task<(GrainId PrevId, LeafReclaimProbe PrevProbe)> StartLeafReclaimWalkAsync(
-        Stack<GrainId> path)
+    private async Task<(bool Entered, int ProbesIssued, GrainId PrevId, LeafReclaimProbe PrevProbe)> StartLeafReclaimWalkAsync(
+        Stack<GrainId> path,
+        LeafWalkBudget budget)
     {
+        var probesIssued = 0;
+
         if (_leafReclaimResumeLowKey is { } resumeKey)
         {
             try
             {
+                if (budget.ShouldYield()) return (false, probesIssued, default, default);
+
                 path.Clear();
                 var resumeId = await ResolveWriteLeafAsync(resumeKey, path);
+
+                if (budget.ShouldYield()) return (false, probesIssued, default, default);
+
+                probesIssued++;
                 var resumeProbe = await ResolveLeafGrain(resumeId).GetReclaimProbeAsync();
-                return (resumeId, resumeProbe);
+                return (true, probesIssued, resumeId, resumeProbe);
             }
             catch (Exception ex)
             {
@@ -409,8 +479,15 @@ internal sealed partial class ShardRootGrain
             }
         }
 
+        if (budget.ShouldYield()) return (false, probesIssued, default, default);
+
         var headId = (await GetLeftmostLeafIdAsync())!.Value;
-        return (headId, await ResolveLeafGrain(headId).GetReclaimProbeAsync());
+
+        if (budget.ShouldYield()) return (false, probesIssued, default, default);
+
+        probesIssued++;
+        var headProbe = await ResolveLeafGrain(headId).GetReclaimProbeAsync();
+        return (true, probesIssued, headId, headProbe);
     }
 
     /// <summary>
