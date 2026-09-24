@@ -170,9 +170,6 @@ internal sealed partial class TxRegistryGrain
     /// </summary>
     private bool _flushing;
 
-    /// <summary>Cached <see cref="LatticeMetrics.TagTree"/> pair for the flush metrics.</summary>
-    private KeyValuePair<string, object?>? _treeTag;
-
     /// <summary>
     /// Returns the group the next mutation joins, marking it as touching
     /// <paramref name="txid"/>. Call it and <see cref="CommitAsync"/> in the
@@ -292,11 +289,10 @@ internal sealed partial class TxRegistryGrain
     /// <summary>Records one registry write on the group-commit instruments.</summary>
     private void RecordWrite(int mutations, TimeSpan elapsed, bool ok)
     {
-        var tree = _treeTag ??= new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
         var outcome = ok ? LatticeMetrics.TxRegistryWriteOutcomeOk : LatticeMetrics.TxRegistryWriteOutcomeFault;
-        LatticeMetrics.TxRegistryWrites.Add(1, tree, outcome, LatticeTenantLabel.ForTree(TreeId));
-        LatticeMetrics.TxRegistryWriteMutations.Record(mutations, tree, outcome, LatticeTenantLabel.ForTree(TreeId));
-        LatticeMetrics.TxRegistryWriteDuration.Record(elapsed.TotalMilliseconds, tree, outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWrites.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWriteMutations.Record(mutations, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWriteDuration.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
     }
 
     /// <summary>
