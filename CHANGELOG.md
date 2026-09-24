@@ -81,10 +81,6 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Placement moves misread the high-water mark.** A move back onto a reclaimed provider skipped offsets it no longer held, and a fully-trimmed partition moved without its mark, so the target reused offsets. Both now fail closed, and a repeated reclaim reports `NoOp`. ([#3459](https://github.com/NSTA1/Orleans.Lattice/issues/3459), [#3460](https://github.com/NSTA1/Orleans.Lattice/issues/3460)) (`Orleans.Lattice`)
 
-- **Storage - Blob cache clobbered a concurrent rewrite.** The sliding renewal and the expired-entry eviction were unconditional, so a `Set` from another replica landing between the read and that write lost its expiry or was deleted. Both now require the read version's ETag. ([#3461](https://github.com/NSTA1/Orleans.Lattice/issues/3461)) (`Orleans.Lattice.Caching.AzureBlob`)
-
-- **WAL - An unreadable cursor registry released the durability hold.** A failed consumer-cursor registry read classified the tree's cursors as durable, which disabled the durability hold and let the collector trim WAL entries with no durability evidence at all. It was silent as well as wrong: the counter that reports such a release is gated on the same hold, so the fault switched off the instrument that would have announced it. An unreadable registry is now its own classification, engages the hold, and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice`)
-
 - **Benchmark - Ingest engine ignored WAL back-pressure.** The azure-throughput producer's retry filter never matched a saturation refusal, so it booked the batch as failed and kept offering load at full rate - measuring client behaviour, not platform capacity. Refusals now back off and retry. ([#3339](https://github.com/NSTA1/Orleans.Lattice/issues/3339)) (`repository-wide`)
 
 - **WAL - Purged tree resurrection.** A WAL shard activating after its tree was purged resolved options through the lazy seeding path, re-creating the registry row and resurrecting the tree. The activation now uses the pure fast path, which never mutates the registry. ([#3343](https://github.com/NSTA1/Orleans.Lattice/issues/3343)) (`Orleans.Lattice`)
@@ -159,21 +155,51 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - A failed view unregister was never retried.** A runtime view delete that hit a storage fault dropped the view from memory only, so a retried delete reported success while storage kept it and the next silo start restored the view. A failed write now restores the entry. ([#3469](https://github.com/NSTA1/Orleans.Lattice/issues/3469)) (`Orleans.Lattice`)
 
-- **Replication - A failed receive-fence write was never retried.** A storage fault during a saga pause or resume changed only memory, so the retry was a no-op: a lost pause let inbound apply resume mid-saga, and a lost resume left the tree paused with no owner. A failed write now restores the owner. ([#3470](https://github.com/NSTA1/Orleans.Lattice/issues/3470)) (`Orleans.Lattice.Replication`)
+- **WAL - A never-written leaf held a pin no drive could lift.** Its (Zero, -1) pin left the GC scheduler looping on NoAdvance for ever. The leaf now publishes its persisted scanned-through checkpoint, and a zero pin on a proven-empty partition still blocks trim but is no longer reported. ([#3453](https://github.com/NSTA1/Orleans.Lattice/issues/3453)) (`Orleans.Lattice`)
 
-- **Backup - A schedule could outlive an unpersisted scope.** A storage fault while recording a backup scope changed only memory, so a retried `EnsureScheduleAsync` registered reminders that later found no scope and captured nothing. A failed write now restores the scope, so the retry persists it. ([#3471](https://github.com/NSTA1/Orleans.Lattice/issues/3471)) (`Orleans.Lattice.Backup`)
+- **WAL - A graceful deactivation lost its final pin.** The slow digest publish ran first and used up the deadline, so the capture and pin barriers faulted on a torn-down activation. The final pin now publishes first, torn-down barriers skip, and the digest publishes last. ([#3393](https://github.com/NSTA1/Orleans.Lattice/issues/3393)) (`Orleans.Lattice`)
+
+- **Leaf - A latched stale leaf was not terminal.** A split stamped a checkpoint hint over a stale-latched partition, so it later replayed past the gap it had declared unrecoverable, and WAL GC re-drove every latched leaf each cooldown. The hint is refused and a latched verdict is terminal. ([#3477](https://github.com/NSTA1/Orleans.Lattice/issues/3477), [#3478](https://github.com/NSTA1/Orleans.Lattice/issues/3478)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Shard - Empty-leaf reclaim under-counted and overran.** Reclaim counted one of its four probe sites, so a reported `probed 0` could hide a spent budget, and never checked its deadline before entry. Every probe now counts and entry stands down at the deadline. ([#2682](https://github.com/NSTA1/Orleans.Lattice/issues/2682)) (`Orleans.Lattice`)
+
+- **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Probes and fixtures that could not fail.** The async allocation probe could report zero for a loop that allocates, and leaf fixtures modelled an unreachable WAL state, so guards on those paths passed without exercising them. Both now measure what they claim. ([#3419](https://github.com/NSTA1/Orleans.Lattice/issues/3419), [#2680](https://github.com/NSTA1/Orleans.Lattice/issues/2680)) (`repository-wide`)
 
 ### Security
 
-- **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, the Explorer's default credential store is no longer process-global, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer`)
+- **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Container - Memory and GC.** Server GC is selected and its heap count written in the hexadecimal form the CLR reads, memory grants derive from the ingested corpus rather than the deploy checkout, and the host is no longer starved against its own corpus into large-object exhaustion. ([#2596](https://github.com/NSTA1/Orleans.Lattice/issues/2596), [#2928](https://github.com/NSTA1/Orleans.Lattice/issues/2928), [#2930](https://github.com/NSTA1/Orleans.Lattice/issues/2930), [#3036](https://github.com/NSTA1/Orleans.Lattice/issues/3036)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Security - Keyword-named metrics passed the telemetry allow-list.** The deny-all gate skipped any metric named like a PromQL keyword, so `up or min` read `min` with only `up` admitted. Such a keyword now counts as a metric name wherever Prometheus parses it as one. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Telemetry`)
-
 ## Released
+
+## [2026-09-24]
+
+Patch release: `Orleans.Lattice`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication` and `Orleans.Lattice.Caching.AzureBlob` advance to `9.7.1`, and `Orleans.Lattice.Explorer.Core` and `Orleans.Lattice.Explorer.UI` advance to `9.4.2` from the `release/9.4` line. Every other package stays where the 2026-09-21 and 2026-09-23 waves left it. Packages that depend on a patched package still require its `9.7.0`, so reference `Orleans.Lattice`, `Orleans.Lattice.Backup` or `Orleans.Lattice.Replication` directly to pick up those fixes. The core fix stops new WAL damage but does not repair a leaf that was already affected: such a leaf still fails to activate with `LeafProjectionStaleException`.
+
+### Fixed
+
+- **WAL - Garbage collection could trim past a leaf's saved checkpoint.** A leaf's durable pin included its unsaved pending checkpoint, so WAL GC could trim entries the leaf's next replay still needed. The pin now never exceeds the saved checkpoint, and a GC-driven replay saves its checkpoint first. ([#3476](https://github.com/NSTA1/Orleans.Lattice/issues/3476)) (`Orleans.Lattice` 9.7.1)
+
+- **WAL - An unreadable cursor registry released the durability hold.** A failed cursor-registry read counted the tree's cursors as durable, so the durability hold disengaged and GC could trim WAL entries with no durability evidence. That failure now engages the hold and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice` 9.7.1)
+
+- **Backup - A schedule could outlive an unpersisted scope.** A storage fault while recording a backup scope changed only memory, so a retried `EnsureScheduleAsync` registered reminders that later found no scope and captured nothing. A failed write now restores the scope, so the retry persists it. ([#3471](https://github.com/NSTA1/Orleans.Lattice/issues/3471)) (`Orleans.Lattice.Backup` 9.7.1)
+
+- **Replication - A failed receive-fence write was never retried.** A storage fault during a saga pause or resume changed only memory, so the retry was a no-op: a lost pause let inbound apply resume mid-saga, and a lost resume left the tree paused with no owner. A failed write now restores the owner. ([#3470](https://github.com/NSTA1/Orleans.Lattice/issues/3470)) (`Orleans.Lattice.Replication` 9.7.1)
+
+- **Storage - Blob cache clobbered a concurrent rewrite.** The sliding renewal and the expired-entry eviction were unconditional, so a `Set` from another replica landing between the read and that write lost its expiry or was deleted. Both now require the read version's ETag. ([#3461](https://github.com/NSTA1/Orleans.Lattice/issues/3461)) (`Orleans.Lattice.Caching.AzureBlob` 9.7.1)
+
+### Security
+
+- **Security - Keyword-named metrics passed the telemetry allow-list.** The deny-all gate skipped any metric named like a PromQL keyword, so `up or min` read `min` with only `up` admitted. Such a keyword now counts as a metric name wherever Prometheus parses it as one. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Telemetry` 9.7.1)
+
+- **Security - MCP telemetry packages resolved the unpatched facade.** `Orleans.Lattice.Api.Mcp.Telemetry` and `Orleans.Lattice.Api.Mcp.Telemetry.Azure` are republished with no code change, so they require the patched `Orleans.Lattice.Api.Telemetry` 9.7.1 instead of resolving 9.7.0. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Mcp.Telemetry` 9.7.1, `Orleans.Lattice.Api.Mcp.Telemetry.Azure` 9.7.1)
+
+- **Explorer - The default credential store was one sign-in for the whole process.** Registered as a singleton, the in-memory store let every circuit of a multi-user head read the last operator's credential. It is now scoped per circuit; a head that registers its own store is unaffected. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386)) (`Orleans.Lattice.Explorer.Core` 9.4.2, `Orleans.Lattice.Explorer.UI` 9.4.2)
 
 ## [2026-09-23]
 

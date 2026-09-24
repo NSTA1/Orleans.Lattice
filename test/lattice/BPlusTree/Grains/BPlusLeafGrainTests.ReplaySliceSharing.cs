@@ -48,7 +48,7 @@ public partial class BPlusLeafGrainTests
     public async Task The_shared_reader_narrows_and_retries_rather_than_propagating()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
         var reader = SharingReader(coordinator);
 
         var slice = await reader.ReadSliceAsync(-1, 8, onNarrowed: null, CancellationToken.None);
@@ -76,7 +76,7 @@ public partial class BPlusLeafGrainTests
     public void The_shared_reader_gives_up_at_a_single_entry_instead_of_retrying_forever()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 0, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 0, PressuredReplayEntries(8));
         var reader = SharingReader(coordinator);
 
         Assert.That(
@@ -101,7 +101,7 @@ public partial class BPlusLeafGrainTests
     public async Task The_shared_reader_widens_back_once_the_pressure_passes()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 1, affordableBudget: 16, PressuredReplayEntries(8));
+            head: 9, sliceSize: 1, affordableBudget: 16, PressuredReplayEntries(8));
         var reader = SharingReader(coordinator);
 
         await reader.ReadSliceAsync(-1, 8, onNarrowed: null, CancellationToken.None);
@@ -137,7 +137,7 @@ public partial class BPlusLeafGrainTests
     public async Task The_shared_reader_reports_each_narrowing_with_the_width_it_adopted()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 16, PressuredReplayEntries(8));
         var reader = SharingReader(coordinator);
         var reported = new List<int>();
 
@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
     public void The_shared_reader_does_not_narrow_for_a_failure_that_is_not_pressure()
     {
         var coordinator = new PressuredReplayCoordinator(
-            head: 8, sliceSize: 8, affordableBudget: 256, PressuredReplayEntries(8));
+            head: 9, sliceSize: 8, affordableBudget: 256, PressuredReplayEntries(8));
         coordinator.Stub.ReadSliceAsync(
                 Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<Task<IReadOnlyList<CommitLogSliceEntry>>>(

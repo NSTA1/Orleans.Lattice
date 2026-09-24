@@ -69,6 +69,9 @@ closes.
 - `docs/<package>/` - Markdown documentation for each package (plus a docs-only
   `docs/crdt/` conceptual topic with no `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
+- `videos/` - the educational video series: a HyperFrames (HTML-to-video)
+  workspace with its own CI lane. See [videos/README.md](videos/README.md) and
+  the **video-production** skill (`.github/skills/video-production/SKILL.md`).
 
 Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
 `docs/foo/`. CI discovers packages from this layout automatically. Note the

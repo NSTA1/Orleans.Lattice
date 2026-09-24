@@ -24,6 +24,8 @@ Alongside `mode`, every `repocontext_search` and `repocontext_context` result ca
 
 The last three are real capability losses, and readiness folds them the same way.
 
+Both producers of `keyword.index_degraded` log a `Warning` from `RepoContextSearchService`: a thrown fault logs the exception, and the hydration-drift case logs the repository id, the number of ranked matches and distinct candidate sources, and a bounded sample (at most five, in rank order) of the candidate keys that no longer hydrate - enough to tell an operator which records the index has drifted from.
+
 ## Keyword search over file content
 
 The keyword path is not limited to filenames and symbol names. During the structural reconcile, every text file's bounded body text is written to the dedicated [content projection tree](record-model.md#content-projection) at `repo/{repoId}/content/{path}`. The keyword scanner folds that body text into each candidate's searchable haystack, so a query token present only inside a file (not in its path or any declared identifier) still matches. This is deliberately **decoupled from the embedding provider**: the content projection is populated by the indexing walk regardless of whether an embedder is bound, precisely so the no-embedder path is more than filename matching. A repository indexed before the content projection existed is healed by an idempotent content back-fill (see [record-model.md](record-model.md#content-projection)). The scan keeps its existing bounded-candidate safety limit, so folding in content does not change its cost profile.

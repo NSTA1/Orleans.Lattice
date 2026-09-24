@@ -1,0 +1,9 @@
+{
+  "$comment": "The series narration voice, chosen by audition (npm run voice:samples). Generated locally with Kokoro-82M, so narration needs no account, key or network, and is reproducible from the script. See series.md, 'Voice'.",
+  "provider": "kokoro",
+  "voice": "bf_emma",
+  "lang": "en-gb",
+  "speed": 1.0,
+  "leadInSeconds": 0.5,
+  "cueGapSeconds": 0.35
+}

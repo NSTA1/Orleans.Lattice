@@ -190,9 +190,9 @@ public partial class BPlusLeafGrainTests
 
         return
         [
-            BuildObservableCoordinator(head: 12, sliceSize: 4, tail: 0, onRead: onPartitionZeroRead, p0),
-            BuildObservableCoordinator(head: 8, sliceSize: 4, tail: 0, onRead: null, p1),
-            BuildObservableCoordinator(head: 20, sliceSize: 4, tail: 0, onRead: null, p2),
+            BuildObservableCoordinator(head: 13, sliceSize: 4, tail: 0, onRead: onPartitionZeroRead, p0),
+            BuildObservableCoordinator(head: 9, sliceSize: 4, tail: 0, onRead: null, p1),
+            BuildObservableCoordinator(head: 21, sliceSize: 4, tail: 0, onRead: null, p2),
         ];
     }
 
@@ -519,7 +519,7 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain[] coordinators =
         [
             BuildObservableCoordinator(
-                head: 12,
+                head: 13,
                 sliceSize: 4,
                 tail: 0,
                 onRead: read =>
@@ -536,8 +536,8 @@ public partial class BPlusLeafGrainTests
                         cts.Cancel();
                 },
                 p0),
-            BuildObservableCoordinator(head: 8, sliceSize: 4, tail: 0, onRead: null, p1),
-            BuildObservableCoordinator(head: 20, sliceSize: 4, tail: 0, onRead: null, p2),
+            BuildObservableCoordinator(head: 9, sliceSize: 4, tail: 0, onRead: null, p1),
+            BuildObservableCoordinator(head: 21, sliceSize: 4, tail: 0, onRead: null, p2),
         ];
 
         var store = new InMemorySnapshotStore();

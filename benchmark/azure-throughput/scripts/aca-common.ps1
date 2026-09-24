@@ -195,6 +195,49 @@ function Read-AcaContext {
 	return $ht
 }
 
+function Get-AcaStaleSiloEnvNames {
+	<#
+	.SYNOPSIS
+		Names of silo env vars left over from an earlier cohort.
+	.DESCRIPTION
+		Returns every env var on the silo app that meets all three conditions:
+		- the new $EnvVars set does not name it;
+		- it is not secret-backed;
+		- it is not in $PreserveEnvNames.
+		Set-AcaSiloCount removes exactly these in the same update that
+		applies the new set, so each cohort runs on only the configuration
+		it states.
+
+		The listing fails closed. If the app's env cannot be read, this
+		throws rather than returning an empty list, because an empty list
+		would silently keep whatever the earlier cohort pinned.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[Parameter(Mandatory)][string[]] $EnvVars,
+		[string[]] $PreserveEnvNames = @()
+	)
+	$json = Invoke-Az @(
+		'containerapp', 'show',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--query', 'properties.template.containers[0].env',
+		'-o', 'json'
+	)
+	$current = @($json | ConvertFrom-Json)
+	$wanted = @{}
+	foreach ($kv in $EnvVars) { $wanted[($kv -split '=', 2)[0]] = $true }
+	foreach ($n in $PreserveEnvNames) { $wanted[$n] = $true }
+	$stale = foreach ($e in $current) {
+		if ($null -eq $e) { continue }
+		$hasSecret = $e.PSObject.Properties.Name -contains 'secretRef' -and $e.secretRef
+		if ($hasSecret) { continue }
+		if ($wanted.ContainsKey($e.name)) { continue }
+		$e.name
+	}
+	return @($stale)
+}
+
 function Set-AcaSiloCount {
 	<#
 	.SYNOPSIS
@@ -221,6 +264,11 @@ function Set-AcaSiloCount {
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
 		[Parameter(Mandatory)][ValidateRange(0, 30)][int] $Count,
 		[string[]] $EnvVars = @(),
+		[string[]] $PreserveEnvNames = @(
+			'BENCH_CLUSTERING', 'BENCH_INGEST_MODE', 'BENCH_SHARD_COUNT',
+			'BENCH_LEAF_STORAGE_KIND', 'BENCH_TOTAL_DURATION_SEC',
+			'BENCH_WAL_EXTRA_ACCOUNT_URIS', 'BENCH_STORAGE_URI'
+		),
 		[int] $TimeoutSec = 600
 	)
 
@@ -297,6 +345,25 @@ function Set-AcaSiloCount {
 	if ($EnvVars -and $EnvVars.Count -gt 0) {
 		$updateArgs += '--set-env-vars'
 		$updateArgs += $EnvVars
+
+		# `--set-env-vars` MERGES into the app's existing env; it does not
+		# replace it. So a knob that one cohort pinned and the next cohort
+		# left at its default kept the earlier cohort's value. Nothing in the
+		# log showed this, and it happened. A diagnostic
+		# BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC=0 and an A/B arm's
+		# BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS=0 both survived into later
+		# cohorts, so arms labelled "shipping defaults" did not measure the
+		# defaults. Remove every variable the new set does not name, except:
+		# - secret-backed ones, which deploy-aca.ps1 owns;
+		# - the deploy baseline in $PreserveEnvNames.
+		# The removal rides the SAME update, so this still mints exactly one
+		# revision per cohort.
+		$stale = @(Get-AcaStaleSiloEnvNames -Context $Context -EnvVars $EnvVars -PreserveEnvNames $PreserveEnvNames)
+		if ($stale.Count -gt 0) {
+			Write-Host "[aca]   removing stale env from earlier cohorts: $($stale -join ', ')" -ForegroundColor DarkGray
+			$updateArgs += '--remove-env-vars'
+			$updateArgs += $stale
+		}
 	}
 	$updateArgs += @('--min-replicas', "$Count", '--max-replicas', "$Count", '-o', 'none')
 	Invoke-Az $updateArgs | Out-Null

@@ -744,6 +744,7 @@ jobs:
               - '!test/lattice.explorer.uitests/**'
               - '!apps/**'
               - '!reference-architecture/**'
+              - '!videos/**'
               - '!.github/workflows/**'
               - '!.gitignore'
             nonSample:
@@ -756,6 +757,7 @@ jobs:
               - '!test/lattice.explorer.uitests/**'
               - '!apps/**'
               - '!reference-architecture/**'
+              - '!videos/**'
               - '!.github/workflows/**'
               - '!.gitignore'
               - '!samples/**'
@@ -1212,7 +1214,7 @@ jobs:
             reason="samples-only change, and no test source names the changed sample(s) by path (whole-tree samples scans are not modelled; see section 4b of select-test-packages.sh)"
           else
             run_tests=false
-            reason="nothing changed outside documentation, .gitignore, and the separately-laned trees (benchmark, apps, reference-architecture, docs-site), each of which runs its own tests in its own lane"
+            reason="nothing changed outside documentation, .gitignore, and the separately-laned trees (benchmark, apps, reference-architecture, docs-site, videos), each of which runs its own tests in its own lane"
           fi
 
           echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"

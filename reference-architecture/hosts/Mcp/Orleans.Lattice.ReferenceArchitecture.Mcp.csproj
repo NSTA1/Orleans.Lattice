@@ -26,8 +26,8 @@
   -->
   <ItemGroup>
     <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.7.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.7.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.7.1" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
@@ -48,7 +48,7 @@
     a pin once Api.Mcp ships a version whose own floor is at or above it.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="9.7.0" />
+    <PackageReference Include="Orleans.Lattice" Version="9.7.1" />
     <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.7.0" />
     <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.7.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.7.0" />

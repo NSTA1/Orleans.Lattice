@@ -152,6 +152,7 @@ public partial class BPlusLeafGrainTests
 
     private static ILeafReplayCoordinatorGrain BuildBudgetUnitsCoordinator(long head, CommitLogSliceEntry[] entries)
     {
+        ReachableWalFixture.EnsureReachable(head, entries);
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
         coord.ReadSliceAsync(

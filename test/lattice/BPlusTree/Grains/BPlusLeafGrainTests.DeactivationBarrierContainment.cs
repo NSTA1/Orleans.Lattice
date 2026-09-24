@@ -146,8 +146,9 @@ public partial class BPlusLeafGrainTests
     /// injected fault below is guaranteed to be reached.
     /// </summary>
     /// <remarks>
-    /// The advance is banked one offset <i>above</i> the WAL head the fixture
-    /// activated against. Activation replay banks the head itself, so a
+    /// The advance is banked at the EXCLUSIVE WAL head the fixture activated
+    /// against, one offset <i>above</i> its newest entry (issue #2680). Activation
+    /// replay banks that newest entry itself, so a
     /// hard-coded low offset would be refused by the monotonicity guard rather
     /// than queued, and the fault under test would never be reached.
     /// </remarks>
@@ -157,7 +158,7 @@ public partial class BPlusLeafGrainTests
         GrowingWal wal)
     {
         var projection = AsProjection(grain);
-        var target = wal.Head + 1;
+        var target = wal.Head;
         projection.Apply(BuildSet(
             $"k{target}", Encoding.UTF8.GetBytes("v"), hlcPhysical: 10, treeId: BarrierContainmentTreeId));
 

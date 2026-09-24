@@ -58,7 +58,16 @@ public partial class BPlusLeafGrainTests
     {
         private readonly List<CommitLogSliceEntry> _entries = [];
 
-        internal long Head { get; private set; } = -1L;
+        /// <summary>Offset of the newest appended entry, or <c>-1</c> for an empty WAL.</summary>
+        internal long NewestOffset { get; private set; } = -1L;
+
+        /// <summary>
+        /// The partition head this stub reports: EXCLUSIVE, the next sequence to be
+        /// assigned, so always one above <see cref="NewestOffset"/> (issue #2680).
+        /// Reporting the newest entry itself as the head would be a WAL state no
+        /// production partition can reach.
+        /// </summary>
+        internal long Head => NewestOffset + 1;
 
         internal ILeafReplayCoordinatorGrain Coordinator { get; }
 
@@ -117,14 +126,15 @@ public partial class BPlusLeafGrainTests
         /// <summary>Appends committed sets at offsets 1..<paramref name="through"/>.</summary>
         internal void GrowTo(long through)
         {
-            for (var offset = Head + 1; offset <= through; offset++)
+            for (var offset = NewestOffset + 1; offset <= through; offset++)
             {
                 if (offset <= 0) continue;
                 _entries.Add(new CommitLogSliceEntry(
                     offset,
                     BuildCommittedSet($"k{offset}", Encoding.UTF8.GetBytes($"v{offset}"))));
             }
-            Head = through;
+            NewestOffset = through;
+            ReachableWalFixture.EnsureReachable(Head, _entries);
         }
     }
 
