@@ -79,10 +79,10 @@ public class SplitResultTests
             Assert.That(combined.PromotedKey, Is.EqualTo("a"));
             Assert.That(combined.Forwarded, Is.False);
             Assert.That(combined.Additional, Has.Length.EqualTo(1));
-            Assert.That(combined.Additional![0].PromotedKey, Is.EqualTo("b"));
-            Assert.That(combined.Additional[0].Forwarded, Is.False,
+            Assert.That(combined.Additional!.Value[0].PromotedKey, Is.EqualTo("b"));
+            Assert.That(combined.Additional!.Value[0].Forwarded, Is.False,
                 "additional entries are always relinked by re-descent, so they carry no Forwarded flag");
-            Assert.That(combined.Additional[0].Additional, Is.Null);
+            Assert.That(combined.Additional!.Value[0].Additional, Is.Null);
         });
     }
 
@@ -99,7 +99,7 @@ public class SplitResultTests
             Assert.That(combined.PromotedKey, Is.EqualTo("a"),
                 "only the called leaf's own split may be linked against the captured ancestor path");
             Assert.That(combined.Forwarded, Is.False);
-            Assert.That(combined.Additional!.Select(s => s.PromotedKey), Is.EqualTo(new[] { "b" }));
+            Assert.That(combined.Additional!.Value.Select(s => s.PromotedKey), Is.EqualTo(new[] { "b" }));
         });
     }
 
@@ -115,7 +115,7 @@ public class SplitResultTests
             Assert.That(combined.PromotedKey, Is.EqualTo("a"));
             Assert.That(combined.Forwarded, Is.True,
                 "a primary that is itself forwarded must still be relinked by re-descent");
-            Assert.That(combined.Additional!.Select(s => s.PromotedKey), Is.EqualTo(new[] { "b" }));
+            Assert.That(combined.Additional!.Value.Select(s => s.PromotedKey), Is.EqualTo(new[] { "b" }));
         });
     }
 
@@ -131,8 +131,8 @@ public class SplitResultTests
         {
             Assert.That(combined.PromotedKey, Is.EqualTo("a"));
             Assert.That(combined.Forwarded, Is.False);
-            Assert.That(combined.Additional!.Select(s => s.PromotedKey), Is.EquivalentTo(new[] { "b", "c", "d" }));
-            Assert.That(combined.Additional!.All(s => s.Additional is null && !s.Forwarded), Is.True,
+            Assert.That(combined.Additional!.Value.Select(s => s.PromotedKey), Is.EquivalentTo(new[] { "b", "c", "d" }));
+            Assert.That(combined.Additional!.Value.All(s => s.Additional is null && !s.Forwarded), Is.True,
                 "every additional entry must be flat and unflagged");
         });
     }

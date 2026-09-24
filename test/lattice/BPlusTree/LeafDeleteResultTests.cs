@@ -53,7 +53,7 @@ public sealed class LeafDeleteResultTests
             Assert.That(copy.Split!.PromotedKey, Is.EqualTo("d"));
             Assert.That(copy.Split.NewSiblingId, Is.EqualTo(GrainId.Create("leaf", "sibling")));
             Assert.That(copy.Split.Additional, Has.Length.EqualTo(1));
-            Assert.That(copy.Split.Additional![0].PromotedKey, Is.EqualTo("q"));
+            Assert.That(copy.Split.Additional!.Value[0].PromotedKey, Is.EqualTo("q"));
         });
     }
 

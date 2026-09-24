@@ -76,8 +76,8 @@ public partial class BPlusInternalGrainTests
             Assert.That(result.NewSiblingId, Is.EqualTo(siblingId));
             Assert.That(result.Additional, Is.Not.Null.And.Length.EqualTo(1),
                 "the sibling's own division is owed to the parent too");
-            Assert.That(result.Additional![0].PromotedKey, Is.EqualTo("wolf"));
-            Assert.That(result.Additional[0].NewSiblingId, Is.EqualTo(siblingDivision.NewSiblingId));
+            Assert.That(result.Additional!.Value[0].PromotedKey, Is.EqualTo("wolf"));
+            Assert.That(result.Additional!.Value[0].NewSiblingId, Is.EqualTo(siblingDivision.NewSiblingId));
         });
     }
 

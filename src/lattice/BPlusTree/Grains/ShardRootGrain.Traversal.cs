@@ -894,9 +894,9 @@ internal sealed partial class ShardRootGrain
             ? split
             : split with { Additional = null, Forwarded = false };
 
-        if (split.Additional is not null)
+        if (split.Additional is { } extras)
         {
-            foreach (var extra in split.Additional)
+            foreach (var extra in extras)
             {
                 yield return extra.Additional is null && !extra.Forwarded
                     ? extra

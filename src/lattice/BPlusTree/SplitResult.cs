@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -67,8 +68,14 @@ internal sealed record SplitResult
     /// interrupted split with any division the same call then made, both of
     /// its own level, so there no entry has it set.
     /// </para>
+    /// <para>
+    /// The collection is an <see cref="ImmutableArray{T}"/> because this type is
+    /// <c>[Immutable]</c>: a same-silo call hands the receiver the sender's own
+    /// instance without a copy, which is sound only while no member offers a
+    /// mutating operation.
+    /// </para>
     /// </remarks>
-    [Id(3)] public SplitResult[]? Additional { get; init; }
+    [Id(3)] public ImmutableArray<SplitResult>? Additional { get; init; }
 
     /// <summary>
     /// Whether this result's own division (its <see cref="PromotedKey"/> and
@@ -127,27 +134,20 @@ internal sealed record SplitResult
         }
 
         var count = 1 + (first.Additional?.Length ?? 0) + (second.Additional?.Length ?? 0);
-        var additional = new SplitResult[count];
-        var i = 0;
-        if (first.Additional is not null)
+        var additional = ImmutableArray.CreateBuilder<SplitResult>(count);
+        if (first.Additional is { } firstExtras)
         {
-            foreach (var extra in first.Additional)
-            {
-                additional[i++] = extra;
-            }
+            additional.AddRange(firstExtras);
         }
 
-        additional[i++] = second.Additional is null && !second.Forwarded
+        additional.Add(second.Additional is null && !second.Forwarded
             ? second
-            : second with { Additional = null, Forwarded = false };
-        if (second.Additional is not null)
+            : second with { Additional = null, Forwarded = false });
+        if (second.Additional is { } secondExtras)
         {
-            foreach (var extra in second.Additional)
-            {
-                additional[i++] = extra;
-            }
+            additional.AddRange(secondExtras);
         }
 
-        return first with { Additional = additional };
+        return first with { Additional = additional.MoveToImmutable() };
     }
 }
