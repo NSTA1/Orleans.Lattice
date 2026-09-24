@@ -241,7 +241,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         // can arm the correct (source) shards even on a resume after a partial
         // cutover. Registry reads run under a system-origin scope.
         string sourcePhysical;
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             sourcePhysical = await registry.ResolveAsync(TreeId);
@@ -436,7 +436,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// </summary>
     private async Task CutoverAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var destinationTreeId = state.State.DestinationTreeId!;
         var operationId = state.State.OperationId!;
         var sourcePhysical = state.State.SourcePhysicalTreeId!;

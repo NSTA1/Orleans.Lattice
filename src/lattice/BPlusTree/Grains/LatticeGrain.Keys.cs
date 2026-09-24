@@ -252,7 +252,7 @@ internal sealed partial class LatticeGrain
                 }
                 retriesUsed++;
 
-                registry ??= grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                registry ??= grainFactory.GetLatticeRegistry();
                 var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
 
                 var needSlots = new HashSet<int>();
@@ -301,7 +301,7 @@ internal sealed partial class LatticeGrain
                 // reported by a live shard). Re-read the map and, if it has
                 // advanced since the last snapshot we saw, reconcile the
                 // owner diff one more time.
-                registry ??= grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                registry ??= grainFactory.GetLatticeRegistry();
                 var shardMapFinal = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (shardMapFinal.Version == lastMapVersion) yield break;
 

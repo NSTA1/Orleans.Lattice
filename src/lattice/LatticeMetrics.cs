@@ -1023,10 +1023,10 @@ public static class LatticeMetrics
     /// timeout, or fault. Tagged with <see cref="TagMethod"/> (the interface
     /// member name, e.g. <c>ResolveAsync</c>, for every member of the interface)
     /// and <see cref="TagOutcome"/> (<c>completed</c>, <c>timeout</c>, or
-    /// <c>faulted</c>). Recorded by <c>LatticeRegistryCallObservationFilter</c>,
-    /// which <see cref="LatticeServiceCollectionExtensions.AddLattice"/> installs
-    /// on every silo; unlike the opt-in <see cref="GrainCallDuration"/> it is not
-    /// optional, because it is the registry's only first-party caller-side signal.
+    /// <c>faulted</c>). Recorded by the caller-side decorator every production
+    /// caller obtains the registry through, so it is always on without an
+    /// outgoing grain call filter: unlike the opt-in <see cref="GrainCallDuration"/>,
+    /// no other grain call on the silo pays for it.
     /// <para>
     /// <b>Why this exists (issue #3088).</b> Registry contention was previously
     /// diagnosed from the <c>Diagnostics: [... CurrentlyExecuting=...]</c> block
@@ -1054,8 +1054,8 @@ public static class LatticeMetrics
     /// its own member rather than being invisible.
     /// </para>
     /// <para>
-    /// <b>Limits.</b> Per-silo: calls from another silo or an external client are
-    /// recorded on that process, not here. The sample is taken on completion, and
+    /// <b>Limits.</b> Per-process: calls from another silo or an external client
+    /// are recorded on that process, not here. The sample is taken on completion, and
     /// Orleans bounds every call by its response timeout, so no dispatched call
     /// goes unrecorded - but a timed-out call contributes a sample pinned at the
     /// deadline, which is why <c>timeout</c> is its own arm rather than folded into

@@ -97,15 +97,6 @@ public static class LatticeServiceCollectionExtensions
         // call is process-wide and idempotent.
         BPlusTree.Grains.LeafResidencyMetrics.EnsureRegistered();
 
-        // Caller-side registry call observation (issue #3088). Always on, unlike
-        // AddLatticeGrainCallObservation: it is the only first-party signal that
-        // separates a slow registry from an unreachable one, since the grain-body
-        // census cannot see a call that is never admitted. Every other outgoing
-        // call pays one interface-type comparison. TryAddEnumerable so a repeated
-        // AddLattice installs one filter rather than double-counting.
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IOutgoingGrainCallFilter, LatticeRegistryCallObservationFilter>());
-
         // Per-silo background poller that drives every registered tree's
         // storage-usage aggregator on a cadence so the gauges populate
         // without any caller invoking ILattice.GetStorageUsageAsync. Each

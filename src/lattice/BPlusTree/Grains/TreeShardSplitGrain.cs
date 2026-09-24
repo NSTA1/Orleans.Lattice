@@ -98,7 +98,7 @@ internal sealed class TreeShardSplitGrain(
     private async Task<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         _physicalTreeId = await registry.ResolveAsync(TreeId);
         return _physicalTreeId;
     }
@@ -153,7 +153,7 @@ internal sealed class TreeShardSplitGrain(
     /// </summary>
     internal async Task InitiateSplitStateAsync(int sourceShardIndex)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
         var currentMap = await registry.GetShardMapAsync(TreeId)
@@ -532,7 +532,7 @@ internal sealed class TreeShardSplitGrain(
         // recovery re-entry into SwapAsync re-drains harmlessly.
         await ForwardMovedSlotEntriesAtomicallyAsync("SplitSwapFinalDrain");
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         // Apply this swap's moved-slot diff inside a single registry call so
         // concurrent topology changes compose: ReassignSlotsAsync re-reads the
         // live map and persists the reassigned copy without interleaving, so a

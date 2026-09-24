@@ -54,7 +54,7 @@ internal sealed class PublishEventsGate
         bool effective;
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             var entry = await registry.GetEntryAsync(treeId);
             effective = entry?.PublishEvents ?? options.PublishEvents;
         }

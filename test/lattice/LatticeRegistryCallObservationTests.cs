@@ -1,16 +1,19 @@
 using System.Collections.Concurrent;
 using Orleans.Hosting;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests;
 
 /// <summary>
-/// End-to-end test that <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
-/// alone - with no opt-in call - installs the caller-side registry histogram, and
-/// that the method names Orleans reports for real registry calls resolve to the
-/// interface's member names rather than falling into the <c>other</c> bucket
-/// (issue #3088).
+/// End-to-end test that a silo configured with
+/// <see cref="LatticeServiceCollectionExtensions.AddLattice"/> alone - with no
+/// opt-in call - records the caller-side registry histogram for the registry calls
+/// real tree traffic makes, because every production caller acquires the registry
+/// through <see cref="LatticeRegistryGrainFactoryExtensions.GetLatticeRegistry"/>, and
+/// that every recorded method resolves to an interface member name rather than
+/// falling into the <c>other</c> bucket (issue #3088).
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -61,15 +64,15 @@ public sealed class LatticeRegistryCallObservationTests
         await tree.SetAsync("k", [1, 2, 3]);
         Assert.That(await tree.GetAsync("k"), Is.EqualTo(new byte[] { 1, 2, 3 }));
 
-        Assert.That(methods, Is.Not.Empty, "AddLattice must install the caller-side registry histogram with no opt-in");
+        Assert.That(methods, Is.Not.Empty, "real tree traffic must record the caller-side registry histogram with no opt-in");
         Assert.That(
             methods,
-            Is.All.Not.EqualTo(LatticeRegistryCallObservationFilter.UnknownMethod),
+            Is.All.Not.EqualTo(ObservedLatticeRegistry.UnknownMethod),
             "every real registry call must resolve to a declared interface member name");
         Assert.That(
             methods.Distinct(),
-            Is.SubsetOf(LatticeRegistryCallObservationFilter.MethodNames()));
-        Assert.That(outcomes, Does.Contain(LatticeRegistryCallObservationFilter.CompletedOutcome));
+            Is.SubsetOf(ObservedLatticeRegistry.MethodNames()));
+        Assert.That(outcomes, Does.Contain(ObservedLatticeRegistry.CompletedOutcome));
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

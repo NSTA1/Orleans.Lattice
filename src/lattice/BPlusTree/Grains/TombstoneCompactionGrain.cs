@@ -1165,7 +1165,7 @@ internal sealed class TombstoneCompactionGrain(
     /// </summary>
     private async Task<(string physicalTreeId, IReadOnlyList<int> physicalShards)> ResolveShardTopologyAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var resolved = await registry.ResolveAsync(TreeId);
         var physicalTreeId = string.IsNullOrEmpty(resolved) ? TreeId : resolved;
         var resolvedOpts = await optionsResolver.ResolveAsync(TreeId);

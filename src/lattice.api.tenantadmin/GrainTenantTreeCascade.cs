@@ -51,7 +51,7 @@ internal sealed class GrainTenantTreeCascade(IGrainFactory grainFactory) : ITena
         using (LatticeActiveTenantContext.With(null))
         {
             tenantTreeIds = await _grainFactory
-                .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+                .GetLatticeRegistry()
                 .GetAllTreeIdsAsync(LatticeTenantTrees.ComposePrefix(tenant))
                 .ConfigureAwait(false);
         }
