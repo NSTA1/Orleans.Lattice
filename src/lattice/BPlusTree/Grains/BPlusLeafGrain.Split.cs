@@ -45,6 +45,102 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes = 0)
     {
+        var result = await SplitIfNeededHoldingGateAsync(maxLeafKeys, maxLeafBytes);
+        if (result is not null)
+        {
+            await PublishSplitDigestAsync(result.PromotedKey);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Publishes the digest a completed division changed, after the caller has
+    /// released <c>_splitGate</c> (issue #3523).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Publishing outside the gate is what keeps leaf and parent split gates
+    /// from forming a cycle: a parent seeding a freshly linked sibling holds
+    /// its own gate while it waits for the sibling's, so a leaf that published
+    /// while holding its gate could wait on that parent indefinitely.
+    /// </para>
+    /// <para>
+    /// A failure is contained rather than thrown. The division is complete
+    /// and its <see cref="SplitResult"/> is the only way the new sibling is
+    /// ever linked; thrown, the result is lost, a retried write finds no
+    /// interrupted split to recover, and the sibling stays spliced into the
+    /// chain but unreachable by descent with every key on it. The digest is
+    /// staleness-tolerant - a failed publish leaves it dirty and the next
+    /// mutation republishes - so containment costs only a late aggregate.
+    /// Cooperative cancellation still propagates.
+    /// </para>
+    /// </remarks>
+    private async Task PublishSplitDigestAsync(string splitKey)
+    {
+        try
+        {
+            await PublishDigestUpwardInlineAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(
+                    ex,
+                    "Leaf '{LeafId}' of tree '{TreeId}' completed a split at '{SplitKey}' but could not publish "
+                    + "its digest to its parent; the digest stays dirty and the next mutation republishes it.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    splitKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs a mutation's trailing per-write digest publish, containing its
+    /// failure when the mutation also produced a <see cref="SplitResult"/>
+    /// (issue #3523).
+    /// </summary>
+    /// <remarks>
+    /// The trailing publish runs after the division is durable, so a fault
+    /// thrown from it loses the result exactly as a fault from
+    /// <see cref="PublishSplitDigestAsync"/> would: the sibling is never
+    /// linked and every key on it becomes unreachable by descent. With no
+    /// split the publish keeps its existing fault semantics, and the
+    /// no-split path stays a non-async pass-through so the hot write path
+    /// allocates nothing extra.
+    /// </remarks>
+    private Task PublishDigestUpwardAfterWriteAsync(SplitResult? splitResult) =>
+        splitResult is null
+            ? PublishDigestUpwardAsync()
+            : PublishDigestUpwardAfterSplitAsync(splitResult.PromotedKey);
+
+    private async Task PublishDigestUpwardAfterSplitAsync(string splitKey)
+    {
+        try
+        {
+            await PublishDigestUpwardAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(
+                    ex,
+                    "Leaf '{LeafId}' of tree '{TreeId}' split at '{SplitKey}' during a write but could not publish "
+                    + "the write's digest to its parent; the digest stays dirty and the next mutation republishes it.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    splitKey);
+            }
+        }
+    }
+
+    private async Task<SplitResult?> SplitIfNeededHoldingGateAsync(int maxLeafKeys, long maxLeafBytes)
+    {
         // Non-blocking acquire: the loser of the race does NOT wait for
         // the in-flight split's cross-grain migration to drain. Its
         // write is already durable and the owning split (or a later
@@ -366,6 +462,17 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private async Task<SplitResult?> CompleteRecoverySplitUnderGateAsync()
+    {
+        var recovered = await CompleteRecoverySplitHoldingGateAsync();
+        if (recovered is not null)
+        {
+            await PublishSplitDigestAsync(recovered.PromotedKey);
+        }
+
+        return recovered;
+    }
+
+    private async Task<SplitResult?> CompleteRecoverySplitHoldingGateAsync()
     {
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
@@ -1028,10 +1135,7 @@ internal sealed partial class BPlusLeafGrain
                 // the migrated payload is released rather than accumulating
                 // across batches. The rows are resident from the enumeration
                 // just above, so this costs no further hydration.
-                foreach (var key in batch.Keys)
-                {
-                    RemoveEntry(key);
-                }
+                RemoveTransferredRows(batch);
 
                 // Issue #2796. Every batch that leaves the donor is an
                 // observable change to the set of rows this leaf owns, so it
@@ -1074,6 +1178,36 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
         }
 
+        // Sweep for rows at or above the split key that arrived while the
+        // batches were moving (issue #3523). Foreground commits interleave
+        // with this method at every await, and until the narrow below this
+        // leaf still declares the whole right half. A commit that lands in a
+        // batch's range after that batch was read stays here. Once the high
+        // bound narrows, no read is routed to it. The sweep repeats until it
+        // finds nothing. The empty check and the narrow then run in one
+        // synchronous step, so nothing can land between them. From that
+        // point the commit paths' own span re-check (StoreAdmittedEntry) takes
+        // over. In the common case no commit raced the transfer, and the sweep
+        // costs one empty range read.
+        while (true)
+        {
+            Dictionary<string, LwwValue<byte[]>>? stragglers = null;
+            foreach (var (key, lww) in Cache.EnumerateRange(splitKey, null))
+            {
+                (stragglers ??= new Dictionary<string, LwwValue<byte[]>>())[key] = lww;
+            }
+
+            if (stragglers is null)
+            {
+                break;
+            }
+
+            await TransferShadowMarkersToSiblingAsync(newLeaf, stragglers.Keys);
+            await newLeaf.MergeEntriesAsync(stragglers);
+            RemoveTransferredRows(stragglers);
+            BumpLocalRevision();
+        }
+
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
         state.State.SplitInFlight = false;
@@ -1105,14 +1239,42 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        await PublishDigestUpwardInlineAsync();
-
+        // The post-split digest is deliberately NOT published here. Every
+        // gated caller runs this while holding _splitGate, and a publish
+        // waits on the parent's own split gate - which the parent may be
+        // holding while it seeds this leaf's new sibling, a call that waits
+        // on a leaf split gate in turn (issue #3523). The two gates then
+        // deadlock until the publish deadline breaks the cycle, and the
+        // thrown deadline used to take the SplitResult below with it. The
+        // caller publishes through PublishSplitDigestAsync once it has let
+        // the gate go.
         return new SplitResult
         {
             PromotedKey = splitKey,
             NewSiblingId = siblingId,
             ChildIsLeaf = true,
         };
+    }
+
+    /// <summary>
+    /// Removes rows the split has just copied to its new sibling, but only a
+    /// row still holding the value that was copied. The transfer awaits the
+    /// sibling between reading a batch and removing it, and a foreground
+    /// commit can overwrite one of those rows in that window. Removing it
+    /// unconditionally would discard an acknowledged write the sibling never
+    /// received (issue #3523). A row that changed stays behind for the
+    /// straggler sweep in <see cref="CompleteSplitAsync"/> to carry across.
+    /// </summary>
+    private void RemoveTransferredRows(Dictionary<string, LwwValue<byte[]>> transferred)
+    {
+        foreach (var (key, sent) in transferred)
+        {
+            if (Cache.TryGetRow(key, out var current)
+                && current.Timestamp == sent.Timestamp)
+            {
+                RemoveEntry(key);
+            }
+        }
     }
 
     /// <summary>

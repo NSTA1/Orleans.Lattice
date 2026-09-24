@@ -24,14 +24,21 @@ internal sealed partial class BPlusInternalGrain
         // [AlwaysInterleave], and this body mutates state.State and persists,
         // so a removal must not interleave with a concurrent promotion.
         await _splitGate.WaitAsync().ConfigureAwait(true);
+        bool removed;
         try
         {
-            return await RemoveChildCoreAsync(childId);
+            removed = await RemoveChildCoreAsync(childId);
         }
         finally
         {
             _splitGate.Release();
         }
+
+        // The removal is durable; report it whatever the publish does, so the
+        // caller closes the reclaimed range (issue #3523 moved this publish out
+        // of the gate).
+        await FlushUpwardPublishContainedAsync(nameof(RemoveChildAsync));
+        return removed;
     }
 
     private async Task<bool> RemoveChildCoreAsync(GrainId childId)
@@ -119,9 +126,9 @@ internal sealed partial class BPlusInternalGrain
         // Publish the corrected aggregate upward so the parent's fold stops
         // including the removed subtree. Failing to publish would not corrupt
         // routing, but it would leave an ancestor digest that never converges.
-        if (digestRemoved && state.State.ParentId is { } parentId)
+        if (digestRemoved)
         {
-            await PublishUpwardAsync(parentId);
+            MarkUpwardPublishPending();
         }
 
         return true;

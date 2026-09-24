@@ -476,14 +476,25 @@ internal sealed partial class ShardRootGrain
             var pendingChild = entry.LeafId;
             var pendingChildIsLeaf = true;
             var pendingHasValue = true;
+            var levelsAccepted = 0;
             while (pendingHasValue && path.Count > 0)
             {
                 var parentId = path.Pop();
                 var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
                 var bubble = await parent.AcceptSplitAsync(pendingKey, pendingChild);
                 InvalidateRoutingTable(parentId);
+                levelsAccepted++;
                 if (bubble is null)
                 {
+                    pendingHasValue = false;
+                }
+                else if (bubble.Additional is not null || bubble.Forwarded)
+                {
+                    // More than one division at this level (a parent that
+                    // completed an interrupted split on accepting): link every
+                    // one by descent rather than carrying only the first up
+                    // this path and dropping the rest (issue #3523).
+                    await LinkSplitAsync(bubble, levelsAccepted);
                     pendingHasValue = false;
                 }
                 else
@@ -496,12 +507,18 @@ internal sealed partial class ShardRootGrain
 
             if (pendingHasValue)
             {
-                await PromoteRootAsync(new SplitResult
-                {
-                    PromotedKey = pendingKey,
-                    NewSiblingId = pendingChild,
-                    ChildIsLeaf = pendingChildIsLeaf,
-                });
+                // Every level on the path divided, so the division is of the
+                // root: a sibling levelsAccepted internal levels tall, which the
+                // link wraps under a new root (or, were the root deeper by now,
+                // links at the parent a descent finds).
+                await LinkSplitAsync(
+                    new SplitResult
+                    {
+                        PromotedKey = pendingKey,
+                        NewSiblingId = pendingChild,
+                        ChildIsLeaf = pendingChildIsLeaf,
+                    },
+                    levelsAccepted);
             }
         }
 

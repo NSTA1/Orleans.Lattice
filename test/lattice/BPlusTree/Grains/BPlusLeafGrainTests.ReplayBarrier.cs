@@ -106,7 +106,7 @@ public partial class BPlusLeafGrainTests
         // Writes.
         "SetAsync", "GetOrSetAsync", "SetIfVersionAsync", "SetManyAsync",
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
-        "DeleteAsync", "DeleteRangeAsync",
+        "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync",
         // Range and enumeration reads.
         "CountAsync", "GetStatsAsync", "GetKeysAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync",

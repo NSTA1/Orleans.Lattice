@@ -191,6 +191,14 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Idempotent: a re-call with the same id is a no-op; a re-call with
     /// a different id (root rotation) overwrites the slot.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #3523):
+    /// a parent calls this from inside its own gated <see cref="AcceptSplitAsync"/>
+    /// frame, so it must never queue behind a turn on this node that is itself
+    /// waiting on the parent. The body is serialised by the per-activation
+    /// <c>_splitGate</c>, which is what actually protects the state write.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetParentAsync(GrainId? parentId);
 
     /// <summary>
@@ -206,6 +214,16 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <paramref name="childId"/> argument identifies the calling child
     /// so the parent can record which slot supplied which snapshot.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #3523):
+    /// the call recurses toward the shard root, and a non-interleaving turn that
+    /// waits on its parent would block the parent's own downward
+    /// <see cref="SetParentAsync"/> into this node - a turn-level cycle that only
+    /// the <c>DigestPublishTimeout</c> broke, faulting the split that was being
+    /// linked. The fold runs under <c>_splitGate</c>; the onward publish runs
+    /// after the gate is released.
+    /// </remarks>
+    [AlwaysInterleave]
     Task OnChildDigestPublishedAsync(GrainId childId, ChildDigestSnapshot newSnapshot);
 
     /// <summary>
@@ -230,6 +248,12 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// prior snapshot has been recorded for this node (e.g. an internal
     /// node activating with legacy state, or a crash-recovery rebuild).
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #3523):
+    /// a synchronous read pulled by a parent from inside its gated seeding frame,
+    /// so it must not queue behind a turn on this node that waits on that parent.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
 
     /// <summary>

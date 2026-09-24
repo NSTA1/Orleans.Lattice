@@ -54,6 +54,7 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
         public required ShardRootGrain Grain { get; init; }
         public required IBPlusInternalGrain Internal { get; init; }
         public required FakePersistentState<ShardRootState> State { get; init; }
+        public required IGrainFactory Factory { get; init; }
     }
 
     /// <summary>
@@ -109,7 +110,7 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
             context, state, factory, optionsResolver,
             NullLogger<ShardRootGrain>.Instance, TestMutationObservers.NoObservers());
 
-        return new Harness { Grain = grain, Internal = @internal, State = state };
+        return new Harness { Grain = grain, Internal = @internal, State = state, Factory = factory };
     }
 
     private static RoutingTableSnapshot LeafBearingRoutingTable() => new()
@@ -189,27 +190,36 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
     /// <summary>
     /// Deeper-race variant of the primary regression: the lying flag sits over
     /// an internal root whose own children are internal, so the leaf-level
-    /// bubble cannot be spliced at this level. The stale intent must be
-    /// dropped rather than used to wrap a lying root.
+    /// bubble belongs under a level-1 parent. It must never be used to wrap a
+    /// lying root, and - since issue #3523 - it must not be dropped either:
+    /// dropping it stranded the sibling, spliced into the leaf chain but
+    /// reached by no descent. It is linked by descent at the parent whose range
+    /// covers its separator.
     /// </summary>
     [Test]
-    public async Task Resume_drops_stale_pending_when_RootIsLeaf_flag_lies_over_a_deep_internal_root()
+    public async Task Resume_links_a_leaf_level_intent_by_descent_when_RootIsLeaf_flag_lies_over_a_deep_internal_root()
     {
         var h = CreateHarness();
+        var innerId = GrainId.Create("internal", "existing-inner");
+        var sibling = GrainId.Create("leaf", "stale-leaf-sibling");
+        var inner = Substitute.For<IBPlusInternalGrain>();
+        inner.GetRoutingTableAsync().Returns(LeafBearingRoutingTable());
+        inner.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        h.Factory.GetGrain<IBPlusInternalGrain>(innerId).Returns(inner);
+
         h.State.State.RootNodeId = InternalRootId;
         h.State.State.RootIsLeaf = true;
         h.State.State.PendingPromotionRootWasLeaf = true;
         h.State.State.PendingPromotion = new SplitResult
         {
             PromotedKey = "k-mismatch",
-            NewSiblingId = GrainId.Create("leaf", "stale-leaf-sibling"),
+            NewSiblingId = sibling,
             ChildIsLeaf = true,
         };
-        h.Internal.GetRoutingTableAsync().Returns(
-            InternalBearingRoutingTable(),
-            LeafBearingRoutingTable());
+        h.Internal.GetRoutingTableAsync().Returns(InternalBearingRoutingTable());
 
-        try { await h.Grain.GetAsync("k-any"); } catch { }
+        await h.Grain.GetAsync("k-any");
 
         await h.Internal.DidNotReceive().InitializeAsync(
             Arg.Any<string>(),
@@ -219,8 +229,11 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
         await h.Internal.DidNotReceive().AcceptSplitAsync(
             Arg.Any<string>(),
             Arg.Any<GrainId>());
+        await inner.Received(1).AcceptSplitAsync("k-mismatch", sibling);
         Assert.That(h.State.State.PendingPromotion, Is.Null,
-            "Stale pending promotion intent should have been dropped on shape mismatch.");
+            "The promotion intent should have been converted, not left to resume again.");
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty,
+            "The converted child link should have been retired once it landed.");
     }
 
     /// <summary>
