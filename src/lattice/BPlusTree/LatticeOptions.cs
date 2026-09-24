@@ -641,6 +641,25 @@ public class LatticeOptions
     public const bool DefaultPrefetchEntriesScan = false;
 
     /// <summary>
+    /// When <c>true</c> (the default), single-key point reads
+    /// (<see cref="ILattice.GetAsync"/>) are first attempted on an interleavable,
+    /// optimistic shard-root path, so concurrent reads against one shard overlap
+    /// their leaf round trips instead of queueing one per round trip. The read is
+    /// validated against an in-memory routing epoch that every potentially
+    /// routing-mutating shard-root call bumps; a read that overlapped such a call (a
+    /// root promotion, a split or move-away publish, a bulk load, a state reload) is
+    /// discarded and repeated on the serial path, so the result is never less
+    /// consistent than the serial read. The optimistic read goes to the primary leaf
+    /// (bypassing the leaf cache), and a miss is always repeated serially, so the
+    /// gain is on reads of present keys. Set to <c>false</c> to send every point read
+    /// straight to the serial path (issue #3474).
+    /// </summary>
+    public bool OptimisticShardRootPointReads { get; set; } = DefaultOptimisticShardRootPointReads;
+
+    /// <summary>Default value for <see cref="OptimisticShardRootPointReads"/> (<c>true</c>).</summary>
+    public const bool DefaultOptimisticShardRootPointReads = true;
+
+    /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
     /// polls each physical shard's hotness counters (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split when the observed

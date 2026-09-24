@@ -55,5 +55,15 @@ public sealed class ShardRootGrainInterleavedReadsTests
                 "'key missing mid-chaos' regression.");
         }
     }
+
+    [Test]
+    public void Optimistic_point_read_is_marked_AlwaysInterleave()
+    {
+        var method = typeof(IShardRootGrain).GetMethod(nameof(IShardRootGrain.TryGetOptimisticAsync));
+
+        Assert.That(method, Is.Not.Null);
+        Assert.That(method!.GetCustomAttribute<AlwaysInterleaveAttribute>(inherit: false), Is.Not.Null,
+            "TryGetOptimisticAsync is the epoch-validated read that is allowed to interleave (issue #3474).");
+    }
 }
 

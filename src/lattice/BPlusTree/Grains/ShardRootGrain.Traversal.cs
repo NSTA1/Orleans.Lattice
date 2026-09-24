@@ -81,6 +81,12 @@ internal sealed partial class ShardRootGrain
     // MaxInternalChildren) the unbounded dictionary is correct and small.
     private readonly ConcurrentDictionary<GrainId, RoutingTableSnapshot> _routingTableCache = new();
 
+    // Advanced by every InvalidateRoutingTable call. A routing-table fetch
+    // publishes its snapshot into _routingTableCache only when this is unchanged
+    // across the fetch, so a snapshot served before an invalidation can never be
+    // cached after it (see GetRoutingTableSnapshotSlowAsync).
+    private long _routingTableCacheGeneration;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ILeafCacheGrain ResolveLeafCacheGrain(GrainId leafId)
         => _leafCacheGrains.TryGetValue(leafId, out var existing)
@@ -374,8 +380,23 @@ internal sealed partial class ShardRootGrain
     private async ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotSlowAsync(GrainId internalId)
     {
         var grain = ResolveInternalGrain(internalId);
+        var generation = _routingTableCacheGeneration;
         var snapshot = await grain.GetRoutingTableAsync();
-        _routingTableCache[internalId] = snapshot;
+
+        // Only publish the snapshot when no invalidation ran while the fetch was
+        // in flight. Otherwise a fetch the internal node served BEFORE a split or
+        // child removal would land in the cache AFTER that change's
+        // InvalidateRoutingTable, and pin the pre-change children list for the
+        // rest of the activation - routing every later read of the moved keys to
+        // a leaf that no longer holds them. Interleaved reads (issue #3474, and
+        // the long-standing [AlwaysInterleave] SetManyAsync) make that overlap
+        // reachable. The caller still uses the fetched snapshot for its own
+        // descent; only caching is skipped.
+        if (generation == _routingTableCacheGeneration)
+        {
+            _routingTableCache[internalId] = snapshot;
+        }
+
         return snapshot;
     }
 
@@ -386,11 +407,53 @@ internal sealed partial class ShardRootGrain
     /// internal node - that is the only call shape capable of mutating an
     /// existing internal node's children list. The method is a no-op when
     /// the entry is absent (e.g. the very first split before any read
-    /// traversed through the parent).
+    /// traversed through the parent), but it always advances
+    /// <see cref="_routingTableCacheGeneration"/> so a routing-table fetch
+    /// already in flight does not re-publish a snapshot taken before the change.
     /// </summary>
-    private void InvalidateRoutingTable(GrainId internalId)
+    internal void InvalidateRoutingTable(GrainId internalId)
     {
+        _routingTableCacheGeneration++;
         _routingTableCache.TryRemove(internalId, out _);
+    }
+
+    /// <summary>
+    /// Resolves the leaf a point read of <paramref name="key"/> routes to using only
+    /// the shard root's in-memory routing state and already-cached routing tables,
+    /// with no await. Returns <c>false</c> when any hop would need a cross-grain
+    /// routing-table fetch, or when the descent does not land on a leaf grain; the
+    /// caller then defers to the serial read. Keeping the optimistic read off the
+    /// fetch path means it never publishes into the routing-table cache the serial
+    /// write path shares.
+    /// </summary>
+    private bool TryResolveReadLeafFromCache(string key, out GrainId leafId)
+    {
+        var currentId = state.State.RootNodeId!.Value;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = currentId;
+            return IsLeafGrainId(leafId);
+        }
+
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (!_routingTableCache.TryGetValue(currentId, out var snapshot))
+            {
+                break;
+            }
+
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
+            if (childrenAreLeaves)
+            {
+                leafId = childId;
+                return IsLeafGrainId(leafId);
+            }
+
+            currentId = childId;
+        }
+
+        leafId = default;
+        return false;
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]

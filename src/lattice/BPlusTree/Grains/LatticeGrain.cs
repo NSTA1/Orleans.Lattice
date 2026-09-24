@@ -899,6 +899,20 @@ internal sealed partial class LatticeGrain(
                     var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                     try
                     {
+                        // Issue #3474: try the interleavable optimistic read first so
+                        // concurrent point reads on one shard root overlap; an
+                        // unvalidated result (routing moved under the read) falls
+                        // through to the serial read, which preserves the U9h-C
+                        // contract documented on IShardRootGrain.GetAsync.
+                        if (Options.OptimisticShardRootPointReads)
+                        {
+                            var optimistic = await shard.TryGetOptimisticAsync(key);
+                            if (optimistic.IsValidated)
+                            {
+                                return optimistic.Value;
+                            }
+                        }
+
                         return await shard.GetAsync(key);
                     }
                     finally
