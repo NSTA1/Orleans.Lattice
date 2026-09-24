@@ -89,6 +89,8 @@ While a run is `Running`, the `repocontext_index_status` snapshot carries a `pac
 
 A `Backoff`, `Waiting`, `Resting`, or `Yielding` state with `filesEmbedded` or `symbolsEmbedded` still advancing between polls is a healthy, paced job. The pacer never skips or fails a batch, so a paced pass lands exactly what an unpaced one would, only spread over more wall-clock time. The variables that tune it are listed under [container configuration](container.md).
 
+A run of failed vector store or membership writes does not by itself end an embedding pass. After three consecutive failures the pass consults the silo's WAL saturation signal, and defers its remaining batches to the next reconcile only when a vector tree reports `Saturated`; against a `Throttled` or `Healthy` tree it keeps attempting under the pacer's backoff, so each further batch tests whether the plane admits the write again (issue #2683). A host that registers no saturation signal falls back to deferring on the run alone.
+
 ## Staying fully indexed: the self-index grain
 
 Onboarding a repository does more than complete once: a per-repository **self-index grain**, keyed by `repoId`, owns that repository's "reach and stay fully indexed" guarantee for as long as the repository is registered. The same onboarding call that starts the first pass (`repocontext_bootstrap`, or `repocontext_add_repo` in workspace mode) arms this grain; removing the repository (`repocontext_remove_repo`) tears it down. Onboarding and self-heal recovery therefore funnel through exactly one path and cannot drift.
