@@ -29,11 +29,18 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// actually did rather than what configuration promised.
 /// </para>
 /// </summary>
-internal sealed class RepoContextSearchService
+internal sealed partial class RepoContextSearchService
 {
     private const int DefaultResultCount = 10;
     private const int MaxResultCount = 100;
     private const int MaxKeywordScan = 5000;
+
+    /// <summary>
+    /// The most non-hydrating candidate keys named in the hydration-drift warning.
+    /// Bounded so a drifted index ranking a large pool cannot produce an unbounded
+    /// log line.
+    /// </summary>
+    internal const int MaxDriftSampleKeys = 5;
 
     private readonly IGrainFactory _grainFactory;
     private readonly Orleans.Serialization.Serializer _serializer;
@@ -385,7 +392,20 @@ internal sealed class RepoContextSearchService
         if (hits.Count == 0)
         {
             // The index ranked candidates but not one of them still hydrates from the
-            // store of record: the index has drifted from its sources.
+            // store of record: the index has drifted from its sources. This is the
+            // same keyword.index_degraded outcome as the thrown-fault branch, so it is
+            // logged just as loudly (issue #2688); the payload is built only when the
+            // branch is taken and Warning is enabled, keeping the retrieval path free.
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                LogHydrationDrift(
+                    _logger,
+                    repoId,
+                    matches.Count,
+                    seenSources.Count,
+                    FormatDriftSample(matches, MaxDriftSampleKeys));
+            }
+
             return SemanticOutcome.IndexDegraded;
         }
 
@@ -394,6 +414,50 @@ internal sealed class RepoContextSearchService
         // (approximate) recall claim instead of over-promising completeness.
         return new SemanticOutcome(hits, RepoContextRetrievalPath.NormalizeSemantic(_index.RetrievalPath));
     }
+
+    /// <summary>
+    /// Renders the first <paramref name="max"/> distinct, non-empty candidate source
+    /// keys in rank order as a comma-separated sample. Called only on the
+    /// hydration-drift branch, where every distinct candidate was tried and none
+    /// hydrated, so each named key is a non-hydrating one.
+    /// </summary>
+    /// <param name="matches">The ranked vector matches the index returned.</param>
+    /// <param name="max">The maximum number of keys to name.</param>
+    /// <returns>The bounded, comma-separated key sample; empty when no candidate carried a key.</returns>
+    internal static string FormatDriftSample(IReadOnlyList<RepoContextVectorMatch> matches, int max)
+    {
+        ArgumentNullException.ThrowIfNull(matches);
+        if (max <= 0)
+        {
+            return string.Empty;
+        }
+
+        var sample = new string[Math.Min(max, matches.Count)];
+        var taken = 0;
+        for (var i = 0; i < matches.Count && taken < sample.Length; i++)
+        {
+            var key = matches[i].SourceKey;
+            if (string.IsNullOrEmpty(key) || Array.IndexOf(sample, key, 0, taken) >= 0)
+            {
+                continue;
+            }
+
+            sample[taken++] = key;
+        }
+
+        return string.Join(", ", sample, 0, taken);
+    }
+
+    [LoggerMessage(
+        EventId = 1,
+        Level = LogLevel.Warning,
+        Message = "repocontext_search for repository {RepoId} falling back to keyword recall: the semantic index ranked {MatchCount} matches over {CandidateCount} distinct candidate sources and none hydrates from the store of record (index drift). Sample of non-hydrating keys: [{SampleKeys}].")]
+    private static partial void LogHydrationDrift(
+        ILogger logger,
+        string repoId,
+        int matchCount,
+        int candidateCount,
+        string sampleKeys);
 
     private async Task<IReadOnlyList<RepoContextSearchHit>> KeywordAsync(
         string repoId, string query, int k, CancellationToken cancellationToken)
