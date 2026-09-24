@@ -7,7 +7,9 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// <summary>
 /// Unit coverage for <see cref="TreeReceiveFenceGrain"/> (issue #1173), the
 /// durable per-tree inbound-apply gate. Verifies pause / resume, idempotency,
-/// and that a superseded saga cannot unpause a tree a newer saga owns.
+/// and that a superseded saga cannot unpause a tree a newer saga owns, and that a
+/// failed persist leaves the in-memory owner as storage holds it so a retry writes
+/// again.
 /// </summary>
 [TestFixture]
 public class TreeReceiveFenceGrainTests
@@ -82,5 +84,102 @@ public class TreeReceiveFenceGrainTests
 
         Assert.That(() => grain.PauseAsync(null!), Throws.InstanceOf<ArgumentException>());
         Assert.That(() => grain.PauseAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task Pause_failed_persist_leaves_the_tree_unpaused()
+    {
+        var (grain, state) = CreateGrain();
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        Assert.That(
+            async () => await grain.PauseAsync("saga-1"),
+            Throws.TypeOf<InvalidOperationException>());
+        var paused = await grain.IsPausedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.PauseSagaId, Is.Null);
+            Assert.That(paused, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task Pause_retry_after_failed_persist_writes_again()
+    {
+        // The same-saga idempotency guard short-circuits on the in-memory owner,
+        // so a failed persist that left it assigned turned the saga's retry into a
+        // no-op and the pause never reached storage: the next activation reads the
+        // tree as unpaused while the saga still believes it is fenced.
+        var (grain, state) = CreateGrain();
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        Assert.That(
+            async () => await grain.PauseAsync("saga-1"),
+            Throws.TypeOf<InvalidOperationException>());
+
+        await grain.PauseAsync("saga-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(state.State.PauseSagaId, Is.EqualTo("saga-1"));
+        });
+    }
+
+    [Test]
+    public async Task Pause_failed_persist_restores_the_previous_owner()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.PauseAsync("saga-1");
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        Assert.That(
+            async () => await grain.PauseAsync("saga-2"),
+            Throws.TypeOf<InvalidOperationException>());
+
+        Assert.That(state.State.PauseSagaId, Is.EqualTo("saga-1"));
+    }
+
+    [Test]
+    public async Task Resume_failed_persist_keeps_the_tree_paused()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.PauseAsync("saga-1");
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        Assert.That(
+            async () => await grain.ResumeAsync("saga-1"),
+            Throws.TypeOf<InvalidOperationException>());
+        var paused = await grain.IsPausedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.PauseSagaId, Is.EqualTo("saga-1"));
+            Assert.That(paused, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Resume_retry_after_failed_persist_writes_again()
+    {
+        // The owner check fails once the in-memory owner is cleared, so a failed
+        // persist turned the saga's retry into a no-op: storage kept the pause,
+        // and once the saga finished no owner remained that could ever lift it.
+        var (grain, state) = CreateGrain();
+        await grain.PauseAsync("saga-1");
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        Assert.That(
+            async () => await grain.ResumeAsync("saga-1"),
+            Throws.TypeOf<InvalidOperationException>());
+
+        await grain.ResumeAsync("saga-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(2));
+            Assert.That(state.State.PauseSagaId, Is.Null);
+        });
     }
 }

@@ -23,8 +23,7 @@ internal sealed class TreeReceiveFenceGrain(
             return;
         }
 
-        state.State.PauseSagaId = sagaId;
-        await state.WriteStateAsync();
+        await PersistOwnerAsync(sagaId);
         logger.LogInformation(
             "Inbound apply paused for a tree by saga '{SagaId}'.", sagaId);
     }
@@ -41,8 +40,7 @@ internal sealed class TreeReceiveFenceGrain(
             return;
         }
 
-        state.State.PauseSagaId = null;
-        await state.WriteStateAsync();
+        await PersistOwnerAsync(null);
         logger.LogInformation(
             "Inbound apply resumed for a tree by saga '{SagaId}'.", sagaId);
     }
@@ -50,4 +48,25 @@ internal sealed class TreeReceiveFenceGrain(
     /// <inheritdoc />
     public Task<bool> IsPausedAsync()
         => Task.FromResult(state.State.PauseSagaId is not null);
+
+    /// <summary>
+    /// Assigns and persists the owning saga, restoring the previous owner when the
+    /// write fails. Both callers short-circuit on the in-memory owner, so an owner
+    /// left assigned by a failed write would turn the saga's retry into a no-op and
+    /// the pause or resume would never reach storage.
+    /// </summary>
+    private async Task PersistOwnerAsync(string? sagaId)
+    {
+        var previous = state.State.PauseSagaId;
+        state.State.PauseSagaId = sagaId;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.PauseSagaId = previous;
+            throw;
+        }
+    }
 }
