@@ -153,6 +153,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Gates - Deep-copy contract enrolment was unchecked.** Nothing required a package declaring a serializable exception to enrol the same-silo deep-copy guard, and one had not. Every package must now enrol the guard or be verified exempt from source. ([#2448](https://github.com/NSTA1/Orleans.Lattice/issues/2448)) (`repository-wide`)
 
+- **Indexing - Gitignore escapes matched a literal backslash.** A `\` escape in a `.gitignore` pattern was read as a backslash, so `\#*\#` and `.\#*` from GitHub's Emacs template never matched and `\*` or an escaped trailing space misfired. The escaped character is now matched literally. ([#3466](https://github.com/NSTA1/Orleans.Lattice/issues/3466)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Auth - An exact-key deny hid a readable prefix grant.** The existence probe judged a prefix grant at the prefix string itself, so a deny on that one key hid a tree whose other keys under the prefix stayed readable. A prefix grant is now judged as enforcement judges the keys beneath it. ([#3467](https://github.com/NSTA1/Orleans.Lattice/issues/3467)) (`Orleans.Lattice.Auth`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, the Explorer's default credential store is no longer process-global, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer`)
@@ -160,6 +164,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Memory and GC.** Server GC is selected and its heap count written in the hexadecimal form the CLR reads, memory grants derive from the ingested corpus rather than the deploy checkout, and the host is no longer starved against its own corpus into large-object exhaustion. ([#2596](https://github.com/NSTA1/Orleans.Lattice/issues/2596), [#2928](https://github.com/NSTA1/Orleans.Lattice/issues/2928), [#2930](https://github.com/NSTA1/Orleans.Lattice/issues/2930), [#3036](https://github.com/NSTA1/Orleans.Lattice/issues/3036)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Security - Keyword-named metrics passed the telemetry allow-list.** The deny-all gate skipped any metric named like a PromQL keyword, so `up or min` read `min` with only `up` admitted. Such a keyword now counts as a metric name wherever Prometheus parses it as one. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Telemetry`)
 
 ## Released
 

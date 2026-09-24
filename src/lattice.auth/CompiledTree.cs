@@ -79,7 +79,25 @@ internal sealed class CompiledTree
             {
                 return new PolicyMatch(exactWinner.Effect, exactWinner.RuleId, LatticeScopeKind.Key, key);
             }
+        }
 
+        return ResolveBelowExactTier(subject, operation, key, userRuleBeatsGroupRule);
+    }
+
+    /// <summary>
+    /// Resolves tiers 2 and 3 of <see cref="ResolvePoint"/> - the prefixes of
+    /// <paramref name="key"/>, longest first, then the tree-wide rules - skipping the
+    /// exact-key tier. For a stored prefix this is the decision every key that
+    /// extends the prefix and names no more specific rule resolves to.
+    /// </summary>
+    private PolicyMatch ResolveBelowExactTier(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        string? key,
+        bool userRuleBeatsGroupRule)
+    {
+        if (key is not null)
+        {
             // Tier 2: prefixes of the key, longest first. The prefixes of a given
             // key are strictly nested and therefore sort in length order, so the
             // largest stored prefix the key starts with is the longest; walking
@@ -258,10 +276,15 @@ internal sealed class CompiledTree
             }
         }
 
-        // Any prefix grant whose decision at the prefix boundary resolves to allow.
+        // Any prefix grant whose decision for the keys it governs resolves to allow.
+        // Those keys are the ones that extend the prefix without naming a more
+        // specific rule, so the exact-key tier is skipped: an exact-key deny on the
+        // key that spells the prefix denies that one key, not the prefix's others,
+        // and evaluating the prefix string as an ordinary key would let it hide a
+        // tree the subject can still read.
         foreach (var prefix in _prefixes)
         {
-            var m = ResolvePoint(subject, operation, prefix, userRuleBeatsGroupRule);
+            var m = ResolveBelowExactTier(subject, operation, prefix, userRuleBeatsGroupRule);
             if (m.Matched && m.Effect == LatticeEffect.Allow)
             {
                 return true;

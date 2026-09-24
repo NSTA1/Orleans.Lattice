@@ -72,9 +72,13 @@ extracted from its PromQL by `PromQlMetricExtractor` and checked against
 
 The extractor is **deliberately conservative rather than a full PromQL parser**:
 it recognises an identifier as a metric name only where one may legally appear -
-not when followed by `(`, not a keyword or aggregation operator, not inside a
-string or a numeric/duration literal, and not inside a `{...}` label matcher
-unless it is the reserved `__name__` label. Erring towards extracting more,
+not when followed by `(`, not inside a string or a numeric/duration literal, and
+not inside a `{...}` label matcher unless it is the reserved `__name__` label. A
+keyword is skipped only where Prometheus reads it as one: Prometheus also accepts
+the aggregation operators, `and` / `or` / `unless`, `by`, `without`, `offset`,
+`start`, and `end` as a bare metric name wherever an operand is expected, so
+`up or min` evaluates the metric `min`, and the extractor reports it as a
+referenced name. Erring towards extracting more,
 rather than fewer, names is what keeps it fail-closed: a name it cannot resolve
 is refused, not admitted.
 
