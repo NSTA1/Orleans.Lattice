@@ -2,6 +2,7 @@ using System.Text;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using NSubstitute;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -68,7 +69,7 @@ public partial class BPlusLeafGrainTests
         // head. This is the whole of the "scanned through, not applied
         // through" claim in one assertion pair.
         var coord = BuildCoordinator(
-            head: 3,
+            head: 4,
             new CommitLogSliceEntry(1, BuildCommittedSet("a1", Encoding.UTF8.GetBytes("v1"))),
             new CommitLogSliceEntry(2, BuildCommittedSet("b1", Encoding.UTF8.GetBytes("v2"))),
             new CommitLogSliceEntry(3, BuildCommittedSet("c1", Encoding.UTF8.GetBytes("v3"))));
@@ -102,7 +103,7 @@ public partial class BPlusLeafGrainTests
         // so this test fails loudly if the advance is ever moved inside the
         // ShouldApplyDuringReplay filter.
         var coord = BuildCoordinator(
-            head: 3,
+            head: 4,
             new CommitLogSliceEntry(1, BuildCommittedSet("m1", Encoding.UTF8.GetBytes("mine"))),
             new CommitLogSliceEntry(2, BuildCommittedSet("b1", Encoding.UTF8.GetBytes("theirs"))),
             new CommitLogSliceEntry(3, BuildCommittedSet("c1", Encoding.UTF8.GetBytes("theirs"))));
@@ -131,11 +132,25 @@ public partial class BPlusLeafGrainTests
         // checkpoint that simply runs ahead. Scanning stops at the head the
         // coordinator reported, and the checkpoint stops with it, even though
         // the leaf skipped everything it saw.
-        var coord = BuildCoordinator(
-            head: 2,
-            new CommitLogSliceEntry(1, BuildCommittedSet("a1", Encoding.UTF8.GetBytes("v1"))),
-            new CommitLogSliceEntry(2, BuildCommittedSet("b1", Encoding.UTF8.GetBytes("v2"))),
-            new CommitLogSliceEntry(3, BuildCommittedSet("c1", Encoding.UTF8.GetBytes("v3"))));
+        //
+        // Reachable shape (issue #2680): the head is EXCLUSIVE, so a head read
+        // of 3 means offsets 1 and 2 were persisted at that moment. Offsets 3
+        // and 4 are appended AFTER the head was read, which is the only way an
+        // entry at or beyond a read head can exist. The replay's read is
+        // bounded inclusively by that head, so the next append (offset 3) is
+        // admitted and offset 4 is not.
+        var coord = BuildCoordinatorWithLateAppends(
+            head: 3,
+            persisted:
+            [
+                new CommitLogSliceEntry(1, BuildCommittedSet("a1", Encoding.UTF8.GetBytes("v1"))),
+                new CommitLogSliceEntry(2, BuildCommittedSet("b1", Encoding.UTF8.GetBytes("v2"))),
+            ],
+            appendedAfterHeadRead:
+            [
+                new CommitLogSliceEntry(3, BuildCommittedSet("c1", Encoding.UTF8.GetBytes("v3"))),
+                new CommitLogSliceEntry(4, BuildCommittedSet("d1", Encoding.UTF8.GetBytes("v4"))),
+            ]);
 
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord, seedState: OwnsOnlyTheMRange());
@@ -146,9 +161,52 @@ public partial class BPlusLeafGrainTests
         {
             Assert.That(grain.EntriesForTest, Is.Empty);
             Assert.That(
-                state.State.ProjectionCheckpointOffset, Is.EqualTo(2),
+                state.State.ProjectionCheckpointOffset, Is.EqualTo(3),
                 "the checkpoint is bounded by the WAL head that replay actually read, "
-                + "so 'scanned through' cannot be read as 'assume everything ahead'");
+                + "so 'scanned through' cannot be read as 'assume everything ahead': offset 4, "
+                + "appended beyond that head, must not be scanned");
         });
+    }
+
+    /// <summary>
+    /// Builds a coordinator stub whose head was read while only
+    /// <paramref name="persisted"/> existed, and which then serves
+    /// <paramref name="appendedAfterHeadRead"/> as well, modelling appends that
+    /// land between the head probe and the slice read. Both lists are held to
+    /// the reachable shape by <see cref="ReachableWalFixture.EnsureReachable"/>.
+    /// </summary>
+    private static ILeafReplayCoordinatorGrain BuildCoordinatorWithLateAppends(
+        long head,
+        CommitLogSliceEntry[] persisted,
+        CommitLogSliceEntry[] appendedAfterHeadRead)
+    {
+        ReachableWalFixture.EnsureReachable(head, persisted, appendedAfterHeadRead);
+        CommitLogSliceEntry[] served = [.. persisted, .. appendedAfterHeadRead];
+        var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
+        coord.ReadSliceAsync(
+                Arg.Any<long>(),
+                Arg.Any<long>(),
+                Arg.Any<int>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var fromExclusive = call.ArgAt<long>(0);
+                var toInclusive = call.ArgAt<long>(1);
+                var budget = call.ArgAt<int>(2);
+                var slice = new List<CommitLogSliceEntry>();
+                foreach (var e in served)
+                {
+                    if (e.Offset <= fromExclusive)
+                        continue;
+                    if (e.Offset > toInclusive)
+                        break;
+                    slice.Add(e);
+                    if (slice.Count >= budget)
+                        break;
+                }
+                return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice);
+            });
+        return coord;
     }
 }

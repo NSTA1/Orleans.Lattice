@@ -116,7 +116,7 @@ public partial class BPlusLeafGrainTests
         // pins the WAL segment that the memory pressure depends on being
         // pinned.
         var entries = EntriesWithUnapplyableAt(UnapplyableOffset);
-        var coord = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -146,7 +146,7 @@ public partial class BPlusLeafGrainTests
         // banked the whole slice, so without this arm the pair is not a
         // specification of the correct value - only of a non-zero one.
         var entries = EntriesWithUnapplyableAt(UnapplyableOffset);
-        var coord = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
@@ -172,7 +172,7 @@ public partial class BPlusLeafGrainTests
         // silently incomplete data, which is the one outcome worse than the
         // livelock.
         var entries = EntriesWithUnapplyableAt(UnapplyableOffset);
-        var coord = BuildChunkingCoordinator(head: 12, sliceSize: 4, tail: 0, entries);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
 
