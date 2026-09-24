@@ -155,8 +155,31 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// the worker's lifetime token; a positive value converts an
     /// unbounded Azure-call hang into a bounded fault so the per-shard
     /// drain loop cannot wedge indefinitely on one stuck transaction.
+    /// The deadline bounds the worker's wait, not the transaction: the
+    /// abandoned submit keeps running and is fenced in
+    /// <see cref="AbandonedSubmits"/> until it completes (#3458).
     /// </summary>
     private readonly TimeSpan? _commitTimeout;
+
+    /// <summary>
+    /// Default for <see cref="_abandonedSubmitSettleCap"/>: 60 seconds.
+    /// Comfortably above the transport's own bound on one transaction under
+    /// the provider defaults (four attempts of the 10 s
+    /// <see cref="AzureTableWalStorageOptions.DefaultRetryNetworkTimeout"/>
+    /// plus backoff), so a genuinely in-flight submit settles on its own
+    /// long before the cap cancels it.
+    /// </summary>
+    internal static readonly TimeSpan DefaultAbandonedSubmitSettleCap = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a submit abandoned on <see cref="_commitTimeout"/> may keep
+    /// running before the worker cancels it, so a transport that never
+    /// returns cannot hold <see cref="AbandonedSubmits"/> forever (#3458).
+    /// A resync that cannot wait this long does not proceed under the live
+    /// submit: its caller's own budget expires first, and the WAL shard
+    /// keeps its sticky latch and deactivates (#3348).
+    /// </summary>
+    private readonly TimeSpan _abandonedSubmitSettleCap;
 
     /// <summary>
     /// Production constructor. Captures the provider's table-client
@@ -171,7 +194,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         int shardIndex,
         KeyValuePair<string, object?> pipelinePhaseTwoTag,
         TimeSpan coalescingWindow,
-        TimeSpan? commitTimeout = null)
+        TimeSpan? commitTimeout = null,
+        TimeSpan? abandonedSubmitSettleCap = null)
         : this(
             async (actions, cancellationToken) =>
             {
@@ -183,7 +207,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             shardIndex,
             pipelinePhaseTwoTag,
             coalescingWindow,
-            commitTimeout)
+            commitTimeout,
+            abandonedSubmitSettleCap)
     {
     }
 
@@ -212,7 +237,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
         string manifestPartitionKey,
         TimeSpan coalescingWindow,
-        TimeSpan? commitTimeout = null)
+        TimeSpan? commitTimeout = null,
+        TimeSpan? abandonedSubmitSettleCap = null)
         : this(
             submit,
             manifestPartitionKey,
@@ -224,7 +250,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             pipelinePhaseTwoTag: new KeyValuePair<string, object?>(
                 LatticeMetrics.TagPipelinePhaseTwo, false),
             coalescingWindow,
-            commitTimeout)
+            commitTimeout,
+            abandonedSubmitSettleCap)
     {
     }
 
@@ -235,7 +262,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         int shardIndex,
         KeyValuePair<string, object?> pipelinePhaseTwoTag,
         TimeSpan coalescingWindow,
-        TimeSpan? commitTimeout = null)
+        TimeSpan? commitTimeout = null,
+        TimeSpan? abandonedSubmitSettleCap = null)
     {
         _submit = submit;
         _manifestPartitionKey = manifestPartitionKey;
@@ -245,6 +273,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         _pipelinePhaseTwoTag = pipelinePhaseTwoTag;
         _coalescingWindow = coalescingWindow;
         _commitTimeout = commitTimeout;
+        _abandonedSubmitSettleCap = abandonedSubmitSettleCap ?? DefaultAbandonedSubmitSettleCap;
         _arrivals = Channel.CreateUnbounded<PhaseTwoCommit>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -671,9 +700,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // mark across this worker's lifetime; the upsert is
             // skipped entirely (no action in the transaction) when
             // the current group's max does not advance the mark.
-            var tailToPersist = Math.Max(highestEndOffset, _highestCommittedEndOffset);
-            var tailAdvances = tailToPersist > _highestCommittedEndOffset
-                || (_highestCommittedEndOffset == -1L && highestEndOffset >= 0L);
+            var highestCommitted = Interlocked.Read(ref _highestCommittedEndOffset);
+            var tailToPersist = Math.Max(highestEndOffset, highestCommitted);
+            var tailAdvances = tailToPersist > highestCommitted
+                || (highestCommitted == -1L && highestEndOffset >= 0L);
             if (tailAdvances)
             {
                 actions.Add(new TableTransactionAction(
@@ -692,36 +722,61 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             {
                 if (_commitTimeout is { } commitTimeout)
                 {
-                    // Bound the single coalesced commit so a stuck Azure
-                    // Tables transaction (hung socket, server-side
-                    // partition stall, or an SDK retry loop running past
-                    // the deadline) cannot block the per-shard drain loop
-                    // - and therefore every later commit on the shard -
-                    // indefinitely. The linked CTS fires either when the
-                    // worker is shutting down or when the per-commit
-                    // deadline elapses; on the deadline we surface a
-                    // TimeoutException so the catch below faults this
-                    // batch and the still-pending window, exactly as a
-                    // transaction error would, leaving recovery to the
-                    // sticky-failure resync path. The submit task itself
-                    // is observed (its faults swallowed) so an
-                    // already-cancelled inner call cannot resurface as an
-                    // unobserved-task exception after we have moved on.
-                    using var commitDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    commitDeadline.CancelAfter(commitTimeout);
-                    var submitTask = _submit(actions, commitDeadline.Token);
+                    // Bound the WAIT on the single coalesced commit so a
+                    // stuck Azure Tables transaction (hung socket,
+                    // server-side partition stall, or an SDK retry loop
+                    // running past the deadline) cannot block the
+                    // per-shard drain loop - and therefore every later
+                    // commit on the shard - indefinitely. On the deadline
+                    // we surface a TimeoutException so the catch below
+                    // faults this batch and the still-pending window,
+                    // exactly as a transaction error would, leaving
+                    // recovery to the sticky-failure resync path.
+                    //
+                    // The deadline deliberately does NOT cancel the
+                    // submit (#3458). Cancelling the SDK call completes
+                    // the local task but cannot retract a request the
+                    // service already holds, so the transaction can still
+                    // land - M-row adds plus the TAIL upsert - after the
+                    // producer has been told it failed. The submit keeps
+                    // its own token (linked to the worker's lifetime),
+                    // runs to a real outcome, and is fenced in
+                    // AbandonedSubmits so the post-failure reconcile and
+                    // tail read wait for it instead of resyncing
+                    // underneath it.
+                    var submitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    Task submitTask;
                     try
                     {
-                        await submitTask.ConfigureAwait(false);
+                        submitTask = _submit(actions, submitCts.Token);
                     }
-                    catch (OperationCanceledException) when (commitDeadline.IsCancellationRequested
-                        && !cancellationToken.IsCancellationRequested)
+                    catch
+                    {
+                        submitCts.Dispose();
+                        throw;
+                    }
+
+                    try
+                    {
+                        await submitTask.WaitAsync(commitTimeout, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (TimeoutException) when (!submitTask.IsCompleted && !cancellationToken.IsCancellationRequested)
                     {
                         LatticeMetrics.ProviderPhase2CommitTimeouts.Add(1, _treeTag, _shardTag, _tenantTag);
-                        ObserveAbandonedSubmit(submitTask);
                         throw new TimeoutException(
                             $"Phase-2 manifest commit for partition '{_manifestPartitionKey}' exceeded the "
                             + $"{commitTimeout.TotalMilliseconds:F0} ms PhaseTwoCommitTimeout and was abandoned.");
+                    }
+                    finally
+                    {
+                        if (submitTask.IsCompleted)
+                        {
+                            submitCts.Dispose();
+                        }
+                        else
+                        {
+                            FenceAbandonedSubmit(submitTask, submitCts, tailAdvances ? tailToPersist : -1L);
+                        }
                     }
                 }
                 else
@@ -744,7 +799,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     });
             }
 
-            _highestCommittedEndOffset = tailToPersist;
+            RaiseHighestCommittedEndOffset(tailToPersist);
             PruneAcceptedRanges(tailToPersist);
             for (var i = 0; i < commits.Count; i++)
             {
@@ -822,21 +877,78 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     };
 
     /// <summary>
-    /// Detaches a continuation that observes (and swallows) the fault of
-    /// a submit task the worker abandoned after its per-commit deadline
-    /// elapsed. Without this, the abandoned Azure-call task would later
-    /// fault unobserved once its linked cancellation token cancels the
-    /// in-flight SDK request, surfacing as a
-    /// <see cref="TaskScheduler.UnobservedTaskException"/> long after the
-    /// worker has already faulted the corresponding commits. The
-    /// continuation is fire-and-forget and never blocks the drain loop.
+    /// Raises <see cref="_highestCommittedEndOffset"/> to at least
+    /// <paramref name="endOffset"/>. The mark is written by the drain loop
+    /// on a successful commit and by an abandoned submit's continuation
+    /// when that submit later lands, so it is only ever raised, never
+    /// lowered, and never torn.
     /// </summary>
-    private static void ObserveAbandonedSubmit(Task submitTask)
+    private void RaiseHighestCommittedEndOffset(long endOffset)
     {
+        var current = Interlocked.Read(ref _highestCommittedEndOffset);
+        while (endOffset > current)
+        {
+            var observed = Interlocked.CompareExchange(ref _highestCommittedEndOffset, endOffset, current);
+            if (observed == current)
+            {
+                return;
+            }
+            current = observed;
+        }
+    }
+
+    /// <summary>
+    /// Phase-2 submits the worker abandoned on its per-commit deadline that
+    /// have not yet reached a real outcome (#3458). An abandoned Azure
+    /// Tables transaction may still be on the wire and land after its
+    /// callers were faulted, so
+    /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> and
+    /// <see cref="AzureTableWalStorageProvider.GetHighestOffsetAsync"/>
+    /// wait for this to drain before they read the shard: resyncing
+    /// underneath a live abandoned transaction rewinds the producer beneath
+    /// rows the transaction then writes, and the re-driven appends collide
+    /// with them. Bounded by the transport's own timeouts and, beyond
+    /// that, by the settle cap, which cancels the call.
+    /// </summary>
+    internal WalShardWriteTracker AbandonedSubmits { get; } = new();
+
+    /// <summary>
+    /// Fences a submit the worker stopped waiting for: records it in
+    /// <see cref="AbandonedSubmits"/> until it completes, arms the settle
+    /// cap on its token, and, if it turns out to have landed, raises the
+    /// TAIL high-water mark to <paramref name="landedTail"/> so no later
+    /// commit upserts TAIL beneath what it wrote. The continuation also
+    /// observes the task's fault so it cannot surface as an unobserved
+    /// task exception. It is fire-and-forget and never blocks the drain
+    /// loop.
+    /// </summary>
+    private void FenceAbandonedSubmit(Task submitTask, CancellationTokenSource submitCts, long landedTail)
+    {
+        AbandonedSubmits.Enter();
+        try
+        {
+            submitCts.CancelAfter(_abandonedSubmitSettleCap);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Unreachable in practice: the CTS is owned here until the
+            // continuation below disposes it.
+        }
+
         _ = submitTask.ContinueWith(
-            static t => _ = t.Exception,
+            (t, state) =>
+            {
+                _ = t.Exception;
+                if (t.IsCompletedSuccessfully && landedTail >= 0L)
+                {
+                    RaiseHighestCommittedEndOffset(landedTail);
+                }
+                ((CancellationTokenSource)state!).Dispose();
+                AbandonedSubmits.Exit();
+            },
+            submitCts,
             CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
 
