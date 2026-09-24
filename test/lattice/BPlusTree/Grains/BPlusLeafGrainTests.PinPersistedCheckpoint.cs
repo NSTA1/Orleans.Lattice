@@ -146,11 +146,15 @@ public partial class BPlusLeafGrainTests
     /// ALREADY been restamped over, and that then publishes without persisting,
     /// must publish its persisted checkpoint and not the pending one.
     /// <para>
-    /// The publisher is graceful deactivation under an expired deadline: the
-    /// checkpoint-flush barrier faults on the cancelled token before it persists,
-    /// and #3366 runs the frontier-pin barrier after it anyway. That is a real
-    /// production ordering and the one publisher that reaches the pin with
-    /// <c>pending &gt; persisted</c> once the drive persists first.
+    /// The publisher is the batched durable-pin flush itself, driven directly.
+    /// This fixture used to reach it through graceful deactivation under an
+    /// expired deadline (the checkpoint-flush barrier faulting before it
+    /// persisted, and the frontier-pin barrier running anyway). Issue #3393
+    /// made that barrier SKIP on an expired deadline, so no deactivation path
+    /// reaches the pin with <c>pending &gt; persisted</c> any longer; the
+    /// skip is pinned by the <c>DeactivationPinFinalAdvance</c> fixtures. The
+    /// clamp is still the last line of defence for any publisher that does, so
+    /// it is exercised here on the one method every publisher routes through.
     /// </para>
     /// <para>
     /// Why this fixture observes the <c>ResolveDurablePinForPartition</c> clamp
@@ -160,7 +164,7 @@ public partial class BPlusLeafGrainTests
     /// </para>
     /// </summary>
     [Test]
-    public async Task Deactivation_under_an_expired_deadline_publishes_no_pin_past_the_persisted_checkpoint()
+    public async Task Batched_pin_flush_over_an_unpersisted_advance_publishes_no_pin_past_the_persisted_checkpoint()
     {
         var wal = new GrowingWal();
         var (grain, state, published, durableWrites) = CreateCoalescingLeafWithPinCapture(wal.Coordinator);
@@ -192,20 +196,17 @@ public partial class BPlusLeafGrainTests
 
         published.Clear();
         durableWrites.Clear();
-        using var expired = new CancellationTokenSource();
-        await expired.CancelAsync();
 
-        await ((IGrainBase)grain).OnDeactivateAsync(
-            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"), expired.Token);
+        await grain.FlushDurableMaterialiserFrontierAsync();
 
         Assert.Multiple(() =>
         {
             Assert.That(durableWrites, Is.Empty,
-                "control: the expired deadline must stop the final checkpoint flush, or the "
-                    + "publisher below persisted first and the clamp is not what is under test.");
+                "control: the batched flush must not persist, or the clamp is not what is "
+                    + "under test.");
             Assert.That(published, Is.Not.Empty,
-                "control: the frontier-pin barrier must still publish after the faulted flush "
-                    + "barrier (#3366), or an empty list satisfies the assertions below vacuously.");
+                "control: the flush must publish, or an empty list satisfies the assertions "
+                    + "below vacuously.");
             Assert.That(published.Select(p => p.CurrentCheckpoint), Is.All.EqualTo(3L),
                 "control: every publication happened while the pending 3 was still unpersisted.");
             Assert.That(published.Select(p => p.PublishedOffset), Is.All.EqualTo(0L),

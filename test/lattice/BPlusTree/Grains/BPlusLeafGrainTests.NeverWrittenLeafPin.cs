@@ -189,12 +189,13 @@ public partial class BPlusLeafGrainTests
     /// Acceptance 2, the mutation fixture. A never-written leaf holding a
     /// PENDING advance above its persisted checkpoint that then publishes
     /// without persisting must publish the persisted value, never the pending
-    /// one. The publisher is graceful deactivation under an expired deadline,
-    /// where the checkpoint-flush barrier faults before it persists and the
-    /// frontier-pin barrier runs anyway (#3366).
+    /// one. The publisher is the batched durable-pin flush, driven directly:
+    /// the expired-deadline deactivation this fixture used to go through now
+    /// skips its frontier-pin barrier (issue #3393), so it no longer reaches
+    /// the pin with a pending advance above the persisted checkpoint.
     /// </summary>
     [Test]
-    public async Task Deactivation_of_a_never_written_leaf_with_a_pending_advance_publishes_the_persisted_checkpoint()
+    public async Task Batched_pin_flush_of_a_never_written_leaf_with_a_pending_advance_publishes_the_persisted_checkpoint()
     {
         var wal = new GrowingWal();
         wal.GrowTo(3);
@@ -215,19 +216,16 @@ public partial class BPlusLeafGrainTests
         });
 
         published.Clear();
-        using var expired = new CancellationTokenSource();
-        await expired.CancelAsync();
 
-        await ((IGrainBase)grain).OnDeactivateAsync(
-            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"), expired.Token);
+        await grain.FlushDurableMaterialiserFrontierAsync();
 
         Assert.Multiple(() =>
         {
             Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1L),
-                "control: the expired deadline must stop the checkpoint flush, or the publisher "
-                    + "persisted first and the persisted-not-pending rule is not under test.");
+                "control: the flush must not persist, or the publisher persisted first and the "
+                    + "persisted-not-pending rule is not under test.");
             Assert.That(published, Is.Not.Empty,
-                "the frontier-pin barrier must publish the never-written release.");
+                "the batched flush must publish the never-written release.");
             Assert.That(published.Select(p => p.CurrentCheckpoint), Is.All.EqualTo(3L),
                 "control: every publication happened with the pending 3 still unpersisted.");
             Assert.That(published.Select(p => (p.Frontier, p.PublishedOffset)),

@@ -114,8 +114,8 @@ internal sealed partial class BPlusLeafGrain(
                     // itself reported as nothing. Telemetry must never decide
                     // whether a fault is observable (the #2312 rule, applied to
                     // this path).
-                    var treeTag = TryResolveTag(LeafTreeTag, LatticeMetrics.TagTree);
-                    var tenantTag = TryResolveTag(
+                    var treeTag = TryResolveDeactivationBarrierTag(LeafTreeTag, LatticeMetrics.TagTree);
+                    var tenantTag = TryResolveDeactivationBarrierTag(
                         LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
 
                     LatticeMetrics.LeafDeactivationBarrierFailures.Add(
@@ -139,52 +139,34 @@ internal sealed partial class BPlusLeafGrain(
                     // Observability must never fail a deactivation.
                 }
             }
-
-            // Resolves one tag without letting the lookup itself suppress the
-            // measurement it is meant to label. The empty value is what these
-            // histograms already record for a leaf whose tree is unregistered,
-            // so it adds no new tag value and no new cardinality.
-            static KeyValuePair<string, object?> TryResolveTag(
-                Func<KeyValuePair<string, object?>> resolve,
-                string fallbackKey)
-            {
-                try
-                {
-                    return resolve();
-                }
-                catch (InvalidOperationException)
-                {
-                    return new KeyValuePair<string, object?>(fallbackKey, string.Empty);
-                }
-            }
         }
 
         try
         {
-            // c2-xxviii: drain any pending coalesced digest publish
-            // before the checkpoint flush so a graceful shutdown does
-            // not leave the parent's digest table observing a stale
-            // snapshot. Crash deactivations bypass this hook by
-            // design; the digest is staleness-tolerant and the next
-            // mutation on reactivation will republish. Gated on the
-            // coalescing window being active because the
-            // synchronous-publish path (window=0) already publishes
-            // inline on every mutation - running the drain in that case
-            // can re-publish a post-publish state that races with
-            // materialiser-driven projection rebuilds and changes the
-            // parent's observed hash. Note the DEFAULT window is
-            // LatticeOptions.DefaultDigestCoalescingWindowMs (5), not 0,
-            // so this arm is enabled unless a host opts out.
-            if (_digestCoalescingWindowMs > 0)
-            {
-                await RunBarrierAsync(
-                    LatticeMetrics.DeactivationBarrierDigestPublish,
-                    async ct => await FlushPendingDigestPublishAsync(ct));
-            }
+            // Whether a coalesced digest publish is pending, read HERE because
+            // this is where the digest_publish barrier used to evaluate it
+            // before the reorder below (issue #3393): the teardown persist marks
+            // the digest dirty itself, so a later read cannot tell a pending
+            // coalesced publish from the persist's own delta.
+            var coalescedDigestPendingAtEntry = HasPendingCoalescedDigestPublish;
 
+            // Durability work runs FIRST (issue #3393). The upward digest
+            // publish used to lead this hook, and it is the slow step: in the
+            // recorded drain it consumed the deactivation deadline, so by the
+            // time the durable barriers below ran the activation had already
+            // been torn down and every one of them faulted with "Attempt to
+            // access an invalid activation" - the final checkpoint's pin never
+            // landed. The order is now: persist the checkpoint and publish its
+            // pin, capture the snapshot, republish the pin, and only then
+            // publish the digest, which is staleness-tolerant by design.
+            //
+            // The final persist's own pin is published from INSIDE this barrier,
+            // as the first step of the teardown persist's tail (see
+            // FlushPendingCheckpointOnDeactivateAsync), so it no longer depends
+            // on the trailing frontier-pin barrier surviving to run.
             await RunBarrierAsync(
                 LatticeMetrics.DeactivationBarrierCheckpointFlush,
-                async ct => await ((ILeafProjection)this).FlushCheckpointAsync(ct));
+                async ct => await FlushPendingCheckpointOnDeactivateAsync(ct));
 
             // Liveness barrier (issue #1537): before the durable pin flush,
             // capture a snapshot for any checkpointed-but-uncovered partition
@@ -192,27 +174,63 @@ internal sealed partial class BPlusLeafGrain(
             // periodic snapshot cadence still leaves durable coverage behind.
             // Without this the leaf's Zero block pin (the safe side of #1535's
             // coverage gate) would retain the shared WAL forever. Ordered
-            // before FlushDurableMaterialiserFrontierAsync so the pin resolves
-            // to the now-covered frontier and the WAL GC can trim the prefix;
+            // before the frontier-pin barrier so the pin resolves to the
+            // now-covered frontier and the WAL GC can trim the prefix;
             // best-effort, so a capture failure simply leaves the block pin in
-            // place (retained, never trimmed ahead of coverage).
+            // place (retained, never trimmed ahead of coverage). Skips, rather
+            // than faults, once the deadline has torn the activation down.
             await RunBarrierAsync(
                 LatticeMetrics.DeactivationBarrierSnapshotCapture,
                 async ct => await TryCaptureSnapshotOnDeactivateAsync(ct));
 
-            // Retention barrier: after the final checkpoint flush, AWAIT a
-            // durable write of this leaf's checkpoint frontier into the
-            // cluster-wide pin store so a leaf can never go dormant on a
-            // graceful shutdown and then have the shared WAL trimmed past its
-            // durable checkpoint across a restart (the "fall off the log"
-            // wedge). The pin store's monotonic-max merge makes this idempotent,
-            // and the flush swallows transient failures so it never blocks
-            // deactivation. Crash deactivations bypass this hook by design; the
-            // first-real-frontier barrier on the checkpoint path already left a
-            // durable floor for any leaf that had checkpointed.
+            // Retention barrier: AWAIT a durable write of this leaf's
+            // coverage-gated checkpoint frontier into the cluster-wide pin
+            // store so a leaf can never go dormant on a graceful shutdown and
+            // then have the shared WAL trimmed past its durable checkpoint
+            // across a restart (the "fall off the log" wedge). It runs even when
+            // the teardown persist's tail already published (issue #3393):
+            // the capture above can raise coverage, and so the pin, after that
+            // publish, and the pin store's monotonic-max merge makes the repeat
+            // idempotent. It is also the only publisher for a deactivation with
+            // no pending advance, where nothing is persisted and no tail runs.
+            // Skips, rather than faults, once the deadline has torn the
+            // activation down; the tail's publish already stands by then.
             await RunBarrierAsync(
                 LatticeMetrics.DeactivationBarrierFrontierPin,
-                async ct => await FlushDurableMaterialiserFrontierAsync(ct));
+                async ct => await FlushDurableMaterialiserFrontierOnDeactivateAsync(ct));
+
+            if (_deactivationInlineDigestDeferred)
+            {
+                // The teardown persist's inline upward digest publish, deferred
+                // behind the durability barriers above (issue #3393). Attributed
+                // to the checkpoint-flush tail exactly as it was when it ran
+                // inside the tail, so LeafCheckpointFlushTailFailures keeps its
+                // meaning. It supersedes the coalesced drain below: both publish
+                // the same dirty digest, and a slow parent must not be hit twice
+                // inside one deadline. When a coalesced publish was pending at
+                // entry this publish IS its drain, and is recorded as the
+                // deactivation_flush it was before the reorder.
+                await PublishDeferredDeactivationDigestAsync(coalescedDigestPendingAtEntry, cancellationToken);
+            }
+            else if (_digestCoalescingWindowMs > 0)
+            {
+                // c2-xxviii: drain any pending coalesced digest publish so a
+                // graceful shutdown does not leave the parent's digest table
+                // observing a stale snapshot. Crash deactivations bypass this
+                // hook by design; the digest is staleness-tolerant and the next
+                // mutation on reactivation will republish. Gated on the
+                // coalescing window being active because the synchronous-publish
+                // path (window=0) already publishes inline on every mutation -
+                // running the drain in that case can re-publish a post-publish
+                // state that races with materialiser-driven projection rebuilds
+                // and changes the parent's observed hash. Note the DEFAULT window
+                // is LatticeOptions.DefaultDigestCoalescingWindowMs (5), not 0,
+                // so this arm is enabled unless a host opts out. Ordered LAST
+                // (issue #3393): it is the slow, staleness-tolerant step.
+                await RunBarrierAsync(
+                    LatticeMetrics.DeactivationBarrierDigestPublish,
+                    async ct => await FlushPendingDigestPublishAsync(ct));
+            }
         }
         finally
         {
@@ -253,6 +271,88 @@ internal sealed partial class BPlusLeafGrain(
             // of the teardown bookkeeping, for the same reason as the footprint
             // release above - a storage failure in the try must not leak it.
             CancelReplayBarrier();
+        }
+    }
+
+    /// <summary>
+    /// Set by the teardown persist's tail
+    /// (<see cref="CompleteDeactivationCheckpointFlushTailAsync"/>) when it
+    /// defers its inline upward digest publish behind the durability barriers,
+    /// and consumed by <c>OnDeactivateAsync</c>, which then publishes it last
+    /// (issue #3393). Only ever set on the deactivation path.
+    /// </summary>
+    private bool _deactivationInlineDigestDeferred;
+
+    /// <summary>
+    /// Records that a graceful-deactivation barrier SKIPPED because the
+    /// activation had already been torn down by the deactivation deadline
+    /// (issue #3393), and never throws.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The skip is counted on
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierFailures"/> under the
+    /// barrier's EXISTING <c>reason</c> value, exactly as a fault of that
+    /// barrier is counted, so the instrument's tag set and value set are
+    /// unchanged: <c>reason</c> already names the barrier, and a barrier that
+    /// could not do its work did not do its work whether it threw or declined.
+    /// What differs is the log line, which says the activation was already torn
+    /// down rather than reporting an unexplained fault.
+    /// </para>
+    /// <para>
+    /// Tags are resolved defensively and individually, for the reason the
+    /// barrier fault path gives: the very condition being reported makes a
+    /// grain-state read throw "Attempt to access an invalid activation".
+    /// </para>
+    /// </remarks>
+    /// <param name="barrier">The barrier's existing reason tag.</param>
+    /// <param name="fault">
+    /// The invalid-activation fault the barrier caught, or <see langword="null"/>
+    /// when it skipped on the cancelled token before reading any state.
+    /// </param>
+    private void RecordDeactivationBarrierSkip(KeyValuePair<string, object?> barrier, Exception? fault)
+    {
+        try
+        {
+            var treeTag = TryResolveDeactivationBarrierTag(LeafTreeTag, LatticeMetrics.TagTree);
+            var tenantTag = TryResolveDeactivationBarrierTag(
+                LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
+
+            LatticeMetrics.LeafDeactivationBarrierFailures.Add(1, treeTag, barrier, tenantTag);
+
+            ResolveLogger()?.LogWarning(
+                fault,
+                "Graceful-deactivation barrier '{Barrier}' skipped for leaf '{LeafId}' of tree '{TreeId}': "
+                + "the deactivation deadline had already expired and the activation was already torn down. "
+                + "The pin published by this activation's last persist stands (the teardown persist publishes "
+                + "its own pin first, issue #3393); a pin that lags only retains more WAL.",
+                barrier.Value,
+                context.GrainId.ToString(),
+                treeTag.Value);
+        }
+        catch (Exception)
+        {
+            // Observability must never fail a deactivation.
+        }
+    }
+
+    /// <summary>
+    /// Resolves one deactivation-barrier tag without letting the lookup itself
+    /// suppress the measurement it is meant to label. The empty value is what
+    /// these instruments already record for a leaf whose tree is unregistered,
+    /// so it adds no new tag value and no new cardinality.
+    /// </summary>
+    private static KeyValuePair<string, object?> TryResolveDeactivationBarrierTag(
+        Func<KeyValuePair<string, object?>> resolve,
+        string fallbackKey)
+    {
+        try
+        {
+            return resolve();
+        }
+        catch (InvalidOperationException)
+        {
+            return new KeyValuePair<string, object?>(fallbackKey, string.Empty);
         }
     }
 
