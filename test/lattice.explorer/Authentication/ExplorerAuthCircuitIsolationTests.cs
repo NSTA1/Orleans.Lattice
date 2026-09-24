@@ -191,4 +191,111 @@ public class ExplorerAuthCircuitIsolationTests
     {
         public StoredCredential? TrySeed() => new(username, password);
     }
+
+    // ---- the default store's own lifetime ---------------------------------
+
+    /// <summary>
+    /// Builds a provider exactly as a head that calls <see cref="AddExplorerAuth"/>
+    /// and registers <b>no</b> credential store of its own - deliberately without
+    /// the per-circuit override the other fixtures install, so what is exercised is
+    /// the package default rather than the test's substitute for it.
+    /// </summary>
+    private static ServiceProvider BuildProviderOnPackageDefaults()
+    {
+        var services = new ServiceCollection();
+        services.AddExplorerConfiguration(options =>
+            options.FilePath = Path.Combine(Path.GetTempPath(), $"lattice-explorer-{Guid.NewGuid():N}.json"));
+        services.AddExplorerCatalog();
+        services.AddExplorerAuth();
+        return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    /// Security regression: the isolation this fixture pins must hold on
+    /// <see cref="AddExplorerAuth"/>'s own default, not only when a test (or a
+    /// head) happens to register a per-circuit store first.
+    /// <para>
+    /// The default was a <b>singleton</b> <see cref="InMemoryCredentialStore"/>,
+    /// which holds one credential in a field - so it is a process-global sign-in.
+    /// Every fixture above sidestepped it by registering a scoped store, which is
+    /// precisely why the isolation suite passed while the shipped default did not
+    /// isolate: any head that did not supply a platform store served one
+    /// operator's credential to every browser's circuit.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void The_default_credential_store_is_scoped_to_the_circuit()
+    {
+        var services = new ServiceCollection();
+        services.AddExplorerAuth();
+
+        var descriptor = services.Single(d => d.ServiceType == typeof(ICredentialStore));
+
+        Assert.That(
+            descriptor.Lifetime,
+            Is.EqualTo(ServiceLifetime.Scoped),
+            "a store holding one credential must not be process-global");
+    }
+
+    [Test]
+    public async Task Sign_in_credential_does_not_leak_to_another_circuit_on_the_package_default_store()
+    {
+        await using var provider = BuildProviderOnPackageDefaults();
+
+        await using var circuitA = provider.CreateAsyncScope();
+        await using var circuitB = provider.CreateAsyncScope();
+
+        var authA = circuitA.ServiceProvider.GetRequiredService<IExplorerAuthSession>();
+        var authB = circuitB.ServiceProvider.GetRequiredService<IExplorerAuthSession>();
+
+        // The second circuit reads its own store first, so a pass cannot be an
+        // artefact of ordering.
+        await authB.InitializeAsync();
+        await authA.LoginAsync("alice", "Password1");
+        await authB.InitializeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                circuitB.ServiceProvider.GetRequiredService<ICredentialStore>(),
+                Is.Not.SameAs(circuitA.ServiceProvider.GetRequiredService<ICredentialStore>()),
+                "each circuit must hold its own credential store");
+            Assert.That(authA.IsAuthenticated, Is.True, "the signing-in circuit is authenticated");
+            Assert.That(authB.IsAuthenticated, Is.False, "a second circuit must not inherit the sign-in");
+            Assert.That(authB.CurrentAuthentication, Is.Null, "the credential must not leak to another circuit");
+        });
+    }
+
+    /// <summary>
+    /// The scoping must not displace a head-supplied store: the web head registers
+    /// an encrypted-cookie store before calling <see cref="AddExplorerAuth"/>, and
+    /// <c>TryAdd</c> matches on service type regardless of lifetime, so that
+    /// registration still wins at whatever lifetime the head chose.
+    /// </summary>
+    [Test]
+    public void A_head_supplied_credential_store_still_wins_over_the_scoped_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ICredentialStore, HeadSuppliedCredentialStore>();
+        services.AddExplorerAuth();
+
+        var descriptor = services.Single(d => d.ServiceType == typeof(ICredentialStore));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.ImplementationType, Is.EqualTo(typeof(HeadSuppliedCredentialStore)));
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+        });
+    }
+
+    private sealed class HeadSuppliedCredentialStore : ICredentialStore
+    {
+        public Task<StoredCredential?> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<StoredCredential?>(null);
+
+        public Task SetAsync(StoredCredential credential, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task ClearAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
 }

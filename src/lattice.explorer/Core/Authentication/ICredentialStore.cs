@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// JSON config store never holds a secret; each head supplies a platform-specific
 /// implementation that keeps the credential at rest in an OS-backed or encrypted
 /// store (DPAPI on the Windows desktop head, a Data-Protection-encrypted server
-/// cookie on the web head). The in-memory default is used for tests and as a safe
-/// fallback when no platform store is registered.
+/// cookie on the web head). The in-memory default is used for tests and when no
+/// platform store is registered; because it holds a single credential it is
+/// registered <b>scoped</b>, so the default is per-circuit rather than a
+/// process-global sign-in.
 /// </summary>
 public interface ICredentialStore
 {
