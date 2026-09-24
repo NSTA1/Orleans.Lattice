@@ -207,6 +207,20 @@ public interface IWalCursorRegistry
     /// idle leaf inside an otherwise live tree as genuine materialiser backlog.
     /// </para>
     /// <para>
+    /// A leaf-materialiser consumer is also excluded when its <b>position</b> is
+    /// stale: its cursor has not advanced since the same floor
+    /// (<see cref="WalCursorSnapshot.CursorAdvancedAtTicks"/>) and the cursor's own
+    /// wall clock is older than the floor. A leaf's cursor is the highest HLC
+    /// applied to its own key range while the WAL head is tree-wide, and a leaf
+    /// re-reports its persisted position with a fresh report time on every
+    /// activation, so a leaf whose range has seen no write would otherwise surface
+    /// as days of phantom lag on a freshly started silo. A leaf that is draining
+    /// advances its cursor and stays counted however far behind it is. Tree-wide
+    /// consumers (view maintainers, WAL subscribers, replication shippers) are
+    /// judged on report age alone, so a stalled tree-wide tailer still registers
+    /// as lag.
+    /// </para>
+    /// <para>
     /// Returning <see langword="null"/> means no fresh consumer can contribute
     /// to the lag plane. The sampler interprets that as zero drain lag, which is
     /// the safe direction for a pure back-off signal: an absent or cold
