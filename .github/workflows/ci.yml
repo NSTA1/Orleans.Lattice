@@ -2,7 +2,12 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # `main` is the release target. The second pattern covers epic integration
+    # branches, and the third the release lines (`release/<X.Y>`): a patch wave
+    # is assembled on one of these, and without it such a pull request ran no
+    # checks at all. GitHub resolves a workflow's triggers from the branch's own
+    # copy of this file, so each release line needs this filter itself (#2153).
+    branches: [main, '*/epic/**', 'release/**']
 
 # Least-privilege: this workflow only reads source code.
 permissions:
