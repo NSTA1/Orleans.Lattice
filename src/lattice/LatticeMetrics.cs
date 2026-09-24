@@ -2158,6 +2158,14 @@ public static class LatticeMetrics
             description: "Seconds since a tree's durable materialiser offset floor last advanced, tagged by tree and by state: advanced, stalled or absent.");
 
     /// <summary>
+    /// Name of the per-tree uncapped blocked-consumer gauge, registered by
+    /// <c>WalGcBlockedConsumerCensus</c>. The denominator for
+    /// <see cref="WalGcBlockedLeafReactivations"/>; neither signal alone shows
+    /// convergence. Zero-primed before the first pass awaits; -1 means unknown.
+    /// </summary>
+    public const string WalGcBlockedConsumersName = "orleans.lattice.wal.gc.blocked_consumers";
+
+    /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
     /// with <b>no durable materialiser offset floor</b> despite the durability
     /// hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) - either

@@ -93,6 +93,12 @@ if (string.Equals(suite, "detachedtransfer", StringComparison.OrdinalIgnoreCase)
     return transferSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "blockedcensus", StringComparison.OrdinalIgnoreCase))
+{
+    var censusSummary = BenchmarkRunner.Run<WalGcBlockedCensusBenchmarks>(config);
+    return censusSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 if (string.Equals(suite, "orphanedsurvey", StringComparison.OrdinalIgnoreCase))
 {
     var surveySummary = BenchmarkRunner.Run<OrphanedLeafSurveyBenchmarks>(config);
