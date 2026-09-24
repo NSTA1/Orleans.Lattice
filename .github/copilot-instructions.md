@@ -430,8 +430,9 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     on a release line, which is the least safe place to have none because a
     patch ships straight to NuGet without ever being built on trunk - keep both
     when editing any of those triggers. (`docs.yml` has
-    no `branches:` filter and so already covers every base; `coverage.yml` and
-    `publish.yml` are push-triggered and unaffected.)
+    no `branches:` filter and so already covers every base; `coverage.yml` runs
+    nightly on a schedule and `publish.yml` is push-triggered, so neither is
+    affected.)
   - **An epic branch must never carry branch protection, and in particular
     never a required status check with `strict` (require branches to be up to
     date before merging).** That setting on `main` is precisely what serialises
