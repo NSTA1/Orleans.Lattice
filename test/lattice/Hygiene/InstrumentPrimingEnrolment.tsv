@@ -296,6 +296,7 @@ src/lattice/LatticeMetrics.cs#RegistryAdmissionQueueDepth	unresolved	reason=cons
 src/lattice/LatticeMetrics.cs#RegistryAdmissionWait	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#RegistryCallDuration	unresolved	reason=dimension operation: no declaration found for operation
 src/lattice/LatticeMetrics.cs#RegistryCallInFlight	unresolved	reason=dimension operation: no declaration found for operation
+src/lattice/LatticeMetrics.cs#RegistryCallerDuration	unresolved	reason=dimension method, outcome: tag arguments are local variables selected from frozen static pairs (method from a FrozenDictionary over ILatticeRegistry member names, outcome from completed/timeout/faulted), not literal KeyValuePair constructions at the emission site
 src/lattice/LatticeMetrics.cs#SagaBroadcastDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaBroadcastLeafDuration	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (TreeId)
 src/lattice/LatticeMetrics.cs#SagaBroadcastShardDuration	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (TreeId)

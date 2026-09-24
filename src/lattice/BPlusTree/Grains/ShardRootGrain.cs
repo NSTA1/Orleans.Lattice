@@ -2635,7 +2635,7 @@ internal sealed partial class ShardRootGrain(
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             await registry.RegisterAsync(TreeId);
             state.State.IsRegistered = true;
         }

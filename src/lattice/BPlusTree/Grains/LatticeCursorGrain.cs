@@ -489,7 +489,7 @@ internal sealed partial class LatticeCursorGrain(
         // multi-step drain pays the catalogue read once per activation.
         if (!_sourceTreeRegistered)
         {
-            var catalogue = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var catalogue = grainFactory.GetLatticeRegistry();
             if (!await catalogue.ExistsAsync(state.State.TreeId))
             {
                 state.State.Phase = LatticeCursorPhase.Exhausted;

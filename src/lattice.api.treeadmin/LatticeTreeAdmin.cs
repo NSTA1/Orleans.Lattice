@@ -212,7 +212,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             // rather than enumerating the whole cluster catalog.
             using var origin = LatticeAccessGateContext.EnterSystemOrigin();
             var ids = await _grainFactory
-                .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+                .GetLatticeRegistry()
                 .GetAllTreeIdsAsync(LatticeTenantTrees.ComposePrefix(tenant))
                 .ConfigureAwait(false);
             return ids.Count;
@@ -584,7 +584,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // and ceiling back out of the resulting quota exception.
         await AdmitTenantCreateAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         // Idempotent create: registering a tree that already exists is a registry
         // no-op that preserves the existing configuration, so the caller-supplied
@@ -624,7 +624,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var exists = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var exists = await _grainFactory.GetLatticeRegistry()
             .ExistsAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
@@ -682,7 +682,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
         await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
         await registry.SetAliasAsync(effectiveTreeId, effectivePhysicalTreeId).ConfigureAwait(false);
 
         var resolved = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false);
@@ -702,7 +702,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var resolved = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var resolved = await _grainFactory.GetLatticeRegistry()
             .ResolveAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
@@ -722,7 +722,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var entry = await _grainFactory.GetLatticeRegistry()
             .GetEntryAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
@@ -747,7 +747,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         }
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         if (update.ApplyPublishEvents)
         {
@@ -779,7 +779,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var map = await _grainFactory.GetLatticeRegistry()
             .GetShardMapAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
@@ -1131,7 +1131,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 .ConfigureAwait(false);
         }
 
-        var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var map = await _grainFactory.GetLatticeRegistry()
             .GetShardMapAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
@@ -1655,7 +1655,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         RequireTagIndex();
         await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         // Push the tag-index prefix down: the registry is ordinally sorted, so
         // this is a bounded range scan rather than a full catalog read that keeps
@@ -1864,7 +1864,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private async Task<TreeRegistryEntry> ResolveTagIndexEntryAsync(
         string treeId, CancellationToken cancellationToken)
     {
-        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var entry = await _grainFactory.GetLatticeRegistry()
             .GetEntryAsync(treeId)
             .ConfigureAwait(false);
 
@@ -2187,7 +2187,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 .ConfigureAwait(false);
         }
 
-        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var entry = await _grainFactory.GetLatticeRegistry()
             .GetEntryAsync(effectiveTreeId)
             .ConfigureAwait(false);
 

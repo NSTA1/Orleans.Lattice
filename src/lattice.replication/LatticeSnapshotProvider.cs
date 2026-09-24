@@ -257,7 +257,7 @@ internal sealed class LatticeSnapshotProvider(
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
         var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
 
         // The registry's shard map is the producer-side authority on

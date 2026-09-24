@@ -309,7 +309,7 @@ internal sealed class TreeDeletionGrain(
         // fully purged tree on return.
         if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             await registry.UnregisterAsync(TreeId);
         }
 
@@ -441,7 +441,7 @@ internal sealed class TreeDeletionGrain(
         // Remove the tree from the registry.
         if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             await registry.UnregisterAsync(TreeId);
         }
 

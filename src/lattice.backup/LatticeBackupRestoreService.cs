@@ -287,7 +287,7 @@ internal sealed class LatticeBackupRestoreService(
         var scope = BackupScopeSelector.WholeTree(restore.TargetTreeId);
         await authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
 
         // Authorization above gates the TARGET tree, but the alias swap below is
         // driven by the physical tree ids carried on the caller-supplied result.
@@ -369,7 +369,7 @@ internal sealed class LatticeBackupRestoreService(
         IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var alreadyExists = await registry.ExistsAsync(targetTreeId).ConfigureAwait(false);
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -441,7 +441,7 @@ internal sealed class LatticeBackupRestoreService(
         CancellationToken cancellationToken)
     {
         var shadowTreeId = ShadowTreeId(targetTreeId, operationId);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
 
         // Resolve the current physical tree before building so the restore is
         // revertible; the previous tree is left in place until it expires.
@@ -493,7 +493,7 @@ internal sealed class LatticeBackupRestoreService(
         string operationId,
         CancellationToken cancellationToken)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         RoutingInfo? retainedRouting = null;
         var armRedirect = !string.IsNullOrEmpty(previousPhysicalTreeId)
             && !string.Equals(previousPhysicalTreeId, shadowPhysicalTreeId, StringComparison.Ordinal);
@@ -655,7 +655,7 @@ internal sealed class LatticeBackupRestoreService(
         // assertion to check against registry provenance, never a fact to act
         // on. A genuine build always passes - BuildShadowCoreAsync stamps the
         // shadow it registers with this very target.
-        var commitRegistry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var commitRegistry = grainFactory.GetLatticeRegistry();
         await AssertPhysicalBelongsToTargetAsync(
             commitRegistry, shadow.ShadowPhysicalTreeId, shadow.TargetTreeId,
             nameof(shadow.ShadowPhysicalTreeId), cancellationToken).ConfigureAwait(false);
@@ -683,7 +683,7 @@ internal sealed class LatticeBackupRestoreService(
     {
         ArgumentException.ThrowIfNullOrEmpty(shadowPhysicalTreeId);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         bool exists;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {

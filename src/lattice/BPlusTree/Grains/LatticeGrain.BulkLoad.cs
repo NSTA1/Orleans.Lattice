@@ -280,7 +280,7 @@ internal sealed partial class LatticeGrain
             return false;
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         return await registry.ExistsAsync(TreeId);
     }
 
@@ -298,7 +298,7 @@ internal sealed partial class LatticeGrain
         // between it and the registry.
         await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var treeIds = await registry.GetAllTreeIdsAsync();
         return FilterTreeIdsByActiveTenant(treeIds);
     }
@@ -333,7 +333,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         await registry.SetPublishEventsAsync(TreeId, enabled);
         // Make sure this activation re-reads the registry next time it publishes
         // so the override takes effect immediately locally.
@@ -349,7 +349,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
@@ -370,7 +370,7 @@ internal sealed partial class LatticeGrain
         // verb only observes.
         await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var entry = await registry.GetEntryAsync(TreeId);
         return new HistoryRetentionSettings
         {

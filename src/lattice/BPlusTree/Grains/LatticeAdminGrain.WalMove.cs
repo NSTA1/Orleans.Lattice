@@ -53,7 +53,7 @@ internal sealed partial class LatticeAdminGrain
         var catalog = RequireCatalog();
 
         var (physicalTreeId, walPartitions) = await ResolveTopologyAsync(treeId, cancellationToken);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -75,7 +75,7 @@ internal sealed partial class LatticeAdminGrain
         var catalog = RequireCatalog();
 
         var (physicalTreeId, walPartitions) = await ResolveTopologyAsync(treeId, cancellationToken);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -128,7 +128,7 @@ internal sealed partial class LatticeAdminGrain
         var (physicalTreeId, walPartitions) = await ResolveTopologyAsync(treeId, cancellationToken);
         ValidatePartition(partition, walPartitions);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -153,7 +153,7 @@ internal sealed partial class LatticeAdminGrain
             ValidatePartition(partition, walPartitions);
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -251,7 +251,7 @@ internal sealed partial class LatticeAdminGrain
             throw new LatticeWalProviderMissingException(physicalTreeId, partition, targetProviderKey);
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -577,7 +577,7 @@ internal sealed partial class LatticeAdminGrain
             }
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -763,7 +763,7 @@ internal sealed partial class LatticeAdminGrain
         var (physicalTreeId, walPartitions) = await ResolveTopologyAsync(treeId, cancellationToken);
         ValidatePartition(partition, walPartitions);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var pin = await registry.GetWalPlacementAsync(physicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 

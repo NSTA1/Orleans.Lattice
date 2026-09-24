@@ -587,7 +587,7 @@ internal sealed partial class BPlusLeafGrain
         }
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             await registry.LatchProjectionDigestPermanentlyDisabledAsync(treeId);
         }
         catch

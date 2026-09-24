@@ -289,6 +289,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, `tenant` | CommitPath | Leaf-cache pre-warm (on by default) - leaves primed, fan-out cost, model size |
 | `orleans.lattice.registry.call.duration` | histogram (`ms`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
 | `orleans.lattice.registry.call.in_flight` | histogram (`{call}`) | `operation`, `tenant` | Overview | Tree-registry singleton - service time and fan-in width |
+| `orleans.lattice.registry.caller.duration` | histogram (`ms`) | `method`, `outcome`, `tenant` | Overview | Tree-registry calls - caller-observed duration and outcome |
 | `orleans.lattice.registry.admission.wait` | histogram (`ms`) | `tenant` | Overview | Tree-registry fan-in gate - caller-side admission wait (the only signal that sees a stall relocated out of the registry) |
 | `orleans.lattice.registry.admission.in_flight` | histogram (`{dispatch}`) | `tenant` | *(not charted)* | Fan-in permits this silo's gate held at dispatch, counting the dispatch, so the ceiling reads as `16` rather than `15` |
 | `orleans.lattice.registry.admission.batch.size` | histogram (`{tree}`) | `tenant` | *(not charted)* | Distinct tree ids per gated round trip - the share above `1` is the share the bound actually coalesced |
