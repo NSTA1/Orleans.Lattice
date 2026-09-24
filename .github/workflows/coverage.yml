@@ -40,26 +40,116 @@ on:
       - 'Directory.Build.targets'
       - 'Orleans.Lattice.slnx'
       - '.github/workflows/coverage.yml'
+      - '.github/workflows/coverage-supersession.py'
       - '.github/workflows/failed-tests-filter.py'
       - '.github/workflows/ui-test-shards.json'
   # Manual trigger. Coverage is a post-merge lane, so without this there is no way
   # to re-run it after a transient failure, or to validate a change to the lane
   # itself on a branch before merging it - the change would have to land on main
   # unverified. It is also the escape hatch when the paths filter above skips a
-  # merge whose coverage you nonetheless want re-measured.
+  # merge whose coverage you nonetheless want re-measured. A dispatched run is the
+  # newest run of this workflow when it is created, so the supersession gate below
+  # lets it measure unless a newer run arrives behind it.
   workflow_dispatch:
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
+# The supersession job additionally reads this workflow's own run history.
 permissions:
   contents: read
 
+# Queue runs; never cancel one.
+#
+# This lane used `cancel-in-progress: true`. That is the right setting for a lane
+# that gates a pull request and the wrong one here. A run takes about an hour and
+# main routinely takes merges faster than that, so most runs were cancelled part
+# way: of the 35 runs from #3327 to #3473, 22 were cancelled, spending 615
+# runner-minutes measuring nothing against 708 for the 11 that completed. GitHub
+# rolls a cancelled check run up as a FAILURE on its commit, so main showed a red
+# cross on most of its commits although nothing had failed - indistinguishable at
+# a glance from the lane being broken - and the two runs that genuinely failed
+# were buried among them.
+#
+# `queue: max` lets every run that starts finish, and holds later runs first in,
+# first out instead of cancelling them. On its own that would measure every commit
+# one after another, and a burst of merges would leave the queue hours behind main.
+# The supersession job below closes that gap: a queued run that reaches the front
+# skips when a newer run of this workflow exists, because that run measures a later
+# commit. The newest run never finds a newer one, so the latest state of main is
+# always measured, behind at most the one run already in flight. The predicate,
+# and why it fails open, are in coverage-supersession.py. GitHub rejects
+# `queue: max` alongside `cancel-in-progress: true`, and
+# CiCoverageLaneConcurrencyTests holds this shape in place.
 concurrency:
   group: coverage-${{ github.ref }}
-  cancel-in-progress: true
+  queue: max
 
 jobs:
-  coverage:
+  # Decides whether this run measures, or leaves it to a newer run of this workflow
+  # on the same branch. It is cheap - a sparse checkout, one API call, one script -
+  # which is what makes skipping a superseded run worth it: a skipped run costs this
+  # job, a measured one costs the hour below.
+  supersession:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # To list this workflow's runs, which is all the gate reads.
+      actions: read
+    outputs:
+      measure: ${{ steps.verdict.outputs.measure }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/workflows
+
+      - name: Decide whether this run measures
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # GITHUB_WORKFLOW_REF is <owner>/<repo>/.github/workflows/<file>@<ref>.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+          runs="${RUNNER_TEMP}/coverage-runs.json"
+
+          verdict=""
+          if gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -f branch="${GITHUB_REF_NAME}" -f per_page=100 -f exclude_pull_requests=true \
+              > "$runs"; then
+            verdict="$(python3 .github/workflows/coverage-supersession.py --run-id "$GITHUB_RUN_ID" "$runs")" \
+              || verdict=""
+          fi
+
+          # Fail open. Measuring needlessly costs one run of this lane; skipping
+          # wrongly leaves main unmeasured with nothing red to show for it.
+          case "$verdict" in
+            measure|skip) ;;
+            *)
+              echo "::warning::Could not decide whether a newer run supersedes this one, so this run measures."
+              verdict=measure
+              ;;
+          esac
+
+          if [ "$verdict" = skip ]; then
+            echo "measure=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "measure=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  coverage:
+    needs: supersession
+    # Measure unless the gate positively decided that a newer run supersedes this one.
+    # Only an explicit 'false' skips, so a missing verdict measures, and `!cancelled()`
+    # keeps a failed gate job from blocking the measurement (it still turns the run
+    # red, so the failure is not hidden).
+    if: ${{ !cancelled() && needs.supersession.outputs.measure != 'false' }}
+    runs-on: ubuntu-latest
+    # A backstop, not a budget. Runs no longer cancel each other, so without it one
+    # hung run would hold every queued run behind it for the six-hour default. The
+    # suites carry their own ten-minute hang dumps below; this is about twice the
+    # longest recent run (69 minutes).
+    timeout-minutes: 150
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
     # AzureStorageEmulator-category integration tests drive via

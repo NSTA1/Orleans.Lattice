@@ -1,4 +1,5 @@
 using System.Text;
+using Deque.AxeCore.Commons;
 using Deque.AxeCore.Playwright;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
@@ -30,6 +31,15 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// is genuinely the one rendered, and - the trap specific to widening the tag set -
 /// every requested WCAG tag genuinely resolved to rules axe evaluated. See
 /// <see cref="AccessibilityConformance"/>, which owns the last of those.
+/// </para>
+/// <para>
+/// <b>Why it waits for motion.</b> axe reads every element's computed colour at the
+/// instant it runs, and the shell's tabs transition theirs over 120ms, so a sweep run
+/// straight after a theme flip or an area activation could read a colour part-way
+/// between two palettes and fail <c>color-contrast</c> on a frame no user ever sees
+/// settle. Every sweep therefore waits for in-flight motion to finish first, and
+/// <see cref="The_sweep_measures_the_settled_palette_not_a_frame_mid_transition"/>
+/// proves both that the hazard is real and that the wait removes it.
 /// </para>
 /// <para>
 /// <b>There is no allow-list and no mechanism to add one</b> - see
@@ -73,6 +83,66 @@ public sealed class AccessibilitySweepTests : UiTestBase
     {
         var page = await OpenScenarioAsync(scenario);
         await AssertSweepIsCleanAsync(page, $"the home surface ({scenario})");
+    }
+
+    /// <summary>
+    /// The sweep must measure the palette a user sees once a theme change has finished,
+    /// never a frame part-way through the tabs' colour transition - the race that made
+    /// the dark-theme home cells above fail intermittently on CI.
+    /// <para>
+    /// Left to timing, that race is lost only occasionally, which is why it flaked rather
+    /// than failed. Here it is made certain in both directions. The tab transition is
+    /// slowed and made linear, and the light-to-dark flip freezes it at its first frame
+    /// in the same script that makes the flip, so the frozen sweep genuinely reads the
+    /// light palette's muted text on the dark surface - and it must FAIL
+    /// <c>color-contrast</c> there. That control is what gives the final assertion its
+    /// meaning, because a page with nothing in flight sweeps clean whether or not
+    /// anything waits. Released, the transition still has seconds to run, far longer than
+    /// an unsettled sweep takes to reach the tabs, so the final sweep is clean only
+    /// because it waited.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_sweep_measures_the_settled_palette_not_a_frame_mid_transition()
+    {
+        var page = await OpenHomeAsync(LatticeBreakpoint.Expanded);
+        await ExplorerShell.AssertShellRenderedAsync(page);
+
+        // Start from a settled light palette, so the flip below is a real change of palette.
+        await ExplorerShell.ApplyThemeAsync(page, ExplorerTheme.Light);
+        await ExplorerShell.WaitForMotionToSettleAsync(page);
+
+        await page.AddStyleTagAsync(new PageAddStyleTagOptions { Content = SlowTabTransitionStyle });
+
+        var frozen = await page.Locator(":root").EvaluateAsync<int>(
+            FlipToDarkAndFreezeTabTransitionsScript,
+            null,
+            new LocatorEvaluateOptions { Timeout = ExplorerShell.RailReadTimeoutMs });
+
+        Assert.That(frozen, Is.GreaterThan(0),
+            "Control failure: flipping the theme started no tab colour transition, so this case "
+            + "cannot tell a sweep that waits for motion from one that does not. The tabs no "
+            + "longer transition their colour; point the slowed style at an element that does.");
+
+        var midTransition = AccessibilityConformance.BlockingViolations(
+            await page.RunAxe(AccessibilityConformance.RunOptions));
+
+        Assert.That(midTransition.Select(violation => violation.Id), Does.Contain("color-contrast"), () =>
+            "Control failure: a sweep of the tabs frozen at the first frame of a light-to-dark "
+            + "transition reported no blocking color-contrast violation, so the hazard the settled "
+            + "sweep guards against was not reproduced and the clean result below would prove "
+            + "nothing. " + AccessibilityConformance.Describe(midTransition, "the frozen frame"));
+
+        var released = await page.Locator(":root").EvaluateAsync<int>(
+            ReleaseFrozenTabTransitionsScript,
+            null,
+            new LocatorEvaluateOptions { Timeout = ExplorerShell.RailReadTimeoutMs });
+
+        Assert.That(released, Is.EqualTo(frozen),
+            "every tab transition frozen above must be released, or the settled sweep below "
+            + "would pass over motion that is merely paused rather than finished");
+
+        await AssertSweepIsCleanAsync(page, "the home surface after a slowed light-to-dark transition");
     }
 
     /// <summary>
@@ -151,7 +221,7 @@ public sealed class AccessibilitySweepTests : UiTestBase
                 // sweep scopes to.
                 await AccessibilityProbe.AssertLandmarksAsync(page, surface);
 
-                var results = await page.RunAxe(AccessibilityConformance.RunOptions);
+                var results = await RunSettledAxeAsync(page);
                 AccessibilityConformance.AssertRuleSetIsNotVacuous(results, surface);
 
                 var blocking = AccessibilityConformance.BlockingViolations(results);
@@ -266,12 +336,66 @@ public sealed class AccessibilitySweepTests : UiTestBase
 
     private static async Task AssertSweepIsCleanAsync(IPage page, string surface)
     {
-        var results = await page.RunAxe(AccessibilityConformance.RunOptions);
+        var results = await RunSettledAxeAsync(page);
         AccessibilityConformance.AssertRuleSetIsNotVacuous(results, surface);
 
         var blocking = AccessibilityConformance.BlockingViolations(results);
         Assert.That(blocking, Is.Empty, () => AccessibilityConformance.Describe(blocking, surface));
     }
+
+    /// <summary>
+    /// Runs the sweep's axe configuration once the page's motion has settled, so every
+    /// sweep measures the colours a user sees rather than a frame part-way through a
+    /// transition. See <see cref="ExplorerShell.WaitForMotionToSettleAsync"/>.
+    /// </summary>
+    private static async Task<AxeResult> RunSettledAxeAsync(IPage page)
+    {
+        await ExplorerShell.WaitForMotionToSettleAsync(page);
+        return await page.RunAxe(AccessibilityConformance.RunOptions);
+    }
+
+    /// <summary>
+    /// Slows the tabs' colour transition from 120ms to five seconds and makes it linear,
+    /// so that once released it is still well short of the contrast threshold for far
+    /// longer than an unsettled sweep takes to reach the tabs.
+    /// </summary>
+    private const string SlowTabTransitionStyle =
+        ".lx-tab { transition-duration: 5s !important; transition-timing-function: linear !important; }";
+
+    /// <summary>
+    /// Flips the palette to dark and pauses the tab transitions that flip starts, in one
+    /// synchronous script, so they are frozen at their first frame rather than wherever a
+    /// round trip happened to find them. <c>getAnimations()</c> flushes style first, which
+    /// is what makes the transitions exist to be frozen.
+    /// </summary>
+    private const string FlipToDarkAndFreezeTabTransitionsScript =
+        """
+        (element) => {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            const tabs = document.getAnimations().filter(animation =>
+                animation instanceof CSSTransition
+                && animation.effect !== null
+                && animation.effect.target instanceof Element
+                && animation.effect.target.matches('.lx-tab'));
+            tabs.forEach(animation => animation.pause());
+            return tabs.length;
+        }
+        """;
+
+    /// <summary>Resumes the tab transitions the flip froze, and reports how many it resumed.</summary>
+    private const string ReleaseFrozenTabTransitionsScript =
+        """
+        (element) => {
+            const frozen = document.getAnimations().filter(animation =>
+                animation instanceof CSSTransition
+                && animation.playState === 'paused'
+                && animation.effect !== null
+                && animation.effect.target instanceof Element
+                && animation.effect.target.matches('.lx-tab'));
+            frozen.forEach(animation => animation.play());
+            return frozen.length;
+        }
+        """;
 
     private const string EnumeratedAriaSelectedProbe =
         """

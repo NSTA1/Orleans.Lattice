@@ -1022,6 +1022,18 @@ jobs:
       - name: Self-test the zero-leg guard
         run: python3 .github/workflows/zero-leg-guard-selftest.py
 
+      # The coverage lane's supersession gate runs only in that post-merge lane,
+      # so no pull request ever executes it - and its healthy outcome for a
+      # superseded run is a SKIPPED coverage job, which is exactly what a gate
+      # that had stopped working would also report: a predicate that skipped
+      # every run would freeze the coverage report with nothing red anywhere.
+      # This drives the real gate over the runs that must and must not
+      # supersede one another, with a mutation suite, and checks that
+      # coverage.yml still invokes it. Ungated for the same reason as the
+      # self-tests above.
+      - name: Self-test the coverage supersession gate
+        run: python3 .github/workflows/coverage-supersession-selftest.py
+
       # A samples-only change selects no package leg, because `nonSample`
       # carries '!samples/**'. That was sound while every sample was
       # self-contained, and stopped being sound when a sample became the body of
