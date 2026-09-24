@@ -282,10 +282,10 @@ internal sealed class SagaWriteFenceGrain(
     // engaging a fence grew linearly with the fenced topology while the write
     // fence itself was already blocking writers. Issued in bounded overlapped
     // waves the same calls cost ceil(N / BoundedFanOut.DefaultWidth) round
-    // trips. The width is the router grain's maxLocalWorkers, so a wave is
-    // serviced by separate local workers rather than queued behind itself, and
-    // a wider one would only burst more outbound calls at a single Orleans
-    // response deadline. Group atomicity is unaffected: it is defined by every
+    // trips. The width is below the router grain's local worker pool, so a
+    // wave is serviced by separate local workers rather than queued behind
+    // itself, and a wider one would only burst more outbound calls at a single
+    // Orleans response deadline. Group atomicity is unaffected: it is defined by every
     // target having acked before the helper returns, which Task.WhenAll inside
     // each wave preserves exactly, not by the order they were asked in.
 

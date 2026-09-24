@@ -134,7 +134,7 @@ public class ViewRebuildFanOutBenchmarks
     /// <summary>
     /// Contrast arm for the rejected alternative: drop the cap and put every
     /// delete in flight at once. It cannot overlap any further than the router
-    /// grain's 32 local workers allow, so past that width it buys no additional
+    /// grain's local worker pool allows, so past that width it buys no additional
     /// concurrency - it only holds N tasks alive instead of 32, turning a sweep
     /// whose working set is a constant into one that scales with the corpus.
     /// </summary>

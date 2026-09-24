@@ -726,12 +726,13 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     /// <remarks>
     /// There is no batched delete on <see cref="ILattice"/>, so the removal of a
     /// key's rows cannot collapse into a single call the way the add path does.
-    /// It can still stop being serial: the router grain is a
-    /// <c>[StatelessWorker(maxLocalWorkers: 32)]</c>, so independent deletes
-    /// issued together are serviced by separate local workers rather than
-    /// queued behind one another. The window is capped at that same worker count
+    /// It can still stop being serial: the router grain is a stateless worker, so
+    /// independent deletes issued together are serviced by separate local workers
+    /// rather than queued behind one another. The window is capped at 32 - the
+    /// router's original worker count, and well below its current pool of 256 -
     /// so a pathologically wide tag set cannot issue an unbounded wave of
-    /// in-flight grain calls; beyond the cap the removal proceeds wave by wave.
+    /// in-flight grain calls or monopolise the pool; beyond the cap the removal
+    /// proceeds wave by wave.
     /// </remarks>
     internal const int RemoveRowConcurrencyLimit = 32;
 

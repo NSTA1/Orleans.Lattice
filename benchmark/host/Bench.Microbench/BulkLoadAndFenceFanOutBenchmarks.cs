@@ -60,7 +60,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// serial await, which is what shows whether the overlap earns its place rather
 /// than the collapse carrying the whole result. Change (3) is overlap-only, so
 /// its contrast is the rejected alternative instead: an unbounded fan-out, which
-/// cannot overlap further than the router grain's 32 local workers allow and
+/// cannot overlap further than the router grain's local worker pool allows and
 /// only trades a constant working set for one that scales with the topology.
 /// </para>
 /// <para>
@@ -400,7 +400,7 @@ public class BulkLoadAndFenceFanOutBenchmarks
     /// <summary>
     /// Contrast arm for the rejected alternative: drop the cap and put every
     /// engage in flight at once. It cannot overlap further than the router
-    /// grain's 32 local workers allow, so past that width it buys no additional
+    /// grain's local worker pool allows, so past that width it buys no additional
     /// concurrency - it only holds N tasks alive instead of 32, turning a fence
     /// whose working set is a constant into one that scales with the topology,
     /// with every call racing a single Orleans response deadline.
