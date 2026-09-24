@@ -46,7 +46,7 @@ place.
 
 ```mermaid
 flowchart TD
-    Door["Front door<br/>Orleans.Lattice in two minutes"]
+    Door["Front door<br/>Orleans.Lattice in three minutes"]
     Door --> Build["Build<br/>developers"]
     Door --> Evaluate["Evaluate<br/>architects and tech leads"]
     Door --> Operate["Operate<br/>operators"]
@@ -56,9 +56,12 @@ flowchart TD
     Build --> How
 ```
 
-- **Front door** (two minutes at most, for everyone): what the platform is, the
-  three positions it takes, and the Local -> Team -> Global journey with
-  unchanged `ILattice` code. It ends by pointing each reader to a path.
+- **Front door** (three minutes at most, for everyone): a first minute in plain
+  words for any viewer - what state is, why keeping it in more than one place
+  is hard, and what Orleans.Lattice does differently - then what the platform
+  is, the three positions it takes, and the Local -> Team -> Global journey
+  with an unchanged `ILattice` programming model. It ends by pointing each
+  reader to a path.
 - **Each path opens with an entry episode** that assumes only the front door.
   Later episodes on the path assume the entry episode.
 - **Deep dives** are reached from the paths rather than from the front door:
@@ -73,7 +76,7 @@ is a proposal until its brief is written.
 
 | Episode | Beats | Sources |
 | --- | --- | --- |
-| Orleans.Lattice in two minutes | the store lives in the cluster; conflict resolution is algebraic (the join); everything else is a seam; Local -> Team -> Global with the same code; pick your path | [README](../README.md) "What is it?", "Why it exists", "The deployment journey" |
+| Orleans.Lattice in three minutes | in plain words: what state is, why it is hard to keep in more than one place, and what Lattice does instead; then the store lives in the cluster; conflict resolution is algebraic (the join); everything else is a seam; Local -> Team -> Global with the same programming model; pick your path | [README](../README.md) "What is it?", "Why it exists", "The deployment journey"; [reference architecture](../reference-architecture.md) "Disaster recovery" |
 
 ### Build (developers)
 
@@ -125,8 +128,13 @@ is a proposal until its brief is written.
 
 ## Format rules
 
-- **Two to five minutes, one idea.** The front door is two minutes at most; a
+- **Two to five minutes, one idea.** The front door is three minutes at most; a
   deep-dive concept can be ninety seconds.
+- **Plain words first where the audience is mixed.** An episode that any
+  viewer may open - the front door, and each path's entry episode - begins
+  with a short part that uses no technical terms and one everyday example,
+  drawn in the same notation as the rest, and then says "in technical terms"
+  where the rest begins.
 - **No presenter on screen.** Diagrams, code and narration only, so a change to
   the product is a re-render rather than a re-shoot.
 - **Every episode ends on a next step**: the next episode on its path, and its
@@ -144,11 +152,15 @@ is a proposal until its brief is written.
 
 1. **The tooling** (this folder as it stands): the workspace, its guards, the
    CI lane, the voice pipeline, and the site's design system read through the brand seam. Nothing here is an episode.
-2. **Pilot: the front door**, built from three reusable scenes - the deployment
-   journey, the core and its seams, and the join. It is the root every path
-   links back to, it forces the style, voice and pacing decisions before there
-   are ten episodes to change, and its source is the most-reviewed prose in the
-   repository. Expect to re-cut it after steps 3 and 4.
+2. **Pilot: the front door** - [episodes/introduction/](episodes/introduction/),
+   built from nine shared scenes: the title card; for everyone, what an
+   application remembers and the same value kept in more than one place; then
+   the store in its cluster, the cluster, the join, the core and its seams,
+   the deployment journey, and the ways in. It is the root every path links back to, it forces the style,
+   voice and pacing decisions before there are ten episodes to change, and its
+   source is the most-reviewed prose in the repository. It is scripted,
+   fact-checked, narrated, stamped, checked and published: the docs site plays
+   it on the home page and under Videos. Expect to re-cut it after steps 3 and 4.
 3. **Hello, Lattice**, the Build entry: it proves the compiled-code path, and
    the README Quick Start it draws on is already written as verified snippets.
 4. **Conflict-free merges in 90 seconds**, the first How it works episode: it is
@@ -165,23 +177,41 @@ narrative and diagram, code walkthrough, and concept animation.
    `## Narration` heading, one paragraph per cue, `### <scene>` headings to
    label scenes, HTML comments for direction notes. Written form, plain ASCII,
    British spelling. The Docs agent fact-checks it against the corpus before it
-   is locked.
-3. **Narration** - `npm run narrate -- <slug>`: one clip per cue, a cue
-   timeline, and WebVTT captions, in the series voice.
+   is locked, and `npm run phonemes -- <slug>` shows how the voice will read
+   it, flagging words with two readings.
+3. **Narration** - `npm run narrate -- <slug>`: one clip per cue in the series
+   voice, cached by what it says so a re-run speaks only the cues that changed;
+   the cues joined on a timeline and mastered to the series loudness; and
+   WebVTT captions. A `<!-- pause N -->` comment in the script adds N seconds
+   of silence, and a new scene waits a little longer than the next cue in a
+   scene does (`voice/voice.json`).
 4. **Storyboard** - `episodes/<slug>/STORYBOARD.md`: what is on screen for each
    cue.
-5. **Composition** - `compositions/episodes/<slug>.html`, built from shared
-   components and timed from the cue timeline.
-6. **Companion page** - `docs/videos/<slug>.md`: the transcript, the compiled
-   snippets shown on screen (`npm run snippets`), and the player.
-7. **Check and render** - `npm run check`, then a draft render for review and
-   a delivery-quality render to publish.
-8. **Review** - the pull request carries the lane's draft render as an
-   artifact. Watch it once with sound and once muted.
+5. **Composition** - `episodes/<slug>/composition.html`, built from the shared
+   scenes in `shared/components/`. Each scene clip names the script scene it
+   shows (`data-scene`), and `npm run timeline -- <slug>` stamps its window,
+   its beats (one per cue) and the narration track from the timeline, so the
+   pictures move on the words and nothing is timed by hand.
+6. **Companion page** - `docs/videos/<slug>.md`: a short introduction whose
+   first sentence is the episode's one-line idea, then the video block and the
+   transcript, both written by `npm run companions`, and the compiled snippets
+   shown on screen (`npm run snippets`). `episodes/<slug>/episode.json` names
+   the episode's path, its place on it, and the moment its poster shows.
+7. **Check and render** - `npm run check -- --episode <slug>`, then
+   `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4`,
+   which also writes the render's receipt: what it was rendered from.
+8. **Review** - `npm run review -- <slug>`: the local review page. Watch it
+   once with sound and once muted.
+9. **Publish** - `npm run publish -- <slug>`: while the render's receipt still
+   matches the sources, it writes the video, its captions and its poster into
+   `docs-site/media/`, named by their cut, removes the episode's earlier cut,
+   and records the new cut in `episode.json` and the companion page. Commit
+   the three files with the episode: the pull request carries the video, and
+   the site plays what is committed.
 
 ## Tooling in place
 
-What was put in place before any episode, and why.
+What is in place, and why.
 
 | Item | Why | Where |
 | --- | --- | --- |
@@ -192,9 +222,16 @@ What was put in place before any episode, and why.
 | Outside `docs/` | the site build publishes and link-checks every markdown file under `docs/`, which would include every brief and script | this folder; companion pages alone go in `docs/videos/` |
 | A pinned toolchain | HyperFrames is pre-1.0 and moves fast; renders must not change because a dependency did | exact versions in `package.json` and the lockfile; [tools/hf.js](tools/hf.js) runs the pinned CLI with telemetry, update checks and skill installs off |
 | No network at render time | a render that fetches is neither reproducible nor local-first | GSAP and its plugins from `node_modules`; local media; font stacks limited to the site's self-hosted faces, because the renderer fetches any other named family from Google Fonts; `--docker` for byte-reproducible renders |
-| The site's design system, read rather than copied | the videos must look like the documentation and follow it when it changes | `tools/hf.js` copies `docs-site/template/public` (tokens, fonts, mark) and `docs-site/figures/join-figures.json` into an ignored folder before every render; [assets/brand/brand.css](assets/brand/brand.css) imports it and adds only camera sizes; [assets/brand/motion.js](assets/brand/motion.js) reads the site's eases; the join figure reads each CRDT's scenario from the site |
+| The site's design system and words, read rather than copied | the videos must look like the documentation, say what it says, and follow it when it changes | `tools/hf.js` copies `docs-site/template/public` (tokens, fonts, mark), `docs-site/figures/join-figures.json`, the home page's words (`docs-site/pages/index.md`) and the package catalogue (`PACKAGES.md`) into an ignored folder before every render; [shared/brand/brand.css](shared/brand/brand.css) imports it and adds only camera sizes and the notation; [shared/brand/motion.js](shared/brand/motion.js) reads the site's eases; scenes quote the site through `site:` variables, the seams are generated, and the join figure reads each CRDT's scenario from the site |
 | Compiled code on screen | a snippet that compiles today can rot tomorrow; the repository already compiles every verify fence | `npm run snippets`, `npm run snippets:check` |
 | A local voice pipeline | one consistent voice, no account or key, reproducible from the script | [voice/](voice/), `npm run voice:samples`, `npm run narrate` |
+| Loudness as delivered | every episode at -16 LUFS with the true peak below -1 dBTP, measured on the stereo track a viewer hears | `npm run narrate` masters the joined narration with one gain and a peak limiter, then measures it again ([tools/lib/loudness.js](tools/lib/loudness.js)) |
+| Timing stamped from the narration | HyperFrames reads timing statically from the HTML, and hand-typed timings drift from the words | `npm run timeline -- <slug>` writes every clip's window, its beats and the narration track; `--check` fails when they are out of date |
+| One folder per episode, one place for what is shared | the series will have dozens of episodes, and a scene fixed once must be fixed everywhere | `episodes/<slug>/` and `shared/`, defined once in [tools/lib/layout.js](tools/lib/layout.js) and guarded by a test that keeps episode material off the root |
+| Project commands on an episode | the CLI's project commands open only `index.html`, and its lint finds compositions only in `compositions/` | `--episode <slug>` stands the episode in as `index.html` for one command and puts the smoke test back afterwards ([tools/lib/episode.js](tools/lib/episode.js)); `npm run check:episodes` checks every episode, against silence where narration is not generated |
+| Companion pages from the episode | a companion page's transcript must say what the video says, and its video block must pin what is committed | `npm run companions`, `npm run companions:check` |
+| Publishing from a receipt | a published video must show what the repository says, and its captions and poster must come from the same cut | `npm run render ... -o <file>` writes a receipt of the render's sources; `npm run publish -- <slug>` checks it and writes the files to commit into `docs-site/media/` ([tools/lib/publication.js](tools/lib/publication.js)) |
+| Captions a reader can follow | a caption that ends mid-phrase, or runs past two lines, makes the viewer wait or squint | at most two lines of 42 characters, broken after a clause and never after a word that belongs with the next ([tools/lib/narration.js](tools/lib/narration.js)) |
 | Agent conventions | agents do most of the authoring and must know the rules above | `.github/skills/video-production/SKILL.md` |
 
 ## Voice
@@ -215,14 +252,30 @@ What was put in place before any episode, and why.
   says OR-lee-unz. Other entries spell out initialisms ("CRDTs", "gRPC").
   Captions keep the written form. Prefer rewording a script to adding an entry,
   and check a new entry by ear with `npm run voice:samples -- --voices bf_emma`.
+- **Words with two readings:** the phonemizer picks one reading of a heteronym
+  without looking at the sentence. It reads "lives" as the plural of life
+  everywhere, so the pilot's "the store lives in the cluster" came out wrong,
+  and the lexicon now respells the verb ("livs"). Before narrating a script, run
+  `npm run phonemes -- <slug>`: it prints each cue's spoken form and phonemes
+  exactly as the voice will receive them, and flags the words in
+  [voice/heteronyms.json](voice/heteronyms.json) so their reading can be
+  confirmed. The phonemizer's British English also gives BATH words a short
+  vowel ("answer", "last"); that is the voice's accent, not a misreading.
 
 ## Open decisions
 
-### Hosting
+### Hosting - decided
 
-Where the rendered MP4s live, and how the companion page plays them. Keeping
-the assets under `videos/` with a native player embedded on the companion page
-is the direction; the question is how the binaries get there.
+**Decided on 2026-09-24: option A, in the docs site.** Each episode's
+published cut - its video, captions and poster - is committed to
+`docs-site/media/`, and the site plays it from its own origin with a native
+`<video>`. The pull request that publishes an episode therefore carries the
+video itself, so it is reviewed and versioned with its page, and it reaches
+the live site with the next docs deploy. The options, and the numbers the
+decision rests on, follow; how it works is at the end of this section.
+
+The question was where the rendered MP4s live and how a page plays them, given
+that the site's player should play them from the site's own origin.
 
 | Option | Upside | Cost |
 | --- | --- | --- |
@@ -230,19 +283,86 @@ is the direction; the question is how the binaries get there.
 | B. Git LFS under `videos/` | the same model with small history; CI checkouts skip LFS unless asked | storage and bandwidth quota; contributors need git-lfs; the docs deploy must check out LFS to publish the files |
 | C. Commit sources only; render in the docs deploy | nothing binary in history; the published video is always in step with the published docs; the pictures are deterministic, so renders can be cached by content | render time in the deploy job; the GitHub Pages 1 GB site limit; the narration must be committed as compressed audio or regenerated in CI |
 | D. An external host, embedded | adaptive streaming and discovery | a third-party dependency and its tracking on every page, against the local-first grain |
+| E. Commit sources; publish renders as GitHub release assets | nothing binary in history; no limit on a release's total size or its bandwidth (each file under 2 GiB); renders versioned with the release they describe | the video is served from GitHub's release CDN rather than the site's origin; a workflow must render and attach it |
 
-**Recommendation: C**, with B as the fallback if render time in the deploy
-proves too slow. Both keep the source of every video under `videos/` and both
-play it in a native HTML `<video>` element with the captions as a `<track>`,
-styled by the docs site template. Decide once the pilot's first
-delivery-quality render gives real numbers: its file size and its render time.
-Until then renders and narration audio are not committed.
+What the pilot measured (the introduction, 2:52, 1920x1080 at 30 fps):
 
-### Companion pages on the site
+- **Size:** 10.8 MB at high quality (502 kbit/s: H.264 about 320, AAC stereo
+  about 175), and 11.6 MB for the published re-render of the same sources,
+  which differs only by encoder variation; the two-minute first cut was 8.0 MB, and a draft is about three
+  quarters of the high-quality size. That is about 4 MB a minute, so the 24
+  episodes planned here, at about three minutes each, are roughly 300 MB a
+  full set, and every re-render of one episode is another 10 to 20 MB.
+- **Render time:** 3 min 39 s for the high-quality render on one worker, on a
+  laptop with every core busy: about 1.3 times real time. Its start-up probes
+  failed repeatedly under that load until FFmpeg was kept resident (see the
+  video-production skill); CI's dedicated runner has no such contention.
+- **Narration:** the mastered track is 5.7 MB as WAV, 1.5 MB as 96 kbit/s AAC
+  and 0.7 MB as 48 kbit/s Opus - small enough to commit.
 
-The first companion page creates `docs/videos/`. The site's navigation would
-currently file it under Concepts next to `docs/crdt`; give it its own section
-then, together with a player style, with whoever owns `docs-site/`.
+What that means for each option: A puts 300 MB in history for the first set and
+more with every re-cut, downloaded by every full-history CI checkout. B fits
+GitHub Free's Git LFS allowance (10 GiB of storage, 10 GiB a month of
+bandwidth) for a while, but every pushed version counts against storage, every
+CI or deploy checkout counts against bandwidth, and past the allowance LFS
+stops working until the month ends. C fits the Pages limits (1 GB a site, 100
+GB a month) with room, and renders only what changed if renders are cached by
+content. E has no size or bandwidth limit at all.
+
+Checked against the live services on 2026-09-24:
+
+- **Pages can play the videos.** The site answers byte-range requests
+  (`206 Partial Content`, through its CDN), and Pages serves `.mp4` as
+  `video/mp4`, so a native `<video>` element starts a fast-start MP4 at once
+  and seeks anywhere in it. Every render here is fast-start: the MP4's index
+  comes first. This is progressive playback, which is what a documentation
+  site needs; adaptive streaming (HLS or DASH) would also work as static
+  files, but is not worth it at 4 MB a minute.
+- **The site has room.** The published site is 41.7 MB (725 files) of its
+  1 GB, so the current cut of all 24 planned episodes, about 260 MB, fits.
+  100 GB a month is about 9,000 full plays of the introduction, and a visitor
+  who never presses play downloads almost nothing (`preload="metadata"`).
+- **Release files are not part of the site.** They count against neither the
+  site's 1 GB nor git history, and have no total-size or bandwidth limit. But
+  a release file is served through a signed link that expires within the hour,
+  as `application/octet-stream` with `Content-Disposition: attachment`: right
+  for a download, not dependable for playing in place.
+
+An earlier recommendation here - keep each render as a release file and have
+the docs deploy copy the current cut into the site - was not taken: the video
+belongs in the pull request that publishes it, and in the site, not in a
+release beside them.
+
+How it works:
+
+- **Only the published cut is committed**, once per episode per cut, as
+  `docs-site/media/<slug>-<cut>.mp4`, `.vtt` and `.jpg`. The cut is a digest
+  of the three files, so a new cut is a new file name and nothing cached under
+  an old name goes stale. Renders, drafts and narration audio are not
+  committed: the published MP4 carries its sound.
+- **The companion page pins the cut** in its video block, which
+  `npm run companions` writes from `episode.json` and the composition, so a
+  page and the video it plays always come from the same commit.
+  `npm run companions:check` fails CI when a pinned file is missing, or a
+  committed one is pinned by no page.
+- **The site plays what is committed.** `docs-site/stage.ps1` replaces each
+  video block with the player when its three files are in `docs-site/media/`,
+  copies them into the site once, and generates the Videos tab and the home
+  page's introduction from the pages that pin a cut.
+- **The cost, accepted:** each published cut adds its size to git history for
+  good (about 4 MB a minute; 11.6 MB for the introduction), and every
+  full-history CI checkout downloads it. Keep re-cuts deliberate, and publish
+  from a review, not from a draft.
+
+### Companion pages on the site - built
+
+Built with the pilot. Companion pages under `docs/videos/` have their own
+tab, Videos, generated from each page's video block: published episodes only,
+grouped by path in the order of the shape above, each with its title, one-line
+idea and length. The front door plays on the home page, in its own section
+after the first viewport. A page whose video is not published is left out of
+the site. The site's side is `docs-site/stage.ps1`, and the player's style is
+in [DESIGN.md](../DESIGN.md).
 
 ### Music
 

@@ -11,13 +11,15 @@
     data-height="1080"
     data-composition-variables='[
       {"id":"kicker","type":"string","label":"Kicker","default":"Orleans.Lattice"},
-      {"id":"title","type":"string","label":"Title","default":"Title"},
-      {"id":"subtitle","type":"string","label":"Subtitle","default":""}
+      {"id":"title","type":"string","label":"Title (or site:home.thesis)","default":"Title"},
+      {"id":"subtitle","type":"string","label":"Subtitle","default":""},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
     ]'
   >
     <div class="tc-block">
       <div class="tc-kicker">
-        <img class="tc-mark" src="assets/brand/site/lattice-mark.svg" alt="" width="56" height="56" />
+        <img class="tc-mark" src="shared/brand/site/lattice-mark.svg" alt="" width="56" height="56" />
         <span class="tc-kicker-text"></span>
       </div>
       <h1 class="tc-title"></h1>
@@ -73,21 +75,24 @@
 
     <script>
       (function () {
-        const { kicker, title, subtitle } = window.__hyperframes.getVariables();
+        const vars = window.__hyperframes.getVariables();
         const root = document.querySelector('[data-composition-id="title-card"]');
         const q = (selector) => root.querySelector(selector);
         const { duration } = window.LatticeMotion;
+        const scene = window.LatticeScene;
+        const timing = scene.cue(vars);
 
-        q(".tc-kicker-text").textContent = kicker;
-        q(".tc-title").textContent = title;
-        q(".tc-subtitle").textContent = subtitle;
-        if (!subtitle) q(".tc-subtitle").style.display = "none";
+        q(".tc-kicker-text").textContent = scene.site(vars.kicker);
+        q(".tc-title").textContent = scene.site(vars.title);
+        q(".tc-subtitle").textContent = scene.site(vars.subtitle);
+        if (!vars.subtitle) q(".tc-subtitle").style.display = "none";
 
         const tl = gsap.timeline({ paused: true });
         tl.from(q(".tc-kicker"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
         tl.from(q(".tc-title"), { opacity: 0, y: 32, duration: duration.slow, ease: "lattice-out" }, 0.2);
         tl.from(q(".tc-rule"), { scaleX: 0, duration: duration.slow, ease: "lattice-out" }, 0.5);
         tl.from(q(".tc-subtitle"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0.7);
+        scene.exit(tl, root, timing);
 
         window.__timelines = window.__timelines || {};
         window.__timelines["title-card"] = tl;

@@ -2,7 +2,7 @@
 //
 // Registers the site's motion with GSAP so compositions move the way the
 // documentation site does. Load it after gsap, CustomEase and MotionPathPlugin
-// (all from node_modules) and after assets/brand/brand.css.
+// (all from node_modules) and after shared/brand/brand.css.
 //
 //   "lattice-out"   the site's --lt-ease-out, read from its tokens: entrances,
 //                   state changes, the join's pulse
@@ -17,7 +17,7 @@
   const read = (name) => {
     const value = tokens.getPropertyValue(name).trim();
     if (!value) {
-      throw new Error("motion: the site token " + name + " is not defined; is assets/brand/site/tokens.css synced?");
+      throw new Error("motion: the site token " + name + " is not defined; is shared/brand/site/tokens.css synced?");
     }
     return value;
   };

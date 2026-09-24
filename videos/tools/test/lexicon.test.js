@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
-import { applyLexicon, validateLexicon } from "../lib/lexicon.js";
+import { workspaceRoot } from "../lib/hyperframes.js";
+import { applyLexicon, heteronymsIn, loadHeteronyms, loadLexicon, validateLexicon } from "../lib/lexicon.js";
 
 const entries = validateLexicon([
   { written: "CRDT", spoken: "C R D T" },
@@ -44,6 +46,25 @@ test("a written form defined twice is rejected", () => {
 
 test("an entry without a spoken form is rejected", () => {
   assert.throws(() => validateLexicon([{ written: "X", spoken: "" }]), /no 'spoken' form/);
+});
+
+test("the series lexicon says the verb 'lives', not the plural of 'life'", () => {
+  const series = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
+  assert.equal(applyLexicon("First: the store lives in the cluster.", series), "First: the store livs in the cluster.");
+  assert.equal(applyLexicon("where the state lives.", series), "where the state livs.");
+  assert.equal(applyLexicon("It delivers.", series), "It delivers.", "only the whole word is respelt");
+});
+
+test("heteronyms are found as whole words, whatever their case, once each and in order", () => {
+  const words = ["lives", "read", "separate"];
+  assert.deepEqual(heteronymsIn("Read it: the store lives here, and Lives there. A read.", words), ["read", "lives"]);
+  assert.deepEqual(heteronymsIn("It delivers, reads and separates.", words), []);
+});
+
+test("the series heteronym list is valid and covers the reading that went wrong", () => {
+  const words = loadHeteronyms(path.join(workspaceRoot, "voice", "heteronyms.json"));
+  assert.ok(words.includes("lives"));
+  assert.equal(new Set(words).size, words.length, "no word is listed twice");
 });
 
 test("entries must be an array", () => {

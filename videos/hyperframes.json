@@ -2,9 +2,9 @@
   "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
   "registry": "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry",
   "paths": {
-    "blocks": "compositions/blocks",
-    "components": "compositions/components",
-    "assets": "assets"
+    "blocks": "shared/blocks",
+    "components": "shared/components",
+    "assets": "shared/assets"
   },
   "media": {
     "autoProxy": true

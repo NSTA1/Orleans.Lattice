@@ -13,6 +13,7 @@ import {
   primaryFamily,
   syncBrand,
 } from "../lib/brand.js";
+import { homeFixture, packagesFixture } from "./fixtures.js";
 
 const scratch = mkdtempSync(path.join(tmpdir(), "videos-brand-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -40,7 +41,10 @@ const tokensCss = `:root {
 
 const figuresJson = JSON.stringify({ figures: [{ id: "gcounter", layout: "diamond" }] });
 
-/** A complete docs-site stand-in; `omit` drops files, `extra` adds or replaces them. */
+/**
+ * A complete docs-site stand-in, inside its own repository root that also
+ * holds PACKAGES.md; `omit` drops files, `extra` adds or replaces them.
+ */
 function docsSite(name, { omit = [], extra = {} } = {}) {
   const files = {
     "template/public/tokens.css": tokensCss,
@@ -50,9 +54,11 @@ function docsSite(name, { omit = [], extra = {} } = {}) {
     "template/public/fonts/cascadia-mono.woff2": "font",
     "template/public/fonts/OFL-Recursive.txt": "licence",
     "figures/join-figures.json": figuresJson,
+    "pages/index.md": homeFixture,
+    "../PACKAGES.md": packagesFixture,
     ...extra,
   };
-  const dir = path.join(scratch, name);
+  const dir = path.join(scratch, name, "docs-site");
   for (const [file, content] of Object.entries(files)) {
     if (omit.includes(file)) continue;
     mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
@@ -99,7 +105,7 @@ test("the join figures become a script that defines the scenarios before any com
   assert.throws(() => joinFiguresScript('{"figures": []}'), /lists no figures/);
 });
 
-test("the design system is copied: tokens, font rules and camera stacks, fonts and licences, the mark, the figures", () => {
+test("the design system is copied: tokens, font rules and camera stacks, fonts and licences, the mark, the figures, the packages", () => {
   const to = path.join(scratch, "complete-out");
   const result = syncBrand({ docsSite: docsSite("complete"), target: to });
   assert.deepEqual({ faces: result.faces, files: result.files }, { faces: 2, files: 3 });
@@ -108,9 +114,14 @@ test("the design system is copied: tokens, font rules and camera stacks, fonts a
   assert.match(generated, /font-family: "Lattice Mono"/);
   assert.match(generated, /--lv-font-sans: "Recursive Sans Linear", sans-serif;/);
   assert.ok(!generated.includes("Segoe"), "no fallback family may reach the renderer");
-  for (const file of ["fonts/recursive-sans-linear.woff2", "fonts/OFL-Recursive.txt", "lattice-mark.svg", "join-figures.js"]) {
+  for (const file of ["fonts/recursive-sans-linear.woff2", "fonts/OFL-Recursive.txt", "lattice-mark.svg", "join-figures.js", "packages.js", "home.js"]) {
     assert.ok(existsSync(path.join(to, file)), file);
   }
+  const sandbox = {};
+  new Function("window", readFileSync(path.join(to, "packages.js"), "utf8"))(sandbox);
+  assert.deepEqual(sandbox.LatticePackages.sections, [{ name: "Core", lede: "The core package.", packages: ["Orleans.Lattice"] }]);
+  new Function("window", readFileSync(path.join(to, "home.js"), "utf8"))(sandbox);
+  assert.equal(sandbox.LatticeHome.thesis, "State that lives in your cluster & converges.");
 });
 
 test("a stale copy is replaced, not merged", () => {
@@ -136,6 +147,8 @@ test("every missing part of the design system fails loudly instead of rendering 
     "template/public/main.css",
     "template/public/lattice-mark.svg",
     "figures/join-figures.json",
+    "pages/index.md",
+    "../PACKAGES.md",
   ]) {
     const site = docsSite(`missing-${path.basename(part)}`, { omit: [part] });
     assert.throws(() => syncBrand({ docsSite: site, target: path.join(scratch, "x") }), /does not exist/, part);

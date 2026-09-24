@@ -1,0 +1,269 @@
+<template id="cluster-template">
+  <!--
+    Where the state lives: inside the cluster, held by grains, alongside the
+    code that uses it. The frame is the cluster and each spine a silo; filled
+    nodes are your code, hollow nodes the grains that hold state, labelled with
+    their keys. A read is drawn as a grain call in ink between them - within
+    the frame, and across silos, because a grain may live on any silo. On its
+    second beat the scene shows what that call is not: a round trip to a pale,
+    separate tier outside the frame, which fades as it is dismissed.
+
+    Variables: heading; frame; silos (how many); keys (comma-separated, spread
+    across the silos); tier and tierNote (the separate tier, beat 1); call (the
+    grain call's label); beats and end are stamped by npm run timeline.
+  -->
+  <div
+    data-composition-id="cluster"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"The store lives in the cluster"},
+      {"id":"frame","type":"string","label":"Cluster label","default":"Your Orleans cluster"},
+      {"id":"silos","type":"number","label":"Silos","default":3},
+      {"id":"keys","type":"string","label":"Grain keys (comma-separated)","default":"user/41,user/42,order/1001,order/1002"},
+      {"id":"code","type":"string","label":"Code label","default":"your code"},
+      {"id":"call","type":"string","label":"Call label","default":"grain call"},
+      {"id":"tier","type":"string","label":"Separate tier (beat 1)","default":"Separate database tier"},
+      {"id":"tierNote","type":"string","label":"Separate tier note","default":"its own scaling, its own failures"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading cl-heading"></h2>
+
+    <div class="cl-frame"><span class="lv-label cl-frame-label"></span></div>
+    <svg class="cl-svg" viewBox="0 0 1920 1080" width="1920" height="1080" aria-hidden="true">
+      <path class="cl-call" d="" />
+      <path class="cl-trip" d="" />
+    </svg>
+    <div class="cl-silos"></div>
+    <div class="lv-label cl-call-label"></div>
+
+    <div class="cl-tier">
+      <span class="lv-node"></span>
+      <div class="cl-tier-text">
+        <div class="cl-tier-name"></div>
+        <div class="lv-label cl-tier-note"></div>
+      </div>
+    </div>
+
+    <style>
+      [data-composition-id="cluster"] .cl-frame {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 250px;
+        width: 1110px;
+        height: 600px;
+        box-sizing: border-box;
+        border: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-radius: var(--lv-radius);
+      }
+      [data-composition-id="cluster"] .cl-frame-label {
+        position: absolute;
+        left: 40px;
+        top: 28px;
+      }
+      [data-composition-id="cluster"] .cl-svg {
+        position: absolute;
+        inset: 0;
+        overflow: visible;
+      }
+      [data-composition-id="cluster"] .cl-call {
+        fill: none;
+        stroke: var(--lt-ink);
+        stroke-width: 4.5;
+        stroke-linecap: round;
+      }
+      [data-composition-id="cluster"] .cl-trip {
+        fill: none;
+        stroke: var(--lt-ink-3);
+        stroke-width: 3;
+        stroke-dasharray: 4 14;
+        stroke-linecap: round;
+      }
+      /* A silo is a spine: its label at the head, its nodes hanging from it.
+         The box around the spine is transparent and exists so that the
+         labels sit inside something the layout check can measure. */
+      [data-composition-id="cluster"] .cl-silo {
+        position: absolute;
+        top: 330px;
+        width: 360px;
+        height: 490px;
+      }
+      [data-composition-id="cluster"] .cl-silo::before {
+        content: "";
+        position: absolute;
+        left: 60px;
+        top: 60px;
+        width: var(--lv-hairline);
+        height: 430px;
+        background: var(--lt-rule-strong);
+      }
+      [data-composition-id="cluster"] .cl-silo-name {
+        position: absolute;
+        top: 8px;
+        left: 60px;
+        transform: translateX(-50%);
+        color: var(--lt-ink-3);
+        white-space: nowrap;
+      }
+      [data-composition-id="cluster"] .cl-member {
+        position: absolute;
+        left: 60px;
+      }
+      [data-composition-id="cluster"] .cl-member .lv-node {
+        position: absolute;
+        left: calc(-0.5 * var(--lv-node) + 0.5 * var(--lv-hairline));
+        top: calc(-0.5 * var(--lv-node));
+      }
+      [data-composition-id="cluster"] .cl-member.is-code .lv-node {
+        background: var(--lt-ink);
+      }
+      [data-composition-id="cluster"] .cl-member-label {
+        position: absolute;
+        left: 30px;
+        top: 0;
+        transform: translateY(-50%);
+        white-space: nowrap;
+      }
+      [data-composition-id="cluster"] .cl-member.is-code .cl-member-label {
+        color: var(--lt-ink);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="cluster"] .cl-member.is-grain .cl-member-label {
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-state);
+        font-weight: 500;
+      }
+      [data-composition-id="cluster"] .cl-call-label {
+        position: absolute;
+        white-space: nowrap;
+        transform: translate(-50%, -100%);
+      }
+      /* The separate tier the store does not need: pale, outside the frame. */
+      [data-composition-id="cluster"] .cl-tier {
+        position: absolute;
+        left: 1370px;
+        top: 470px;
+        display: flex;
+        align-items: flex-start;
+        gap: 26px;
+      }
+      [data-composition-id="cluster"] .cl-tier .lv-node {
+        flex: none;
+        margin-top: 12px;
+        box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-rule-strong);
+      }
+      [data-composition-id="cluster"] .cl-tier-name {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-strong);
+        line-height: 1.3;
+      }
+      [data-composition-id="cluster"] .cl-tier-note {
+        max-width: 440px;
+        margin-top: 8px;
+        color: var(--lt-ink-3);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="cluster"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+
+        q(".cl-heading").textContent = scene.site(vars.heading);
+        q(".cl-frame-label").textContent = scene.site(vars.frame);
+        q(".cl-call-label").textContent = scene.site(vars.call);
+        q(".cl-tier-name").textContent = scene.site(vars.tier);
+        q(".cl-tier-note").textContent = scene.site(vars.tierNote);
+
+        // Silos spread across the frame; the code sits at the head of the
+        // first, and the grains share out across all of them, each taking the
+        // next free place on its silo's spine.
+        const silos = Math.max(2, Math.round(Number(vars.silos) || 3));
+        const keys = String(vars.keys || "").split(",").map((key) => key.trim()).filter(Boolean);
+        const siloBox = 330;
+        const firstSlot = 490;
+        const slot = 150;
+        const x = (i) => 96 + 110 + (690 * i) / (silos - 1);
+        const place = { code: null, grains: [] };
+        for (let i = 0; i < silos; i++) {
+          const silo = document.createElement("div");
+          silo.className = "cl-silo";
+          silo.style.left = x(i) - 60 + "px";
+          silo.innerHTML = '<span class="lv-label cl-silo-name"></span>';
+          silo.querySelector(".cl-silo-name").textContent = "silo " + (i + 1);
+          q(".cl-silos").appendChild(silo);
+        }
+        const used = new Array(silos).fill(0);
+        const member = (siloIndex, kind, label) => {
+          const y = firstSlot + slot * used[siloIndex]++;
+          const item = document.createElement("div");
+          item.className = "cl-member is-" + kind;
+          item.style.top = y - siloBox + "px";
+          item.innerHTML = '<span class="lv-node"></span><span class="cl-member-label"></span>';
+          item.querySelector(".cl-member-label").textContent = label;
+          q(".cl-silos").children[siloIndex].appendChild(item);
+          return { item, x: x(siloIndex), y };
+        };
+        place.code = member(0, "code", scene.site(vars.code));
+        keys.forEach((key, i) => place.grains.push(member((i + 1) % silos, "grain", key)));
+
+        // The grain call: from the code to a grain on the next silo, bowed
+        // over the silos between, and labelled at its crest.
+        const target = place.grains[0];
+        const midX = (place.code.x + target.x) / 2;
+        const crest = Math.min(place.code.y, target.y) - 70;
+        q(".cl-call").setAttribute("d", `M ${place.code.x} ${place.code.y} Q ${midX} ${crest - 40} ${target.x} ${target.y}`);
+        q(".cl-call-label").style.left = midX + "px";
+        q(".cl-call-label").style.top = crest - 12 + "px";
+
+        // The round trip it is not: out of the frame to the separate tier and
+        // back, long and dashed.
+        const tierX = 1381;
+        const tierY = 493;
+        q(".cl-trip").setAttribute(
+          "d",
+          `M ${place.code.x + 16} ${place.code.y - 8} C 900 330, 1200 380, ${tierX} ${tierY} M ${tierX} ${tierY + 10} C 1200 680, 900 640, ${target.x + 8} ${target.y + 14}`,
+        );
+
+        const tl = gsap.timeline({ paused: true });
+        const first = timing.at(0, 0.3);
+        const second = timing.at(1, first + 6);
+        const call = q(".cl-call");
+        const callLength = call.getTotalLength();
+        gsap.set(call, { strokeDasharray: callLength, strokeDashoffset: callLength });
+        const trip = q(".cl-trip");
+
+        tl.from(q(".cl-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.from(q(".cl-frame"), { opacity: 0, duration: duration.slow, ease }, first);
+        all(".cl-silo").forEach((silo, i) => {
+          tl.from(silo, { opacity: 0, y: 20, duration: duration.slow, ease }, first + 0.3 + i * 0.2);
+        });
+        tl.from(all(".cl-member.is-grain"), { opacity: 0, duration: duration.base, ease, stagger: 0.15 }, first + 1.2);
+        tl.from(q(".cl-member.is-code"), { opacity: 0, duration: duration.base, ease }, first + 2);
+        tl.to(call, { strokeDashoffset: 0, duration: 1.3, ease: "lattice-draw" }, first + 2.8);
+        tl.from(q(".cl-call-label"), { opacity: 0, duration: duration.base, ease }, first + 3.6);
+
+        tl.from(q(".cl-tier"), { opacity: 0, x: 30, duration: duration.slow, ease }, second + 0.4);
+        tl.from(trip, { opacity: 0, duration: duration.slow, ease }, second + 1.1);
+        tl.to([q(".cl-tier"), trip], { opacity: 0.3, duration: duration.slow, ease }, second + 3.6);
+        tl.fromTo(call, { strokeWidth: 4.5 }, { strokeWidth: 7, duration: 0.45, ease, yoyo: true, repeat: 1 }, second + 4.2);
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["cluster"] = tl;
+      })();
+    </script>
+  </div>
+</template>

@@ -1,0 +1,12 @@
+{
+  "$comment": "English words spelt the same but said two ways (heteronyms). The phonemizer picks one reading and often the wrong one: it reads 'lives' as the plural of life in every context. `npm run phonemes -- <slug>` flags any of these in a script so its reading can be checked before narrating. A wrong reading is fixed with a lexicon entry (voice/lexicon.json) or by rewording.",
+  "words": [
+    "alternate", "associate", "attribute", "attributes", "close", "closes", "conduct", "conflict", "conflicts",
+    "console", "content", "contest", "contract", "converse", "convert", "decrease", "desert", "digest", "does",
+    "duplicate", "entrance", "estimate", "excuse", "export", "extract", "import", "increase", "insert", "invalid",
+    "invite", "lead", "live", "lives", "minute", "minutes", "moderate", "object", "objects", "perfect", "permit",
+    "polish", "present", "produce", "progress", "project", "projects", "read", "rebel", "record", "records",
+    "refund", "refuse", "reject", "resume", "row", "rows", "separate", "subject", "suspect", "tear", "transfer",
+    "transport", "update", "updates", "upset", "use", "uses", "wind", "wound"
+  ]
+}

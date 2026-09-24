@@ -1,0 +1,149 @@
+<template id="ways-template">
+  <!--
+    The close: the site's three ways in, Build, Evaluate and Operate, each a
+    node on one chain with who it is for, in the site's own words
+    (shared/brand/site/home.js). Way k arrives on beat k + 1 with the marker on
+    its node - the one being named - and the ways before it filled as passed.
+    Beneath them, where to go: the mark, the name, and the site's address,
+    set in link blue because it is a reference.
+
+    Variables: heading (default the site's own); url (the site's address as
+    shown); beats and end are stamped by npm run timeline.
+  -->
+  <div
+    data-composition-id="ways"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"site:home.paths.title"},
+      {"id":"url","type":"string","label":"Site address","default":"nsta1.github.io/Orleans.Lattice"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading wy-heading"></h2>
+    <div class="wy-chain"></div>
+    <ol class="wy-ways"></ol>
+    <div class="wy-close">
+      <img class="wy-mark" src="shared/brand/site/lattice-mark.svg" alt="" width="64" height="64" />
+      <div>
+        <div class="wy-name">Orleans.Lattice</div>
+        <div class="wy-url"></div>
+      </div>
+    </div>
+
+    <style>
+      [data-composition-id="ways"] .wy-chain {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 11px);
+        top: 338px;
+        width: 1200px;
+        height: var(--lv-hairline);
+        background: var(--lt-rule-strong);
+        transform-origin: left center;
+      }
+      [data-composition-id="ways"] .wy-ways {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 339px;
+        display: grid;
+        grid-template-columns: repeat(3, 528px);
+        gap: 72px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      [data-composition-id="ways"] .wy-way {
+        position: relative;
+        padding-top: 44px;
+      }
+      [data-composition-id="ways"] .wy-way .lv-node {
+        position: absolute;
+        left: 0;
+        top: calc(-0.5 * var(--lv-node));
+      }
+      [data-composition-id="ways"] .wy-way-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-title);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.05;
+        letter-spacing: -0.015em;
+      }
+      [data-composition-id="ways"] .wy-way-for {
+        margin: 20px 0 0;
+        max-width: 500px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+      [data-composition-id="ways"] .wy-close {
+        position: absolute;
+        left: var(--lv-safe-x);
+        top: 680px;
+        display: flex;
+        align-items: center;
+        gap: 28px;
+      }
+      [data-composition-id="ways"] .wy-name {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+      }
+      [data-composition-id="ways"] .wy-url {
+        margin-top: 4px;
+        color: var(--lt-link);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="ways"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+        const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+
+        q(".wy-heading").textContent = scene.site(vars.heading);
+        q(".wy-url").textContent = scene.site(vars.url);
+        for (const way of scene.site("site:home.ways")) {
+          const item = document.createElement("li");
+          item.className = "wy-way";
+          item.innerHTML = '<span class="lv-node"></span><h3 class="wy-way-name"></h3><p class="wy-way-for"></p>';
+          item.querySelector(".wy-way-name").textContent = way.name;
+          scene.parts(item.querySelector(".wy-way-for"), way.for);
+          q(".wy-ways").appendChild(item);
+        }
+
+        const ways = all(".wy-way");
+        const nodes = ways.map((way) => way.querySelector(".lv-node"));
+        const tl = gsap.timeline({ paused: true });
+        const first = timing.at(0, 0.3);
+        tl.from(q(".wy-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.from(q(".wy-chain"), { scaleX: 0, duration: 1.4, ease: "lattice-draw" }, first);
+        tl.from(nodes, { opacity: 0, duration: duration.base, ease, stagger: 0.2 }, first + 0.2);
+        tl.from(q(".wy-close"), { opacity: 0, y: 16, duration: duration.slow, ease }, first + 0.8);
+        tl.set(ways.map((way) => [way.querySelector(".wy-way-name"), way.querySelector(".wy-way-for")]).flat(), { opacity: 0 }, 0);
+
+        ways.forEach((way, k) => {
+          const start = timing.at(k + 1, first + 1.6 + k * 2) + 0.15;
+          tl.to(nodes[k], { backgroundColor: token("--lt-marker"), duration: duration.base, ease }, start);
+          if (k > 0) tl.to(nodes[k - 1], { backgroundColor: token("--lt-ink"), duration: duration.base, ease }, start);
+          tl.to(way.querySelector(".wy-way-name"), { opacity: 1, duration: duration.base, ease }, start);
+          tl.to(way.querySelector(".wy-way-for"), { opacity: 1, duration: duration.base, ease }, start + 0.25);
+        });
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["ways"] = tl;
+      })();
+    </script>
+  </div>
+</template>

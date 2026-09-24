@@ -1,6 +1,3 @@
-import { readdirSync } from "node:fs";
-import path from "node:path";
-
 /**
  * The marker that names a snippet on a companion page. It must sit on the line
  * immediately above the fence it names.
@@ -91,21 +88,4 @@ export function applySnippets(html, snippets) {
     return open + escapeHtml(snippet.code) + close;
   });
   return { output, used, missing };
-}
-
-/** Every file under `directory` (recursively, skipping node_modules) that satisfies `accept`. */
-export function listFiles(directory, accept) {
-  const found = [];
-  const walk = (current) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "node_modules") walk(full);
-      } else if (accept(full)) {
-        found.push(full);
-      }
-    }
-  };
-  walk(directory);
-  return found.sort();
 }

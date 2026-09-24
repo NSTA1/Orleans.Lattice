@@ -50,3 +50,26 @@ export function applyLexicon(text, entries) {
   const pattern = new RegExp(`(?<![A-Za-z0-9_])(?:${alternation})(?![A-Za-z0-9_])`, "g");
   return text.replace(pattern, (match) => spokenFor.get(match));
 }
+
+/** Loads voice/heteronyms.json ({ "words": [...] }): words spelt the same but said two ways. */
+export function loadHeteronyms(file) {
+  const { words } = JSON.parse(readFileSync(file, "utf8"));
+  if (!Array.isArray(words) || words.some((word) => typeof word !== "string" || !/^[a-z]+$/.test(word))) {
+    throw new Error("heteronyms: 'words' must be an array of lower-case words");
+  }
+  return words;
+}
+
+/**
+ * The heteronyms a text contains, in order of first appearance, matched as
+ * whole words and without regard to case, so their reading can be checked.
+ */
+export function heteronymsIn(text, words) {
+  const wanted = new Set(words);
+  const found = [];
+  for (const [word] of text.matchAll(/[A-Za-z]+/g)) {
+    const lower = word.toLowerCase();
+    if (wanted.has(lower) && !found.includes(lower)) found.push(lower);
+  }
+  return found;
+}
