@@ -155,6 +155,18 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - A failed view unregister was never retried.** A runtime view delete that hit a storage fault dropped the view from memory only, so a retried delete reported success while storage kept it and the next silo start restored the view. A failed write now restores the entry. ([#3469](https://github.com/NSTA1/Orleans.Lattice/issues/3469)) (`Orleans.Lattice`)
 
+- **WAL - A never-written leaf held a pin no drive could lift.** Its (Zero, -1) pin left the GC scheduler looping on NoAdvance for ever. The leaf now publishes its persisted scanned-through checkpoint, and a zero pin on a proven-empty partition still blocks trim but is no longer reported. ([#3453](https://github.com/NSTA1/Orleans.Lattice/issues/3453)) (`Orleans.Lattice`)
+
+- **WAL - A graceful deactivation lost its final pin.** The slow digest publish ran first and used up the deadline, so the capture and pin barriers faulted on a torn-down activation. The final pin now publishes first, torn-down barriers skip, and the digest publishes last. ([#3393](https://github.com/NSTA1/Orleans.Lattice/issues/3393)) (`Orleans.Lattice`)
+
+- **Leaf - A latched stale leaf was not terminal.** A split stamped a checkpoint hint over a stale-latched partition, so it later replayed past the gap it had declared unrecoverable, and WAL GC re-drove every latched leaf each cooldown. The hint is refused and a latched verdict is terminal. ([#3477](https://github.com/NSTA1/Orleans.Lattice/issues/3477), [#3478](https://github.com/NSTA1/Orleans.Lattice/issues/3478)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Shard - Empty-leaf reclaim under-counted and overran.** Reclaim counted one of its four probe sites, so a reported `probed 0` could hide a spent budget, and never checked its deadline before entry. Every probe now counts and entry stands down at the deadline. ([#2682](https://github.com/NSTA1/Orleans.Lattice/issues/2682)) (`Orleans.Lattice`)
+
+- **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Probes and fixtures that could not fail.** The async allocation probe could report zero for a loop that allocates, and leaf fixtures modelled an unreachable WAL state, so guards on those paths passed without exercising them. Both now measure what they claim. ([#3419](https://github.com/NSTA1/Orleans.Lattice/issues/3419), [#2680](https://github.com/NSTA1/Orleans.Lattice/issues/2680)) (`repository-wide`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
