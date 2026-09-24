@@ -24,13 +24,22 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>LeafProjectionStaleException</c>. On the live estate that parked 965 leaves.
 /// </para>
 /// <para>
-/// <b>Two changes, two disjoint fixtures.</b> The fix clamps the pin to the
-/// persisted checkpoint in <c>ResolveDurablePinForPartition</c>, and makes the
-/// starvation drive persist its pending advance before it restamps coverage and
-/// publishes. Each fixture below observes exactly one of them: the clamp is only
-/// observable on a publisher that does NOT persist first, and the drive's flush
-/// is only observable as the drive's pin still ADVANCING under the clamp. A
-/// single fixture over both would stay green with either change reverted.
+/// <b>Two changes, one fixture on this release line.</b> The fix clamps the pin
+/// to the persisted checkpoint in <c>ResolveDurablePinForPartition</c>, and makes
+/// the starvation drive persist its pending advance before it restamps coverage
+/// and publishes. The drive's flush is observable here as the drive's pin still
+/// ADVANCING under the clamp, and the fixture below pins it.
+/// </para>
+/// <para>
+/// <b>Why the clamp has no fixture on release/9.7.</b> On <c>main</c> the clamp
+/// is observed through graceful deactivation under an expired deadline, where
+/// per-barrier containment (#3387) runs the frontier-pin barrier after the
+/// checkpoint-flush barrier faults. This line predates that containment: a
+/// faulted checkpoint flush skips the frontier-pin barrier, so that publisher
+/// never reaches the pin with a pending advance above the persisted checkpoint,
+/// and neither the activation publish nor the coverage-lag tick publishes in that
+/// state either. The clamp ships here as defence in depth; the drive, which is
+/// the path that produced #3476, is covered.
 /// </para>
 /// <para>
 /// <b>The observable.</b> Each report is paired with the persisted checkpoint the
@@ -139,83 +148,6 @@ public partial class BPlusLeafGrainTests
             TestOriginClusterIdResolver.Default());
 
         return (grain, state, published, durableWrites);
-    }
-
-    /// <summary>
-    /// THE clamp fixture. A leaf holding a pending advance that coverage has
-    /// ALREADY been restamped over, and that then publishes without persisting,
-    /// must publish its persisted checkpoint and not the pending one.
-    /// <para>
-    /// The publisher is graceful deactivation under an expired deadline: the
-    /// checkpoint-flush barrier faults on the cancelled token before it persists,
-    /// and #3366 runs the frontier-pin barrier after it anyway. That is a real
-    /// production ordering and the one publisher that reaches the pin with
-    /// <c>pending &gt; persisted</c> once the drive persists first.
-    /// </para>
-    /// <para>
-    /// Why this fixture observes the <c>ResolveDurablePinForPartition</c> clamp
-    /// and nothing else: coverage is 3 and the current checkpoint is 3, so the
-    /// only term that can hold the pin at 0 is the persisted checkpoint. Revert
-    /// the clamp and the pin reads <c>min(3, 3) == 3</c> against a persisted 0.
-    /// </para>
-    /// </summary>
-    [Test]
-    public async Task Deactivation_under_an_expired_deadline_publishes_no_pin_past_the_persisted_checkpoint()
-    {
-        var wal = new GrowingWal();
-        var (grain, state, published, durableWrites) = CreateCoalescingLeafWithPinCapture(wal.Coordinator);
-
-        // The activation replay applies 1..3 and, under the coalescing options,
-        // leaves the advance PENDING. The coverage-lag tick then restamps
-        // coverage from the CURRENT checkpoint - the #3224 path that lifts the
-        // coverage arm of the min onto the pending advance.
-        wal.GrowTo(3);
-        await ActivateAsync(grain);
-        await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(state.State.Clock, Is.GreaterThan(HybridLogicalClock.Zero),
-                "precondition: the replay applied real entries, so every publisher is live. A "
-                    + "Zero clock returns before resolving any pin.");
-            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(0L),
-                "precondition: the persisted checkpoint is the one the snapshot rehydrated, 0. "
-                    + "Anything higher means the coalescing options did not hold the advance "
-                    + "pending, and the fixture would assert nothing.");
-            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(3L),
-                "precondition: the pending advance is 3, strictly above persisted.");
-            Assert.That(grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(3L),
-                "precondition: coverage was restamped from the pending checkpoint, so the "
-                    + "coverage arm of the min no longer protects the persisted one. Without "
-                    + "this the pre-fix pin is min(3, 0) == 0 and the fixture cannot redden.");
-        });
-
-        published.Clear();
-        durableWrites.Clear();
-        using var expired = new CancellationTokenSource();
-        await expired.CancelAsync();
-
-        await ((IGrainBase)grain).OnDeactivateAsync(
-            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"), expired.Token);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(durableWrites, Is.Empty,
-                "control: the expired deadline must stop the final checkpoint flush, or the "
-                    + "publisher below persisted first and the clamp is not what is under test.");
-            Assert.That(published, Is.Not.Empty,
-                "control: the frontier-pin barrier must still publish after the faulted flush "
-                    + "barrier (#3366), or an empty list satisfies the assertions below vacuously.");
-            Assert.That(published.Select(p => p.CurrentCheckpoint), Is.All.EqualTo(3L),
-                "control: every publication happened while the pending 3 was still unpersisted.");
-            Assert.That(published.Select(p => p.PublishedOffset), Is.All.EqualTo(0L),
-                "THE assertion. The pin must be the persisted checkpoint, 0. Pre-fix it is "
-                    + "min(current 3, covered 3) == 3: the WAL GC trims through 3, the next "
-                    + "activation replays from 0, and the replay throws LeafProjectionStaleException.");
-            Assert.That(published.All(p => p.PublishedOffset <= p.PersistedCheckpoint), Is.True,
-                "the #3476 invariant, stated as the contract #3453 builds on: at the moment of "
-                    + "publication the pin is at or below the persisted checkpoint.");
-        });
     }
 
     /// <summary>
