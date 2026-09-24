@@ -272,6 +272,183 @@ public class AzureTableWalStorageProviderReconcileConcurrencyIntegrationTests
         activity.Writes.Exit();
     }
 
+    private static WalEntry[] Entries(long startOffset, int count)
+    {
+        var entries = new WalEntry[count];
+        for (var i = 0; i < count; i++)
+        {
+            var offset = startOffset + i;
+            entries[i] = new WalEntry
+            {
+                Offset = offset,
+                Mutation = new LatticeMutation
+                {
+                    TreeId = TreeId,
+                    Kind = MutationKind.Set,
+                    Key = string.Create(CultureInfo.InvariantCulture, $"k{offset}"),
+                    Value = new byte[] { (byte)i },
+                    Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                    OriginClusterId = "site-a",
+                },
+            };
+        }
+        return entries;
+    }
+
+    /// <summary>
+    /// Replaces the provider's phase-2 worker for the shard with one whose
+    /// first transaction is abandoned on a short deadline and lands on the
+    /// real table only when <paramref name="zombieGate"/> is released (or
+    /// never lands, when the gate is faulted): a phase-2 transaction that
+    /// was on the wire when the deadline fired (#3458). Cancelling the
+    /// submit's token abandons only the local wait, exactly as the SDK
+    /// does: the request the service already holds still lands.
+    /// </summary>
+    private void InjectZombieWorker(AzureTableWalStorageProvider provider, TaskCompletionSource zombieGate)
+    {
+        var calls = 0;
+        var worker = new PhaseTwoWorker(
+            (actions, ct) =>
+            {
+                if (Interlocked.Increment(ref calls) != 1)
+                {
+                    return _table.SubmitTransactionAsync(actions, ct);
+                }
+                var landing = LandAsync(actions);
+                return landing.WaitAsync(ct);
+            },
+            ManifestPartitionKey,
+            TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromMilliseconds(100));
+        Assert.That(provider._phaseTwoWorkers.TryAdd(ManifestPartitionKey, worker), Is.True);
+
+        async Task LandAsync(IReadOnlyList<TableTransactionAction> actions)
+        {
+            await zombieGate.Task;
+            await _table.SubmitTransactionAsync(actions, CancellationToken.None);
+        }
+    }
+
+    /// <summary>The grain's post-failure resync: reconcile, then read the tail.</summary>
+    private static async Task<long> ResyncAsync(AzureTableWalStorageProvider provider)
+    {
+        await provider.ReconcileAsync(TreeId, 0, CancellationToken.None);
+        return await provider.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+    }
+
+    [Test]
+    public async Task Resync_after_abandoned_phase_two_waits_for_a_zombie_that_lands()
+    {
+        // [2,4] is phase-1 durable and its phase 2 was abandoned on the
+        // deadline while still on the wire; [0,1] never reached phase 1.
+        // Resyncing before the zombie lands would roll [2,4] back above
+        // the gap and hand out offset 0, after which the zombie adds M2
+        // and TAIL = 4 beneath the rewound producer - the unprovable 409
+        // and overlap storm of #3458.
+        await using var provider = await CreateProviderAsync(eliminateCandidateRow: true);
+        var zombieGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        InjectZombieWorker(provider, zombieGate);
+
+        Assert.That(
+            async () => await provider.AppendBatchAsync(TreeId, 0, Entries(2L, 3), CancellationToken.None),
+            Throws.InstanceOf<TimeoutException>());
+
+        var resync = ResyncAsync(provider);
+        await Task.Delay(300);
+        var resyncRanUnderTheZombie = resync.IsCompleted;
+
+        zombieGate.SetResult();
+        var highest = await resync.WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Delay(300);
+        Assert.That(resyncRanUnderTheZombie, Is.False,
+            "the resync must not reconcile or read the tail while the abandoned transaction is in flight");
+        Assert.That(highest, Is.EqualTo(4L), "the resync must account for what the zombie wrote");
+
+        await provider.AppendBatchAsync(TreeId, 0, Entries(highest + 1, 2), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await provider.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(6L));
+            Assert.That(await ReadOffsetsAsync(provider), Is.EqualTo(new[] { 2L, 3L, 4L, 5L, 6L }));
+        });
+    }
+
+    [Test]
+    public async Task Resync_after_abandoned_phase_two_waits_for_a_zombie_that_fails()
+    {
+        await using var provider = await CreateProviderAsync(eliminateCandidateRow: true);
+        var zombieGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        InjectZombieWorker(provider, zombieGate);
+
+        Assert.That(
+            async () => await provider.AppendBatchAsync(TreeId, 0, Entries(2L, 3), CancellationToken.None),
+            Throws.InstanceOf<TimeoutException>());
+
+        var resync = ResyncAsync(provider);
+        await Task.Delay(300);
+        var resyncRanUnderTheZombie = resync.IsCompleted;
+
+        zombieGate.SetException(new RequestFailedException(500, "zombie failed"));
+        var highest = await resync.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.That(resyncRanUnderTheZombie, Is.False,
+            "the resync must not reconcile or read the tail while the abandoned transaction is in flight");
+        Assert.That(highest, Is.EqualTo(-1L), "a failed zombie wrote nothing, so the gapped orphan rolls back");
+
+        await provider.AppendBatchAsync(TreeId, 0, Entries(highest + 1, 3), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await provider.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(2L));
+            Assert.That(await ReadOffsetsAsync(provider), Is.EqualTo(new[] { 0L, 1L, 2L }));
+        });
+    }
+
+    [Test]
+    public async Task ReconcileAsync_waits_for_an_abandoned_phase_two_submit()
+    {
+        await using var provider = await CreateProviderAsync(eliminateCandidateRow: false);
+        var worker = provider.GetOrCreatePhaseTwoWorker(TreeId, 0);
+        worker.AbandonedSubmits.Enter();
+
+        var reconcile = provider.ReconcileAsync(TreeId, 0, CancellationToken.None);
+        await Task.Delay(200);
+        Assert.That(reconcile.IsCompleted, Is.False, "reconcile must not scan under a live abandoned submit");
+
+        worker.AbandonedSubmits.Exit();
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    [Test]
+    public async Task ReconcileAsync_wait_for_an_abandoned_phase_two_submit_honours_cancellation()
+    {
+        await using var provider = await CreateProviderAsync(eliminateCandidateRow: false);
+        var worker = provider.GetOrCreatePhaseTwoWorker(TreeId, 0);
+        var activity = provider.GetShardActivity(ManifestPartitionKey);
+        worker.AbandonedSubmits.Enter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        Assert.That(
+            async () => await provider.ReconcileAsync(TreeId, 0, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+        Assert.That(activity.ReconcileGate.CurrentCount, Is.EqualTo(1), "a cancelled wait must release the reconcile gate");
+        worker.AbandonedSubmits.Exit();
+    }
+
+    [Test]
+    public async Task GetHighestOffsetAsync_waits_for_an_abandoned_phase_two_submit()
+    {
+        await using var provider = await CreateProviderAsync(eliminateCandidateRow: false);
+        var worker = provider.GetOrCreatePhaseTwoWorker(TreeId, 0);
+        worker.AbandonedSubmits.Enter();
+
+        var read = provider.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        await Task.Delay(200);
+        Assert.That(read.IsCompleted, Is.False, "the tail read must not run under a live abandoned submit");
+
+        worker.AbandonedSubmits.Exit();
+        Assert.That(await read.WaitAsync(TimeSpan.FromSeconds(30)), Is.EqualTo(-1L));
+    }
+
     [Test]
     public async Task AppendBatchAsync_leaves_shard_write_tracker_idle_on_return()
     {

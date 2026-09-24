@@ -172,15 +172,14 @@ public partial class PhaseTwoWorkerTests
     [Test]
     public async Task CommitTimeout_abandoned_submit_that_faults_is_observed()
     {
-        // The abandoned-submit observer only runs its fault-swallowing
-        // continuation when the abandoned task actually FAULTS. The
-        // existing timeout tests cancel their submit task (TrySetCanceled),
-        // which never triggers an OnlyOnFaulted continuation. Here the
-        // submit task instead faults with an OperationCanceledException
-        // (TrySetException), so awaiting it throws OCE, the deadline filter
-        // matches, ObserveAbandonedSubmit attaches its continuation to a
-        // genuinely faulted task, and that continuation observes the
-        // exception. The commit still surfaces a TimeoutException outward.
+        // An abandoned submit is fenced until it completes, and the fence's
+        // continuation must observe a FAULT (not just a cancellation) so it
+        // cannot surface as an unobserved task exception. The deadline no
+        // longer cancels the submit (#3458), so this one keeps running
+        // until the worker is disposed, whose shutdown token faults it with
+        // an OperationCanceledException (TrySetException) that the fence
+        // observes. The commit still surfaces a TimeoutException outward
+        // at the deadline.
         var submitter = new RecordingSubmitter((_, ct) =>
         {
             var tcs = new TaskCompletionSource();
