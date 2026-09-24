@@ -419,6 +419,68 @@ public sealed class BackupSchedulerGrainUnitTests
             + "would assert 'scheduled, nothing has completed yet' for a scope that is not scheduled");
     }
 
+    // ---- Scope persistence under a failed write -----------------------------------
+
+    [Test]
+    public async Task EnsureScheduleAsync_failed_scope_persist_leaves_the_scope_unset()
+    {
+        var state = new FakePersistentState<BackupSchedulerState>
+        {
+            ThrowOnWrite = new InvalidOperationException("storage unavailable"),
+        };
+        var grain = CreateGrain(state: state);
+
+        Assert.That(
+            async () => await grain.EnsureScheduleAsync(TestScope),
+            Throws.TypeOf<InvalidOperationException>());
+
+        Assert.That(state.State.Scope, Is.Null);
+    }
+
+    [Test]
+    public async Task EnsureScheduleAsync_retry_after_failed_scope_persist_writes_again()
+    {
+        // PersistScopeAsync skips the write when the in-memory scope already
+        // matches, so a failed persist that left the scope assigned turned the
+        // caller's retry into a no-op. EnsureScheduleAsync writes nothing else,
+        // so the reminders were registered against a scope storage never held:
+        // the first reminder to reach a fresh activation found no scope and the
+        // cycle returned without capturing, on every tick.
+        var state = new FakePersistentState<BackupSchedulerState>
+        {
+            ThrowOnWrite = new InvalidOperationException("storage unavailable"),
+        };
+        var grain = CreateGrain(state: state);
+
+        Assert.That(
+            async () => await grain.EnsureScheduleAsync(TestScope),
+            Throws.TypeOf<InvalidOperationException>());
+
+        await grain.EnsureScheduleAsync(TestScope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(state.State.Scope, Is.EqualTo(TestScope));
+        });
+    }
+
+    [Test]
+    public async Task EnsureScheduleAsync_failed_scope_persist_restores_the_previous_scope()
+    {
+        var previous = BackupScopeSelector.WholeTree("invoices");
+        var state = new FakePersistentState<BackupSchedulerState>();
+        state.State.Scope = previous;
+        state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+        var grain = CreateGrain(state: state);
+
+        Assert.That(
+            async () => await grain.EnsureScheduleAsync(TestScope),
+            Throws.TypeOf<InvalidOperationException>());
+
+        Assert.That(state.State.Scope, Is.SameAs(previous));
+    }
+
     // ---- CancelScheduleAsync (line 109) ----------------------------------------
 
     [Test]
