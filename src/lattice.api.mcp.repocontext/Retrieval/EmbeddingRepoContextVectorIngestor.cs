@@ -63,6 +63,20 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// every further batch adds load to a store that is already failing while landing
     /// nothing. Stopping early costs nothing durable: a deferred source is simply left
     /// unmarked and the next reconcile re-embeds it idempotently.
+    /// <para>
+    /// For the store and record stages this run is a trigger to CONSULT the
+    /// platform, not a verdict (issue #2683). The platform publishes whether a
+    /// vector tree is saturated through <see cref="IWalSaturationSignal"/>, so when
+    /// a signal is registered the arm defers only while a vector tree reports
+    /// <see cref="WalSaturationState.Saturated"/>. A run of failures against a tree
+    /// reporting <see cref="WalSaturationState.Healthy"/> or
+    /// <see cref="WalSaturationState.Throttled"/> - appends that will land - keeps
+    /// attempting, because stopping would discard the only measurement able to
+    /// show whether the next batch lands. Inferring saturation from the run itself
+    /// is the fallback for a host that registers no signal, and the embed stage
+    /// (the embedding provider, which the WAL signal says nothing about) keeps the
+    /// plain run bound.
+    /// </para>
     /// </summary>
     internal const int MaxConsecutiveBatchFailures = 3;
 
@@ -140,6 +154,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     private readonly RepoContextCoverageProbeReporter? _coverageProbeReporter;
     private readonly RepoContextSymbolWalkReporter? _symbolWalkReporter;
     private readonly RepoContextIndexingPacer? _pacer;
+    private readonly IWalSaturationSignal? _saturation;
 
     /// <summary>
     /// The symbol arm's in-progress range walk, per repository, carried across
@@ -177,7 +192,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// so the arm drives the failing tree exactly as hard again, and that load is
     /// itself what keeps the writes failing (issue #2071). The batch loop already
     /// refuses to add load <i>within</i> a pass once
-    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive batches fail to record;
+    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive batches fail to record
+    /// and the WAL saturation signal confirms a vector tree saturated (issue #2683);
     /// this is the same rule applied <i>across</i> passes, which is the timescale
     /// the loop actually runs on.
     /// </para>
@@ -294,6 +310,13 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="coverageProbeReporter">Meters whether the store's read-path access gate is standing ingestion coverage down, or <see langword="null"/> in a host that registered none.</param>
     /// <param name="symbolWalkReporter">Meters whether the symbol arm's range walk completed, resumed banked progress, or banked and stood down, or <see langword="null"/> in a host that registered none.</param>
     /// <param name="pacer">The silo's shared indexing pacer, consulted before and fed after every embedding batch, or <see langword="null"/> to run batches back to back unpaced.</param>
+    /// <param name="saturation">
+    /// The silo's WAL saturation signal, consulted when a run of store or record
+    /// failures reaches <see cref="MaxConsecutiveBatchFailures"/> so the arm defers
+    /// only on a vector tree the platform reports saturated, or
+    /// <see langword="null"/> in a host that registers none (the arm then infers
+    /// saturation from the run, as it did before issue #2683).
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
@@ -303,7 +326,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         IEmbeddingProvider? embeddingProvider = null,
         RepoContextCoverageProbeReporter? coverageProbeReporter = null,
         RepoContextSymbolWalkReporter? symbolWalkReporter = null,
-        RepoContextIndexingPacer? pacer = null)
+        RepoContextIndexingPacer? pacer = null,
+        IWalSaturationSignal? saturation = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -317,6 +341,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         _coverageProbeReporter = coverageProbeReporter;
         _symbolWalkReporter = symbolWalkReporter;
         _pacer = pacer;
+        _saturation = saturation;
     }
 
     /// <inheritdoc />
@@ -1956,6 +1981,64 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 deferred < 0 ? 0 : deferred);
         }
 
+        // The store and record stages write to the vector trees, and whether those
+        // trees are saturated is a fact the platform publishes rather than one this
+        // loop has to guess (issue #2683). A run of failures is the trigger to ask;
+        // the signal is the answer. Only a tree reporting Saturated defers the pass -
+        // there the append path rejects writes and WaitForHealthyAsync gives a
+        // principled resume. A Throttled or Healthy tree still admits appends, so the
+        // arm keeps attempting under the pacer's backoff, and every further batch is
+        // a fresh test of the premise the old bound could never re-examine once it
+        // had stopped. With no signal registered the run is all there is to go on, so
+        // the arm infers saturation from it exactly as before.
+        bool DeferOnStoreFailureRun(int from, int length, string stage)
+        {
+            if (_saturation is null)
+            {
+                ReportSaturationDeferral(from, length, stage);
+                return true;
+            }
+
+            var saturatedTree = RepoContextIndexingPacer.FindVectorTree(_saturation, WalSaturationState.Saturated);
+            if (saturatedTree is not null)
+            {
+                var deferred = unitTexts.Count - (from + length);
+                _logger.LogWarning(
+                    "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to {Stage} and vector tree "
+                    + "{Tree} reports {State}; deferring the remaining {Deferred} passage(s) to the next reconcile "
+                    + "rather than adding load.",
+                    repoId,
+                    consecutiveBatchFailures,
+                    arm,
+                    stage,
+                    saturatedTree,
+                    WalSaturationState.Saturated,
+                    deferred < 0 ? 0 : deferred);
+                return true;
+            }
+
+            // Logged once per run, at the crossing, so a long run of failures against
+            // a tree that is merely throttled reads as one decision, not one line per
+            // batch. Each further failure in the run still re-consults the signal.
+            if (consecutiveBatchFailures == MaxConsecutiveBatchFailures)
+            {
+                var throttledTree = RepoContextIndexingPacer.FindVectorTree(_saturation, WalSaturationState.Throttled);
+                _logger.LogWarning(
+                    "Repo {RepoId}: {Failures} consecutive {Arm}-arm batches failed to {Stage}, but no vector tree "
+                    + "reports {Saturated} (worst: {Tree} {State}); continuing with the remaining batches so the "
+                    + "next one tests whether the plane admits the write.",
+                    repoId,
+                    consecutiveBatchFailures,
+                    arm,
+                    stage,
+                    WalSaturationState.Saturated,
+                    throttledTree ?? "all vector trees",
+                    throttledTree is null ? WalSaturationState.Healthy : WalSaturationState.Throttled);
+            }
+
+            return false;
+        }
+
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1964,10 +2047,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             // batch runs - after a bounded wait on a saturated vector tree, a bounded
             // yield to in-flight searches, a duty-cycle rest, and the current
             // congestion delay - and never WHETHER it runs, so every outcome below is
-            // classified exactly as it was. It also turns the three-strike break
-            // further down into a last resort: each failure doubles the delay before
-            // the next attempt, so the strikes are spread over a backoff rather than
-            // spent in a burst against a store that is already failing.
+            // classified exactly as it was. It also turns the run bound further down
+            // into a last resort: each failure doubles the delay before the next
+            // attempt, so the strikes are spread over a backoff rather than spent in
+            // a burst against a store that is already failing.
             var batchStartedAt = _pacer is null
                 ? 0L
                 : await _pacer.PaceAsync(cancellationToken).ConfigureAwait(false);
@@ -2124,10 +2207,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     batchSources.Count,
                     string.Join(", ", batchSources.Take(6)));
 
-                if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
+                if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures
+                    && DeferOnStoreFailureRun(start, count, stage))
                 {
                     saturated = true;
-                    ReportSaturationDeferral(start, count, stage);
                     break;
                 }
 
@@ -2202,10 +2285,12 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// <param name="Landed">The source keys whose vectors were stored and whose membership was recorded.</param>
     /// <param name="Saturated">
     /// <see langword="true"/> when the pass hit
-    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive record failures and
-    /// deferred its remaining batches. It is the arm's one deterministic saturation
-    /// signal, and the caller uses it to decide whether to drive the same tree
-    /// again on the next pass.
+    /// <see cref="MaxConsecutiveBatchFailures"/> consecutive failures and deferred
+    /// its remaining batches - for the store and record stages only when the
+    /// registered <see cref="IWalSaturationSignal"/> confirmed a vector tree
+    /// Saturated, or when no signal is registered (issue #2683). It is the arm's
+    /// one deterministic saturation signal, and the caller uses it to decide
+    /// whether to drive the same tree again on the next pass.
     /// </param>
     private readonly record struct EmbedOutcome(List<string> Landed, bool Saturated);
 
