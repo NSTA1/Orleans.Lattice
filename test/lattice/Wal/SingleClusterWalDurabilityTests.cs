@@ -112,62 +112,130 @@ public sealed class SingleClusterWalDurabilityTests
             "Every foreground write must commit at least one WAL entry across the tree's partitions.");
     }
 
+    /// <summary>
+    /// Issue #3209: this fixture used to resolve the DI-registered GC, which
+    /// has no <see cref="LatticeOptions.WalRetention"/>, and wait silently for
+    /// a leaf cursor that usually never advanced. The pass then returned before
+    /// the trim loop, nothing was recorded, and the assertion held as
+    /// <c>0 == 0</c> - green with the production emission deleted. It now
+    /// drives a GC whose short retention TTL makes the written entries
+    /// trim-eligible, requires the pass to have actually trimmed, and requires
+    /// the WAL itself to show it, so the name's claim is the thing measured.
+    /// </summary>
     [Test]
     public async Task LatticeWalGc_RunOnceAsync_emits_wal_entries_trimmed_metric_when_log_is_advanced()
     {
         var treeId = "sc-wal-gc-" + Guid.NewGuid().ToString("N")[..8];
         var tree = _cluster.Client.GetGrain<ILattice>(treeId);
 
-        // Drive enough writes that at least one leaf advances a
-        // checkpoint and reports a non-Zero cursor.
         for (var i = 0; i < 10; i++)
         {
             await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
         }
 
-        var registry = RequireSiloServices().GetRequiredService<IWalCursorRegistry>();
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (DateTime.UtcNow < deadline)
+        var sp = RequireSiloServices();
+        var provider = sp.GetRequiredService<IWalStorageProvider>();
+        var partitions = (await sp
+            .GetRequiredService<LatticeOptionsResolver>()
+            .ResolveAsync(treeId)).WalPartitions;
+
+        var lowestBefore = new long[partitions];
+        for (var shard = 0; shard < partitions; shard++)
         {
-            var min = await registry.GetMinCursorAsync(treeId);
-            if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)
-            {
-                break;
-            }
-            await Task.Delay(50);
+            lowestBefore[shard] = await provider.GetLowestOffsetAsync(treeId, shard, CancellationToken.None);
         }
 
-        var trimmed = 0L;
+        Assert.That(lowestBefore, Has.Some.GreaterThanOrEqualTo(0L),
+            "Precondition: the writes above must have left WAL entries for the pass to trim.");
+
+        // Only this tree's measurements count, so a sibling fixture's GC pass
+        // cannot supply (or mask) the emission this test is about.
+        var trimmedForTree = 0L;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (inst, lst) =>
         {
-            if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter) && inst.Name == "orleans.lattice.wal.entries_trimmed")
+            if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                && inst.Name == "orleans.lattice.wal.entries_trimmed")
             {
                 lst.EnableMeasurementEvents(inst);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
         {
-            Interlocked.Add(ref trimmed, value);
+            foreach (var tag in tags)
+            {
+                if (tag.Key == LatticeMetrics.TagTree
+                    && tag.Value is string t
+                    && string.Equals(t, treeId, StringComparison.Ordinal))
+                {
+                    Interlocked.Add(ref trimmedForTree, value);
+                }
+            }
         });
         listener.Start();
 
-        var gc = RequireSiloServices().GetRequiredService<ILatticeWalGc>();
-        var report = await gc.RunOnceAsync(treeId);
+        // A 1 ms retention TTL makes every already-written entry trim-eligible
+        // by wall clock, so the pass enters the trim loop instead of taking the
+        // no-cursor / no-TTL early return. The durability hold (issue #3300)
+        // is opted out of because this freshly-created tree has never published
+        // a durable offset floor, which is exactly the state the hold retains.
+        var gc = new LatticeWalGc(
+            sp,
+            sp.GetRequiredService<IWalCursorRegistry>(),
+            new FixedLatticeOptionsMonitor(new LatticeOptions
+            {
+                WalRetention = TimeSpan.FromMilliseconds(1),
+                WalDurabilityHoldCeilingBytes = 0,
+            }));
+
+        // Entries only become TTL-eligible once the wall clock has moved past
+        // them, so retry the pass until it trims rather than racing a single
+        // run, and fail - not fall through - if it never does.
+        var reportedTotal = 0L;
+        var passes = 0;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        LatticeWalGcReport report;
+        do
+        {
+            report = await gc.RunOnceAsync(treeId);
+            passes++;
+            reportedTotal += report.EntriesTrimmed;
+            if (reportedTotal > 0)
+            {
+                break;
+            }
+
+            await Task.Delay(50);
+        }
+        while (DateTime.UtcNow < deadline);
+
         listener.RecordObservableInstruments();
 
+        var advancedShards = 0;
+        for (var shard = 0; shard < partitions; shard++)
+        {
+            if (lowestBefore[shard] < 0)
+            {
+                continue;
+            }
+
+            var lowestAfter = await provider.GetLowestOffsetAsync(treeId, shard, CancellationToken.None);
+            if (lowestAfter < 0 || lowestAfter > lowestBefore[shard])
+            {
+                advancedShards++;
+            }
+        }
+
+        Assert.That(reportedTotal, Is.GreaterThan(0),
+            $"RunOnceAsync must trim within the deadline; {passes} pass(es) reported zero, so the emission path was never exercised.");
         Assert.Multiple(() =>
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
-            Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
-            // The metric must agree with the report. When the run
-            // trimmed zero entries the counter records zero, so the
-            // assertion is the equality rather than a strict-positive.
-            // That equality is also the only non-vacuous claim available
-            // about EntriesTrimmed, which is a count and so can never be
-            // negative in the first place.
-            Assert.That(trimmed, Is.EqualTo(report.EntriesTrimmed),
-                "orleans.lattice.wal.entries_trimmed must record the count reported by RunOnceAsync.");
+            Assert.That(report.ShardsScanned, Is.EqualTo(partitions));
+            Assert.That(Interlocked.Read(ref trimmedForTree), Is.EqualTo(reportedTotal),
+                "orleans.lattice.wal.entries_trimmed must record exactly the count RunOnceAsync reported trimming.");
+            Assert.That(advancedShards, Is.GreaterThan(0),
+                "A pass that reports trimmed entries must have advanced the low-water offset of at least one WAL shard.");
         });
     }
 
