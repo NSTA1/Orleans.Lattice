@@ -190,8 +190,7 @@ public class WalCommitLogWriterDrainTests
     private static IWalShardGrain CreateHangingShard(Task<long> hangingDispatch, DispatchCounter dispatches)
     {
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
+        shard.StubPointAppend(_ =>
             {
                 dispatches.Increment();
                 return hangingDispatch;
@@ -433,7 +432,7 @@ public class WalCommitLogWriterDrainTests
     {
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        shard.StubPointAppend(heldRelease.Task);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {

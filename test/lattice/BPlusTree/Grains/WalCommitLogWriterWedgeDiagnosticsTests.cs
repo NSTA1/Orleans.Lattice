@@ -120,7 +120,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
         var writer = CreateWriter(shard);
 
         var offset = await writer.AppendAsync(MakeMutation("k"), CancellationToken.None)
@@ -148,7 +148,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
         var writer = CreateWriter(shard);
 
         await writer.AppendAsync(MakeMutation("k"), CancellationToken.None)
@@ -268,7 +268,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
         var writer = CreateWriter(shard);
         var treeId = FreshTreeId();
 
@@ -297,7 +297,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         // AND the WalAppendAdmissionTimeouts counter advances.
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
         var perTree = new LatticeOptions
         {
             WalMaxPendingBatches = 1,
@@ -433,7 +433,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
 
         // Cap = 0 is the opt-out sentinel; the writer must admit
         // every dispatch without a semaphore (parity with the

@@ -107,7 +107,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(42L));
+        shard.StubPointAppend(Task.FromResult(42L));
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -126,7 +126,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
         using var capture = new MeterCapture();
         var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+        shard.StubPointAppend(release.Task);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -162,7 +162,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
     {
         using var capture = new MeterCapture();
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(7L));
+        shard.StubPointAppend(Task.FromResult(7L));
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -236,7 +236,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
 
         var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+        shard.StubPointAppend(release.Task);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -275,7 +275,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
 
         var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+        shard.StubPointAppend(release.Task);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -309,7 +309,7 @@ public class WalCommitLogWriterDispatchTimeoutTests
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
 
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(42L));
+        shard.StubPointAppend(Task.FromResult(42L));
 
         var writer = CreateWriter(shard, new LatticeOptions
         {

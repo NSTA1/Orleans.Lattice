@@ -36,6 +36,15 @@ public class WalCommitLogWriterTests
         shard
             .AppendAsync(Arg.Do<WalRecord>(r => captured.Add(r)), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(0L));
+        // With WalBatchedSingleEntryAppends on, point appends dispatch through
+        // AppendBatchAsync (#812), so capture from that overload too.
+        shard
+            .AppendBatchAsync(Arg.Do<IReadOnlyList<WalRecord>>(l => captured.AddRange(l)), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var list = (IReadOnlyList<WalRecord>)callInfo[0];
+                return Task.FromResult<IReadOnlyList<long>>(new long[list.Count]);
+            });
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
@@ -142,8 +151,7 @@ public class WalCommitLogWriterTests
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
 
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-             .Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
