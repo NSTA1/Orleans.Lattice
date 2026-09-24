@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 185 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 186 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -258,6 +258,7 @@ src/lattice/LatticeMetrics.cs#LeafSnapshotLoadFailures	unresolved	reason=dimensi
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentPeakBytes	unresolved	reason=dimension tree: read from this observable instrument's measurement callback, which yields [archive/memory-restore-state]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentReads	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafSnapshotSegmentedHydrations	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
+src/lattice/LatticeMetrics.cs#LeafSpanFailOpenCommits	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafSplitAttempts	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionOldestAge	unresolved	reason=dimension tree: read from this observable instrument's measurement callback, which yields [archive/memory-restore-state]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/LatticeMetrics.cs#LeafSplitCompletionsInFlight	unresolved	reason=dimension tree: read from this observable instrument's measurement callback, which yields [archive/memory-restore-state]. A callback read is a lower bound on the tag surface, not a closed domain

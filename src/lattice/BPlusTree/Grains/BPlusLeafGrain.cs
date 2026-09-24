@@ -1056,7 +1056,7 @@ internal sealed partial class BPlusLeafGrain(
         // the key. Committing here would produce a row this leaf's own replay
         // filter refuses to reinstate, leaving durability to depend on where
         // the declaring leaf's checkpoint happens to sit. Forward instead.
-        if (TryResolveSpanForwardTarget(key, out var spanTarget))
+        if (TryResolveSpanForwardTarget(key, out var spanTarget, out var spanFailOpen))
         {
             // The sibling publishes its own mutation notification after
             // persist, so none is published here. Its SplitResult is discarded
@@ -1064,6 +1064,11 @@ internal sealed partial class BPlusLeafGrain(
             await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
                 .SetAsync(key, value, expiresAtTicks);
             return null;
+        }
+
+        if (spanFailOpen != SpanFailOpenReason.None)
+        {
+            RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
         return await CommitSetAsync(key, value, expiresAtTicks);
@@ -1865,9 +1870,14 @@ internal sealed partial class BPlusLeafGrain(
         // here would report "nothing to delete" while leaving the row live, and
         // committing here would append a tombstone this leaf's own replay filter
         // drops. Forwarding is the only answer that makes the returned bool true.
-        if (TryResolveSpanForwardTarget(key, out var spanTarget))
+        if (TryResolveSpanForwardTarget(key, out var spanTarget, out var spanFailOpen))
         {
             return await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget).DeleteAsync(key);
+        }
+
+        if (spanFailOpen != SpanFailOpenReason.None)
+        {
+            RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
         // For non-prepared deletes, the absent / tombstoned short-circuit

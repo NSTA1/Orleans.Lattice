@@ -150,6 +150,8 @@ public partial class BPlusTreeBulkLoadTests
         await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
         Assert.That(keys.Count, Is.EqualTo(count));
+
+        await LeafChainTiling.AssertTreeTilesAsync(_cluster.GrainFactory, "bulk-large", "after the bulk load");
     }
 
     [Test]

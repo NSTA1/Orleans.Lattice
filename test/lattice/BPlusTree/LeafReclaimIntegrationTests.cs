@@ -83,23 +83,14 @@ public class LeafReclaimIntegrationTests
     }
 
     /// <summary>
-    /// Asserts that consecutive leaves in the chain tile the keyspace with no
-    /// gap and no overlap. This is the invariant reclaim is most able to break:
-    /// a gap is a range routed to a leaf whose replay filter rejects it (writes
-    /// survive in cache and vanish on rebuild), and an overlap is a record two
-    /// leaves both materialise.
+    /// Asserts that consecutive leaves in the chain tile the keyspace, and that
+    /// routing agrees with the chain, through the shared
+    /// <see cref="LeafChainTiling"/> check. This is the invariant reclaim is
+    /// most able to break: a gap is a range routed to a leaf whose replay filter
+    /// rejects it (writes survive in cache and vanish on rebuild).
     /// </summary>
-    private async Task AssertChainTilesKeyspaceAsync(List<GrainId> chain, string because)
-    {
-        for (var i = 0; i < chain.Count - 1; i++)
-        {
-            var here = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i]).GetKeyRangeAsync();
-            var next = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i + 1]).GetKeyRangeAsync();
-
-            Assert.That(here.HighKeyExclusive, Is.EqualTo(next.LowKeyInclusive),
-                $"{because}: leaf {i} ends at '{here.HighKeyExclusive}' but leaf {i + 1} begins at '{next.LowKeyInclusive}', so that span is owned by {(here.HighKeyExclusive is null ? "both" : "nobody")}");
-        }
-    }
+    private Task AssertChainTilesKeyspaceAsync(IShardRootGrain shard, string because) =>
+        LeafChainTiling.AssertTilesAsync(_cluster.GrainFactory, shard, because);
 
     // --- the bug, and the fix ---
 
@@ -136,6 +127,7 @@ public class LeafReclaimIntegrationTests
         var afterReclaim = await WalkChainAsync(shard);
         Assert.That(afterReclaim.Count, Is.EqualTo(afterDelete.Count - reclaimed),
             "the chain must be shorter by exactly the number of leaves the pass reported folding");
+        await AssertChainTilesKeyspaceAsync(shard, "after reclaim");
     }
 
     /// <summary>
@@ -216,12 +208,12 @@ public class LeafReclaimIntegrationTests
         var (router, shard) = await CreateSingleShardTreeAsync(treeName);
         await SeedAsync(router, 120);
 
-        await AssertChainTilesKeyspaceAsync(await WalkChainAsync(shard), "before reclaim");
+        await AssertChainTilesKeyspaceAsync(shard, "before reclaim");
 
         await router.DeleteRangeAsync("k030", "k090");
         await shard.ReclaimEmptyLeavesAsync(int.MaxValue);
 
-        await AssertChainTilesKeyspaceAsync(await WalkChainAsync(shard), "after reclaim");
+        await AssertChainTilesKeyspaceAsync(shard, "after reclaim");
     }
 
     // --- bounds and refusals ---
@@ -337,7 +329,7 @@ public class LeafReclaimIntegrationTests
 
         var regrown = await WalkChainAsync(shard);
         Assert.That(regrown.Count, Is.GreaterThan(folded), "re-filling the range must split the tree back out");
-        await AssertChainTilesKeyspaceAsync(regrown, "after regrowth");
+        await AssertChainTilesKeyspaceAsync(shard, "after regrowth");
 
         Assert.That(await router.CountAsync(), Is.EqualTo(120));
         for (var i = 30; i < 90; i++)
