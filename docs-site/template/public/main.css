@@ -1,16 +1,2344 @@
-/* Orleans.Lattice documentation site overrides. */
-
 /*
- * The navbar template applies no size constraint to the brand logo and relies
- * entirely on the asset's intrinsic width/height (DocFX's own stock logo is
- * authored at 38pt). An icon-resolution asset therefore renders at full size and
- * overflows the header, so the size is bounded here as well as on the asset.
+ * Orleans.Lattice documentation site - theme.
+ *
+ * Layered over DocFX's `modern` template (DocFX 2.78.5, Bootstrap 5.3). The
+ * template's markup is untouched: everything here restyles the elements it
+ * already renders, and main.js adds the few behaviours CSS cannot express. No
+ * DocFX partial is overridden, so a DocFX upgrade only has to keep the class
+ * names below, not a forked layout.
+ *
+ * Values come from tokens.css. The world they express - the order diagram -
+ * is described there and in DESIGN.md at the repository root.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
  */
+
+@import url("tokens.css");
+
+@font-face {
+  font-family: "Recursive Sans Linear";
+  src: url("fonts/recursive-sans-linear.woff2") format("woff2");
+  font-weight: 300 850;
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lattice Mono";
+  src: url("fonts/cascadia-mono.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ==========================================================================
+   1. Bootstrap bridge - hand the template's own variables the token values,
+      so every component DocFX renders picks them up without a restyle.
+   ========================================================================== */
+
+:root,
+[data-bs-theme="light"],
+[data-bs-theme="dark"] {
+  --bs-font-sans-serif: var(--lt-font-sans);
+  --bs-font-monospace: var(--lt-font-mono);
+  --bs-body-font-family: var(--lt-font-sans);
+  --bs-body-font-size: var(--lt-text-base);
+  --bs-body-line-height: var(--lt-leading-body);
+  --bs-body-color: var(--lt-ink);
+  --bs-body-bg: var(--lt-surface);
+  --bs-emphasis-color: var(--lt-ink);
+  --bs-secondary-color: var(--lt-ink-2);
+  --bs-tertiary-color: var(--lt-ink-3);
+  --bs-secondary-bg: var(--lt-surface-sunken);
+  --bs-tertiary-bg: var(--lt-surface-sunken);
+  --bs-heading-color: var(--lt-ink);
+  --bs-link-color: var(--lt-link);
+  --bs-link-hover-color: var(--lt-link-hover);
+  --bs-code-color: var(--lt-ink);
+  --bs-border-color: var(--lt-rule);
+  --bs-border-color-translucent: var(--lt-rule);
+  --bs-highlight-bg: var(--lt-marker-soft);
+  --bs-highlight-color: var(--lt-ink);
+  --bs-focus-ring-color: var(--lt-focus);
+  --lt-prose: 42rem;
+}
+
+/* The -rgb triplets feed Bootstrap's rgba() utilities and cannot be derived
+   from a custom property, so they are restated per material. */
+:root,
+[data-bs-theme="light"] {
+  --bs-body-color-rgb: 21, 25, 31;
+  --bs-body-bg-rgb: 255, 255, 255;
+  --bs-emphasis-color-rgb: 21, 25, 31;
+  --bs-secondary-rgb: 100, 108, 121;
+  --bs-secondary-color-rgb: 75, 83, 97;
+  --bs-link-color-rgb: 34, 52, 176;
+  --bs-link-hover-color-rgb: 23, 36, 125;
+}
+
+[data-bs-theme="dark"] {
+  --bs-body-color-rgb: 228, 233, 229;
+  --bs-body-bg-rgb: 16, 22, 19;
+  --bs-emphasis-color-rgb: 228, 233, 229;
+  --bs-secondary-rgb: 139, 151, 143;
+  --bs-secondary-color-rgb: 168, 179, 172;
+  --bs-link-color-rgb: 242, 208, 75;
+  --bs-link-hover-color-rgb: 255, 224, 122;
+}
+
+/* ==========================================================================
+   2. Base
+   ========================================================================== */
+
+body {
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-body);
+  line-height: var(--lt-leading-body);
+  color: var(--lt-ink);
+  background: var(--lt-surface);
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+[data-bs-theme="dark"] body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--lt-focus);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--lt-link);
+}
+
+a:hover {
+  color: var(--lt-link-hover);
+}
+
+strong,
+b {
+  font-weight: var(--lt-weight-strong);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--lt-font-mono);
+}
+
+/* Skip link, inserted by main.js ahead of the header. */
+.lt-skip {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 2000;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-ink);
+  color: var(--lt-surface);
+  font-weight: var(--lt-weight-strong);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-skip:focus {
+  transform: none;
+  color: var(--lt-surface);
+}
+
+/* ==========================================================================
+   3. Header
+   ========================================================================== */
+
+body > header {
+  background: var(--lt-surface);
+  border-bottom: 1px solid var(--lt-rule) !important;
+}
+
+.navbar {
+  --bs-navbar-color: var(--lt-ink-2);
+  --bs-navbar-hover-color: var(--lt-ink);
+  --bs-navbar-active-color: var(--lt-ink);
+  --bs-navbar-brand-color: var(--lt-ink);
+  --bs-navbar-brand-hover-color: var(--lt-ink);
+  min-height: var(--lt-header-height);
+}
+
+.navbar .navbar-brand {
+  gap: 0.6rem;
+  margin-right: 1.75rem;
+  padding: 0;
+  color: var(--lt-ink);
+  font-size: 1.0625rem;
+  font-weight: var(--lt-weight-heading);
+  letter-spacing: -0.012em;
+}
+
 #logo {
-  height: 2rem;
-  width: auto;
-  max-height: 2rem;
-  margin-right: 0.6rem;
-  margin-left: 0.2rem;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  flex: none;
+}
+
+/* The inline mark main.js swaps in for the logo image, so it follows the theme. */
+.lt-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  overflow: visible;
+}
+
+.lt-mark .lt-mark-edge {
+  stroke: var(--lt-ink);
+}
+
+.lt-mark .lt-mark-node {
+  fill: var(--lt-ink);
+}
+
+.lt-mark .lt-mark-bottom {
+  fill: var(--lt-surface);
+  stroke: var(--lt-ink);
+}
+
+.lt-mark .lt-mark-join {
+  fill: var(--lt-diagram-join);
+  stroke: var(--lt-diagram-join-ring);
+}
+
+.lt-brand-org {
+  color: var(--lt-ink-3);
+  font-weight: 520;
+}
+
+.navbar-nav .nav-link {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  font-weight: 520;
+  white-space: nowrap;
+}
+
+.navbar-nav .nav-link:hover,
+.navbar-nav .nav-link:focus-visible {
+  color: var(--lt-ink);
+}
+
+.navbar-nav .nav-link.active {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+@media (min-width: 768px) {
+  .navbar-nav .nav-link {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: var(--lt-header-height);
+    padding: 0 0.7rem !important;
+  }
+
+  /* The current section is marked like the current node in a chain. */
+  .navbar-nav .nav-link.active::after {
+    content: "";
+    position: absolute;
+    left: 0.7rem;
+    right: 0.7rem;
+    bottom: -1px;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+    background: var(--lt-marker);
+    box-shadow: 0 -1px 0 0 color-mix(in srgb, var(--lt-ink) 12%, transparent);
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1199.98px) {
+  .navbar-nav .nav-link {
+    padding: 0 0.45rem !important;
+  }
+
+  .navbar-nav .nav-link.active::after {
+    left: 0.45rem;
+    right: 0.45rem;
+  }
+
+  .navbar .navbar-brand {
+    margin-right: 1rem;
+  }
+}
+
+.navbar #navbar form.search {
+  position: relative;
+}
+
+.navbar #navbar form.search > input,
+.toc form.filter > input {
+  height: 36px;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  box-shadow: none;
+}
+
+.navbar #navbar form.search > input {
+  width: 15rem;
+  padding-right: 2.25rem;
+}
+
+.navbar #navbar form > i.bi,
+.toc form.filter > i.bi {
+  color: var(--lt-ink-3);
+  opacity: 1;
+}
+
+.form-control::placeholder {
+  color: var(--lt-ink-3);
+  opacity: 1;
+}
+
+.form-control:focus {
+  border-color: var(--lt-focus);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lt-focus) 24%, transparent);
+}
+
+/* "/" focuses search (main.js); the hint says so. */
+.lt-kbd-hint {
+  position: absolute;
+  right: 0.55rem;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 1.35rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  color: var(--lt-ink-3);
+  font: 500 var(--lt-text-xs) / 1.3 var(--lt-font-mono);
+  text-align: center;
+  pointer-events: none;
+}
+
+form.search:focus-within .lt-kbd-hint {
+  display: none;
+}
+
+.navbar #navbar form.icons .btn,
+.navbar .btn.border-0 {
+  color: var(--lt-ink-2);
+}
+
+.navbar #navbar form.icons .btn:hover,
+.navbar #navbar form.icons .btn:focus-visible {
+  color: var(--lt-ink);
+}
+
+.dropdown-menu {
+  --bs-dropdown-bg: var(--lt-surface-raised);
+  --bs-dropdown-color: var(--lt-ink);
+  --bs-dropdown-border-color: var(--lt-rule-strong);
+  --bs-dropdown-link-color: var(--lt-ink);
+  --bs-dropdown-link-hover-color: var(--lt-ink);
+  --bs-dropdown-link-hover-bg: var(--lt-surface-sunken);
+  --bs-dropdown-link-active-color: var(--lt-marker-ink);
+  --bs-dropdown-link-active-bg: var(--lt-marker);
+  --bs-dropdown-border-radius: var(--lt-radius-md);
+  --bs-dropdown-font-size: var(--lt-text-md);
+  box-shadow: var(--lt-shadow);
+}
+
+/* ==========================================================================
+   4. Layout
+   ========================================================================== */
+
+.container-xxl {
+  max-width: 1480px;
+}
+
+@media screen and (min-width: 768px) {
+  body:not([data-search])[data-layout=""] > main > .toc-offcanvas,
+  body:not([data-search])[data-layout="conceptual"] > main > .toc-offcanvas {
+    flex: 0 0 17.5rem;
+    max-width: 17.5rem;
+  }
+
+  body:not([data-search])[data-layout=""] > main > .content,
+  body:not([data-search])[data-layout="conceptual"] > main > .content {
+    margin: 0 2.5rem 0 3rem;
+  }
+
+  body:not([data-search])[data-layout=""] > main > .affix,
+  body:not([data-search])[data-layout="conceptual"] > main > .affix {
+    width: 15rem;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1199.98px) {
+  body:not([data-search])[data-layout=""] > main > .toc-offcanvas,
+  body:not([data-search])[data-layout="conceptual"] > main > .toc-offcanvas {
+    flex-basis: 15rem;
+    max-width: 15rem;
+  }
+
+  body:not([data-search])[data-layout=""] > main > .content,
+  body:not([data-search])[data-layout="conceptual"] > main > .content {
+    margin: 0 1.25rem 0 2rem;
+  }
+}
+
+@media (max-width: 767.98px) {
+  body:not([data-search])[data-layout=""] > main > .content,
+  body:not([data-search])[data-layout="conceptual"] > main > .content {
+    margin: 0;
+  }
+
+  body > main {
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+  }
+}
+
+/* ==========================================================================
+   5. Sidebar - the table of contents as an order diagram
+      Sections head the tree; each package's pages hang from a spine, one node
+      per page. The current page is the marked node.
+   ========================================================================== */
+
+.offcanvas {
+  --bs-offcanvas-bg: var(--lt-surface);
+  --bs-offcanvas-color: var(--lt-ink);
+  --bs-offcanvas-width: min(88vw, 21rem);
+  --bs-offcanvas-border-color: var(--lt-rule);
+}
+
+.offcanvas-title {
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-strong);
+}
+
+.toc {
+  font-size: var(--lt-text-md);
+}
+
+.toc form.filter {
+  margin: 0 0.75rem 1rem 0;
+}
+
+.toc form.filter > input {
+  padding-left: 2rem;
+}
+
+.toc ul {
+  margin: 0;
+  font-size: var(--lt-text-md);
+}
+
+.toc li {
+  margin: 0;
+  padding-left: 0.85rem;
+  line-height: 1.35;
+}
+
+.toc li > a,
+.toc span.name-only {
+  display: inline-block;
+  padding: 0.28rem 0;
+  color: var(--lt-ink-2);
+  text-decoration: none;
+}
+
+.toc li > a:hover,
+.toc li > a:focus-visible {
+  color: var(--lt-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--lt-rule-strong);
+  text-underline-offset: 0.2em;
+}
+
+/* Sections and packages read as headings of the tree. */
+.toc > div > ul > li > a,
+.toc > div > ul > li > span.name-only {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.toc > div > ul > li {
+  margin-top: 0.1rem;
+}
+
+.toc > div > ul > li > ul > li.expander > a {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+}
+
+.toc .expand-stub::before {
+  color: var(--lt-ink-3);
+  margin-top: 0.42em;
+}
+
+/* The spine: every nested list hangs from a hairline. */
+.toc li > ul {
+  margin: 0.1rem 0 0.45rem 0.3rem;
+  padding-left: 0.8rem;
+  border-left: 1px solid var(--lt-rule-strong);
+}
+
+/* Pages are nodes on the spine. */
+.toc li > ul > li:not(.expander) {
+  padding-left: 0.1rem;
+}
+
+.toc li > ul > li:not(.expander)::before {
+  content: "";
+  position: absolute;
+  left: calc(-0.8rem - 4px);
+  top: calc(0.28rem + 0.675em - 3.5px);
+  width: var(--lt-diagram-node-size);
+  height: var(--lt-diagram-node-size);
+  border-radius: 50%;
+  background: var(--lt-diagram-node-hollow);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-diagram-node-ring);
+  transition: box-shadow var(--lt-duration-fast) var(--lt-ease-out), background var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.toc li > ul > li:not(.expander):hover::before {
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-2);
+}
+
+/* The chain from the root down to the current page is drawn in ink. */
+.toc li.expander.active > a {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.toc li.active:not(.expander) > a {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.toc li > ul > li.active:not(.expander)::before {
+  background: var(--lt-diagram-join);
+  box-shadow: 0 0 0 var(--lt-diagram-ring-width) var(--lt-diagram-join-ring);
+  width: 9px;
+  height: 9px;
+  left: calc(-0.8rem - 5px);
+  top: calc(0.28rem + 0.675em - 4.5px);
+}
+
+.toc > .no-result {
+  color: var(--lt-ink-3);
+}
+
+/* ==========================================================================
+   6. Breadcrumb - the chain above the page
+   ========================================================================== */
+
+.actionbar {
+  min-height: 1.5rem;
+}
+
+.breadcrumb {
+  --bs-breadcrumb-margin-bottom: 0.75rem;
+  --bs-breadcrumb-item-padding-x: 0;
+  align-items: center;
+  font-size: var(--lt-text-sm);
+}
+
+.breadcrumb-item a {
+  color: var(--lt-ink-3);
+  text-decoration: none;
+}
+
+.breadcrumb-item a[href]:not([href=""]):hover {
+  color: var(--lt-ink);
+  text-decoration: underline;
+}
+
+/* Section and package crumbs are labels, not pages. */
+.breadcrumb-item a[href=""] {
+  pointer-events: none;
+}
+
+.breadcrumb-item + .breadcrumb-item::before {
+  content: "";
+  float: none;
+  display: inline-block;
+  width: 0.9rem;
+  height: 1px;
+  margin: 0 0.45rem;
+  padding: 0;
   vertical-align: middle;
+  background: var(--lt-rule-strong);
+}
+
+/* ==========================================================================
+   7. Article
+   ========================================================================== */
+
+article {
+  font-size: var(--lt-text-base);
+  line-height: var(--lt-leading-body);
+}
+
+article > :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6, .alert, details, hr) {
+  max-width: var(--lt-prose);
+}
+
+article h1,
+article h2,
+article h3,
+article h4,
+article h5,
+article h6 {
+  color: var(--lt-ink);
+  line-height: var(--lt-leading-tight);
+  text-wrap: balance;
+}
+
+article h1 {
+  margin: 0.25rem 0 1.1rem;
+  font-size: var(--lt-text-2xl);
+  font-weight: var(--lt-weight-display);
+  letter-spacing: -0.024em;
+}
+
+/* Each section opens a new node on the page's chain. */
+article h2 {
+  position: relative;
+  margin: 3.25rem 0 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--lt-rule);
+  font-size: var(--lt-text-xl);
+  font-weight: var(--lt-weight-heading);
+  letter-spacing: -0.016em;
+}
+
+article h2::before {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink);
+}
+
+article h1 + h2,
+article > h2:first-child {
+  margin-top: 1.5rem;
+}
+
+article h3 {
+  margin: 2.25rem 0 0.75rem;
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-strong);
+  letter-spacing: -0.01em;
+}
+
+article h4 {
+  margin: 1.75rem 0 0.5rem;
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-heading);
+}
+
+article h5,
+article h6 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-heading);
+}
+
+article p,
+article ul,
+article ol,
+article dl {
+  margin: 0 0 1.05rem;
+}
+
+article li {
+  margin: 0.3rem 0;
+}
+
+article li > ul,
+article li > ol {
+  margin: 0.3rem 0 0.4rem;
+}
+
+article ul > li::marker {
+  color: var(--lt-ink-3);
+}
+
+article ol > li::marker {
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  font-variant-numeric: tabular-nums;
+}
+
+article em,
+article i:not(.bi) {
+  font-style: oblique 10deg;
+}
+
+article a {
+  color: var(--lt-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--lt-link) 42%, transparent);
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--lt-duration-fast) var(--lt-ease-out), background-color var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+article a:hover {
+  color: var(--lt-link-hover);
+  text-decoration-color: currentColor;
+  background-color: var(--lt-marker-soft);
+}
+
+article a.external[href]::after {
+  color: var(--lt-ink-3);
+}
+
+article a.anchorjs-link {
+  color: var(--lt-ink-3);
+  text-decoration: none;
+  background: none;
+  font-weight: 400;
+}
+
+article a.anchorjs-link:hover {
+  color: var(--lt-link);
+  background: none;
+}
+
+article hr {
+  margin: 2.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--lt-rule);
+  opacity: 1;
+}
+
+article kbd {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+  color: var(--lt-ink);
+  font-size: 0.85em;
+}
+
+article mark {
+  padding: 0 0.15em;
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+}
+
+article img {
+  border-radius: var(--lt-radius-sm);
+}
+
+/* Inline code sits in the text; it does not shout. */
+article :not(pre) > code {
+  padding: 0.12em 0.36em;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-inline-code-bg);
+  color: var(--lt-ink);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+
+article a > code,
+article a:hover > code {
+  color: inherit;
+  background: color-mix(in srgb, var(--lt-link) 9%, transparent);
+}
+
+article h1 > code,
+article h2 > code,
+article h3 > code,
+article h4 > code {
+  padding: 0;
+  background: none;
+  font-size: 0.88em;
+}
+
+/* Blockquotes are margin notes: set back from the text on a single hairline. */
+article blockquote {
+  margin: 1.5rem 0 1.75rem;
+  padding: 0.1rem 0 0.1rem 1.1rem;
+  border: 0;
+  border-left: 1px solid var(--lt-rule-strong);
+  color: var(--lt-ink-2);
+  font-size: 0.9375rem;
+}
+
+article blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+article blockquote strong {
+  color: var(--lt-ink);
+}
+
+/* Callouts: a hairline frame and a named role, never a thick coloured bar. */
+article .alert {
+  --bs-alert-bg: var(--lt-surface-sunken);
+  --bs-alert-color: var(--lt-ink);
+  --bs-alert-border-color: var(--lt-rule-strong);
+  --lt-role: var(--lt-info);
+  margin: 1.5rem 0 1.75rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--bs-alert-border-color);
+  border-radius: var(--lt-radius-md);
+  font-size: 0.9375rem;
+}
+
+article .alert-warning {
+  --lt-role: var(--lt-warning);
+}
+
+article .alert-danger {
+  --lt-role: var(--lt-danger);
+}
+
+article .alert-success {
+  --lt-role: var(--lt-success);
+}
+
+article .alert h5 {
+  margin: 0 0 0.35rem;
+  color: var(--lt-role);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-heading);
+  letter-spacing: 0.02em;
+}
+
+article .alert > p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Tables: booktabs rules, the way a paper sets a table ---------------- */
+
+article table,
+article .table {
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--lt-ink);
+  --bs-table-border-color: var(--lt-rule);
+  --bs-table-striped-bg: transparent;
+  --bs-table-hover-bg: var(--lt-surface-sunken);
+  width: 100%;
+  margin: 1.5rem 0 2rem;
+  border-collapse: collapse;
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+article .table-bordered > :not(caption) > *,
+article .table-bordered > :not(caption) > * > * {
+  border-width: 0;
+}
+
+article table > :not(caption) > * > * {
+  padding: 0.6rem 0.8rem;
+  background: transparent;
+  box-shadow: none;
+}
+
+article table th {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+  text-align: left;
+  vertical-align: bottom;
+  border-bottom: 1px solid var(--lt-ink) !important;
+}
+
+article table td {
+  vertical-align: top;
+  border-top: 1px solid var(--lt-rule) !important;
+}
+
+article table tbody tr:first-child td {
+  border-top: 0 !important;
+}
+
+article table th:first-child,
+article table td:first-child {
+  padding-left: 0.2rem;
+}
+
+article table th:last-child,
+article table td:last-child {
+  padding-right: 0.2rem;
+}
+
+article table tbody tr:hover > td {
+  background: var(--lt-surface-sunken);
+}
+
+article table td > code,
+article table th > code {
+  font-size: 0.84em;
+}
+
+/* Wide tables scroll inside their own frame (main.js adds the wrapper). */
+.lt-table-scroll {
+  margin: 1.5rem 0 2rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.lt-table-scroll > table {
+  margin: 0 !important;
+}
+
+.lt-table-scroll:focus-visible {
+  outline-offset: 4px;
+}
+
+/* --- Code ----------------------------------------------------------------- */
+
+article pre {
+  position: relative;
+  margin: 1.25rem 0 1.75rem;
+  padding: 0;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-code-bg);
+  font-size: var(--lt-text-sm);
+  line-height: 1.6;
+}
+
+article pre > code,
+article pre > code.hljs {
+  display: block;
+  padding: 1rem 1.15rem;
+  background: transparent;
+  color: var(--lt-code-ink);
+  font-family: var(--lt-font-mono);
+  font-size: inherit;
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+article pre > .code-action {
+  top: 0.4rem;
+  right: 0.4rem;
+  display: block;
+  opacity: 0;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--lt-rule-strong) !important;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  line-height: 1;
+  transition: opacity var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+article pre:hover > .code-action,
+article pre:focus-within > .code-action,
+article pre > .code-action:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  article pre > .code-action {
+    opacity: 1;
+  }
+}
+
+article pre > .code-action:hover {
+  color: var(--lt-ink);
+}
+
+.hljs,
+[data-bs-theme="dark"] .hljs {
+  background: transparent;
+  color: var(--lt-code-ink);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+[data-bs-theme="dark"] .hljs-keyword,
+[data-bs-theme="dark"] .hljs-selector-tag,
+[data-bs-theme="dark"] .hljs-literal {
+  color: var(--lt-syn-keyword);
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-title,
+.hljs-title.class_,
+.hljs-class .hljs-title,
+.hljs-name,
+.hljs-tag,
+[data-bs-theme="dark"] .hljs-type,
+[data-bs-theme="dark"] .hljs-built_in,
+[data-bs-theme="dark"] .hljs-title,
+[data-bs-theme="dark"] .hljs-name,
+[data-bs-theme="dark"] .hljs-tag,
+[data-bs-theme="dark"] .hljs-class {
+  color: var(--lt-syn-type);
+}
+
+.hljs-string,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-addition,
+.hljs-regexp,
+[data-bs-theme="dark"] .hljs-string,
+[data-bs-theme="dark"] .hljs-meta .hljs-string,
+[data-bs-theme="dark"] .hljs-regexp,
+[data-bs-theme="dark"] .hljs-template-tag,
+[data-bs-theme="dark"] .hljs-template-variable {
+  color: var(--lt-syn-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+[data-bs-theme="dark"] .hljs-number,
+[data-bs-theme="dark"] .hljs-symbol,
+[data-bs-theme="dark"] .hljs-bullet {
+  color: var(--lt-syn-number);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-doctag,
+[data-bs-theme="dark"] .hljs-comment,
+[data-bs-theme="dark"] .hljs-quote,
+[data-bs-theme="dark"] .hljs-doctag {
+  color: var(--lt-syn-comment);
+  font-style: normal;
+}
+
+.hljs-meta,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-deletion,
+[data-bs-theme="dark"] .hljs-meta,
+[data-bs-theme="dark"] .hljs-meta .hljs-keyword,
+[data-bs-theme="dark"] .hljs-attr,
+[data-bs-theme="dark"] .hljs-attribute,
+[data-bs-theme="dark"] .hljs-variable,
+[data-bs-theme="dark"] .hljs-selector-attr,
+[data-bs-theme="dark"] .hljs-selector-pseudo {
+  color: var(--lt-syn-meta);
+}
+
+.hljs-section,
+.hljs-link,
+.hljs-subst,
+.hljs-function,
+.hljs-params,
+.hljs-formula,
+[data-bs-theme="dark"] .hljs-section,
+[data-bs-theme="dark"] .hljs-link,
+[data-bs-theme="dark"] .hljs-subst,
+[data-bs-theme="dark"] .hljs-function,
+[data-bs-theme="dark"] .hljs-params,
+[data-bs-theme="dark"] .hljs-formula {
+  color: inherit;
+}
+
+[data-bs-theme="dark"] .hljs-addition,
+[data-bs-theme="dark"] .hljs-deletion {
+  display: inline;
+  width: auto;
+  background: none;
+}
+
+pre > code .line-highlight,
+[data-bs-theme="dark"] pre > code .line-highlight {
+  background: var(--lt-marker-soft);
+}
+
+/* --- Diagrams ------------------------------------------------------------- */
+
+article pre.mermaid {
+  padding: 1.25rem 1rem;
+  border-color: var(--lt-rule);
+  background: var(--lt-surface);
+  font-family: var(--lt-font-sans);
+  text-align: center;
+}
+
+article pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* --- Tabs (DocFX tab groups) ---------------------------------------------- */
+
+.tabGroup .nav-tabs {
+  --bs-nav-tabs-border-color: var(--lt-rule-strong);
+  --bs-nav-tabs-link-active-bg: var(--lt-surface);
+  --bs-nav-tabs-link-active-color: var(--lt-ink);
+  --bs-nav-tabs-link-active-border-color: var(--lt-rule-strong) var(--lt-rule-strong) var(--lt-surface);
+}
+
+/* ==========================================================================
+   8. In this article - the page's own chain, with the section in view marked
+   ========================================================================== */
+
+.affix {
+  font-size: var(--lt-text-sm);
+}
+
+#affix h5 {
+  display: block;
+  margin: 0;
+  padding: 0 0 0.6rem;
+  border: 0 !important;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The rail is a scroll container that DocFX clips horizontally (overflow-x:
+   hidden), so the spine sits far enough in that the current section's node,
+   the widest at 9px plus its 1.5px ring, is never cut off at the left edge. */
+#affix ul {
+  position: relative;
+  margin: 0 0 0 0.5rem;
+  padding: 0.2rem 0;
+  border-left: 1px solid var(--lt-rule-strong);
+}
+
+#affix ul li {
+  position: relative;
+  margin: 0;
+}
+
+#affix ul li a {
+  display: block;
+  padding: 0.24rem 0 0.24rem 0.95rem;
+  color: var(--lt-ink-2) !important;
+  line-height: 1.4;
+  text-decoration: none;
+}
+
+#affix ul li a.link-secondary {
+  padding-left: 1.75rem;
+  color: var(--lt-ink-3) !important;
+}
+
+#affix ul li a::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: calc(0.24rem + 0.7em - 3.5px);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-rule-strong);
+  transition: background var(--lt-duration-fast) var(--lt-ease-out), box-shadow var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+#affix ul li a.link-secondary::before {
+  left: -3px;
+  width: 5px;
+  height: 5px;
+  top: calc(0.24rem + 0.7em - 2.5px);
+  background: var(--lt-rule-strong);
+  box-shadow: none;
+}
+
+#affix ul li a:hover {
+  color: var(--lt-ink) !important;
+}
+
+#affix ul li a.lt-passed::before {
+  background: var(--lt-ink-3);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-3);
+}
+
+#affix ul li a.lt-current {
+  color: var(--lt-ink) !important;
+  font-weight: var(--lt-weight-strong);
+}
+
+#affix ul li a.lt-current::before {
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  top: calc(0.24rem + 0.7em - 4.5px);
+  background: var(--lt-diagram-join);
+  box-shadow: 0 0 0 var(--lt-diagram-ring-width) var(--lt-diagram-join-ring);
+}
+
+/* ==========================================================================
+   9. Previous / next
+   ========================================================================== */
+
+.next-article {
+  gap: 1rem;
+  border-top-color: var(--lt-rule) !important;
+}
+
+.next-article:has(div) {
+  margin-top: 3.5rem;
+  padding-top: 1.5rem;
+}
+
+.next-article > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.next-article > div.next {
+  align-items: flex-end;
+}
+
+.next-article > div > span {
+  color: var(--lt-ink-3);
+  opacity: 1;
+  font-size: var(--lt-text-sm);
+}
+
+.next-article > div > a {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  text-decoration: none;
+}
+
+.next-article > div > a:hover {
+  color: var(--lt-link);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* ==========================================================================
+   10. Search results
+   ========================================================================== */
+
+#search-results {
+  max-width: 52rem;
+  line-height: 1.6;
+}
+
+#search-results > .search-list {
+  margin-bottom: 1.5rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+}
+
+#search-results > .sr-items .sr-item {
+  margin-bottom: 1.6rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--lt-rule-strong);
+}
+
+#search-results > .sr-items .sr-item > .item-title {
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-strong);
+}
+
+#search-results > .sr-items .sr-item > .item-title a {
+  color: var(--lt-ink);
+  text-decoration: none;
+}
+
+#search-results > .sr-items .sr-item > .item-title a:hover {
+  color: var(--lt-link);
+  text-decoration: underline;
+}
+
+#search-results > .sr-items .sr-item > .item-href {
+  color: var(--lt-ink-3);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+}
+
+#search-results > .sr-items .sr-item > .item-brief {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+}
+
+#search-results mark,
+#search-results b {
+  padding: 0 0.1em;
+  background: var(--lt-marker-soft);
+  color: inherit;
+  font-weight: var(--lt-weight-strong);
+}
+
+.pagination {
+  --bs-pagination-color: var(--lt-ink-2);
+  --bs-pagination-bg: var(--lt-surface);
+  --bs-pagination-border-color: var(--lt-rule-strong);
+  --bs-pagination-hover-color: var(--lt-ink);
+  --bs-pagination-hover-bg: var(--lt-surface-sunken);
+  --bs-pagination-active-color: var(--lt-marker-ink);
+  --bs-pagination-active-bg: var(--lt-marker);
+  --bs-pagination-active-border-color: var(--lt-ink);
+  --bs-pagination-focus-box-shadow: 0 0 0 3px color-mix(in srgb, var(--lt-focus) 24%, transparent);
+}
+
+/* ==========================================================================
+   11. Footer
+   ========================================================================== */
+
+body > footer,
+body[data-layout="landing"] > footer {
+  height: auto;
+  padding: 2rem 0 2.25rem;
+  border-top-color: var(--lt-rule) !important;
+  color: var(--lt-ink-2) !important;
+  font-size: var(--lt-text-md);
+}
+
+.lt-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem 2.5rem;
+}
+
+.lt-footer-id {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-footer-id img {
+  width: 22px;
+  height: 22px;
+}
+
+.lt-footer-note {
+  flex: 1 1 22rem;
+  max-width: 34rem;
+  margin: 0;
+  color: var(--lt-ink-2);
+}
+
+.lt-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-footer a {
+  color: var(--lt-ink-2);
+  text-decoration: underline;
+  text-decoration-color: var(--lt-rule-strong);
+  text-underline-offset: 0.2em;
+}
+
+.lt-footer a:hover {
+  color: var(--lt-ink);
+  text-decoration-color: currentColor;
+}
+
+/* ==========================================================================
+   12. Generated overview pages (documentation map, samples index)
+   ========================================================================== */
+
+.lt-map-lede {
+  margin: 0 0 1.1rem;
+  max-width: var(--lt-prose);
+  color: var(--lt-ink-2);
+}
+
+article .lt-map-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16.5rem, 1fr));
+  gap: 0 2rem;
+  max-width: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+article .lt-map-list > li {
+  position: relative;
+  margin: 0;
+  padding: 0.7rem 0 0.8rem 1.2rem;
+  border-top: 1px solid var(--lt-rule);
+}
+
+article .lt-map-list > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(0.7rem + 0.67em - 3.5px);
+  width: var(--lt-diagram-node-size);
+  height: var(--lt-diagram-node-size);
+  border-radius: 50%;
+  background: var(--lt-diagram-node);
+}
+
+article .lt-map-list > li.lt-unreleased::before {
+  background: var(--lt-diagram-node-hollow);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-2);
+}
+
+.lt-map-name {
+  display: block;
+  font-weight: var(--lt-weight-strong);
+  line-height: 1.35;
+}
+
+article .lt-map-name a {
+  color: var(--lt-ink);
+  text-decoration-color: var(--lt-rule-strong);
+}
+
+article .lt-map-name a:hover {
+  color: var(--lt-link);
+  text-decoration-color: currentColor;
+}
+
+.lt-map-meta {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-map-desc {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+.lt-status {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: 999px;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-label);
+  line-height: 1.55;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+
+article .lt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.5rem;
+  max-width: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+article .lt-legend li {
+  position: relative;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+article .lt-legend li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(0.8em - 3.5px);
+  width: var(--lt-diagram-node-size);
+  height: var(--lt-diagram-node-size);
+  border-radius: 50%;
+  background: var(--lt-diagram-node);
+}
+
+article .lt-legend li.lt-unreleased::before {
+  background: var(--lt-diagram-node-hollow);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-2);
+}
+
+/* ==========================================================================
+   13. Print, motion, forced colours
+   ========================================================================== */
+
+@media print {
+  article a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  article h2::before,
+  .toc li > ul > li::before {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .toc li > ul > li.active:not(.expander)::before,
+  #affix ul li a.lt-current::before,
+  .navbar-nav .nav-link.active::after {
+    forced-color-adjust: none;
+    background: Highlight;
+    box-shadow: none;
+  }
+
+  .toc li > ul > li:not(.expander)::before,
+  #affix ul li a::before,
+  article h2::before,
+  article .lt-map-list > li::before {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* ==========================================================================
+   14. Home - the landing page (docs-site/pages/index.md)
+   ========================================================================== */
+
+body[data-layout="landing"] > main {
+  padding-top: 0;
+}
+
+.lt-home {
+  --lt-home-gutter: clamp(1.1rem, 3.5vw, 2.5rem);
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 0 var(--lt-home-gutter) 1rem;
+}
+
+.lt-home code {
+  padding: 0.1em 0.34em;
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-inline-code-bg);
+  color: var(--lt-ink);
+  font-size: 0.86em;
+}
+
+/* Section headings keep the article's grammar - a rule with a node - at the
+   scale of a page that is organised by them. */
+article .lt-home h2 {
+  max-width: none;
+  margin: 0 0 0.75rem;
+  padding-top: 2rem;
+  font-size: 2rem;
+  font-weight: var(--lt-weight-display);
+  letter-spacing: -0.024em;
+}
+
+article .lt-home h2::before {
+  top: -6px;
+  width: 11px;
+  height: 11px;
+}
+
+.lt-section-lede {
+  max-width: 44rem;
+  margin: 0 0 2.25rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-lg);
+  line-height: 1.55;
+}
+
+.lt-home section + section {
+  margin-top: var(--lt-space-8);
+}
+
+/* --- The first viewport ---------------------------------------------------- */
+
+.lt-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  gap: clamp(2rem, 5vw, 4.5rem);
+  align-items: center;
+  min-height: min(calc(100vh - var(--lt-header-height)), 52rem);
+  padding: clamp(2.5rem, 6vh, 4.5rem) 0 clamp(2rem, 5vh, 3.5rem);
+}
+
+article .lt-hero h1 {
+  max-width: 15ch;
+  margin: 0 0 1.5rem;
+  font-size: clamp(2.3rem, 1.2rem + 3.1vw, 3.6rem);
+  font-weight: var(--lt-weight-display);
+  line-height: 1.04;
+  letter-spacing: -0.034em;
+  text-wrap: balance;
+}
+
+.lt-lede {
+  max-width: 35rem;
+  margin: 0 0 2.5rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-lg);
+  line-height: 1.6;
+}
+
+/* Three ways in: three incomparable nodes above the same reader. */
+.lt-ways {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 1.5rem;
+  max-width: 38rem;
+  border-top: 1px solid var(--lt-ink);
+}
+
+article a.lt-way {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 1.05rem 0 0.4rem;
+  color: var(--lt-ink);
+  text-decoration: none;
+  background: none;
+}
+
+article a.lt-way::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 2px var(--lt-ink);
+  transition: background var(--lt-duration) var(--lt-ease-out), transform var(--lt-duration) var(--lt-ease-out);
+}
+
+.lt-way-name {
+  font-size: 1.3rem;
+  font-weight: var(--lt-weight-heading);
+  letter-spacing: -0.015em;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.22em;
+  transition: text-decoration-color var(--lt-duration) var(--lt-ease-out);
+}
+
+.lt-way-for {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.4;
+}
+
+article a.lt-way:hover,
+article a.lt-way:focus-visible {
+  color: var(--lt-ink);
+  background: none;
+}
+
+article a.lt-way:hover .lt-way-name,
+article a.lt-way:focus-visible .lt-way-name {
+  text-decoration-color: var(--lt-marker);
+}
+
+article a.lt-way:hover::before,
+article a.lt-way:focus-visible::before {
+  background: var(--lt-marker);
+  transform: scale(1.18);
+}
+
+/* --- The join diagram ------------------------------------------------------ */
+
+.lt-join {
+  margin: 0;
+  justify-self: stretch;
+}
+
+.lt-join-svg {
+  display: block;
+  width: 100%;
+  max-width: 34rem;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+}
+
+/* Every drawn edge carries pathLength="100", so a curve and a line draw on the
+   same dash, whatever their true lengths. */
+.lt-edges-base line,
+.lt-edges-base path {
+  fill: none;
+  stroke: var(--lt-rule-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.lt-edge {
+  fill: none;
+  stroke: var(--lt-ink);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 0;
+}
+
+.lt-concurrent-line {
+  stroke: var(--lt-ink-3);
+  stroke-width: 1.25;
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+}
+
+.lt-node-bottom {
+  fill: var(--lt-surface);
+  stroke: var(--lt-ink);
+  stroke-width: 2.25;
+}
+
+.lt-node-concurrent {
+  fill: var(--lt-diagram-concurrent);
+  stroke: var(--lt-surface);
+  stroke-width: 3;
+}
+
+.lt-node-join {
+  fill: var(--lt-diagram-join);
+  stroke: var(--lt-diagram-join-ring);
+  stroke-width: 2.5;
+  transition: fill var(--lt-duration) var(--lt-ease-out);
+}
+
+.lt-join-pulse {
+  fill: none;
+  stroke: var(--lt-diagram-join);
+  stroke-width: 2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.lt-token {
+  fill: var(--lt-diagram-concurrent);
+  stroke: var(--lt-surface);
+  stroke-width: 2.5;
+  opacity: 0;
+}
+
+.lt-token-dup {
+  fill: var(--lt-surface);
+  stroke: var(--lt-diagram-concurrent);
+  stroke-width: 2.5;
+}
+
+.lt-join-svg text {
+  font-family: var(--lt-font-sans);
+}
+
+.lt-label-state {
+  fill: var(--lt-ink);
+  font-family: var(--lt-font-mono) !important;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.lt-label-note {
+  fill: var(--lt-ink-2);
+  font-size: 13px;
+}
+
+.lt-label-edge {
+  fill: var(--lt-ink-3);
+  font-size: 13px;
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-label-concurrent {
+  fill: var(--lt-ink-3);
+  font-size: 12px;
+  font-style: oblique 8deg;
+}
+
+.lt-label-concurrent.lt-label-concurrent-short {
+  display: none;
+}
+
+.lt-label-join {
+  transition: opacity var(--lt-duration) var(--lt-ease-out);
+}
+
+.lt-label-join .lt-label-note {
+  fill: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+/* While the merge replays: the lower edges draw first, then the upper, and
+   the join stays hollow until both writes have arrived. */
+.lt-join.is-running .lt-edge-low {
+  animation: lt-draw 1300ms cubic-bezier(0.45, 0, 0.2, 1) both;
+}
+
+.lt-join.is-running .lt-edge-high {
+  animation: lt-draw 1300ms cubic-bezier(0.45, 0, 0.2, 1) 1300ms both;
+}
+
+.lt-join.is-running .lt-node-join {
+  fill: var(--lt-surface);
+}
+
+.lt-join.is-running .lt-label-join {
+  opacity: 0;
+}
+
+.lt-join.is-arrived .lt-join-pulse {
+  animation: lt-pulse 900ms var(--lt-ease-out) both;
+}
+
+@keyframes lt-draw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes lt-pulse {
+  from { opacity: 0.9; transform: scale(1); }
+  to { opacity: 0; transform: scale(2.4); }
+}
+
+.lt-join-caption {
+  max-width: 34rem;
+  margin: 1.25rem auto 0;
+}
+
+.lt-join-status {
+  min-height: 3.2em;
+  margin: 0 0 0.9rem;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  line-height: 1.6;
+}
+
+.lt-join-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+}
+
+.lt-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.95rem;
+  border: 1px solid var(--lt-ink);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font: inherit;
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background var(--lt-duration-fast) var(--lt-ease-out), border-color var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+.lt-button:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-button:active {
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+}
+
+.lt-button-quiet {
+  border-color: var(--lt-rule-strong);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-button-quiet:hover {
+  border-color: var(--lt-ink-2);
+  color: var(--lt-ink);
+}
+
+.lt-join-source {
+  margin: 0;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+  line-height: 1.55;
+}
+
+/* In an explainer the figure sits in the prose column, framed like a code
+   block so it reads as an exhibit of the section rather than decoration. */
+article .lt-join-inline {
+  max-width: 40rem;
+  margin: 1.5rem 0 2rem;
+  padding: 1.25rem 1.25rem 1rem;
+  border: 1px solid var(--lt-rule);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface);
+}
+
+.lt-join-inline .lt-join-svg {
+  max-width: 36rem;
+}
+
+.lt-join-inline .lt-join-caption {
+  max-width: none;
+  margin: 1rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--lt-rule);
+}
+
+/* Room for the longest message, so the controls do not jump as it changes. */
+.lt-join-inline .lt-join-status {
+  min-height: 4.9em;
+}
+
+/* --- Three ways in: each a chain of pages ---------------------------------- */
+
+.lt-path-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem);
+}
+
+.lt-path {
+  scroll-margin-top: calc(var(--lt-header-height) + 1.5rem);
+}
+
+article .lt-path h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: var(--lt-weight-display);
+  letter-spacing: -0.02em;
+}
+
+.lt-path-for {
+  margin: 0 0 1.4rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+article .lt-path ol {
+  position: relative;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 0 1.5rem;
+  list-style: none;
+}
+
+/* The spine runs from the first node to the last. */
+article .lt-path ol::before {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  top: 0.55rem;
+  bottom: 1.6rem;
+  width: 1px;
+  background: var(--lt-rule-strong);
+}
+
+article .lt-path li {
+  position: relative;
+  margin: 0 0 1.05rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+article .lt-path li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1.2rem - 4px);
+  top: 0.42rem;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 var(--lt-diagram-ring-width) var(--lt-ink-2);
+  transition: background var(--lt-duration-fast) var(--lt-ease-out), box-shadow var(--lt-duration-fast) var(--lt-ease-out);
+}
+
+article .lt-path li:first-child::before {
+  background: var(--lt-ink);
+  box-shadow: none;
+}
+
+article .lt-path li:hover::before,
+article .lt-path li:focus-within::before {
+  background: var(--lt-marker);
+  box-shadow: 0 0 0 var(--lt-diagram-ring-width) var(--lt-diagram-join-ring);
+}
+
+article .lt-path li > a:first-child {
+  display: block;
+  margin-bottom: 0.1rem;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-strong);
+  text-decoration-color: var(--lt-rule-strong);
+}
+
+article .lt-path li > a:first-child:hover {
+  color: var(--lt-link);
+  text-decoration-color: currentColor;
+  background: none;
+}
+
+.lt-shared {
+  display: inline-block;
+  margin-left: 0.3rem;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-label);
+  white-space: nowrap;
+}
+
+/* --- Local, Team, Global --------------------------------------------------- */
+
+article .lt-stages {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2rem clamp(1.5rem, 3.5vw, 3.5rem);
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The chain: Local, then Team, then Global, each holding the last's packages. */
+article .lt-stages::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: calc((100% - 2 * clamp(1.5rem, 3.5vw, 3.5rem)) / 3 + clamp(1.5rem, 3.5vw, 3.5rem) - 6px);
+  top: 6px;
+  height: 2px;
+  background: var(--lt-ink);
+}
+
+article .lt-stage {
+  position: relative;
+  margin: 0;
+  padding-top: 1.75rem;
+}
+
+article .lt-stage::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lt-surface);
+  box-shadow: inset 0 0 0 2.5px var(--lt-ink);
+}
+
+article .lt-stage:last-child::before {
+  background: var(--lt-ink);
+}
+
+article .lt-stage h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.35rem;
+  font-weight: var(--lt-weight-display);
+  letter-spacing: -0.018em;
+}
+
+article .lt-stage p {
+  margin: 0 0 0.9rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+  line-height: 1.5;
+}
+
+article .lt-stage ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--lt-text-md);
+}
+
+article .lt-stage ul li {
+  margin: 0;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--lt-rule);
+}
+
+article .lt-stage ul li a {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+  text-decoration-color: var(--lt-rule-strong);
+}
+
+article .lt-stage ul li a:hover {
+  color: var(--lt-link);
+  text-decoration-color: currentColor;
+  background: none;
+}
+
+.lt-invariant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.8rem;
+  margin: 2.25rem 0 0;
+  padding: 0.85rem 0 0;
+  border-top: 2px solid var(--lt-ink);
+  font-size: var(--lt-text-md);
+}
+
+.lt-invariant-label {
+  color: var(--lt-ink-3);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-home .lt-invariant code {
+  padding: 0;
+  background: none;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.lt-invariant-note {
+  color: var(--lt-ink-2);
+}
+
+/* --- Seams (generated from PACKAGES.md) ------------------------------------ */
+
+article .lt-seam-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13.5rem), 1fr));
+  gap: 0 1.75rem;
+  max-width: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+article .lt-seam-list > li {
+  position: relative;
+  margin: 0;
+  padding: 0.75rem 0 1rem 1.15rem;
+  border-top: 1px solid var(--lt-rule);
+}
+
+article .lt-seam-list > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(0.75rem + 0.62em - 3.5px);
+  width: var(--lt-diagram-node-size);
+  height: var(--lt-diagram-node-size);
+  border-radius: 50%;
+  background: var(--lt-diagram-node);
+}
+
+article a.lt-seam-name {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  text-decoration-color: var(--lt-rule-strong);
+}
+
+article a.lt-seam-name:hover {
+  color: var(--lt-link);
+  text-decoration-color: currentColor;
+  background: none;
+}
+
+.lt-seam-count {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-seam-members {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  line-height: 1.5;
+}
+
+.lt-section-more {
+  margin: 0;
+  color: var(--lt-ink-2);
+}
+
+/* --- Close ----------------------------------------------------------------- */
+
+.lt-close p {
+  max-width: 44rem;
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-lg);
+  line-height: 1.6;
+}
+
+article .lt-close h2 {
+  font-size: 1.5rem;
+}
+
+/* --- Home at narrower widths ----------------------------------------------- */
+
+@media (max-width: 1099.98px) {
+  .lt-hero {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .lt-join {
+    max-width: 34rem;
+  }
+}
+
+@media (max-width: 759.98px) {
+  article .lt-hero h1 {
+    max-width: none;
+  }
+
+  .lt-ways {
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 0;
+    padding-left: 1.4rem;
+    position: relative;
+  }
+
+  .lt-ways::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 0.8rem;
+    bottom: 1.2rem;
+    width: 1px;
+    background: var(--lt-ink);
+  }
+
+  article a.lt-way {
+    padding: 0.45rem 0 0.8rem;
+  }
+
+  article a.lt-way::before {
+    top: 0.85rem;
+    left: calc(-1.4rem);
+  }
+
+  article .lt-home h2 {
+    font-size: 1.6rem;
+  }
+
+  .lt-section-lede,
+  .lt-close p {
+    font-size: var(--lt-text-base);
+  }
+
+  .lt-lede {
+    margin-bottom: 2rem;
+    font-size: 1.0625rem;
+  }
+
+  .lt-label-state {
+    font-size: 16px;
+  }
+
+  .lt-label-note,
+  .lt-label-edge {
+    font-size: 14px;
+  }
+
+  .lt-label-concurrent {
+    font-size: 12.5px;
+  }
+
+  /* An explainer's figure is drawn wider than the home page's, so its labels
+     need a larger size to render at the same height on a phone. */
+  .lt-join-inline .lt-label-state {
+    font-size: 18px;
+  }
+
+  .lt-join-inline .lt-label-note,
+  .lt-join-inline .lt-label-edge {
+    font-size: 16px;
+  }
+
+  .lt-join-inline .lt-label-concurrent {
+    display: none;
+  }
+
+  .lt-join-inline .lt-label-concurrent.lt-label-concurrent-short {
+    display: inline;
+    font-size: 18px;
+  }
+
+  article .lt-join-inline {
+    padding: 1rem 0.9rem 0.9rem;
+  }
+
+  article .lt-stages {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 1.6rem;
+  }
+
+  article .lt-stages::before {
+    left: 6px;
+    right: auto;
+    top: 6px;
+    bottom: 2rem;
+    width: 2px;
+    height: auto;
+  }
+
+  article .lt-stage {
+    padding-top: 0;
+  }
+
+  article .lt-stage::before {
+    left: -1.6rem;
+    top: 0.3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lt-join.is-running .lt-edge-low,
+  .lt-join.is-running .lt-edge-high,
+  .lt-join.is-arrived .lt-join-pulse {
+    animation: none;
+  }
 }

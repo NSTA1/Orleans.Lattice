@@ -33,10 +33,12 @@ try {
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { throw "docfx build failed with exit code $LASTEXITCODE" }
 
-    # DocFX resolves inbound README.md links to index.html but emits README.html,
-    # so the landing page is published under both names.
+    # The home page is authored (docs-site/pages/index.md) and builds to
+    # index.html itself. Should it ever be missing, fall back to publishing the
+    # README as the landing page, so the site root never 404s.
     $readme = Join-Path $site 'README.html'
-    if (Test-Path $readme) { Copy-Item $readme (Join-Path $site 'index.html') -Force }
+    $landing = Join-Path $site 'index.html'
+    if ((Test-Path $readme) -and -not (Test-Path $landing)) { Copy-Item $readme $landing }
 
     $pages = (Get-ChildItem $site -Recurse -Filter *.html | Measure-Object).Count
     $size = '{0:N1} MB' -f ((Get-ChildItem $site -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
