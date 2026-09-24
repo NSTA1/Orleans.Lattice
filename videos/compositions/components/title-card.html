@@ -1,0 +1,97 @@
+<template id="title-card-template">
+  <!--
+    Title card, in the site's voice: ink on paper, one proportional family for
+    every line with weight marking importance, and the project mark read from
+    the site. The marker is not used here: on the site it is reserved for the
+    join and for "you are here".
+  -->
+  <div
+    data-composition-id="title-card"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"kicker","type":"string","label":"Kicker","default":"Orleans.Lattice"},
+      {"id":"title","type":"string","label":"Title","default":"Title"},
+      {"id":"subtitle","type":"string","label":"Subtitle","default":""}
+    ]'
+  >
+    <div class="tc-block">
+      <div class="tc-kicker">
+        <img class="tc-mark" src="assets/brand/site/lattice-mark.svg" alt="" width="56" height="56" />
+        <span class="tc-kicker-text"></span>
+      </div>
+      <h1 class="tc-title"></h1>
+      <div class="tc-rule"></div>
+      <p class="tc-subtitle"></p>
+    </div>
+
+    <style>
+      [data-composition-id="title-card"] {
+        width: 1920px;
+        height: 1080px;
+        box-sizing: border-box;
+        padding: var(--lv-safe-y) var(--lv-safe-x);
+        display: flex;
+        align-items: center;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      [data-composition-id="title-card"] .tc-block {
+        max-width: 1400px;
+      }
+      [data-composition-id="title-card"] .tc-kicker {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        font-weight: var(--lt-weight-label);
+      }
+      [data-composition-id="title-card"] .tc-title {
+        margin: 36px 0 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-hero);
+        font-weight: var(--lt-weight-display);
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+      }
+      [data-composition-id="title-card"] .tc-rule {
+        width: 240px;
+        height: 3px;
+        margin: 44px 0 0;
+        background: var(--lt-rule-strong);
+        transform-origin: left center;
+      }
+      [data-composition-id="title-card"] .tc-subtitle {
+        margin: 36px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-body);
+        line-height: 1.3;
+      }
+    </style>
+
+    <script>
+      (function () {
+        const { kicker, title, subtitle } = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="title-card"]');
+        const q = (selector) => root.querySelector(selector);
+        const { duration } = window.LatticeMotion;
+
+        q(".tc-kicker-text").textContent = kicker;
+        q(".tc-title").textContent = title;
+        q(".tc-subtitle").textContent = subtitle;
+        if (!subtitle) q(".tc-subtitle").style.display = "none";
+
+        const tl = gsap.timeline({ paused: true });
+        tl.from(q(".tc-kicker"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+        tl.from(q(".tc-title"), { opacity: 0, y: 32, duration: duration.slow, ease: "lattice-out" }, 0.2);
+        tl.from(q(".tc-rule"), { scaleX: 0, duration: duration.slow, ease: "lattice-out" }, 0.5);
+        tl.from(q(".tc-subtitle"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0.7);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["title-card"] = tl;
+      })();
+    </script>
+  </div>
+</template>

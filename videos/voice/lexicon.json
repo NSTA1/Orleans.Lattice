@@ -1,0 +1,20 @@
+{
+  "$comment": "Written form -> spoken form, applied to narration before text-to-speech. Captions keep the written form. Matching is case-sensitive and whole-token, longest entry first. Prefer rewording a script over adding an entry; add one when a term must appear as written.",
+  "entries": [
+    { "written": "Orleans.Lattice", "spoken": "Or-leens Lattice" },
+    { "written": "Orleans", "spoken": "Or-leens", "note": "Said or-LEENZ, stress on the second syllable. espeak-ng reads the written form as OR-lee-unz; the hyphenated respelling phonemizes to /O:l'i:nz/." },
+    { "written": "ILattice", "spoken": "I Lattice" },
+    { "written": "CRDTs", "spoken": "C R D Tees" },
+    { "written": "CRDT", "spoken": "C R D T" },
+    { "written": "WAL", "spoken": "wall", "note": "Scripts should say 'write-ahead log'; this is the fallback reading." },
+    { "written": "HLC", "spoken": "H L C" },
+    { "written": "LWW", "spoken": "L W W" },
+    { "written": "gRPC", "spoken": "G R P C" },
+    { "written": "OIDC", "spoken": "O I D C" },
+    { "written": "MCP", "spoken": "M C P" },
+    { "written": "NuGet", "spoken": "new get" },
+    { "written": "B+ tree", "spoken": "B plus tree" },
+    { "written": "TLA+", "spoken": "T L A plus" },
+    { "written": "byte[]", "spoken": "byte array" }
+  ]
+}

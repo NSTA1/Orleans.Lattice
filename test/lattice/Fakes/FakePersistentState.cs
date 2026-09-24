@@ -12,9 +12,27 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     private int _writersInFlight;
     private readonly TaskCompletionSource _rendezvousSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public T State { get => ThrowOnStateAccess is { } ex ? throw ex : _state; set => _state = value; }
+    public T State
+    {
+        get
+        {
+            OnStateAccess?.Invoke();
+            return ThrowOnStateAccess is { } ex ? throw ex : _state;
+        }
+        set => _state = value;
+    }
 
     private T _state = new();
+
+    /// <summary>
+    /// When set, runs on every read of <see cref="State"/>, before the
+    /// <see cref="ThrowOnStateAccess"/> check. Lets a test land a teardown at an
+    /// exact state read - for example cancelling a deactivation deadline and
+    /// arming <see cref="ThrowOnStateAccess"/> in one step, the issue #3393
+    /// shape of a deadline that expires after a barrier has started. The
+    /// callback must not read <see cref="State"/> itself.
+    /// </summary>
+    public Action? OnStateAccess { get; set; }
 
     /// <summary>
     /// When set, every read of <see cref="State"/> throws this exception

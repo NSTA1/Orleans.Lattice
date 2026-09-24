@@ -113,7 +113,7 @@ public partial class BPlusLeafGrainTests
         // residual case and not the #1537 checkpoint-advance case.
         var store = new InMemorySnapshotStore();
         var coord = BuildChunkingCoordinator(
-            head: 3, sliceSize: 8, tail: 0,
+            head: 4, sliceSize: 8, tail: 0,
             ColdRebuildSet(1, "k1"), ColdRebuildSet(2, "k2"), ColdRebuildSet(3, "k3"));
         var (grain, state, lastFlush) = BuildColdRebuildLeaf(coord, store.Stub, persistedCheckpoint: 3);
 
@@ -171,7 +171,7 @@ public partial class BPlusLeafGrainTests
         // claiming coverage of the lost prefix is ever written.
         var store = new InMemorySnapshotStore();
         var coord = BuildChunkingCoordinator(
-            head: 10, sliceSize: 8, tail: 5,
+            head: 11, sliceSize: 8, tail: 5,
             ColdRebuildSet(6, "k6"), ColdRebuildSet(7, "k7"), ColdRebuildSet(8, "k8"),
             ColdRebuildSet(9, "k9"), ColdRebuildSet(10, "k10"));
         var (grain, _, _) = BuildColdRebuildLeaf(coord, store.Stub, persistedCheckpoint: 3);

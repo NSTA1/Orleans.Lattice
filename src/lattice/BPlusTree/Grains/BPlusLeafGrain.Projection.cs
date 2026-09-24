@@ -140,6 +140,16 @@ internal sealed partial class BPlusLeafGrain
     /// against the wrong offset space, and the skip path opens no scope and
     /// starts no state machine - the split path is hot.
     /// </para>
+    /// <para>
+    /// A hint is also refused outright on a partition a starvation drive has
+    /// latched as stale (issue #3477). That partition's WAL was trimmed past an
+    /// offset its persisted checkpoint still needs, so the range between the
+    /// checkpoint and the hinted head was never applied here. Stamping the hint
+    /// would persist a checkpoint past rows the leaf does not hold - silent loss
+    /// - and, because the latch is keyed on the persisted checkpoints, would
+    /// clear the latch with nothing repaired. Only an apply or an operator reset
+    /// may move a latched partition.
+    /// </para>
     /// </summary>
     /// <param name="partition">The WAL partition ordinal the hint targets.</param>
     /// <param name="offset">The hinted WAL head offset. Non-positive offsets are ignored.</param>
@@ -150,7 +160,35 @@ internal sealed partial class BPlusLeafGrain
             return ValueTask.CompletedTask;
         }
 
+        if (IsPartitionStaleLatched(partition))
+        {
+            LogCheckpointHintRefused(partition, offset);
+            return ValueTask.CompletedTask;
+        }
+
         return new ValueTask(StampCheckpointHintAsync(partition, offset));
+    }
+
+    /// <summary>
+    /// Logs, once per latch, that a checkpoint hint was refused on a stale
+    /// partition (issue #3477).
+    /// </summary>
+    private void LogCheckpointHintRefused(int partition, long offset)
+    {
+        var latch = _projectionStaleDriveLatch;
+        if (ReferenceEquals(_checkpointHintRefusalLoggedFor, latch))
+        {
+            return;
+        }
+
+        _checkpointHintRefusalLoggedFor = latch;
+        ResolveLogger()?.LogWarning(
+            "Leaf {Leaf} on tree {Tree} refused a checkpoint hint to offset {Offset} on WAL partition {Partition}: a starvation drive found this partition stale, so the range between its persisted checkpoint ({Checkpoint}) and the hint was trimmed before this leaf applied it. Stamping the hint would persist a checkpoint past rows the leaf does not hold. The persisted checkpoint is left where it is; see docs/lattice/projection-rebuild.md.",
+            context.GrainId,
+            state.State.TreeId,
+            offset,
+            partition,
+            GetPersistedCheckpointForPartition(partition));
     }
 
     /// <summary>
@@ -311,6 +349,53 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The <c>checkpoint_flush</c> graceful-deactivation barrier: the
+    /// teardown persist. Commits the pending advance exactly as
+    /// <see cref="FlushPendingCheckpointAsync"/> does (with
+    /// <c>persistEvenWithoutPendingAdvance: false</c>, which is what
+    /// <see cref="ILeafProjection.FlushCheckpointAsync"/> passes), and then runs
+    /// the deactivation shape of the post-persist tail,
+    /// <see cref="CompleteDeactivationCheckpointFlushTailAsync"/>, whose FIRST
+    /// step publishes the final advance's durable pin (issue #3393).
+    /// </summary>
+    /// <remarks>
+    /// The commit is restated here rather than routed through
+    /// <see cref="FlushPendingCheckpointAsync"/> so the persist path shared
+    /// with every other caller - the coalescing fast path, the idempotent
+    /// re-assert, the interface flush - and its tail
+    /// <see cref="CompleteCheckpointFlushTailAsync"/> stay byte-identical: no
+    /// new argument, no new branch, no change to the steady-state allocation
+    /// profile. Keep the two commit sequences in step; the deactivation
+    /// fixtures pin this one's observable effects (persisted checkpoint,
+    /// digest dirtied and published, the cache-backed-coverage latch).
+    /// </remarks>
+    /// <param name="cancellationToken">The deactivation deadline.</param>
+    private async Task FlushPendingCheckpointOnDeactivateAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_pendingCheckpointOffsetsByPartition is not { Count: > 0 } pending)
+        {
+            return;
+        }
+
+        foreach (var (partition, offset) in pending)
+        {
+            SetPersistedCheckpointForPartition(partition, offset);
+        }
+
+        _pendingCheckpointOffsetsByPartition = null;
+        _checkpointAdvancedThisActivation = true;
+        MarkDigestDirty();
+        await PersistAsync();
+
+        // Durable write committed; the tail is contained exactly as the
+        // ordinary tail is (#2220).
+        _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+        await CompleteDeactivationCheckpointFlushTailAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Synchronously flushes any pending checkpoint advance to durable
     /// storage. Called from <see cref="ILeafProjection.FlushCheckpointAsync"/>,
     /// from idempotent re-assert in <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>, 
@@ -465,6 +550,165 @@ internal sealed partial class BPlusLeafGrain
                 + "checkpoint is persisted and the recheck re-runs on the next flush. The activation is "
                 + "retained (#2220).",
                 context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// The deactivation shape of <see cref="CompleteCheckpointFlushTailAsync"/>,
+    /// run for the teardown persist only (issue #3393).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The final advance's pin is published first, and awaited.</b> On the
+    /// ordinary tail the pin rides the cursor report as a debounced
+    /// fire-and-forget mirror, which is right for the steady state and wrong
+    /// for the last persist of an activation: nothing guarantees a debounced
+    /// write lands before the activation is gone, and the dedicated
+    /// <c>frontier_pin</c> barrier that was meant to cover it runs after the
+    /// snapshot capture, by which point the recorded drain had already torn
+    /// every activation down. So the durable write of the advance this persist
+    /// just committed now happens here, through the batched, awaited
+    /// <see cref="FlushDurableMaterialiserFrontierAsync"/>, before anything else
+    /// the teardown does. The pin it publishes is unchanged in shape: resolved
+    /// per partition by <c>ResolveDurablePinForPartition</c> from the PERSISTED
+    /// checkpoint (never the pending one, issue #3476) and capped by durable
+    /// snapshot coverage. This is not a write-through: it runs once per
+    /// deactivation, and the pin grain's own batching is untouched.
+    /// </para>
+    /// <para>
+    /// <b>The inline upward digest publish is deferred</b>, not dropped: it is
+    /// flagged and published by <c>OnDeactivateAsync</c> after the durability
+    /// barriers, still attributed to this tail's inline-digest step. It is the
+    /// slow step - a synchronous parent-chain hop - and running it here put
+    /// its latency in front of the snapshot capture and the pin, which is the
+    /// mechanism #3393 records.
+    /// </para>
+    /// <para>
+    /// The coverage-lag timer is NOT re-armed here, unlike the ordinary tail:
+    /// <c>OnDeactivateAsync</c> disposed it before the first barrier precisely so
+    /// no tick races the final capture.
+    /// </para>
+    /// <para>
+    /// Each step is contained and counted on
+    /// <see cref="LatticeMetrics.LeafCheckpointFlushTailFailures"/> exactly as on
+    /// the ordinary tail, the pin publish under the cursor-report step it
+    /// previously rode on, so the durable write that has already committed is
+    /// never undone by a notification failure (#2220).
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">The deactivation deadline.</param>
+    private async Task CompleteDeactivationCheckpointFlushTailAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+
+            // The first-real-frontier batched flush the cursor report would
+            // otherwise perform has just happened.
+            _durableFrontierBarriered = true;
+        }
+        catch (Exception ex)
+        {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailCursorReport);
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: publishing the durable pin for the final checkpoint of a graceful "
+                + "deactivation failed; the checkpoint is persisted and the frontier-pin barrier retries the "
+                + "publish (#3393).",
+                context.GrainId);
+        }
+
+        try
+        {
+            await ReportCursorIfActiveAsync(publishDurablePin: false);
+        }
+        catch (Exception ex)
+        {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailCursorReport);
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: cursor report failed after the final checkpoint flush of a graceful "
+                + "deactivation; the checkpoint is persisted and its durable pin was published first (#3393).",
+                context.GrainId);
+        }
+
+        _deactivationInlineDigestDeferred = true;
+
+        try
+        {
+            await MaybeRunPeriodicSnapshotRecheckAsync(fromCheckpointPersist: true);
+        }
+        catch (Exception ex)
+        {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailSnapshotRecheck);
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: periodic snapshot recheck failed after the final checkpoint flush of a "
+                + "graceful deactivation; the checkpoint is persisted and the deactivation snapshot capture "
+                + "still runs (#2220).",
+                context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// Publishes the teardown persist's inline upward digest, deferred by
+    /// <see cref="CompleteDeactivationCheckpointFlushTailAsync"/> behind the
+    /// durability barriers (issue #3393), and never throws.
+    /// </summary>
+    /// <remarks>
+    /// The publish is the one the tail used to run inline - the same
+    /// <see cref="PublishDigestUpwardInlineAsync"/>, which also retires any
+    /// pending coalesced publish - and its failure is counted on the tail's
+    /// existing inline-digest step, so moving it changes when it runs and
+    /// nothing about what it publishes or how its failure is reported. A
+    /// failed publish leaves the digest dirty; it is staleness-tolerant and the
+    /// next mutation after reactivation republishes it.
+    /// </remarks>
+    /// <param name="drainsPendingCoalescedPublish">
+    /// Whether a coalesced digest publish was pending when the hook started.
+    /// Before the reorder the leading <c>digest_publish</c> barrier drained it
+    /// and recorded <c>deactivation_flush</c>, after which the tail's inline
+    /// publish had nothing left to send; this one publish now carries both, so
+    /// it is recorded as that drain to keep the outcome's meaning.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// The deactivation deadline. The publish is not started once it has
+    /// expired: the activation is torn down by then and the hop could only
+    /// fault, so it is counted as a failed inline-digest step instead.
+    /// </param>
+    private async Task PublishDeferredDeactivationDigestAsync(
+        bool drainsPendingCoalescedPublish,
+        CancellationToken cancellationToken)
+    {
+        _deactivationInlineDigestDeferred = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (drainsPendingCoalescedPublish && TryBeginPendingDigestDrain(cancellationToken, out var parentId))
+            {
+                await PublishDrainedDigestAsync(parentId, cancellationToken);
+            }
+            else
+            {
+                await PublishDigestUpwardInlineAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailInlineDigestPublish);
+            try
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Leaf {GrainId}: the inline upward digest publish of a graceful deactivation's final "
+                    + "checkpoint, deferred behind the durability barriers (#3393), failed; the digest stays "
+                    + "dirty and is republished on the next mutation after reactivation.",
+                    context.GrainId);
+            }
+            catch (Exception)
+            {
+                // Observability must never fail a deactivation.
+            }
         }
     }
 

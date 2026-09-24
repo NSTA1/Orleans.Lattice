@@ -1,0 +1,170 @@
+/*
+ * Orleans.Lattice documentation - design tokens.
+ *
+ * The single source of truth for the site's visual values, imported by
+ * main.css. Other surfaces that need to match the site (the video series in
+ * videos/, for one) should read these rather than copy them. DESIGN.md at the
+ * repository root documents the system these values express.
+ *
+ * World: the order diagram. The product is named after lattice-based state
+ * primitives, whose merges are joins in a partial order, so the site is drawn
+ * in the notation of partial orders: states as nodes, order as edges, and the
+ * join - where concurrent writes meet - marked in one colour.
+ *
+ * Two materials, chosen by the reader's operating system (or the theme menu):
+ *   light  "paper"  - ink on white, as in a printed mathematics text;
+ *   dark   "board"  - chalk on a dark green-grey slate, as in a seminar room.
+ * The marker (yellow highlighter on paper, yellow chalk on the board) is the
+ * only accent with a structural role: the join, the current page, the current
+ * section. Every text pair below is checked to WCAG 2.2 AA or better; the
+ * marker is never the only cue for a state in the light theme, where it is too
+ * pale to stand alone against the paper.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+:root,
+[data-bs-theme="light"] {
+  /* --- Type ----------------------------------------------------------- */
+  --lt-font-sans: "Recursive Sans Linear", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --lt-font-mono: "Lattice Mono", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --lt-text-xs: 0.75rem;      /* 12px - fine print */
+  --lt-text-sm: 0.8125rem;    /* 13px - labels, table headers, code */
+  --lt-text-md: 0.875rem;     /* 14px - navigation, tables */
+  --lt-text-base: 1rem;       /* 16px - body */
+  --lt-text-lg: 1.1875rem;    /* 19px - h3, lead */
+  --lt-text-xl: 1.5rem;       /* 24px - h2 */
+  --lt-text-2xl: 2.25rem;     /* 36px - h1 */
+  --lt-text-3xl: 3.25rem;     /* 52px - home thesis */
+
+  --lt-weight-body: 400;
+  --lt-weight-label: 560;
+  --lt-weight-strong: 650;
+  --lt-weight-heading: 720;
+  --lt-weight-display: 780;
+
+  --lt-leading-body: 1.65;
+  --lt-leading-tight: 1.2;
+  --lt-measure: 72ch;
+
+  /* --- Space and shape ------------------------------------------------- */
+  --lt-space-1: 0.25rem;
+  --lt-space-2: 0.5rem;
+  --lt-space-3: 0.75rem;
+  --lt-space-4: 1rem;
+  --lt-space-5: 1.5rem;
+  --lt-space-6: 2rem;
+  --lt-space-7: 3rem;
+  --lt-space-8: 4.5rem;
+  --lt-radius-sm: 3px;
+  --lt-radius-md: 6px;
+  --lt-header-height: 60px;
+
+  /* --- Paper (light) ---------------------------------------------------- */
+  --lt-surface: #ffffff;          /* the page */
+  --lt-surface-sunken: #f4f5f7;   /* code, inputs, quiet panels */
+  --lt-surface-raised: #ffffff;   /* menus, popovers */
+  --lt-ink: #15191f;              /* text, nodes; 17.6:1 on surface */
+  --lt-ink-2: #4b5361;            /* secondary text; 7.8:1 */
+  --lt-ink-3: #646c79;            /* captions, metadata; 5.3:1 (4.9:1 on sunken) */
+  --lt-rule: #dfe3e8;             /* hairlines between rows */
+  --lt-rule-strong: #c3c9d1;      /* spines, borders, hollow nodes */
+  --lt-link: #2234b0;             /* blue ink, as hyperref sets a paper's links; 9.6:1 */
+  --lt-link-hover: #17247d;
+  --lt-marker: #ffd23f;           /* the join; ink on marker is 12.2:1 */
+  --lt-marker-soft: #fff1bf;      /* highlighter band behind text */
+  --lt-marker-ink: #15191f;       /* text set on the marker */
+  --lt-focus: #2234b0;            /* focus ring; 9.6:1 against the page */
+  --lt-inline-code-bg: #edf0f4;
+  --lt-code-bg: #f4f5f7;
+  --lt-code-ink: #1d2230;
+  --lt-shadow: 0 1px 2px rgba(21, 25, 31, 0.06), 0 8px 24px rgba(21, 25, 31, 0.08);
+
+  /* Semantic roles for callouts */
+  --lt-info: #2234b0;
+  --lt-warning: #8a5300;          /* 6.1:1 */
+  --lt-danger: #b42318;           /* 6.3:1 */
+  --lt-success: #1d7433;          /* 5.8:1 */
+
+  /* Syntax (highlight.js token roles) */
+  --lt-syn-keyword: #2234b0;
+  --lt-syn-type: #0a6b62;
+  --lt-syn-string: #1d7433;
+  --lt-syn-number: #a1401b;
+  --lt-syn-comment: #646c79;
+  --lt-syn-meta: #7b3a99;
+
+  /* --- Order-diagram primitives ---------------------------------------
+   * Shared by the sidebar spine, the in-page chain, the breadcrumb, the
+   * home page's join diagram, and anything else that draws the notation.
+   *   node         a state, a page, a section
+   *   node-hollow  the bottom element, an unreleased package, a page not yet
+   *                visited in a chain
+   *   concurrent   two states neither of which is above the other
+   *   join         their least upper bound - the merged state; the current
+   *                position in any chain
+   *   edge         the covering relation, drawn upward in a Hasse diagram
+   */
+  --lt-diagram-node: var(--lt-ink);
+  --lt-diagram-node-hollow: var(--lt-surface);
+  --lt-diagram-node-ring: var(--lt-rule-strong);
+  --lt-diagram-concurrent: var(--lt-link);
+  --lt-diagram-join: var(--lt-marker);
+  --lt-diagram-join-ring: var(--lt-ink);
+  --lt-diagram-edge: var(--lt-rule-strong);
+  --lt-diagram-edge-active: var(--lt-ink);
+  --lt-diagram-edge-width: 1.5px;
+  --lt-diagram-node-size: 7px;
+  --lt-diagram-node-size-lg: 11px;
+  --lt-diagram-ring-width: 1.5px;
+
+  /* --- Motion ---------------------------------------------------------- */
+  --lt-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --lt-duration-fast: 140ms;
+  --lt-duration: 220ms;
+  --lt-duration-slow: 700ms;
+}
+
+[data-bs-theme="dark"] {
+  /* --- Board (dark) ---------------------------------------------------- */
+  --lt-surface: #101613;          /* slate */
+  --lt-surface-sunken: #0b100d;
+  --lt-surface-raised: #151c18;
+  --lt-ink: #e4e9e5;              /* chalk; 14.9:1 */
+  --lt-ink-2: #a8b3ac;            /* 8.5:1 */
+  --lt-ink-3: #8b978f;            /* 6.0:1 */
+  --lt-rule: #26302b;
+  --lt-rule-strong: #3a4640;
+  --lt-link: #f2d04b;             /* yellow chalk; 12.1:1 */
+  --lt-link-hover: #ffe07a;
+  --lt-marker: #f2d04b;
+  --lt-marker-soft: rgba(242, 208, 75, 0.14);
+  --lt-marker-ink: #101613;       /* slate on chalk, 12.1:1 */
+  --lt-focus: #f2d04b;
+  --lt-inline-code-bg: #1b241f;
+  --lt-code-bg: #0b100d;
+  --lt-code-ink: #dde3df;
+  --lt-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.45);
+
+  --lt-info: #a9b8ff;
+  --lt-warning: #f2b17a;
+  --lt-danger: #ff9a8f;
+  --lt-success: #a8d98f;
+
+  --lt-syn-keyword: #a9b8ff;
+  --lt-syn-type: #72d1c5;
+  --lt-syn-string: #a8d98f;
+  --lt-syn-number: #f2b17a;
+  --lt-syn-comment: #8b978f;
+  --lt-syn-meta: #d7a9f2;
+
+  --lt-diagram-node: var(--lt-ink);
+  --lt-diagram-node-hollow: var(--lt-surface);
+  --lt-diagram-node-ring: var(--lt-rule-strong);
+  --lt-diagram-concurrent: #a9b8ff;
+  --lt-diagram-join: var(--lt-marker);
+  --lt-diagram-join-ring: var(--lt-marker);
+  --lt-diagram-edge: var(--lt-rule-strong);
+  --lt-diagram-edge-active: var(--lt-ink);
+}

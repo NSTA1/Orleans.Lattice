@@ -2352,8 +2352,44 @@ internal sealed partial class BPlusLeafGrain
     /// <c>OnDeactivateAsync</c> (and thus this hook) by design; the persisted
     /// checkpoint still bounds the next activation's replay cost.
     /// </para>
+    /// <para>
+    /// SKIPS, rather than faults, once the deactivation deadline has torn the
+    /// activation down (issue #3393): the token is checked before the first
+    /// state read, and an invalid-activation fault raised while the token is
+    /// cancelled is caught. Both are counted on the existing
+    /// <c>snapshot_capture</c> reason of
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierFailures"/>. The catch
+    /// is narrow - an <see cref="InvalidOperationException"/> that is not an
+    /// <see cref="ILatticeDomainFault"/>, only while the token is cancelled - so
+    /// the same exception with a live token still propagates into the barrier's
+    /// fault containment. A caller passing <see cref="CancellationToken.None"/>
+    /// can never reach either arm and sees the previous behaviour exactly.
+    /// </para>
     /// </summary>
-    private async Task TryCaptureSnapshotOnDeactivateAsync(CancellationToken cancellationToken)
+    internal async Task TryCaptureSnapshotOnDeactivateAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierSnapshotCapture, fault: null);
+            return;
+        }
+
+        try
+        {
+            await TryCaptureSnapshotOnDeactivateCoreAsync(cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+            when (cancellationToken.IsCancellationRequested && ex is not ILatticeDomainFault)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierSnapshotCapture, ex);
+        }
+    }
+
+    /// <summary>
+    /// The body of <see cref="TryCaptureSnapshotOnDeactivateAsync"/>, without
+    /// its teardown skip.
+    /// </summary>
+    private async Task TryCaptureSnapshotOnDeactivateCoreAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
         {

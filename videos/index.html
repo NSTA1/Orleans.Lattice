@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Orleans.Lattice video workspace - smoke test</title>
+    <link rel="stylesheet" href="assets/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="assets/brand/motion.js"></script>
+    <script src="assets/brand/site/join-figures.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Workspace smoke test, not an episode. The videos lane
+      (.github/workflows/videos.yml) lints, checks and draft-renders this
+      composition to prove the toolchain end to end: the site's design system
+      read through the brand seam, a variable-driven shared component, the
+      site's canonical join figure at camera scale, and GSAP and its plugins
+      served from node_modules rather than a CDN. Episodes are standalone
+      compositions under compositions/episodes/.
+    -->
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="10"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+    >
+      <div
+        id="title-card"
+        data-composition-id="title-card"
+        data-composition-src="compositions/components/title-card.html"
+        data-start="0"
+        data-duration="3"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Orleans.Lattice","title":"Video workspace","subtitle":"Toolchain smoke test"}'
+      ></div>
+      <div
+        id="join-diagram"
+        data-composition-id="join-diagram"
+        data-composition-src="compositions/components/join-diagram.html"
+        data-start="3"
+        data-duration="7"
+        data-track-index="0"
+        data-variable-values='{"scenario":"gcounter","heading":"Two concurrent writes, one join","redeliver":true}'
+      ></div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

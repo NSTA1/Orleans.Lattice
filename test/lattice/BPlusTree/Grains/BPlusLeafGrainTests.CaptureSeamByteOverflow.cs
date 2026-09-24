@@ -403,35 +403,33 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     /// exclusion is therefore pinned together with its escape.
     /// </para>
     /// <para>
-    /// Driven through <c>IGrainBase.OnDeactivateAsync</c>, the real Orleans
-    /// lifecycle seam that supplies the deactivation token, rather than by
-    /// reflecting into the private capture. That distinction is load-bearing
-    /// here: reaching a production helper by reflection is exactly how the
-    /// pre-existing byte-bound fixture stayed green for the whole life of this
-    /// defect while the only call site was unreachable.
+    /// Driven through <c>TryCaptureSnapshotOnDeactivateAsync</c>, the
+    /// production method the deactivation hook's <c>snapshot_capture</c>
+    /// barrier calls, rather than by reflecting into the private capture.
+    /// That distinction is load-bearing here: reaching a production helper by
+    /// reflection is exactly how the pre-existing byte-bound fixture stayed
+    /// green for the whole life of this defect while the only call site was
+    /// unreachable.
     /// </para>
     /// <para>
-    /// <b>The deadline expires DURING the teardown, not before it, and that is
-    /// the only shape that tests anything.</b> An already-cancelled token is
-    /// the obvious way to write this test and it is worthless: the hook's very
-    /// first step, <c>ILeafProjection.FlushCheckpointAsync</c>, opens with
-    /// <c>ThrowIfCancellationRequested</c>, so the capture seam is never
-    /// reached and both assertions below hold for any implementation of the
-    /// guard. Measured, not assumed - written that way first, it stayed green
-    /// with the guard deleted. The token is therefore cancelled from the state
-    /// store's write callback, which fires inside that first flush, reproducing
-    /// the real #1965 shape: a deactivation deadline that expires partway
-    /// through teardown, after the hook has committed to running.
+    /// <b>The deadline expires DURING the capture, not before it, and that is
+    /// the only shape that reaches this guard.</b> Since issue #3393 the
+    /// barrier skips outright on a token that is already cancelled when it
+    /// starts, which subsumes this guard for a deadline that expired earlier in
+    /// the teardown (<c>BPlusLeafGrainTests.DeactivationPinFinalAdvance</c>
+    /// pins that skip). What remains for the seam to decide is a deadline that
+    /// expires after the barrier has committed to capturing. The token is
+    /// therefore cancelled from the state store's read callback, which fires
+    /// on the capture's first state read - after the barrier's entry check and
+    /// before the pre-split guard.
     /// </para>
     /// </summary>
     [Test]
     public async Task Capture_on_an_expired_deactivation_deadline_defers_the_division_to_the_next_capture()
     {
-        // A non-zero materialiser interval is what leaves the checkpoint advance
-        // PENDING rather than flushing it inline. The deactivation hook's own
-        // FlushCheckpointAsync then performs the write, which is what fires the
-        // state store's OnWriteState callback below - the only point inside the
-        // teardown at which this test can expire the deadline.
+        // A non-zero materialiser interval leaves the checkpoint advance
+        // PENDING; the explicit flush below makes it durable, exactly as the
+        // hook's checkpoint_flush barrier does before snapshot_capture runs.
         var h = CreateOversizedLeaf(
             maxLeafBytes: 1024,
             entries: 64,
@@ -439,31 +437,35 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             materialiserCheckpointInterval: TimeSpan.FromHours(1));
         await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
 
-        // Reaching the seam from the deactivation hook is not automatic, and a
-        // test that skips this step passes vacuously.
-        // TryCaptureSnapshotOnDeactivateAsync applies the #1535 no-loss gate
-        // first and returns without capturing unless this activation produced
-        // cache-backed coverage. Queue a real checkpoint advance through the
-        // projection seam so the hook's own FlushCheckpointAsync latches
-        // _checkpointAdvancedThisActivation and the capture is actually
-        // attempted - otherwise the assertions below hold no matter what the
-        // pre-split guard does.
+        // Reaching the seam from the deactivation capture is not automatic, and
+        // a test that skips this step passes vacuously. The capture applies the
+        // #1535 no-loss gate first and returns without capturing unless this
+        // activation produced cache-backed coverage. Queue and persist a real
+        // checkpoint advance so _checkpointAdvancedThisActivation is latched and
+        // the capture is actually attempted - otherwise the assertions below
+        // hold no matter what the pre-split guard does.
         await ((ILeafProjection)h.Grain).SetCheckpointOffsetAsync(64L);
+        await ((ILeafProjection)h.Grain).FlushCheckpointAsync();
 
         using var deadline = new CancellationTokenSource();
-        h.State.OnWriteState = _ => deadline.Cancel();
+        h.State.OnStateAccess = () => deadline.Cancel();
 
-        await ((IGrainBase)h.Grain).OnDeactivateAsync(
-            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
-            deadline.Token);
+        await h.Grain.TryCaptureSnapshotOnDeactivateAsync(deadline.Token);
+
+        h.State.OnStateAccess = null;
+
+        Assert.That(
+            deadline.IsCancellationRequested, Is.True,
+            "POSITIVE CONTROL: the capture never read state, so the deadline never expired "
+            + "inside it and the assertions below say nothing about the pre-split guard.");
 
         Assert.That(
             h.Saved, Is.Not.Empty,
-            "POSITIVE CONTROL: the deactivation hook did not capture at all, so the assertion "
-            + "below would hold for any implementation of the pre-split guard. Either the "
-            + "#1535 no-loss gate declined (re-check that the queued checkpoint advance above "
-            + "still latches _checkpointAdvancedThisActivation) or the token was already "
-            + "cancelled on entry and FlushCheckpointAsync threw before the seam.");
+            "POSITIVE CONTROL: the deactivation capture did not capture at all, so the "
+            + "assertion below would hold for any implementation of the pre-split guard. Either "
+            + "the #1535 no-loss gate declined (re-check that the persisted checkpoint advance "
+            + "above still latches _checkpointAdvancedThisActivation) or the barrier skipped "
+            + "because the token was cancelled before its entry check.");
 
         Assert.That(
             h.SiblingBatches, Is.Empty,
@@ -472,7 +474,6 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
 
         // The deferral must not be a refusal. No reactivation, no operator
         // action, no configuration change - just the next capture.
-        h.State.OnWriteState = null;
         await h.Grain.CaptureSnapshotAsync();
 
         Assert.That(

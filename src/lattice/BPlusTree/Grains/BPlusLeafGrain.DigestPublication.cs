@@ -508,27 +508,60 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     internal async Task FlushPendingDigestPublishAsync(CancellationToken cancellationToken = default)
     {
-        var timer = System.Threading.Interlocked.Exchange(ref _digestPublishTimer, null);
-        timer?.Dispose();
-
-        if (!_maintainProjectionDigest) return;
-        if (!_digestDirty) return;
-        if (state.State.ParentId is not { } parentId) return;
-        if (cancellationToken.IsCancellationRequested) return;
+        if (!TryBeginPendingDigestDrain(cancellationToken, out var parentId)) return;
 
         try
         {
-            await PublishCurrentDigestAsync(parentId).WaitAsync(cancellationToken);
-            _digestDirty = false;
-            LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag, LeafTenantTag());
+            await PublishDrainedDigestAsync(parentId, cancellationToken);
         }
         catch
         {
             // Match OnDeactivateAsync's swallow-on-shutdown contract. This also
-            // absorbs the deadline cancellation above, which is the point: the
-            // grain returns promptly instead of overrunning the deactivation
-            // budget, and the digest is republished on the next mutation.
+            // absorbs the deadline cancellation, which is the point: the grain
+            // returns promptly instead of overrunning the deactivation budget,
+            // and the digest is republished on the next mutation.
         }
+    }
+
+    /// <summary>
+    /// Whether a graceful deactivation has a pending coalesced digest publish
+    /// to drain: the coalescing window is active and the digest is dirty. This
+    /// is the gate the <c>digest_publish</c> barrier and
+    /// <see cref="FlushPendingDigestPublishAsync"/> apply, read from fields only
+    /// so it is safe on an activation that is being torn down.
+    /// </summary>
+    private bool HasPendingCoalescedDigestPublish =>
+        _digestCoalescingWindowMs > 0 && _maintainProjectionDigest && _digestDirty;
+
+    /// <summary>
+    /// Retires the pending coalesced publish timer and reports whether a dirty
+    /// digest remains to drain to a parent before the deadline.
+    /// </summary>
+    private bool TryBeginPendingDigestDrain(CancellationToken cancellationToken, out GrainId parentId)
+    {
+        var timer = System.Threading.Interlocked.Exchange(ref _digestPublishTimer, null);
+        timer?.Dispose();
+
+        parentId = default;
+        if (!_maintainProjectionDigest) return false;
+        if (!_digestDirty) return false;
+        if (state.State.ParentId is not { } parent) return false;
+        if (cancellationToken.IsCancellationRequested) return false;
+
+        parentId = parent;
+        return true;
+    }
+
+    /// <summary>
+    /// Publishes a drained digest and records <c>deactivation_flush</c> on
+    /// <see cref="LatticeMetrics.LeafDigestPublishes"/>. Faults propagate; the
+    /// callers decide whether to swallow or count them.
+    /// </summary>
+    private async Task PublishDrainedDigestAsync(GrainId parentId, CancellationToken cancellationToken)
+    {
+        await PublishCurrentDigestAsync(parentId).WaitAsync(cancellationToken);
+        _digestDirty = false;
+        LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag, LeafTenantTag());
     }
 
     /// <summary>

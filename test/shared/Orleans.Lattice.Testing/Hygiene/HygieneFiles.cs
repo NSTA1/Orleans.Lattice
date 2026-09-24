@@ -33,9 +33,14 @@ public static class HygieneFiles
     // Every extension tracked in this repository that holds text, plus common
     // neighbours that would otherwise trip the unclassified guard on their
     // first appearance. Kept exhaustive by that guard rather than by review.
+    // The second row is the text the `videos/` HyperFrames workspace produces
+    // or configures: caption tracks, transcript streams, ES modules, and the
+    // Node toolchain dotfiles (`.nvmrc` has no stem, so its whole name is its
+    // extension, exactly like `.gitignore`).
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".md", ".csproj", ".razor", ".ps1", ".psm1", ".json", ".yml", ".yaml",
+        ".srt", ".vtt", ".jsonl", ".mjs", ".cjs", ".nvmrc", ".npmrc",
         ".css", ".env", ".bicep", ".bicepparam", ".mutation", ".sql", ".py",
         ".proto", ".gitignore", ".dockerignore", ".gitattributes", ".gitmodules",
         ".props", ".targets", ".js", ".ts", ".svg", ".sh", ".slnx", ".sln",
@@ -47,10 +52,14 @@ public static class HygieneFiles
     // Extensions that hold binary payloads, where a scanned byte sequence is
     // meaningless and would only produce noise. `.log` files are local-only run
     // artefacts and none is tracked, so listing it here preserves the previous
-    // behaviour rather than introducing a new exclusion.
+    // behaviour rather than introducing a new exclusion. The video and audio
+    // row is classified ahead of its first tracked file so that the `videos/`
+    // workspace cannot fail every content gate the day it commits a render,
+    // a narration track, or a still, whichever hosting option is chosen.
     private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".pdf",
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".pdf", ".webp", ".avif",
+        ".mp4", ".webm", ".mov", ".m4a", ".mp3", ".wav", ".ogg", ".opus", ".flac",
         ".ttf", ".otf", ".woff", ".woff2", ".eot",
         ".dll", ".exe", ".pdb", ".so", ".dylib",
         ".zip", ".tar", ".gz", ".7z", ".nupkg", ".snk",

@@ -191,6 +191,25 @@ public sealed class TrackedFileEnumerationTests
     }
 
     [Test]
+    public void Classify_recognises_the_video_workspace_formats_before_they_are_tracked()
+    {
+        Assert.Multiple(() =>
+        {
+            // Renders, narration, and stills: binary payloads the content gates must skip.
+            foreach (var binary in new[] { "episode.mp4", "overlay.webm", "master.mov", "narration.wav", "narration.m4a", "bed.mp3", "still.webp" })
+            {
+                Assert.That(HygieneFiles.Classify("videos/" + binary), Is.EqualTo(HygieneFileKind.Binary), binary);
+            }
+
+            // Captions, transcripts, and Node toolchain files: text the gates must read.
+            foreach (var text in new[] { "captions.vtt", "captions.srt", "transcript.jsonl", "tool.mjs", ".nvmrc", ".npmrc" })
+            {
+                Assert.That(HygieneFiles.Classify("videos/" + text), Is.EqualTo(HygieneFileKind.Text), text);
+            }
+        });
+    }
+
+    [Test]
     public void ShouldScan_throws_for_an_unclassified_file_rather_than_skipping_it()
     {
         Assert.Multiple(() =>

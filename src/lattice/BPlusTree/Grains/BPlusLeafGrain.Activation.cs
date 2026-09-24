@@ -1589,19 +1589,47 @@ internal sealed partial class BPlusLeafGrain
     /// a repair that might yet succeed, so it does not reopen the non-convergence
     /// the #3389 re-arm exists to prevent. It is keyed on the persisted
     /// checkpoint signature, and it clears the moment any partition's persisted
-    /// checkpoint changes, which is the only thing that can change the verdict.
-    /// It is also per activation, so an operator rebuild, which deactivates the
-    /// leaf, always starts from a clean slate.
+    /// checkpoint changes through a genuine apply or an operator reset, which is
+    /// the only thing that can change the verdict. A checkpoint <em>hint</em>
+    /// cannot clear it: the hint seam refuses to advance the latched partition
+    /// (issue #3477), because stamping a captured WAL head over the trimmed,
+    /// never-applied range would both lose that range silently and change the
+    /// signature, clearing the latch with nothing repaired. It is also per
+    /// activation, so an operator rebuild, which deactivates the leaf, always
+    /// starts from a clean slate.
     /// </para>
     /// </summary>
     private LeafProjectionStaleDriveLatch? _projectionStaleDriveLatch;
 
     /// <summary>
+    /// The WAL partition ordinal whose replay last threw
+    /// <see cref="LeafProjectionStaleException"/> on this activation, or
+    /// <c>-1</c> when unknown. Stamped immediately before each stale throw in
+    /// the replay core and reset at the start of each starvation drive, so
+    /// <see cref="LatchProjectionStaleDrive"/> can record which partition the
+    /// verdict is about (issue #3477). The exception carries no partition of its
+    /// own, and adding one would widen the public surface.
+    /// </summary>
+    private int _lastStaleReplayPartition = -1;
+
+    /// <summary>
+    /// The latch whose hint refusal has already been logged, so a split retry
+    /// that re-offers the same hint does not repeat the warning.
+    /// </summary>
+    private LeafProjectionStaleDriveLatch? _checkpointHintRefusalLoggedFor;
+
+    /// <summary>
     /// The verdict <see cref="_projectionStaleDriveLatch"/> holds: the persisted
-    /// checkpoint signature the stale fault was observed at, and the fault itself.
+    /// checkpoint signature the stale fault was observed at, the partition the
+    /// replay found stale (<c>-1</c> when unknown, which is treated as every
+    /// partition), that partition's own persisted checkpoint at the time, the
+    /// partition count the signature was computed over, and the fault itself.
     /// </summary>
     private sealed record LeafProjectionStaleDriveLatch(
         long PersistedCheckpointSignature,
+        int Partition,
+        long PartitionCheckpoint,
+        int PartitionCount,
         LeafProjectionStaleException Fault);
 
     /// <summary>
@@ -1630,6 +1658,32 @@ internal sealed partial class BPlusLeafGrain
             && latch.PersistedCheckpointSignature == ComputePersistedCheckpointSignature(partitionCount);
 
     /// <summary>
+    /// Whether a stale verdict still covers <paramref name="partition"/>
+    /// (issue #3477). When the latch names a partition, the test is keyed on
+    /// that partition's OWN persisted checkpoint, not on the summed signature
+    /// the drive latch uses: a split offers hints for every partition in turn,
+    /// and a legitimate advance of a healthy partition ahead of the stale one
+    /// changes the sum, which would otherwise release the stale partition's
+    /// hint one iteration later. A latch whose partition is unknown refuses
+    /// every partition while the summed signature holds, because the only safe
+    /// answer to "which range was never applied" when it cannot be answered is
+    /// all of them.
+    /// </summary>
+    /// <param name="partition">The WAL partition ordinal to test.</param>
+    private bool IsPartitionStaleLatched(int partition)
+    {
+        if (_projectionStaleDriveLatch is not { } latch)
+        {
+            return false;
+        }
+
+        return latch.Partition < 0
+            ? latch.PersistedCheckpointSignature == ComputePersistedCheckpointSignature(latch.PartitionCount)
+            : latch.Partition == partition
+                && GetPersistedCheckpointForPartition(partition) == latch.PartitionCheckpoint;
+    }
+
+    /// <summary>
     /// Records a stale verdict from a starvation drive and logs it once per
     /// verdict. The log is the operator's signal: the timer path swallows the
     /// fault after this point, so this line is what names the leaf and the
@@ -1644,7 +1698,13 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        _projectionStaleDriveLatch = new LeafProjectionStaleDriveLatch(signature, fault);
+        var stalePartition = _lastStaleReplayPartition;
+        _projectionStaleDriveLatch = new LeafProjectionStaleDriveLatch(
+            signature,
+            stalePartition,
+            stalePartition >= 0 ? GetPersistedCheckpointForPartition(stalePartition) : 0L,
+            partitionCount,
+            fault);
         ResolveLogger()?.LogError(
             fault,
             "Leaf {Leaf} on tree {Tree} cannot advance its durable projection checkpoint: the WAL has been trimmed past an offset its persisted checkpoint still needs and no snapshot covers the gap. Replaying that checkpoint cannot converge, so further starvation drives on this activation are suppressed until a persisted checkpoint changes. This leaf keeps its WAL retention pin and nothing automatic will repair it. The live activation may hold the only copy of writes in the trimmed range: capture a logical backup or export of the tree BEFORE this activation is recycled or the silo restarts, then rebuild or restore the tree. See docs/lattice/projection-rebuild.md.",
@@ -1727,6 +1787,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _starvationDriveInFlight = true;
+        _lastStaleReplayPartition = -1;
 
         var startedAt = Stopwatch.GetTimestamp();
         var driveCts = new CancellationTokenSource(budget);
@@ -1871,6 +1932,29 @@ internal sealed partial class BPlusLeafGrain
     {
         var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
 
+        // Issue #3476: make the replay's advance DURABLE before anything below
+        // republishes the pin. The replay advances the checkpoint through
+        // SetCheckpointOffsetAsync, which only records it in the pending map
+        // and defers the persist behind the coalescing window - a window whose
+        // clock restarts at every activation, so a drive over a few hundred
+        // entries on a freshly reactivated dormant leaf routinely ends with its
+        // whole advance still pending. ResolveDurablePinForPartition bounds the
+        // published offset by the PERSISTED checkpoint, which is what keeps the
+        // WAL GC from trimming past the offset the next replay starts from; but
+        // it also means an unpersisted advance would republish the SAME pin,
+        // and the drive - whose whole purpose is to move this consumer's floor
+        // - would move nothing. Persisting here is what lets the flush below
+        // carry the advance.
+        //
+        // This is the same flush the timer, the entry threshold, the
+        // deactivation hook and BankCancelledWarmReplayProgressAsync already
+        // run, over offsets the replay has already clamped behind every
+        // unresolved deferred terminal and saga prepare, so it claims nothing a
+        // later flush would not. It is clock-agnostic: it persists whatever
+        // advance is pending regardless of the leaf's frontier clock, and is a
+        // no-op when the replay recorded none.
+        await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+
         // Advancing the checkpoint is only HALF of what the pin needs. The pin
         // is min(checkpoint, coverage), so a checkpoint that advances over
         // coverage which does not move republishes the SAME offset and the leaf
@@ -1946,7 +2030,16 @@ internal sealed partial class BPlusLeafGrain
         // any other report would publish, and the pin store merges by
         // monotonic max, so a republish can only ever hold a pin where it is
         // or move it forward.
-        var emptyWalReleases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+        //
+        // Issue #3453: the same holds for a never-written leaf (Clock == Zero),
+        // which previously never reached this publish at all - the flush turned
+        // every Zero-clock leaf away. The FlushCheckpointAsync above has already
+        // persisted the replay's scanned-through advance over entries this leaf
+        // skipped as another leaf's work, so the flush can now publish that
+        // PERSISTED checkpoint as (Zero, X); a never-written leaf whose replay
+        // recorded no advance and whose persisted checkpoint is still -1 has
+        // nothing to release, and the flush stays a no-op for it.
+        var releases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
 
         // Report the property the pin actually depends on, not a proxy for
         // it. `advanced` alone is the same class of mistake this issue is
@@ -1961,9 +2054,11 @@ internal sealed partial class BPlusLeafGrain
         // whose WAL is empty has genuinely lifted a block, but it reaches that
         // outcome without replaying anything, so the replay-based predicate
         // above scores it NoAdvance and the sweep would report a repair it
-        // actually performed as a failure.
+        // actually performed as a failure. The #3453 never-written release is
+        // counted on the same arm for the same reason: a leaf with no applied
+        // data has no coverage to stamp, so the first arm cannot score it.
         return (advanced && !HasCheckpointedPartitionWithoutCoverage(partitionCount))
-                || emptyWalReleases > 0
+                || releases > 0
             ? LeafStarvationDriveOutcome.Lifted
             : LeafStarvationDriveOutcome.NoAdvance;
     }
@@ -3292,6 +3387,7 @@ internal sealed partial class BPlusLeafGrain
                 var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
                 if (tail > persistedCheckpoint + 1)
                 {
+                    _lastStaleReplayPartition = partition;
                     throw new LeafProjectionStaleException(
                         $"Leaf projection for tree '{treeId}' partition {partition} cannot be rebuilt " +
                         $"from the WAL: the durable projection checkpoint (offset {persistedCheckpoint}) " +
@@ -3392,6 +3488,7 @@ internal sealed partial class BPlusLeafGrain
                     case FallOffLogDecision.FullRebuildFromWal:
                     case FallOffLogDecision.Fail:
                     default:
+                        _lastStaleReplayPartition = partition;
                         throw new LeafProjectionStaleException(
                             $"Leaf projection for tree '{treeId}' partition {partition} cannot be recovered " +
                             $"from the WAL alone (decision={decision}, persistedCheckpoint={checkpoint}): the " +

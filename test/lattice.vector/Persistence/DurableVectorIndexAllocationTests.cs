@@ -6,16 +6,16 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 /// <summary>
 /// Allocation contracts for the durable index's load, query, and update paths.
 /// <para>
-/// Every figure is a <b>differential</b> measurement: the same path runs at two
-/// loop sizes after a warm-up and the assertion is on the difference. A one-off
-/// runtime cost - tiered JIT, on-stack replacement landing inside the window, a
-/// pool's first rent - appears in both measurements and cancels, while a genuine
-/// per-iteration allocation scales with the loop and survives. An absolute
-/// "allocated zero bytes" assertion cannot tell those apart, so it passes in
-/// isolation and fails in a larger batch where the shared test host has already
-/// compiled a different set of methods. That failure mode has cost this
-/// repository real rework twice, so it is designed out here rather than tuned
-/// around.
+/// Every <b>synchronous</b> figure is a <b>differential</b> measurement: the
+/// same path runs at two loop sizes after a warm-up and the assertion is on the
+/// difference. A one-off runtime cost - tiered JIT, on-stack replacement landing
+/// inside the window, a pool's first rent - appears in both measurements and
+/// cancels, while a genuine per-iteration allocation scales with the loop and
+/// survives. An absolute "allocated zero bytes" assertion cannot tell those
+/// apart, so it passes in isolation and fails in a larger batch where the shared
+/// test host has already compiled a different set of methods. That failure mode
+/// has cost this repository real rework twice, so it is designed out here rather
+/// than tuned around.
 /// </para>
 /// <para>
 /// The synchronous query and update paths are measured with the per-thread
@@ -23,6 +23,21 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 /// measured with the process-wide precise counter instead, because a
 /// continuation may resume on a different thread and a per-thread figure would
 /// then be meaningless rather than merely noisy.
+/// </para>
+/// <para>
+/// The process-wide counter changes which aggregation is sound, so the
+/// asynchronous probe is <b>not</b> differential. Other threads' traffic is a
+/// noise floor that can only ever <i>add</i> to a sample, and a difference of
+/// two such samples inherits that noise with either sign: a spike in the
+/// narrower window drives the difference below the truth, and a minimum over
+/// attempts then selects exactly that attempt. The asynchronous probe instead
+/// reports the least an absolute window of the loop allocated. The counter is
+/// monotonic and every byte the loop allocates lands inside the window, so each
+/// sample - and therefore their minimum - is an upper bound on what the loop
+/// allocated that noise cannot pull below the truth. It suits the upper-bound
+/// budgets it serves: it can over-report, which a budget turns into a visible
+/// red, and it cannot under-report, which would turn a budget into a silent
+/// pass. See issue #3419.
 /// </para>
 /// <para>
 /// Every assertion here about an <b>asynchronous</b> path presupposes an
@@ -71,16 +86,24 @@ public sealed class DurableVectorIndexAllocationTests
     };
 
     /// <summary>
-    /// The number of times each differential measurement is repeated. The
-    /// <b>minimum</b> across attempts is kept, never the first sample and never a
-    /// short circuit on the first non-positive one: on a loop that genuinely
-    /// allocates, a single noisy attempt where the small window absorbed more
-    /// noise than the large one reports allocation-free, which is the exact false
-    /// negative this fixture exists to prevent. A loop that truly allocates every
-    /// iteration cannot have a non-positive minimum, and a clean loop's minimum
-    /// picks the least noisy attempt.
+    /// The number of times each measurement is repeated. The <b>minimum</b>
+    /// across attempts is kept, never the first sample and never a short circuit
+    /// on the first non-positive one. For the synchronous differential probe the
+    /// per-thread counter has no other-thread noise floor, so a clean loop's
+    /// minimum picks the least disturbed attempt. For the asynchronous probe
+    /// every sample is an upper bound on the loop's own allocation, so the
+    /// minimum is the tightest upper bound on offer and still cannot fall below
+    /// the truth.
     /// </summary>
     private const int Attempts = 5;
+
+    /// <summary>
+    /// The smallest heap object the runtime can allocate: a header, a method
+    /// table pointer, and one pointer-sized payload slot. It is a lower bound on
+    /// what a planted <c>new object()</c> costs on any platform, so a probe that
+    /// reports less than this per planted allocation has provably under-reported.
+    /// </summary>
+    private static readonly long MinimumObjectBytes = 3L * IntPtr.Size;
 
     /// <summary>
     /// The battery test's sink. <b>Load-bearing: do not simplify.</b> A reference
@@ -136,7 +159,73 @@ public sealed class DurableVectorIndexAllocationTests
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
-    private static async Task<long> PerIterationDeltaAsync(Func<ValueTask> action, int iterations)
+    private static Task<long> AllocatedOverLoopUpperBoundAsync(Func<ValueTask> action, int iterations)
+        => AllocatedOverLoopUpperBoundAsync(action, iterations, ProcessWideAllocatedBytes);
+
+    /// <summary>
+    /// The asynchronous probe: the least any of <see cref="Attempts"/> windows of
+    /// <paramref name="iterations"/> runs allocated, as read from
+    /// <paramref name="allocatedBytes"/>. Each window is an absolute reading of a
+    /// monotonic counter, so it contains every byte the loop allocated plus
+    /// whatever other threads allocated meanwhile, and the minimum is therefore
+    /// an upper bound that noise can only raise. It deliberately does not
+    /// subtract one noisy window from another, and it does not clamp: a
+    /// negative figure can only come from a counter that ran backwards, which
+    /// is a broken instrument and is refused rather than reported as zero.
+    /// </summary>
+    private static async Task<long> AllocatedOverLoopUpperBoundAsync(
+        Func<ValueTask> action, int iterations, Func<long> allocatedBytes)
+    {
+        // Full-size warm-up, as in the synchronous probe, so tiering and
+        // on-stack replacement have settled before any window is read. A
+        // one-off that still lands in a window only raises that window, and the
+        // minimum across attempts discards it.
+        for (var i = 0; i < iterations * 2; i++)
+        {
+            await action();
+        }
+
+        var least = long.MaxValue;
+        for (var attempt = 0; attempt < Attempts; attempt++)
+        {
+            least = Math.Min(least, await AllocatedOverLoopAsync(action, iterations, allocatedBytes));
+        }
+
+        if (least < 0)
+        {
+            throw new InvalidOperationException(
+                $"The allocation counter ran backwards ({least} bytes over a window), so it cannot "
+                + "bound anything. Refusing to report a figure rather than clamping it to zero.");
+        }
+
+        return least;
+    }
+
+    private static async Task<long> AllocatedOverLoopAsync(
+        Func<ValueTask> action, int iterations, Func<long> allocatedBytes)
+    {
+        var before = allocatedBytes();
+        for (var i = 0; i < iterations; i++)
+        {
+            await action();
+        }
+
+        return allocatedBytes() - before;
+    }
+
+    // The process-wide precise counter, because an awaited path may resume on a
+    // different thread and the per-thread counter would then report a figure
+    // that is not merely noisy but wrong.
+    private static long ProcessWideAllocatedBytes() => GC.GetTotalAllocatedBytes(precise: true);
+
+    /// <summary>
+    /// The aggregation issue #3419 replaced, retained only as the known-positive
+    /// control that proves the adversarial noise schedules below have teeth: the
+    /// minimum of (doubled window - single window) differences, clamped at zero.
+    /// Never use it to measure anything.
+    /// </summary>
+    private static async Task<long> MinimumOfClampedDifferencesAsync(
+        Func<ValueTask> action, int iterations, Func<long> allocatedBytes)
     {
         for (var i = 0; i < iterations * 2; i++)
         {
@@ -146,26 +235,47 @@ public sealed class DurableVectorIndexAllocationTests
         var best = long.MaxValue;
         for (var attempt = 0; attempt < Attempts; attempt++)
         {
-            var single = await AllocatedOverLoopAsync(action, iterations);
-            var doubled = await AllocatedOverLoopAsync(action, iterations * 2);
+            var single = await AllocatedOverLoopAsync(action, iterations, allocatedBytes);
+            var doubled = await AllocatedOverLoopAsync(action, iterations * 2, allocatedBytes);
             best = Math.Min(best, doubled - single);
         }
 
         return Math.Max(0, best);
     }
 
-    private static async Task<long> AllocatedOverLoopAsync(Func<ValueTask> action, int iterations)
+    /// <summary>
+    /// A process-wide allocation counter with scripted additive noise, standing
+    /// in for other threads allocating while a window is open. Noise is only
+    /// ever added and the running total never decreases, which is the one
+    /// property real other-thread traffic is guaranteed to have, so any probe
+    /// it defeats is defeated by a noise pattern the real counter can produce.
+    /// </summary>
+    private sealed class NoisyAllocationCounter(int period, int phase, long spikeBytes)
     {
-        // The process-wide precise counter, because an awaited path may resume on
-        // a different thread and the per-thread counter would then report a
-        // figure that is not merely noisy but wrong.
-        var before = GC.GetTotalAllocatedBytes(precise: true);
-        for (var i = 0; i < iterations; i++)
-        {
-            await action();
-        }
+        private long _reads;
+        private long _noise;
 
-        return GC.GetTotalAllocatedBytes(precise: true) - before;
+        /// <summary>The number of reads that carried a noise spike.</summary>
+        public int Spikes { get; private set; }
+
+        /// <summary>The number of times the counter was read.</summary>
+        public long Reads => _reads;
+
+        /// <summary>
+        /// Reads the real process-wide counter, first adding a spike of noise
+        /// when this read falls on the schedule, so the spike lands in whichever
+        /// window this read closes.
+        /// </summary>
+        public long Read()
+        {
+            if (_reads++ % period == phase)
+            {
+                _noise += spikeBytes;
+                Spikes++;
+            }
+
+            return ProcessWideAllocatedBytes() + _noise;
+        }
     }
 
     private static void AssertNoPerIterationAllocation(long delta, int iterations, string what)
@@ -179,7 +289,7 @@ public sealed class DurableVectorIndexAllocationTests
         long delta, int iterations, long budget, string what)
     {
         var perRun = (double)delta / iterations;
-        TestContext.Out.WriteLine($"{what}: {perRun:F1} bytes per run across {iterations} extra runs");
+        TestContext.Out.WriteLine($"{what}: at most {perRun:F1} bytes per run across {iterations} runs");
         Assert.That(perRun, Is.LessThanOrEqualTo(budget),
             $"{what} allocated {perRun:F1} bytes per run, above the {budget} byte budget.");
     }
@@ -207,40 +317,123 @@ public sealed class DurableVectorIndexAllocationTests
     [Test]
     public async Task The_asynchronous_allocation_probe_detects_a_loop_that_does_allocate()
     {
-        // The same battery, for the other probe. PerIterationDeltaAsync is what
-        // the flush and load budgets rest on, and until this existed nothing
+        // The same battery, for the other probe. AllocatedOverLoopUpperBoundAsync
+        // is what the flush budget rests on, and until this existed nothing
         // checked that it could see an allocation at all: had it been broken,
-        // those budgets would have passed vacuously and reported nothing, which
-        // is strictly worse than failing because a vacuous gate is invisible.
+        // that budget would have passed vacuously and reported nothing, which is
+        // strictly worse than failing because a vacuous gate is invisible.
         //
-        // The per-iteration allocation is sized, where the synchronous battery
-        // above is content with a bare object, and the asymmetry is load-bearing
-        // rather than arbitrary. The asynchronous probe must read the
-        // process-wide counter (see AllocatedOverLoopAsync), which carries other
-        // threads' traffic as a noise floor the per-thread counter does not have,
-        // and it aggregates by taking the MINIMUM difference across attempts and
-        // clamping at zero. That aggregation is protective for the upper-bound
-        // assertions it was built for and hostile to a lower-bound one: a noise
-        // spike landing in the single-width sample drives that attempt's
-        // difference negative, the minimum selects precisely that attempt, and
-        // the clamp reports a flat zero. A bare object yields roughly 24 kB of
-        // signal here, inside the range ambient noise reaches, and this test duly
-        // failed in Release at that size while passing in Debug. Four kilobytes
-        // an iteration puts the signal three orders of magnitude clear of the
-        // floor, so the assertion turns on whether the probe can see an
-        // allocation rather than on what else the process happened to be doing.
-        var delta = await PerIterationDeltaAsync(
+        // A bare object, exactly as in the synchronous battery. The superseded
+        // differential probe needed a four-kilobyte allocation here to stay
+        // clear of the process-wide noise floor, because a spike in its narrower
+        // window pulled its minimum to zero (#3419). The absolute probe cannot be
+        // pulled below what the loop allocated, so the smallest possible object
+        // is enough, and the assertion is the lower bound rather than merely
+        // non-zero.
+        const int Iterations = 1_000;
+        var allocated = await AllocatedOverLoopUpperBoundAsync(
             () =>
             {
-                _escapeSink = new byte[4096];
+                _escapeSink = new object();
                 return ValueTask.CompletedTask;
             },
-            iterations: 1_000);
+            Iterations);
 
-        Assert.That(delta, Is.GreaterThan(0),
-            "The asynchronous differential probe failed to detect a loop that allocates on every "
-            + "iteration. Either the probe is broken, or the sink stopped escaping and the JIT "
-            + "elided the allocation.");
+        Assert.That(allocated, Is.GreaterThanOrEqualTo(Iterations * MinimumObjectBytes),
+            "The asynchronous probe reported less than the loop provably allocated. Either the "
+            + "probe under-reports, or the sink stopped escaping and the JIT elided the allocation.");
+    }
+
+    [Test]
+    public async Task The_asynchronous_probe_cannot_be_pulled_to_zero_by_noise_that_zeroes_the_superseded_probe()
+    {
+        // The regression test for #3419. A known allocation is planted - one
+        // escaping object per iteration, about 24 kB across the loop - and the
+        // counter is fed additive noise: a spike far larger than the signal
+        // landing in the single-width window of every attempt. That is a pattern
+        // real other-thread traffic can produce, and it is exactly the one the
+        // superseded probe was blind to.
+        const int Iterations = 1_000;
+        const long Spike = 16L * 1024 * 1024;
+        Func<ValueTask> planted = () =>
+        {
+            _escapeSink = new object();
+            return ValueTask.CompletedTask;
+        };
+
+        // Known-positive control: the schedule has teeth. The superseded
+        // aggregation reads four times per attempt (single before/after, doubled
+        // before/after), so period 4, phase 1 lands every spike inside the
+        // single-width window. Its minimum difference goes negative and the clamp
+        // reports a flat zero for a loop that allocates on every iteration.
+        var superseded = new NoisyAllocationCounter(period: 4, phase: 1, Spike);
+        var supersededReading = await MinimumOfClampedDifferencesAsync(planted, Iterations, superseded.Read);
+
+        // The probe the budgets actually use, under the same schedule.
+        var current = new NoisyAllocationCounter(period: 4, phase: 1, Spike);
+        var currentReading = await AllocatedOverLoopUpperBoundAsync(planted, Iterations, current.Read);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(superseded.Spikes, Is.EqualTo(Attempts),
+                "The control must have injected one spike per attempt, or it measured nothing.");
+            Assert.That(supersededReading, Is.Zero,
+                "The noise schedule no longer defeats the superseded probe, so this test no longer "
+                + "demonstrates anything. Re-derive the schedule before trusting the assertion below.");
+            Assert.That(current.Spikes, Is.GreaterThan(0),
+                "No noise reached the probe under test, so the assertion below is unexercised.");
+            Assert.That(currentReading, Is.GreaterThanOrEqualTo(Iterations * MinimumObjectBytes),
+                "The asynchronous probe reported less than the loop provably allocated under additive "
+                + "noise, so an allocation budget resting on it can pass vacuously.");
+        });
+    }
+
+    [TestCase(1, 0)]
+    [TestCase(2, 0)]
+    [TestCase(2, 1)]
+    [TestCase(3, 1)]
+    public async Task The_asynchronous_probe_never_reports_below_a_planted_allocation_under_additive_noise(
+        int period, int phase)
+    {
+        // Noise on every read, on only the reads that open a window, on only the
+        // reads that close one, and out of step with the window altogether. The
+        // probe must stay at or above the planted allocation in every case,
+        // because additive noise on a monotonic counter can only raise an
+        // absolute window.
+        const int Iterations = 1_000;
+        var counter = new NoisyAllocationCounter(period, phase, spikeBytes: 16L * 1024 * 1024);
+
+        var allocated = await AllocatedOverLoopUpperBoundAsync(
+            () =>
+            {
+                _escapeSink = new object();
+                return ValueTask.CompletedTask;
+            },
+            Iterations,
+            counter.Read);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counter.Reads, Is.EqualTo(2L * Attempts),
+                "The probe must read the supplied counter twice per window, or it measured something else.");
+            Assert.That(counter.Spikes, Is.GreaterThan(0),
+                "No noise reached the probe, so the lower-bound assertion is unexercised.");
+            Assert.That(allocated, Is.GreaterThanOrEqualTo(Iterations * MinimumObjectBytes),
+                $"The probe under-reported under a period {period}, phase {phase} noise schedule.");
+        });
+    }
+
+    [Test]
+    public void The_asynchronous_probe_refuses_a_counter_that_runs_backwards()
+    {
+        // Fails closed rather than clamping: a figure below zero cannot bound
+        // anything, and reporting it as zero is how a budget goes vacuous.
+        var reading = 0L;
+
+        Assert.That(
+            async () => await AllocatedOverLoopUpperBoundAsync(
+                () => ValueTask.CompletedTask, iterations: 10, () => reading -= 1_000),
+            Throws.InvalidOperationException.With.Message.Contains("ran backwards"));
     }
 
     [Test]
@@ -359,13 +552,15 @@ public sealed class DurableVectorIndexAllocationTests
         var index = await BuiltAsync();
         await index.FlushAsync();
 
-        var delta = await PerIterationDeltaAsync(
+        var allocated = await AllocatedOverLoopUpperBoundAsync(
             async () => await index.FlushAsync(),
             iterations: Iterations);
 
         // A flush with nothing dirty writes one manifest record: a fixed handful
-        // of small objects, independent of the corpus.
-        AssertBoundedPerIterationAllocation(delta, Iterations, budget: 2_048, "An unchanged flush");
+        // of small objects, independent of the corpus. The figure is an upper
+        // bound (see AllocatedOverLoopUpperBoundAsync), so a regression cannot
+        // hide beneath the process-wide noise floor.
+        AssertBoundedPerIterationAllocation(allocated, Iterations, budget: 2_048, "An unchanged flush");
     }
 
     [Test]
@@ -382,10 +577,12 @@ public sealed class DurableVectorIndexAllocationTests
 
         await DurableIndexHarness.OpenAsync(store, source, options);
 
-        // The minimum across attempts, for the same reason every differential
-        // measurement here takes one: a single sample can absorb unrelated
-        // noise, and the cheapest load is the one that reflects the path rather
-        // than the machine.
+        // The minimum across attempts, for the same reason every measurement here
+        // takes one: a single sample can absorb unrelated noise, and the cheapest
+        // load is the one that reflects the path rather than the machine. Like
+        // the asynchronous probe this is an absolute window of a monotonic
+        // counter, so noise can only raise it and the minimum cannot fall below
+        // what the load allocated (#3419).
         var allocated = long.MaxValue;
         var loaded = await DurableIndexHarness.OpenAsync(store, source, options);
         for (var attempt = 0; attempt < 3; attempt++)
