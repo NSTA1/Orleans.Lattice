@@ -525,6 +525,41 @@ internal sealed partial class ShardRootGrain(
     private readonly SemaphoreSlim _promotionGate = new(1, 1);
 
     /// <summary>
+    /// Per-activation gate that serialises every split link: the fresh
+    /// ancestor descent, each <c>AcceptSplitAsync</c> up the chain, and any
+    /// root promotion the link bubbles into (issue #3523).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The write paths are <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>,
+    /// so before this gate two turns could link concurrently against ancestor
+    /// paths each had captured before the other mutated the tree. A separator
+    /// delivered to an internal node that had since split was inserted into the
+    /// donor half, whose range no longer covers it, and the new leaf became
+    /// reachable by chain but by no descent - every acknowledged key on it lost
+    /// to reads.
+    /// </para>
+    /// <para>
+    /// Taken only on the split-propagation path, never on the per-key write
+    /// path, so an ordinary write that does not split never waits on it. Lock
+    /// order is this gate, then <see cref="_promotionGate"/>; nothing that holds
+    /// the promotion gate may wait on this one.
+    /// </para>
+    /// </remarks>
+    private readonly SemaphoreSlim _splitLinkGate = new(1, 1);
+
+    /// <summary>
+    /// The <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.PendingChildLinks"/>
+    /// entries recorded by the link currently holding
+    /// <see cref="_splitLinkGate"/>, by reference. Lets the pre-operation fast
+    /// path tell an in-flight link (nothing owed) from an interrupted one (a
+    /// resume owed), so a concurrent write does not queue behind a link that is
+    /// merely running. Emptied whenever the gate is released: anything still
+    /// recorded then is stranded, and owed a resume.
+    /// </summary>
+    private readonly HashSet<PendingChildLink> _inFlightChildLinks = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     /// Per-activation gate that serialises the lazy single-leaf root
     /// seed in <see cref="EnsureRootAsync"/>. Public operations are
     /// annotated <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>, so two turns
@@ -1820,7 +1855,18 @@ internal sealed partial class ShardRootGrain(
                 var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
                 await RecordAffectedLeafIfPreparedAsync(leafId);
                 await MarkLeafDirtyAsync(leafId);
-                result = await leafGrain.DeleteAsync(key);
+                var deleted = await DeleteOnLeafAsync(leafGrain, key);
+                result = deleted.Deleted;
+
+                // Link any leaf split the delete caused (issue #3523). A split
+                // that interleaved with the leaf's WAL append can leave the
+                // tombstone outside the leaf's span; the leaf then relocates it
+                // to the sibling that declares the key, and that merge can
+                // divide the sibling. Only this grain can link the new leaf.
+                if (deleted.Split is { } deleteSplit)
+                {
+                    await LinkSplitAsync(deleteSplit);
+                }
 
                 // Shadow-forward the prepared tombstone to the split
                 // destination and install the destination-side shadow marker
@@ -1839,6 +1885,67 @@ internal sealed partial class ShardRootGrain(
                 // Retry - same rationale as SetAsync.
             }
         }
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="key"/> on <paramref name="leaf"/> through
+    /// <see cref="IBPlusLeafGrain.DeleteTrackedAsync"/>, so any split the delete
+    /// caused comes back to be linked, falling back to
+    /// <see cref="IBPlusLeafGrain.DeleteAsync"/> when the leaf is hosted on a
+    /// silo that predates the tracked method.
+    /// <para>
+    /// The fallback exists only for a rolling upgrade. An older silo cannot
+    /// resolve the new method's request type, so it rejects the message before
+    /// the leaf runs any of it and the caller receives the type-resolution
+    /// fault; see <see cref="IsLeafMethodUnavailableFault"/>. Because nothing
+    /// ran, re-issuing the delete through the older method is safe. Any other
+    /// fault propagates unchanged, so a delete that did run is never
+    /// re-issued. The fallback cannot report a split, which leaves an
+    /// upgrading cluster exposed to the pre-fix orphan window only on the
+    /// older leaves, never worse than before.
+    /// </para>
+    /// </summary>
+    private static async Task<LeafDeleteResult> DeleteOnLeafAsync(IBPlusLeafGrain leaf, string key)
+    {
+        try
+        {
+            return await leaf.DeleteTrackedAsync(key);
+        }
+        catch (Exception ex) when (IsLeafMethodUnavailableFault(ex))
+        {
+            return new LeafDeleteResult { Deleted = await leaf.DeleteAsync(key) };
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is the fault a silo raises when it
+    /// cannot decode a request because the request type is unknown to it:
+    /// a <see cref="TypeLoadException"/> (an unresolved type alias), an Orleans
+    /// <see cref="Orleans.Serialization.SerializerException"/>, or either of
+    /// those carried back as an
+    /// <see cref="Orleans.Serialization.UnavailableExceptionFallbackException"/>.
+    /// Searches the inner-exception chain, since the fault can arrive wrapped.
+    /// Such a fault is raised before the target grain runs, which is what makes
+    /// retrying through an older method safe (see <see cref="DeleteOnLeafAsync"/>).
+    /// </summary>
+    internal static bool IsLeafMethodUnavailableFault(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case TypeLoadException:
+                case Orleans.Serialization.SerializerException:
+                    return true;
+                case Orleans.Serialization.UnavailableExceptionFallbackException fallback
+                    when fallback.ExceptionType is { } type
+                        && (type.Contains(nameof(TypeLoadException), StringComparison.Ordinal)
+                            || type.StartsWith("Orleans.Serialization.", StringComparison.Ordinal)):
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     // Mutating, and therefore the one site where the stall ceiling abandons work
@@ -1931,6 +2038,12 @@ internal sealed partial class ShardRootGrain(
                 await MarkLeafDirtyAsync(leafId);
             if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
                 matchedKeys.AddRange(result.MatchedKeys);
+
+            // Link any leaf split the range delete caused (issue #3523); see
+            // DeleteAsync. An older leaf never sets Split, so this is inert
+            // across a rolling upgrade.
+            if (result.Split is { } rangeSplit)
+                await LinkSplitAsync(rangeSplit);
 
             if (result.PastRange)
                 break;
@@ -2760,7 +2873,7 @@ internal sealed partial class ShardRootGrain(
         if (state.State.RootNodeId is not null
             && state.State.PendingPromotion is null
             && state.State.PendingBulkGraft is null
-            && state.State.PendingChildLinks.Count == 0)
+            && state.State.PendingChildLinks.Count == _inFlightChildLinks.Count)
         {
             return Task.CompletedTask;
         }

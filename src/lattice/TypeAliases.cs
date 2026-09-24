@@ -239,6 +239,7 @@ internal static class TypeAliases
 
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
+    internal const string LeafDeleteResult = "ol.ldr";
     internal const string ShardRangeDeletePage = "ol.srd";
 
     // Work-bounded shard count batch (issue 1971).

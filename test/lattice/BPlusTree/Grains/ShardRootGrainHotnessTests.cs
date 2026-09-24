@@ -32,6 +32,7 @@ public class ShardRootGrainHotnessTests
         leafGrain.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(false));
         leafGrain.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leafGrain.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(false));
+        leafGrain.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = false }));
         leafGrain.GetWithVersionAsync(Arg.Any<string>()).Returns(Task.FromResult(default(VersionedValue)!));
         leafGrain.CountAsync().Returns(Task.FromResult(0));
         leafGrain.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>())

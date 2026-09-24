@@ -338,12 +338,13 @@ internal sealed partial class BPlusLeafGrain
     /// grain call, not one per row.
     /// </para>
     /// </summary>
-    private async Task<Dictionary<string, LwwValue<byte[]>>> ForwardOutOfSpanMergeAsync(
+    private async Task<(Dictionary<string, LwwValue<byte[]>> Local, SplitResult? ForwardedSplit)> ForwardOutOfSpanMergeAsync(
         Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
         var local = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
         Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>? buckets = null;
         var origin = isCrossShardMigration ? SpanWriteOrigin.CrossShardMigration : SpanWriteOrigin.Merge;
+        SplitResult? forwardedSplit = null;
 
         foreach (var (key, lww) in entries)
         {
@@ -397,17 +398,82 @@ internal sealed partial class BPlusLeafGrain
                 // neither markers nor prepared buckets.
                 await TransferShadowMarkersToSiblingAsync(sibling, bucket.Keys);
 
-                // The forwarded SplitResult is deliberately discarded. It
-                // describes a split of the *sibling*, and the shard root
-                // installs a separator against the leaf it called; returning a
-                // sibling's result would make it install that separator against
-                // the wrong leaf. The sibling's own callers observe its splits.
-                // This matches the existing split-recovery forward above it.
-                await sibling.MergeManyAsync(bucket, isCrossShardMigration);
+                // The forwarded SplitResult is kept and returned (issue
+                // #3523). An earlier revision discarded it on the reasoning
+                // that it describes a split of the *sibling* and the shard
+                // root installs a separator against the leaf it called. The
+                // premise was wrong: a parent inserts a separator by its
+                // sorted position, not against a named child, and the shard
+                // root is the only party that can link the sibling's new
+                // leaf at all. Discarding it orphaned that leaf and every key
+                // on it. The shard root links such a split by re-descending
+                // on its promoted key; see SplitResult.Additional.
+                forwardedSplit = SplitResult.Combine(
+                    forwardedSplit,
+                    SplitResult.Forward(await sibling.MergeManyAsync(bucket, isCrossShardMigration)));
             }
         }
 
-        return local;
+        return (local, forwardedSplit);
+    }
+
+    /// <summary>
+    /// Applies a committed value to this leaf's projection, unless a split that
+    /// interleaved with the commit has since moved <paramref name="key"/> out of
+    /// this leaf's declared span. In that case the value is set aside in
+    /// <paramref name="stranded"/> for <see cref="RelocateStrandedAsync"/>.
+    /// <para>
+    /// A commit checks the span before it awaits the WAL append, and applies
+    /// after the append returns. The foreground write methods are
+    /// <c>[AlwaysInterleave]</c>, so in between another commit can divide this
+    /// leaf. The split moves every row at or above its split key to the new
+    /// sibling and then narrows this leaf's high bound. A row stored after that
+    /// is outside the range every reader is routed by: the write was
+    /// acknowledged, but no read ever finds it (issue #3523). Re-checking here
+    /// costs nothing on a leaf with no declared span. The check and the store
+    /// run in one synchronous step, so no split can narrow the range between
+    /// them.
+    /// </para>
+    /// <para>
+    /// A key with no resolvable forward target is stored here, as it would be
+    /// at admission. Such a key was already out of span when it was admitted
+    /// and was counted as a fail-open then. Stranding it would count it a
+    /// second time, and there is still nowhere better to put it.
+    /// </para>
+    /// </summary>
+    private void StoreAdmittedEntry(
+        string key,
+        in LwwValue<byte[]> value,
+        ref Dictionary<string, LwwValue<byte[]>>? stranded)
+    {
+        if (HasDeclaredSpan && TryResolveSpanForwardTarget(key, out _, out _))
+        {
+            (stranded ??= new Dictionary<string, LwwValue<byte[]>>())[key] = value;
+            return;
+        }
+
+        StoreEntry(key, value);
+    }
+
+    /// <summary>
+    /// Hands the values <see cref="StoreAdmittedEntry"/> set aside to the leaves
+    /// that now declare their keys. The values keep the stamps they were
+    /// committed under, so the receiving leaf's last-writer-wins merge orders
+    /// them correctly against any newer write to the same key. Keys with no
+    /// resolvable forward target are stored here, which is the documented
+    /// fail-open rule. Returns every split the receiving leaves report, for the
+    /// shard root to link.
+    /// </summary>
+    private async Task<SplitResult?> RelocateStrandedAsync(
+        Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration)
+    {
+        var (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
+        foreach (var (key, lww) in local)
+        {
+            StoreEntry(key, lww);
+        }
+
+        return forwardedSplit;
     }
 
     /// <summary>
@@ -472,6 +538,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         HashSet<string>? forwardWritten = null;
+        SplitResult? forwardedSplit = null;
         foreach (var (target, bucket) in buckets)
         {
             var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(target);
@@ -483,11 +550,10 @@ internal sealed partial class BPlusLeafGrain
             // is the foreground shape SetCoreAsync's span forward takes - and
             // that path transfers no markers either.
             //
-            // The forwarded SplitResult is discarded for the same reason the
-            // merge forward discards it: it describes a split of the sibling,
-            // and the shard root installs the separator it is returned against
-            // the leaf it called.
+            // The forwarded SplitResult is kept, for the reason given in
+            // ForwardOutOfSpanMergeAsync (issue #3523).
             var forwarded = await sibling.SetManyWherePredicateAsync(bucket, predicate);
+            forwardedSplit = SplitResult.Combine(forwardedSplit, SplitResult.Forward(forwarded.Split));
             var written = forwarded.WrittenKeys;
             for (var i = 0; i < written.Count; i++)
             {
@@ -498,11 +564,14 @@ internal sealed partial class BPlusLeafGrain
         var localResult = await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true);
         if (forwardWritten is null)
         {
-            return localResult;
+            return forwardedSplit is null
+                ? localResult
+                : localResult with { Split = SplitResult.Combine(localResult.Split, forwardedSplit) };
         }
 
         return localResult with
         {
+            Split = SplitResult.Combine(localResult.Split, forwardedSplit),
             WrittenKeys = MergeSpanForwardedWrittenKeys(entries, localResult.WrittenKeys, forwardWritten),
         };
     }
@@ -584,6 +653,7 @@ internal sealed partial class BPlusLeafGrain
         if (buckets is not null)
         {
             var parts = new Task[buckets.Count + 1];
+            var forwards = new Task<SplitResult?>[buckets.Count];
             var i = 0;
             foreach (var (target, bucket) in buckets)
             {
@@ -591,19 +661,31 @@ internal sealed partial class BPlusLeafGrain
                 // conditional forward gives: a set forwards a caller's
                 // proposed value for a row this leaf does not hold, which is
                 // the shape SetCoreAsync's span forward takes. The sibling's
-                // SplitResult is discarded for the reason given in
-                // ForwardOutOfSpanMergeAsync.
-                parts[i++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).SetManyAsync(bucket);
+                // SplitResult is kept, for the reason given in
+                // ForwardOutOfSpanMergeAsync (issue #3523).
+                forwards[i] = grainFactory.GetGrain<IBPlusLeafGrain>(target).SetManyAsync(bucket);
+                parts[i] = forwards[i];
+                i++;
             }
 
             parts[i] = localCommit;
             await Task.WhenAll(parts);
+
+            // Every split is returned: the batch's own commit, the recovered
+            // one, and each forwarded sibling's. Returning only one - as an
+            // earlier revision did, mirroring the per-key loop's "last
+            // non-null wins" - left the others' new leaves unlinked and
+            // their keys unreachable (issue #3523).
+            var splits = SplitResult.Combine(await localCommit, recovered);
+            foreach (var forward in forwards)
+            {
+                splits = SplitResult.Combine(splits, SplitResult.Forward(await forward));
+            }
+
+            return splits;
         }
 
-        // Mirrors the per-key loop, which returned the last non-null result:
-        // a split this batch's own commit triggered takes precedence over the
-        // recovered one.
-        return await localCommit ?? recovered;
+        return SplitResult.Combine(await localCommit, recovered);
     }
 
     /// <summary>

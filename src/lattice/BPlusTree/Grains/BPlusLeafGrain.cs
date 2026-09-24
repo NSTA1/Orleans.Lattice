@@ -1034,19 +1034,21 @@ internal sealed partial class BPlusLeafGrain(
                 // The key belongs to the new sibling - forward it there.
                 // The sibling publishes its own mutation notification after persist,
                 // so we do not publish one here to avoid a duplicate for the same key.
+                // Its SplitResult is kept, not discarded: the sibling can
+                // divide under this write, and the shard root is the only
+                // party that can link the new leaf (issue #3523).
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
-                await sibling.SetAsync(key, value, expiresAtTicks);
-            }
-            else
-            {
-                // The key belongs to this leaf - write it via the
-                // WAL-first commit path so the WAL append and the
-                // in-memory projection update remain consistent with the
-                // main path below.
-                await CommitSetAsync(key, value, expiresAtTicks);
+                var forwarded = await sibling.SetAsync(key, value, expiresAtTicks);
+                return SplitResult.Combine(recovered, SplitResult.Forward(forwarded));
             }
 
-            return recovered;
+            // The key belongs to this leaf - write it via the WAL-first
+            // commit path so the WAL append and the in-memory projection
+            // update remain consistent with the main path below. The
+            // commit can overflow this leaf again, so its split is kept
+            // alongside the recovered one (issue #3523).
+            var committed = await CommitSetAsync(key, value, expiresAtTicks);
+            return SplitResult.Combine(recovered, committed);
         }
 
         // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs).
@@ -1059,11 +1061,11 @@ internal sealed partial class BPlusLeafGrain(
         if (TryResolveSpanForwardTarget(key, out var spanTarget, out var spanFailOpen))
         {
             // The sibling publishes its own mutation notification after
-            // persist, so none is published here. Its SplitResult is discarded
-            // for the reason given in ForwardOutOfSpanMergeAsync.
-            await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
-                .SetAsync(key, value, expiresAtTicks);
-            return null;
+            // persist, so none is published here. Its SplitResult is returned
+            // for the shard root to link (issue #3523); see
+            // SplitResult.Additional.
+            return SplitResult.Forward(await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
+                .SetAsync(key, value, expiresAtTicks));
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1198,13 +1200,18 @@ internal sealed partial class BPlusLeafGrain(
         }
         else
         {
-            StoreEntry(key, newEntry);
+            Dictionary<string, LwwValue<byte[]>>? stranded = null;
+            StoreAdmittedEntry(key, newEntry, ref stranded);
             // Foreground commit constructs a fresh LwwValue with the
             // default IsMigrated=false, so StoreEntry's merge clears
             // any stale migration provenance from a prior migrated
             // entry on the same key automatically - the flag rides
             // with the value, not in a side-channel map.
-            if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
+            if (stranded is not null)
+            {
+                splitResult = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+            }
+            else if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
                 splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
@@ -1249,7 +1256,7 @@ internal sealed partial class BPlusLeafGrain(
         // LeafCommitDuration alongside the wal / apply / observer
         // stages.
         var digestStartTicks = Stopwatch.GetTimestamp();
-        await PublishDigestUpwardAsync();
+        await PublishDigestUpwardAfterWriteAsync(splitResult);
         RecordCommitStep("digest", digestStartTicks);
 
         return splitResult;
@@ -1320,14 +1327,14 @@ internal sealed partial class BPlusLeafGrain(
                 return await SetManyAdmittingSpanAsync(entries);
             }
 
-            SplitResult? lastSplit = null;
+            // Every split is kept, not just the last: each one names a
+            // distinct new leaf the shard root must link (issue #3523).
+            SplitResult? splits = null;
             foreach (var entry in entries)
             {
-                var split = await SetAsync(entry.Key, entry.Value);
-                if (split is not null)
-                    lastSplit = split;
+                splits = SplitResult.Combine(splits, await SetAsync(entry.Key, entry.Value));
             }
-            return lastSplit;
+            return splits;
         }
 
         return await CommitSetManyAsync(entries);
@@ -1450,14 +1457,13 @@ internal sealed partial class BPlusLeafGrain(
             // active post-merge observer also routes per key so every LWW write
             // is observed (the batched CommitSetManyAsync path does not invoke
             // the observer); zero-cost on the default null-observer path.
-            SplitResult? lastSplit = null;
+            // Every split is kept, not just the last (issue #3523).
+            SplitResult? splits = null;
             foreach (var entry in matched)
             {
-                var s = await SetAsync(entry.Key, entry.Value);
-                if (s is not null)
-                    lastSplit = s;
+                splits = SplitResult.Combine(splits, await SetAsync(entry.Key, entry.Value));
             }
-            split = lastSplit;
+            split = splits;
         }
         else
         {
@@ -1746,13 +1752,20 @@ internal sealed partial class BPlusLeafGrain(
         }
         else
         {
+            Dictionary<string, LwwValue<byte[]>>? stranded = null;
             for (var i = 0; i < count; i++)
             {
-                StoreEntry(entries[i].Key, values[i]);
+                StoreAdmittedEntry(entries[i].Key, values[i], ref stranded);
             }
             if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
                 splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+            }
+            if (stranded is not null)
+            {
+                splitResult = SplitResult.Combine(
+                    splitResult,
+                    await RelocateStrandedAsync(stranded, isCrossShardMigration: false));
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -1837,7 +1850,7 @@ internal sealed partial class BPlusLeafGrain(
         // every per-key hash contribution into a single parent
         // notification.
         var digestStartTicks = Stopwatch.GetTimestamp();
-        await PublishDigestUpwardAsync();
+        await PublishDigestUpwardAfterWriteAsync(splitResult);
         RecordCommitStep("digest", digestStartTicks);
 
         return splitResult;
@@ -1856,7 +1869,19 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<bool> DeleteAsync(string key)
+    public async Task<bool> DeleteAsync(string key) =>
+        (await DeleteCoreAsync(key, tracked: false)).Deleted;
+
+    public Task<LeafDeleteResult> DeleteTrackedAsync(string key) =>
+        DeleteCoreAsync(key, tracked: true);
+
+    /// <summary>
+    /// Shared body of <see cref="DeleteAsync"/> and
+    /// <see cref="DeleteTrackedAsync"/>. <paramref name="tracked"/> selects
+    /// which of the two a span forward calls on the sibling, so an untracked
+    /// delete keeps the call shape an older sibling understands.
+    /// </summary>
+    private async Task<LeafDeleteResult> DeleteCoreAsync(string key, bool tracked)
     {
         await AwaitReplayBarrierAsync();
 
@@ -1872,7 +1897,14 @@ internal sealed partial class BPlusLeafGrain(
         // drops. Forwarding is the only answer that makes the returned bool true.
         if (TryResolveSpanForwardTarget(key, out var spanTarget, out var spanFailOpen))
         {
-            return await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget).DeleteAsync(key);
+            var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
+            if (!tracked)
+            {
+                return new LeafDeleteResult { Deleted = await sibling.DeleteAsync(key) };
+            }
+
+            var forwarded = await sibling.DeleteTrackedAsync(key);
+            return forwarded with { Split = SplitResult.Forward(forwarded.Split) };
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1888,7 +1920,7 @@ internal sealed partial class BPlusLeafGrain(
         // captured separately by the saga coordinator).
         if (!isPrepared && (!Cache.TryGetRow(key, out var existing) || existing.IsTombstone))
         {
-            return false;
+            return default;
         }
 
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
@@ -1948,17 +1980,31 @@ internal sealed partial class BPlusLeafGrain(
         // into the per-leaf pending-tx map when the mutation is a saga
         // prepare-phase write.
         var applyStartTicks = Stopwatch.GetTimestamp();
+        SplitResult? relocatedSplit = null;
         if (isPrepared)
         {
             AddPreparedMutation(transactionId, key, tombstone);
         }
         else
         {
-            StoreEntry(key, tombstone);
             // Tombstone has IsMigrated=false (default), so the merge
             // result inside StoreEntry clears any stale migration
             // marker for the same key naturally - no explicit cleanup
             // call required.
+            //
+            // A split that interleaved with the WAL append above may have
+            // moved this key, with its live value, to a new sibling. Storing
+            // the tombstone here would leave it outside this leaf's span,
+            // where no read looks, and the deleted value would resurface on
+            // the sibling (issue #3523). StoreAdmittedEntry sets it aside
+            // instead, and the relocation merges it into the leaf that now
+            // declares the key under its original stamp.
+            Dictionary<string, LwwValue<byte[]>>? stranded = null;
+            StoreAdmittedEntry(key, tombstone, ref stranded);
+            if (stranded is not null)
+            {
+                relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+            }
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -1981,7 +2027,7 @@ internal sealed partial class BPlusLeafGrain(
         // is attributable on LeafCommitDuration alongside the wal /
         // apply / observer stages.
         var digestStartTicks = Stopwatch.GetTimestamp();
-        await PublishDigestUpwardAsync();
+        await PublishDigestUpwardAfterWriteAsync(relocatedSplit);
         RecordCommitStep("digest", digestStartTicks);
 
         // Best-effort policy trigger: a fresh tombstone may push the
@@ -1989,7 +2035,7 @@ internal sealed partial class BPlusLeafGrain(
         // both knobs hold their defaults.
         EvaluateCompactionTrigger();
 
-        return true;
+        return new LeafDeleteResult { Deleted = true, Split = relocatedSplit };
     }
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
@@ -2115,14 +2161,26 @@ internal sealed partial class BPlusLeafGrain(
         RecordCommitStep("wal", walStartTicks);
 
         // step 2 (apply) - tombstone every matched key with the same HLC.
+        // A split that interleaved with the WAL append above may have moved
+        // some matched keys, with their live values, to a new sibling; their
+        // tombstones are relocated to the leaf that now declares them rather
+        // than stored out of span, where the deleted values would resurface
+        // (issue #3523). See the single-key delete for the full argument.
         var applyStartTicks = Stopwatch.GetTimestamp();
+        Dictionary<string, LwwValue<byte[]>>? stranded = null;
         foreach (var key in keysToDelete)
         {
-            StoreEntry(key, tombstone);
+            StoreAdmittedEntry(key, tombstone, ref stranded);
             // Range tombstone has IsMigrated=false (default); merge
             // inside StoreEntry naturally clears any stale migration
             // marker - the flag rides with the value, not in a
             // side-channel map.
+        }
+
+        SplitResult? relocatedSplit = null;
+        if (stranded is not null)
+        {
+            relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2143,7 +2201,7 @@ internal sealed partial class BPlusLeafGrain(
         // / apply stages (DeleteRange has no per-leaf observer step;
         // see the comment above).
         var digestStartTicks = Stopwatch.GetTimestamp();
-        await PublishDigestUpwardAsync();
+        await PublishDigestUpwardAfterWriteAsync(relocatedSplit);
         RecordCommitStep("digest", digestStartTicks);
 
         // Best-effort policy trigger: range deletes can swing the
@@ -2155,6 +2213,7 @@ internal sealed partial class BPlusLeafGrain(
             Deleted = keysToDelete.Count,
             PastRange = pastRange,
             MatchedKeys = predicate is null ? null : keysToDelete,
+            Split = relocatedSplit,
         };
     }
 
@@ -3747,7 +3806,10 @@ internal sealed partial class BPlusLeafGrain(
                 await TransferShadowMarkersToSiblingAsync(sibling, siblingEntries.Keys);
                 // Forward the caller's migration intent verbatim - a cross-shard migration
                 // import that arrives during split recovery is still a migration on the sibling.
-                await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration);
+                // The sibling's split is kept for the shard root to link (issue #3523).
+                recovered = SplitResult.Combine(
+                    recovered,
+                    SplitResult.Forward(await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration)));
             }
 
             // Merge remaining local entries via the WAL-routed path so the
@@ -3759,7 +3821,13 @@ internal sealed partial class BPlusLeafGrain(
             // state-row persist.
             if (localEntries.Count > 0)
             {
-                await MergeIntoStateAsync(localEntries, isCrossShardMigration);
+                var strandedLocal = await MergeIntoStateAsync(localEntries, isCrossShardMigration);
+                if (strandedLocal is not null)
+                {
+                    recovered = SplitResult.Combine(
+                        recovered,
+                        await RelocateStrandedAsync(strandedLocal, isCrossShardMigration));
+                }
             }
 
             return recovered;
@@ -3803,16 +3871,17 @@ internal sealed partial class BPlusLeafGrain(
         // Routing the import to the leaf that actually declares the key fixes
         // that at the seam where ownership is decided, and leaves the saga
         // machinery untouched.
+        SplitResult? forwardedSplit = null;
         if (ContainsOutOfSpanKey(entries))
         {
-            entries = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
+            (entries, forwardedSplit) = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
             if (entries.Count == 0)
             {
-                return null;
+                return forwardedSplit;
             }
         }
 
-        await MergeIntoStateAsync(entries, isCrossShardMigration);
+        var stranded = await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
         var mergeOptions = await GetOptionsAsync();
@@ -3821,10 +3890,23 @@ internal sealed partial class BPlusLeafGrain(
             splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
         }
 
-        return splitResult;
+        if (stranded is not null)
+        {
+            forwardedSplit = SplitResult.Combine(
+                forwardedSplit,
+                await RelocateStrandedAsync(stranded, isCrossShardMigration));
+        }
+
+        return SplitResult.Combine(splitResult, forwardedSplit);
     }
 
-    private async Task MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    /// <summary>
+    /// Durably commits and applies a merge batch. Returns the entries a split
+    /// interleaved with the WAL append has since moved out of this leaf's
+    /// declared span, or <see langword="null"/> when there are none. The
+    /// caller must hand them to <see cref="RelocateStrandedAsync"/>.
+    /// </summary>
+    private async Task<Dictionary<string, LwwValue<byte[]>>?> MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
         // Track the high-water timestamp of the incoming batch so we can
         // (a) advance state.State.Clock past it (audit bug #3), and (b)
@@ -3847,6 +3929,7 @@ internal sealed partial class BPlusLeafGrain(
         var transactionId = LatticeTransactionContext.Current;
         var maxIncoming = HybridLogicalClock.Zero;
         var appliedAny = false;
+        Dictionary<string, LwwValue<byte[]>>? stranded = null;
 
         // step 0 (filter + build) - first pass classifies each incoming
         // entry under the asymmetric migration-vs-foreground rule
@@ -3979,7 +4062,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 for (var i = 0; i < accepted.Count; i++)
                 {
-                    StoreEntry(accepted[i].Key, accepted[i].Value);
+                    StoreAdmittedEntry(accepted[i].Key, accepted[i].Value, ref stranded);
                     appliedAny = true;
                 }
             }
@@ -3988,7 +4071,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             foreach (var (key, incoming) in entries)
             {
-                StoreEntry(key, incoming);
+                StoreAdmittedEntry(key, incoming, ref stranded);
                 appliedAny = true;
             }
         }
@@ -4044,6 +4127,7 @@ internal sealed partial class BPlusLeafGrain(
         // merge is a structural apply - bypass the c2-xxviii
         // coalescing window.
         await PublishDigestUpwardInlineAsync();
+        return stranded;
     }
 
     public async Task ClearGrainStateAsync()
