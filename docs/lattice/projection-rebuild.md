@@ -544,8 +544,13 @@ persisted checkpoints are unchanged:
   `LeafProjectionStaleException`, without another replay, so the sweep
   classifies the leaf exactly as before.
 
-Any change to a persisted checkpoint clears the latch, and a new
-activation starts without it. The leaf keeps its WAL retention pin.
+Any change a genuine apply or an operator reset makes to a persisted
+checkpoint clears the latch, and a new activation starts without it. A
+split's checkpoint hint does not: a hint for the partition the drive
+found stale is refused and logged as a `Warning`, because stamping it
+would persist a checkpoint past the trimmed range the leaf never
+applied, and would clear the latch with nothing repaired (issue #3477).
+The leaf keeps its WAL retention pin.
 
 Treat the `Error` as data at risk rather than as noise. The live
 activation may hold the only copy of writes in the trimmed range. Once

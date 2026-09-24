@@ -626,6 +626,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// "the seam enforces non-decrease": it is harmless only because this
     /// method drops it first (issue #3360).
     /// </para>
+    /// <para>
+    /// A hint is also dropped for a partition a starvation drive on this
+    /// activation has latched as stale: that partition's WAL was trimmed past
+    /// an offset its persisted checkpoint still needs, so the range up to the
+    /// hint was never applied here, and stamping it would persist a checkpoint
+    /// past rows the leaf does not hold (issue #3477). The drop is logged once
+    /// per latch as a warning.
+    /// </para>
     /// </summary>
     /// <param name="offsetsByPartition">Per-partition WAL head offsets, indexed by partition ordinal. Must not be <see langword="null"/>.</param>
     Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition);
