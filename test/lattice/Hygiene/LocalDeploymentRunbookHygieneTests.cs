@@ -64,7 +64,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class LocalDeploymentRunbookHygieneTests
+public sealed partial class LocalDeploymentRunbookHygieneTests
 {
     private const string RunbookPath = "docs/lattice.api.mcp.repocontext/local-deployment-runbook.md";
     private const string ComposeDirectory = "samples/RepoContextContainer";
