@@ -183,20 +183,68 @@ public sealed class RepoContextGarbageCollectionMeterTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                text,
-                Does.Contain("new RepoContextGarbageCollectionMeter()"),
+                ConstructsEagerly(text, "RepoContextGarbageCollectionMeter"),
+                Is.True,
                 "The meter has to be constructed during registration, next to the metrics collector and "
                 + "for the same reason. An observable instrument that nobody resolves is never published, "
                 + "so a singleton registered behind a factory would leave the source containing a "
                 + "measurand that the exposition never carries - present in the code, absent from the "
                 + "scrape, and silently readable as zero pause.");
             Assert.That(
-                text,
-                Does.Contain("new RepoContextMetricsCollector()"),
+                ConstructsEagerly(text, "RepoContextMetricsCollector"),
+                Is.True,
                 "Control: this guard is matching on the real registration block. If the collector's own "
                 + "eager construction is no longer here, the file has been restructured and the assertion "
                 + "above is pinned to a shape that no longer exists.");
         });
+    }
+
+    [Test]
+    public void The_eager_construction_guard_rejects_a_lazy_factory_registration()
+    {
+        // A factory lambda contains the constructor call too, so a guard that only
+        // looks for "new RepoContextGarbageCollectionMeter()" passes on exactly the
+        // lazy registration it is named for rejecting.
+        const string lazy = "builder.Services.AddSingleton(_ => new RepoContextGarbageCollectionMeter());";
+
+        Assert.That(ConstructsEagerly(lazy, "RepoContextGarbageCollectionMeter"), Is.False);
+    }
+
+    [Test]
+    public void The_eager_construction_guard_accepts_an_eager_assignment()
+    {
+        const string eager = "var gcMeter = new RepoContextGarbageCollectionMeter();\n"
+            + "builder.Services.AddSingleton(gcMeter);";
+
+        Assert.That(ConstructsEagerly(eager, "RepoContextGarbageCollectionMeter"), Is.True);
+    }
+
+    [Test]
+    public void The_eager_construction_guard_rejects_an_eager_assignment_beside_a_lazy_factory()
+    {
+        // A second, lazy registration beside the eager one would still resolve the
+        // meter only on demand for any consumer that binds to the factory.
+        const string mixed = "var gcMeter = new RepoContextGarbageCollectionMeter();\n"
+            + "builder.Services.AddSingleton(_ => new RepoContextGarbageCollectionMeter());";
+
+        Assert.That(ConstructsEagerly(mixed, "RepoContextGarbageCollectionMeter"), Is.False);
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="source"/> constructs <paramref name="typeName"/>
+    /// in an eager local assignment and never behind a factory lambda. Matching the
+    /// constructor call alone cannot tell the two apart, because
+    /// <c>AddSingleton(_ =&gt; new T())</c> contains the same call.
+    /// </summary>
+    internal static bool ConstructsEagerly(string source, string typeName)
+    {
+        var escaped = System.Text.RegularExpressions.Regex.Escape(typeName);
+        var eager = new System.Text.RegularExpressions.Regex(
+            $@"\bvar\s+\w+\s*=\s*new\s+{escaped}\s*\(\s*\)\s*;");
+        var lazy = new System.Text.RegularExpressions.Regex(
+            $@"=>\s*new\s+{escaped}\s*\(");
+
+        return eager.IsMatch(source) && !lazy.IsMatch(source);
     }
 
     /// <summary>

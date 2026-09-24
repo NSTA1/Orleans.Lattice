@@ -102,6 +102,13 @@ public sealed class MetricDocArmArityTests
             ["decisions"] = "decision",
         };
 
+    /// <summary>
+    /// The number words an arity claim may spell its count with. The claim regex's
+    /// count alternation is built from these keys, so a word the table can convert is
+    /// always a word the regex can match: when the alternation was written out by hand
+    /// it stopped at <c>twelve</c>, and a claim such as "all thirteen arms" matched
+    /// nothing and went ungraded rather than failing.
+    /// </summary>
     private static readonly IReadOnlyDictionary<string, int> NumberWords =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
@@ -116,6 +123,14 @@ public sealed class MetricDocArmArityTests
             ["ten"] = 10,
             ["eleven"] = 11,
             ["twelve"] = 12,
+            ["thirteen"] = 13,
+            ["fourteen"] = 14,
+            ["fifteen"] = 15,
+            ["sixteen"] = 16,
+            ["seventeen"] = 17,
+            ["eighteen"] = 18,
+            ["nineteen"] = 19,
+            ["twenty"] = 20,
         };
 
     /// <summary>
@@ -136,7 +151,7 @@ public sealed class MetricDocArmArityTests
     /// </summary>
     private static readonly Regex ArityClaimRegex = new(
         @"\b(?:all|every one of the|each of the)\s+"
-        + @"(?<count>two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\s+"
+        + "(?<count>" + string.Join('|', NumberWords.Keys.OrderByDescending(static w => w.Length)) + @"|\d{1,2})\s+"
         + @"(?<noun>outcome arms|fault arms|outcomes|arms|phases|states|stages|statuses|reasons|kinds|decisions|values)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -605,6 +620,46 @@ public sealed class MetricDocArmArityTests
     }
 
     /// <summary>
+    /// A claim that spells a count above twelve is read, with the count it states.
+    /// </summary>
+    /// <remarks>
+    /// The count alternation once stopped at <c>twelve</c>, so "all thirteen arms"
+    /// matched nothing: the claim was not graded, and it would have stayed green
+    /// had it said any number at all.
+    /// </remarks>
+    [Test]
+    public void AClaimSpellingACountAboveTwelveIsRead()
+    {
+        var claims = ReadArityClaims("All sixteen outcome arms are zero-primed once per tree.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(claims, Has.Count.EqualTo(1),
+                "A claim spelling its count as a word above twelve was not read, so it is ungraded.");
+            Assert.That(claims.Select(static c => c.Count), Is.EqualTo(new[] { 16 }));
+            Assert.That(claims.Select(static c => c.Noun), Is.EqualTo(new[] { "outcome arms" }));
+        });
+    }
+
+    /// <summary>
+    /// Every word the count table can convert is a word the claim regex matches, so
+    /// the two cannot drift apart and leave a spelled count unread.
+    /// </summary>
+    [Test]
+    public void EveryNumberWordTheCountTableConvertsIsReadAsAClaim()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var (word, value) in NumberWords)
+            {
+                Assert.That(ReadArityClaims($"all {word} arms").Select(static c => c.Count),
+                    Is.EqualTo(new[] { value }),
+                    $"\"all {word} arms\" was not read as a claim of {value}.");
+            }
+        });
+    }
+
+    /// <summary>
     /// A noun that names a tag key pins the check to that key, rather than
     /// accepting any tag on the instrument whose cardinality happens to match.
     /// </summary>
@@ -798,21 +853,37 @@ public sealed class MetricDocArmArityTests
 
         foreach (var row in ScanRows())
         {
-            foreach (Match match in ArityClaimRegex.Matches(row.Text))
+            foreach (var (count, noun, phrase) in ReadArityClaims(row.Text))
             {
-                var raw = match.Groups["count"].Value;
-                var count = NumberWords.TryGetValue(raw, out var word)
-                    ? word
-                    : int.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
-
                 claims.Add(new ArityClaim(
                     row.File,
                     row.Line,
                     row.Instrument,
                     count,
-                    match.Groups["noun"].Value,
-                    match.Value));
+                    noun,
+                    phrase));
             }
+        }
+
+        return claims;
+    }
+
+    /// <summary>
+    /// Reads every arity claim in <paramref name="text"/> as its stated count, the
+    /// noun it counts, and the matched phrase. Both the documentation scan and the
+    /// published-description scan read claims through this one method, so a control
+    /// that drives it exercises the same parsing the gate runs.
+    /// </summary>
+    internal static IReadOnlyList<(int Count, string Noun, string Phrase)> ReadArityClaims(string text)
+    {
+        var claims = new List<(int Count, string Noun, string Phrase)>();
+        foreach (Match match in ArityClaimRegex.Matches(text))
+        {
+            var raw = match.Groups["count"].Value;
+            var count = NumberWords.TryGetValue(raw, out var word)
+                ? word
+                : int.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
+            claims.Add((count, match.Groups["noun"].Value, match.Value));
         }
 
         return claims;
@@ -855,20 +926,15 @@ public sealed class MetricDocArmArityTests
         {
             if (string.IsNullOrWhiteSpace(declared.Description)) continue;
 
-            foreach (Match match in ArityClaimRegex.Matches(declared.Description))
+            foreach (var (count, noun, phrase) in ReadArityClaims(declared.Description))
             {
-                var raw = match.Groups["count"].Value;
-                var count = NumberWords.TryGetValue(raw, out var word)
-                    ? word
-                    : int.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
-
                 claims.Add(new ArityClaim(
                     $"{declared.Owner}.{declared.Field} (published description)",
                     0,
                     declared.Name,
                     count,
-                    match.Groups["noun"].Value,
-                    match.Value,
+                    noun,
+                    phrase,
                     ClaimSurface.PublishedDescription));
             }
         }

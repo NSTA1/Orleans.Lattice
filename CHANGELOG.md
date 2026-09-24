@@ -187,6 +187,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Tests - Probes and fixtures that could not fail.** The async allocation probe could report zero for a loop that allocates, and leaf fixtures modelled an unreachable WAL state, so guards on those paths passed without exercising them. Both now measure what they claim. ([#3419](https://github.com/NSTA1/Orleans.Lattice/issues/3419), [#2680](https://github.com/NSTA1/Orleans.Lattice/issues/2680)) (`repository-wide`)
 
+- **Retrieval - Keyword search starved memory and file content.** The keyword fallback shared one 5,000-record candidate bound across its three trees, so a large structural tree exhausted it and memory entries and file bodies went unsearchable. Each tree now scans under its own bound. ([#3525](https://github.com/NSTA1/Orleans.Lattice/pull/3525)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Two guards blind to the regressions they named.** The metric arity gate skipped claims spelling a count above twelve, and the guard that the host builds its GC meter eagerly passed on a lazy factory registration. Both now fail on the shape they exist to catch. ([#3525](https://github.com/NSTA1/Orleans.Lattice/pull/3525)) (`repository-wide`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
