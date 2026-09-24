@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Orleans.Configuration;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
@@ -115,6 +116,9 @@ public sealed class SqliteSchemaInitializerTests
         {
             Assert.That(builder.DataSource, Is.EqualTo(_dbPath));
             Assert.That(builder.DefaultTimeout, Is.GreaterThan(0));
+            Assert.That(builder.DefaultTimeout,
+                Is.EqualTo((int)(new SiloMessagingOptions().ResponseTimeout.TotalSeconds / 2)),
+                "SQLite must leave headroom before Orleans times out the enclosing request.");
         });
     }
 
@@ -122,6 +126,65 @@ public sealed class SqliteSchemaInitializerTests
     [TestCase("   ")]
     public void Constructor_rejects_an_empty_path(string path)
         => Assert.That(() => new SqliteSchemaInitializer(path), Throws.ArgumentException);
+
+    [TestCase(-1)]
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(1.999)]
+    public void BuildConnectionString_rejects_budgets_that_would_allow_unlimited_retries(double seconds)
+    {
+        var budget = TimeSpan.FromSeconds(seconds);
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => SqliteSchemaInitializer.BuildConnectionString(_dbPath, budget),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+            Assert.That(() => new SqliteSchemaInitializer(_dbPath, budget),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [TestCase(2, 1)]
+    [TestCase(31.9, 15)]
+    [TestCase(10_000_000, 2_147_483)]
+    public void Initialize_uses_the_derived_timeout_for_commands_and_the_busy_pragma(
+        double requestSeconds, int busySeconds)
+    {
+        var budget = TimeSpan.FromSeconds(requestSeconds);
+        new SqliteSchemaInitializer(_dbPath, budget).Initialize();
+
+        // Reuse the initializer's pooled connection to observe its per-connection PRAGMA.
+        using var connection = new SqliteConnection(
+            SqliteSchemaInitializer.BuildConnectionString(_dbPath, budget));
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout;";
+        Assert.Multiple(() =>
+        {
+            Assert.That(command.CommandTimeout, Is.EqualTo(busySeconds));
+            Assert.That(Convert.ToInt64(command.ExecuteScalar()), Is.EqualTo(busySeconds * 1000L));
+            Assert.That(busySeconds, Is.LessThan(requestSeconds));
+        });
+    }
+
+    [Test]
+    public void BuildConnectionString_contended_write_surfaces_sqlite_busy()
+    {
+        var budget = TimeSpan.FromSeconds(2);
+        new SqliteSchemaInitializer(_dbPath, budget).Initialize();
+        var connectionString = SqliteSchemaInitializer.BuildConnectionString(_dbPath, budget);
+        using var writer = new SqliteConnection(connectionString);
+        writer.Open();
+        using var transaction = writer.BeginTransaction();
+        using var contender = new SqliteConnection(connectionString);
+        contender.Open();
+        using var command = contender.CreateCommand();
+        command.CommandText = "INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES ('contender', 'SELECT 1');";
+
+        var exception = Assert.Throws<SqliteException>(() => command.ExecuteNonQuery());
+
+        Assert.That(exception!.SqliteErrorCode, Is.EqualTo(5), "A held write lock must surface SQLITE_BUSY.");
+        Assert.That(command.CommandTimeout, Is.EqualTo(1));
+    }
 
     [Test]
     public void Initialize_rejects_a_database_path_with_no_parent_directory()
