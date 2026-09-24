@@ -264,6 +264,61 @@ function Get-SiloInFlight {
 
 <#
 .SYNOPSIS
+	Returns the longest mid-run freeze, in seconds, in a stream of
+	'[silo] t=' progress lines: the longest interval over which the
+	cumulative ops counter did not advance while work was in flight.
+
+.DESCRIPTION
+	A saturated cell is slow but still moving: its cumulative ops counter
+	keeps advancing, however slowly. A freeze is a different shape: the
+	cell delivers throughput, then the counter stops advancing while the
+	in-flight gauge stays pinned above zero, because every in-flight call
+	is parked and none completes. The Layer 3 grading deliberately keeps
+	saturated cells HEALTHY and carries their failures as data, so a freeze
+	needs its own signal or it presents as HEALTHY with a failure count
+	that reads like saturation.
+
+	A freeze interval opens at the last line on which the counter advanced,
+	or at the first line, and extends while every following line has
+	inFlight > 0 and an unchanged counter. A line with inFlight = 0 closes
+	the interval without counting it: an idle silo is not a stuck silo.
+	Lines that do not parse are skipped.
+
+.PARAMETER Lines
+	Candidate log lines; only '[silo] t=' progress lines are considered.
+
+.OUTPUTS
+	[double] the longest freeze in seconds (0 when there is none).
+#>
+function Get-SiloProgressLongestStall {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyCollection()] [string[]] $Lines)
+
+	$longest = 0.0
+	$lastOps = $null
+	$stallStart = $null
+	foreach ($line in @($Lines)) {
+		if ([string]::IsNullOrEmpty($line) -or -not $line.Contains('[silo] t=')) { continue }
+		if ($line -notmatch 't=\s*([\d.]+)s\s+ops=\s*([\d,]+)') { continue }
+		$t = [double]$Matches[1]
+		$ops = [long]($Matches[2] -replace ',', '')
+		$inFlight = Get-SiloInFlight -Line $line
+		if ($null -eq $inFlight) { continue }
+
+		if ($null -eq $lastOps -or $ops -ne $lastOps -or $inFlight -le 0) {
+			$stallStart = if ($inFlight -gt 0) { $t } else { $null }
+		} elseif ($null -eq $stallStart) {
+			$stallStart = $t
+		} elseif (($t - $stallStart) -gt $longest) {
+			$longest = $t - $stallStart
+		}
+		$lastOps = $ops
+	}
+	return [double]$longest
+}
+
+<#
+.SYNOPSIS
 	Decides whether the silo has quiesced enough to stop, given the
 	latest parsed in-flight value and a running count of consecutive
 	zero observations.
