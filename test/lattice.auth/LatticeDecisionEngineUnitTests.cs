@@ -20,6 +20,9 @@ public sealed class LatticeDecisionEngineUnitTests
         LatticeEffect effect = LatticeEffect.Allow) =>
         new("r", LatticeSubjectSelector.User("alice"), scope, LatticeOperation.Read, effect);
 
+    private static LatticeAuthorizationRule AliceRule(string ruleId, LatticeScope scope, LatticeEffect effect) =>
+        new(ruleId, LatticeSubjectSelector.User("alice"), scope, LatticeOperation.Read, effect);
+
     private static async Task<LatticeDecisionEngine> EngineAsync(
         LatticeAuthOptions options,
         params LatticeAuthorizationRule[] rules) =>
@@ -229,6 +232,67 @@ public sealed class LatticeDecisionEngineUnitTests
             engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
             Is.False,
             "a tree that carries only a deny yields no resolved allow");
+    }
+
+    [Test]
+    public async Task HasAnyGrant_prefix_allow_denied_only_at_its_own_key_returns_true()
+    {
+        // A deny on the exact key that spells the granted prefix denies that one key
+        // (a directory-marker key, say) and nothing else: every other key under the
+        // prefix still resolves allow at the prefix tier.
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny },
+            AliceRule("allow-prefix", LatticeScope.Prefix("app", "p/"), LatticeEffect.Allow),
+            AliceRule("deny-marker", LatticeScope.Key("app", "p/"), LatticeEffect.Deny));
+
+        var marker = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "p/"));
+        var member = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "p/a"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Allowed, Is.False, "the exact-key deny wins at its own key");
+            Assert.That(member.Allowed, Is.True, "the prefix allow still governs every other key under it");
+            Assert.That(
+                harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+                Is.True,
+                "the existence probe must agree with enforcement: 'p/a' is readable, so the tree is visible");
+        });
+    }
+
+    [Test]
+    public async Task HasAnyGrant_default_allow_prefix_carve_out_denied_only_at_its_own_key_returns_true()
+    {
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow },
+            AliceRule("deny-tree", LatticeScope.Tree("app"), LatticeEffect.Deny),
+            AliceRule("allow-prefix", LatticeScope.Prefix("app", "p/"), LatticeEffect.Allow),
+            AliceRule("deny-marker", LatticeScope.Key("app", "p/"), LatticeEffect.Deny));
+
+        var member = await harness.Gate.AuthorizeAsync(
+            new LatticeAccessRequest("app", LatticeOperation.Read, Alice, "p/a"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(member.Allowed, Is.True, "the prefix carve-out keeps 'p/a' readable under the whole-tree deny");
+            Assert.That(
+                harness.Engine.HasAnyGrant(Alice, "app", LatticeOperation.Read),
+                Is.True,
+                "a whole-tree deny with a live prefix carve-out does not deny every key");
+        });
+    }
+
+    [Test]
+    public async Task HasAnyGrant_prefix_allow_shadowed_by_a_same_scope_deny_returns_false()
+    {
+        // Negative control: a deny at the prefix's own scope does shadow every key.
+        var engine = await EngineAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny },
+            AliceRule("allow-prefix", LatticeScope.Prefix("app", "p/"), LatticeEffect.Allow),
+            AliceRule("deny-prefix", LatticeScope.Prefix("app", "p/"), LatticeEffect.Deny));
+
+        Assert.That(engine.HasAnyGrant(Alice, "app", LatticeOperation.Read), Is.False);
     }
 
     [Test]

@@ -25,9 +25,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// anchor a pattern to its <c>.gitignore</c> directory, a trailing <c>/</c> for a
 /// directory-only match, the <c>*</c>, <c>?</c>, and <c>**</c> wildcards, a
 /// <c>[...]</c> character class (with ranges and <c>!</c>/<c>^</c> negation, as in
-/// the ubiquitous <c>[Bb]in/</c> and <c>[Oo]bj/</c>), and a leading <c>\</c> escape
-/// of <c>#</c> or <c>!</c>. It does not read <c>.git/info/exclude</c> or the user's
-/// global excludes.
+/// the ubiquitous <c>[Bb]in/</c> and <c>[Oo]bj/</c>), and a <c>\</c> escape that
+/// makes the next character literal (a leading <c>\#</c> or <c>\!</c>, an escaped
+/// wildcard such as <c>\*</c>, or an escaped trailing space). It does not read
+/// <c>.git/info/exclude</c> or the user's global excludes.
 /// </para>
 /// <para>
 /// <b>Hierarchy.</b> Each rule matches the entry it names and nothing deeper; a path
@@ -368,6 +369,13 @@ internal sealed class GitignoreScope
                         break;
                     case '[':
                         i = AppendCharacterClass(pattern, i, builder);
+                        break;
+                    case '\\' when i + 1 < pattern.Length:
+                        // gitignore(5): a backslash escapes the character after it,
+                        // which is then matched literally - '\#', '\*', '\[' or an
+                        // escaped trailing space - rather than as a backslash.
+                        i++;
+                        builder.Append(Regex.Escape(pattern[i].ToString()));
                         break;
                     default:
                         builder.Append(Regex.Escape(c.ToString()));

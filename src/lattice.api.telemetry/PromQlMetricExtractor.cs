@@ -15,10 +15,21 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// The extraction is deliberately conservative rather than a full PromQL parser.
 /// It recognises an identifier (<c>[a-zA-Z_:][a-zA-Z0-9_:]*</c>) as a metric name
 /// only when it is <b>not</b> immediately followed by <c>(</c> (a function or
-/// aggregation call), <b>not</b> a PromQL keyword or aggregation operator,
-/// <b>not</b> inside a quoted string or a numeric / duration literal such as
-/// <c>5m</c>, and <b>not</b> inside a <c>{...}</c> label matcher unless it is the
-/// reserved <c>__name__</c> label.
+/// aggregation call), <b>not</b> inside a quoted string or a numeric / duration
+/// literal such as <c>5m</c>, and <b>not</b> inside a <c>{...}</c> label matcher
+/// unless it is the reserved <c>__name__</c> label.
+/// </para>
+/// <para>
+/// A PromQL keyword is excluded only where Prometheus itself reads it as a keyword.
+/// Prometheus's grammar also accepts the aggregation operators, the set operators,
+/// and the <c>by</c>, <c>without</c>, <c>offset</c>, <c>start</c>, and <c>end</c>
+/// keywords as a bare metric name, so <c>up or min</c> selects the metric named
+/// <c>min</c>. An aggregation operator is therefore a keyword only when a call or a
+/// <c>by</c> / <c>without</c> clause follows it, <c>start</c> and <c>end</c> only as
+/// the <c>@ start()</c> / <c>@ end()</c> calls, and a set operator, <c>offset</c>,
+/// <c>by</c>, or <c>without</c> only when it follows an operand; anywhere else each
+/// is reported as a referenced name, so the deny-all gate cannot be walked past by
+/// naming a metric that shares a keyword's spelling.
 /// </para>
 /// <para>
 /// The reserved <c>__name__</c> label designates a metric by name from inside a
@@ -41,16 +52,23 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </remarks>
 public static class PromQlMetricExtractor
 {
-    private static readonly HashSet<string> ReservedWords = new(StringComparer.Ordinal)
+    // Aggregation operators. Each is call-like - written `sum(...)`, or with a
+    // grouping modifier before the '(' as `sum by (job) (...)` - and anywhere else
+    // Prometheus's grammar reads the keyword as a bare metric name
+    // (generated_parser.y, metric_identifier), so `up or min` selects the metric
+    // named min.
+    private static readonly HashSet<string> AggregationOperators = new(StringComparer.Ordinal)
     {
-        // Set / binary / vector-matching keywords.
-        "and", "or", "unless", "by", "without", "on", "ignoring",
-        "group_left", "group_right", "offset", "bool", "inf", "nan",
-        "start", "end", "atan2",
-        // Aggregation operators (all are call-like but may be written with a
-        // modifier before the '(' so they are excluded by name as well).
         "sum", "min", "max", "avg", "group", "stddev", "stdvar", "count",
         "count_values", "bottomk", "topk", "quantile", "limitk", "limit_ratio",
+    };
+
+    // Keywords that are an operator or modifier after an operand and a bare
+    // metric name where an operand is expected: `a or b` is a set operation, but
+    // `a or or` selects the metric named or.
+    private static readonly HashSet<string> OperandPositionMetricKeywords = new(StringComparer.Ordinal)
+    {
+        "and", "or", "unless", "offset", "by", "without",
     };
 
     private static readonly HashSet<string> GroupingKeywords = new(StringComparer.Ordinal)
@@ -92,6 +110,12 @@ public static class PromQlMetricExtractor
         var selectorAnchored = false;
         var selectorSawExactName = false;
 
+        // Whether the scanner stands where Prometheus expects an operand (the start
+        // of the expression, or after an operator, '(' or ','), as opposed to just
+        // after one. It decides whether a keyword that doubles as a metric name is
+        // the metric (`up or offset`) or the operator / modifier (`up offset 5m`).
+        var expectOperand = true;
+
         while (i < length)
         {
             var c = query[i];
@@ -117,6 +141,7 @@ public static class PromQlMetricExtractor
             {
                 i = SkipString(query, i);
                 metricNamePrecedes = false;
+                expectOperand = false;
                 continue;
             }
 
@@ -145,6 +170,11 @@ public static class PromQlMetricExtractor
                         // metric name nor pinned by an exact __name__ matcher is
                         // unconstrained; the deny-all gate must reject it.
                         hasUnconstrainedSelector = true;
+                    }
+
+                    if (braceDepth == 0)
+                    {
+                        expectOperand = false;
                     }
                 }
 
@@ -189,10 +219,32 @@ public static class PromQlMetricExtractor
                     // whose identifiers are label names, not metrics. Skip it. This
                     // is checked before the function-call test because the label
                     // list opens with '(' just as a call does.
+                    var aggregationGrouping = identifier is "by" or "without";
                     var listStart = SkipWhitespaceIndex(query, i);
                     if (listStart < length && query[listStart] == '(')
                     {
                         i = SkipBalancedParens(query, listStart);
+
+                        // A by/without list closes an aggregation's grouping clause;
+                        // an on/ignoring/group_left/group_right list precedes the
+                        // right-hand operand of a binary operation.
+                        expectOperand = !aggregationGrouping;
+                        metricNamePrecedes = false;
+                        continue;
+                    }
+
+                    if (expectOperand && aggregationGrouping)
+                    {
+                        AddName(identifier, ref names, ref seen);
+                        metricNamePrecedes = true;
+                        expectOperand = false;
+                        continue;
+                    }
+
+                    if (!aggregationGrouping)
+                    {
+                        // group_left / group_right written without a label list.
+                        expectOperand = true;
                     }
 
                     metricNamePrecedes = false;
@@ -201,18 +253,52 @@ public static class PromQlMetricExtractor
 
                 if (NextNonWhitespace(query, i) == '(')
                 {
+                    // A function or aggregation call; the '(' arm below puts the
+                    // scanner in operand position for its arguments.
                     metricNamePrecedes = false;
                     continue;
                 }
 
-                if (ReservedWords.Contains(identifier))
+                if (AggregationOperators.Contains(identifier)
+                    && IsFollowedByAggregationGrouping(query, i))
                 {
+                    // `sum by (job) (...)`: the grouping clause is read next.
                     metricNamePrecedes = false;
+                    expectOperand = false;
                     continue;
                 }
 
+                if (OperandPositionMetricKeywords.Contains(identifier) && !expectOperand)
+                {
+                    // A set operator or offset modifier after an operand. Either way
+                    // an operand (or the modifier's duration) follows.
+                    metricNamePrecedes = false;
+                    expectOperand = true;
+                    continue;
+                }
+
+                if (identifier is "bool" or "atan2")
+                {
+                    // A comparison modifier or binary operator, never a metric name.
+                    metricNamePrecedes = false;
+                    expectOperand = true;
+                    continue;
+                }
+
+                if (identifier is "inf" or "nan")
+                {
+                    // A numeric literal.
+                    metricNamePrecedes = false;
+                    expectOperand = false;
+                    continue;
+                }
+
+                // Everything else is a metric selector, including an aggregation
+                // operator or a start / end preprocessor keyword written without a
+                // call, and an operator keyword standing where an operand belongs.
                 AddName(identifier, ref names, ref seen);
                 metricNamePrecedes = true;
+                expectOperand = false;
                 continue;
             }
 
@@ -226,6 +312,7 @@ public static class PromQlMetricExtractor
                 }
 
                 metricNamePrecedes = false;
+                expectOperand = false;
                 continue;
             }
 
@@ -237,7 +324,10 @@ public static class PromQlMetricExtractor
                 continue;
             }
 
+            // A closing bracket ends an operand; an opening bracket, a comma, or an
+            // operator character leaves the scanner expecting one.
             metricNamePrecedes = false;
+            expectOperand = c is not (')' or ']');
             i++;
         }
 
@@ -483,6 +573,25 @@ public static class PromQlMetricExtractor
         }
 
         return i;
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when the identifier that follows
+    /// <paramref name="index"/> (after any whitespace) is exactly <c>by</c> or
+    /// <c>without</c> - the grouping clause an aggregation operator may carry before
+    /// its argument list.
+    /// </summary>
+    private static bool IsFollowedByAggregationGrouping(string text, int index)
+    {
+        var start = SkipWhitespaceIndex(text, index);
+        var end = start;
+        while (end < text.Length && IsIdentifierPart(text[end]))
+        {
+            end++;
+        }
+
+        var word = text.AsSpan(start, end - start);
+        return word.SequenceEqual("by") || word.SequenceEqual("without");
     }
 
     private static int SkipBalancedParens(string text, int openIndex)
