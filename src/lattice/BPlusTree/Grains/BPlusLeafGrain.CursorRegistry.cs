@@ -714,12 +714,26 @@ internal sealed partial class BPlusLeafGrain
     /// <item><description>
     /// <b>Data-bearing and snapshot-covered</b>: a durable snapshot covers the
     /// checkpointed prefix, so the pin authorises trimming up to
-    /// <c>min(checkpoint, coveredOffset)</c> - never past what the snapshot
-    /// durably holds. The guaranteed cadence capture (see
+    /// <c>min(persistedCheckpoint, coveredOffset)</c> - never past what the
+    /// snapshot durably holds. The guaranteed cadence capture (see
     /// <c>MaybeRunPeriodicSnapshotRecheckAsync</c>) ensures a block pin always
     /// has a bounded path to coverage and trim, so retention stays bounded.
     /// </description></item>
     /// </list>
+    /// <para>
+    /// <b>Invariant (issue #3476): a published offset never exceeds the
+    /// partition's persisted projection checkpoint.</b> The <c>checkpoint &lt; 0</c>
+    /// release tests above read the current checkpoint (persisted or pending),
+    /// but the offset a data-bearing partition publishes is bounded by the
+    /// PERSISTED checkpoint alone. A pending advance lives only in this
+    /// activation's memory, while every replay starts from the persisted offset
+    /// and faults when the WAL tail has passed persisted + 1, so a pin above it
+    /// authorises exactly the trim that latches the leaf. Snapshot coverage
+    /// above the persisted checkpoint does not relax the bound: a live
+    /// activation's replay does not rehydrate from the blob, and the pin
+    /// store's monotonic-max merge means an over-reported offset can never be
+    /// withdrawn.
+    /// </para>
     /// </summary>
     private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
         int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData,
@@ -787,14 +801,33 @@ internal sealed partial class BPlusLeafGrain
         // partition whose in-memory cache is momentarily empty. Either way the
         // checkpointed prefix's only durable copy - absent a snapshot - is the
         // WAL, so authorise trimming only as far as a durable snapshot covers.
+        //
+        // Issue #3476: and never past the PERSISTED checkpoint. `checkpoint`
+        // above is max(persisted, pending), and the pending half is an advance
+        // held only in this activation's memory. Every replay this activation
+        // (or a crash-recovered successor that does not rehydrate a snapshot)
+        // runs starts from the persisted offset, and the #945 guard and the
+        // fall-off-log detector fault it when the WAL tail has passed
+        // persisted + 1. A pin above the persisted checkpoint licenses exactly
+        // that trim: the #3224 drive recheck restamps coverage up to the
+        // pending checkpoint, so both arms of min(checkpoint, covered) could
+        // sit above it, the GC trimmed to the pin, and the next replay latched
+        // the leaf. Because the pin store merges by monotonic max, an
+        // over-reported offset can never be taken back, so the clamp has to
+        // hold at publication. The pending advance reaches the pin as soon as
+        // it persists: FlushPendingCheckpointAsync republishes through
+        // ReportCursorIfActiveAsync, and the starvation drive persists before
+        // it republishes.
         var covered = DurableSnapshotCoverageForPartition(partition);
-        var safeOffset = Math.Min(checkpoint, covered);
+        var safeOffset = Math.Min(GetPersistedCheckpointForPartition(partition), covered);
         if (safeOffset < 0)
         {
-            // Never checkpointed (checkpoint < 0, #1490) OR checkpointed but
-            // uncovered (covered < 0, the residual cold-restart prefix loss and
-            // the empty-cache misclassification): the whole WAL from offset 0
-            // is the only durable copy - retain the Zero block pin.
+            // Never checkpointed (checkpoint < 0, #1490), checkpointed only in
+            // memory so far (a pending first checkpoint over a persisted -1,
+            // #3476), OR checkpointed but uncovered (covered < 0, the residual
+            // cold-restart prefix loss and the empty-cache misclassification):
+            // the whole WAL from offset 0 is the only durable copy - retain the
+            // Zero block pin.
             return (HybridLogicalClock.Zero, -1L);
         }
 
