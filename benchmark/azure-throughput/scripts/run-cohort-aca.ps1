@@ -191,10 +191,17 @@ param(
 	# keeps cohorts logically isolated but does not stop the table growing,
 	# so set this per cohort whenever arms are to be compared.
 	#
-	# It does NOT fix the separate, unexplained decay in absolute throughput
-	# across successive cohorts on one deployment (first cohort ~329 ops/s,
-	# ninth ~17-45 regardless of table). Treat only the first cohort after a
-	# deployment as a trustworthy absolute number.
+	# That paragraph predates -ResetStorage (below, on by default), which also
+	# gives every cohort a fresh WAL table. An earlier deployment showed an
+	# unexplained decay in absolute throughput across successive cohorts
+	# (first cohort ~329 ops/s, ninth ~17-45 regardless of table); on the
+	# 91-cohort Layer 3 sweep with -ResetStorage on, repeat cohorts of most
+	# cells agreed to within a few percent however late in the sweep they ran
+	# (e.g. get-many at 1 silo 19,995 / 19,878 keys/s, set-many at 1 silo
+	# 5,928 / 5,925); the one 2x disagreement was a #3458 stall, not decay.
+	# Only if -ResetStorage is turned off should the first
+	# cohort after a deployment be treated as the only trustworthy absolute
+	# number.
 	[string] $WalTable = "OrleansLatticeWal",
 	# Grain-state table for leaf/internal/atomic/registry state
 	# (BENCH_LEAF_STORAGE_TABLE). Rotated per cohort alongside $WalTable when

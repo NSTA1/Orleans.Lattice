@@ -1335,8 +1335,17 @@ function Invoke-Layer3Cohorts {
 			$vehicles = $perSilo.Vehicles * $silos
 			Write-Host "[layer3] silos=$silos mode=$mode rung=${vehicles}veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $($perSilo.Vehicles) veh/silo)" -ForegroundColor Cyan
 
-			$cohortList = New-Object System.Collections.Generic.List[hashtable]
-			for ($i = 1; $i -le $N; $i++) {
+			$cohortList = New-Object System.Collections.Generic.List[object]
+			# A cell resumed with fewer than N cohorts is topped up rather
+			# than re-run: its recorded cohorts are kept and numbering
+			# continues after them, so raising -N on -Resume adds tie-break
+			# cohorts to a cell without discarding what it already paid for.
+			$firstCohort = 1
+			if ($cells[$mode].ContainsKey("$silos")) {
+				foreach ($existing in @($cells[$mode]["$silos"])) { if ($existing) { $cohortList.Add($existing) } }
+				$firstCohort = $cohortList.Count + 1
+			}
+			for ($i = $firstCohort; $i -le $N; $i++) {
 				Write-Host "[layer3] cohort $i/$N silos=$silos mode=$mode ..." -ForegroundColor DarkGray
 				# `| Out-Host` for exactly the reason Invoke-Layer2Cohorts
 				# gives: run-cohort-aca.ps1 emits a lot of az/cohort progress
@@ -1611,6 +1620,14 @@ function Read-SiloLogStats {
 			# per-call p50 matches plain set-point. Anchor the cell on the
 			# source tree by dropping any tree=view-* row.
 			($_.Line -notmatch ' tree=view-[^\s]*') -and
+			# Exclude the library's own system trees (tree=_lattice_trees, the
+			# tree registry, and any other _lattice_* tree). They emit the same
+			# duration instruments for registry lookups, and after the producer
+			# stops the final window can carry ONLY those rows, so the last-
+			# window pick published a ~120 us registry read as the get-point
+			# per-call latency (the bench tree's own p50 in the same cohort was
+			# ~3 ms).
+			($_.Line -notmatch ' tree=_lattice_[^\s]*') -and
 			($_.Line -match '\[phaseA\] t=\s*([\d.]+)s') -and ([double]$Matches[1] -ge 15)
 		})
 		if ($productive.Count -eq 0) { continue }
@@ -2311,7 +2328,7 @@ function New-MetaHeaderForLayer3 {
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. All silo counts share ONE Azure Storage account for the WAL. That account''s own metrics were checked for this sweep and it is NOT the write-side limit: zero throttling responses at any silo count, and server-side latency falling from 9.7 ms at N=1 to 6.7 ms at N=8. Read the write-mode collapse as a cluster-side defect, not a storage ceiling - see the caveats section.'
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
 	return $meta
 }
 
@@ -2393,7 +2410,7 @@ function Render-ProvenanceNote {
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand). All silo counts share one Azure Storage account for the WAL, but that account was measured and is NOT the write-side limit - see the caveats below."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand), and every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed."
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
@@ -2599,11 +2616,28 @@ function Main {
 			}
 			# Re-aggregate from the raw cells for the same reason Layer 2 does:
 			# replaying is how an aggregator fix is validated without paying for
-			# a fresh sweep. Layer 3 does not re-parse the cohort logs, because
-			# Read-SiloLogStats already froze the FINAL-line throughput into the
-			# cohort record and the raw logs are harvested per cell rather than
-			# per silo.
+			# a fresh sweep.
 			if ($state.layer3.ContainsKey('cohorts') -and $state.layer3.cohorts -is [System.Collections.IDictionary] -and $state.layer3.cohorts.Count -gt 0) {
+				# Re-derive the per-call quantiles (only) from each retained
+				# cohort log, so a fix to the [phaseA] instrument/tree selection
+				# reaches the published latency columns without a fresh sweep.
+				# Throughput stays frozen: it is FINAL-line derived and a
+				# re-parse would reproduce it exactly.
+				$l3BatchSize = [int](Get-StateOr $state 'batchSize' 4096)
+				foreach ($mode in @($state.layer3.cohorts.Keys)) {
+					foreach ($siloKey in @($state.layer3.cohorts[$mode].Keys)) {
+						foreach ($cohort in @($state.layer3.cohorts[$mode][$siloKey])) {
+							$cohortLog = Get-StateOr $cohort 'siloLog' $null
+							if ($cohortLog -and (Test-Path $cohortLog)) {
+								$reparsed = Read-SiloLogStats -SiloLogPath $cohortLog -WorkloadMode $mode -BatchSize $l3BatchSize
+								$cohort.perCallP50Ms = $reparsed.PerCallP50Ms
+								$cohort.perCallP75Ms = $reparsed.PerCallP75Ms
+								$cohort.perCallP90Ms = $reparsed.PerCallP90Ms
+								$cohort.perCallP99Ms = $reparsed.PerCallP99Ms
+							}
+						}
+					}
+				}
 				$state.layer3.rows = Aggregate-Layer3Cells -Cells $state.layer3.cohorts
 			}
 			$l3Replayed = Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $state -WhatIf:$Diff
