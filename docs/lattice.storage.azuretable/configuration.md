@@ -75,7 +75,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`EliminateCandidateRowOnHotPath`](#eliminatecandidaterowonhotpath) | `bool` | `true` |
 | [`PipelinedPhaseTwoFaultHandler`](#pipelinedphasetwofaulthandler) | `Action<Exception>?` | `null` |
 | [`PhaseTwoCoalescingWindow`](#phasetwocoalescingwindow) | `TimeSpan` | 5 ms |
-| [`PhaseTwoCommitTimeout`](#phasetwocommittimeout) | `TimeSpan?` | 3 seconds |
+| [`PhaseTwoCommitTimeout`](#phasetwocommittimeout) | `TimeSpan?` | 12 seconds |
 | [`PhaseOneTransientRetryMaxAttempts`](#phaseonetransientretrymaxattempts) | `int` | `2` |
 | [`PhaseOneTransientRetryBaseDelay`](#phaseonetransientretrybasedelay) | `TimeSpan` | 25 ms |
 
@@ -188,7 +188,11 @@ Maximum wait after the first pending completion arrives so more completions can 
 
 ### `PhaseTwoCommitTimeout`
 
-Per-commit deadline for the ordered completion transaction. Default is 3 seconds. Set to `null` to make completion unbounded, or set a positive `TimeSpan` tuned above healthy p99 and below the silo-level timeout.
+Per-commit deadline for the ordered completion transaction. Default is 12 seconds. Set to `null` to make completion unbounded, or set a positive `TimeSpan` tuned above the worst commit latency a browned-out account produces and below the silo-level timeout.
+
+The deadline bounds how long the shard waits, not the transaction: on a timeout the waiting batches fail fast, but the abandoned transaction keeps running to a real outcome, because the service may already hold it and can still apply it. The shard's post-failure resync waits for it before reading the log, so the writer never resumes beneath rows that transaction then writes. A transaction still running 60 seconds after it was abandoned is cancelled so the wait stays bounded.
+
+The 12-second default comes from multi-silo real-Azure measurement: one storage account under about 36k keys/s had a 6-9 second latency brown-out in which completion transactions took up to 6 seconds. The former 3-second default tripped on every shard at once and turned that brown-out into a failure storm; with no deadline the same run failed no keys. 12 seconds leaves 2x headroom over that worst case while staying below the 15-second WAL flush timeout and the silo request timeout, so a genuinely wedged shard is still broken.
 
 ```csharp verify
 using Orleans.Lattice.Storage.AzureTable;

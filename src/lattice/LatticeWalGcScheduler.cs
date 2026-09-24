@@ -924,6 +924,23 @@ internal sealed class LatticeWalGcScheduler(
     /// </param>
     /// <param name="FirstBlocker">The first consumer admitted in this episode, which is the one the warning named.</param>
     /// <param name="LatestBlocker">The most recently admitted consumer, which is the one holding the floor now.</param>
+    /// <param name="AnyTerminal">
+    /// Whether some consumer on this tree has reached a terminal outcome
+    /// (<see cref="ConsumerReactivationBudget.Terminal"/>) in this episode. It
+    /// suppresses the unreachable-block escalation, which would otherwise read a
+    /// consumer the sweep deliberately stopped driving as one it never managed to
+    /// reach (issue #3478).
+    /// </param>
+    /// <param name="LatchedStaleLeaves">
+    /// The leaves whose drive was refused as latched stale in this episode, or
+    /// <see langword="null"/> while there are none (issue #3478). Held per leaf
+    /// rather than per consumer because the latch is leaf-wide: a leaf publishes
+    /// one pin per WAL partition, and every one of them would rethrow the same
+    /// fault, so a sibling pin of a latched leaf is made terminal without being
+    /// driven. Its count is the "N latched stale leaves" the tree is reported
+    /// blocked by. Bounded by the leaves the floor reports in one episode, and
+    /// dropped with the observation when the episode ends.
+    /// </param>
     private readonly record struct BlockedConsumerObservation(
         DateTimeOffset EpisodeStarted,
         DateTimeOffset? LastAnyAttempt,
@@ -933,7 +950,9 @@ internal sealed class LatticeWalGcScheduler(
         bool WarnedBlocked = false,
         int DistinctBlockers = 0,
         string? FirstBlocker = null,
-        string? LatestBlocker = null);
+        string? LatestBlocker = null,
+        bool AnyTerminal = false,
+        HashSet<GrainId>? LatchedStaleLeaves = null);
 
     /// <summary>
     /// One blocking leaf's reactivation budget and rate-limiter state, carried
@@ -980,6 +999,16 @@ internal sealed class LatticeWalGcScheduler(
     /// <see cref="_reactivationHealEpoch"/>, which collapses every abandoned
     /// consumer's backoff estate-wide.
     /// </param>
+    /// <param name="Terminal">
+    /// Why the sweep has stopped driving this consumer for the rest of the
+    /// episode, or <see cref="ReactivationTerminal.None"/> while it is still
+    /// eligible (issue #3478). A terminal consumer is skipped before every other
+    /// gate: it is never touched, never abandoned and never re-armed, because
+    /// abandonment is a pause that re-arms and would re-create the loop this
+    /// state exists to end. It is also never credited a heal, since the sweep
+    /// gave up on it. Its pin is not retired, so it keeps holding the cursor
+    /// floor and nothing is trimmed past it.
+    /// </param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -992,7 +1021,51 @@ internal sealed class LatticeWalGcScheduler(
         long HealEpochAtAbandonment = 0,
         bool PinStateClassified = false,
         bool HealCredited = false,
-        bool OffsetAdvanceOwed = false);
+        bool OffsetAdvanceOwed = false,
+        ReactivationTerminal Terminal = ReactivationTerminal.None);
+
+    /// <summary>
+    /// Why the reactivation sweep has stopped driving a blocking consumer for the
+    /// rest of its blocked episode (issue #3478).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A terminal state is the verdict "driving this pin again cannot help",
+    /// which is a stronger statement than abandonment. Abandonment is a pause
+    /// that re-arms after a backoff, because the conditions it concludes from -
+    /// memory pressure, a saturated replay gate - are transient. A terminal state
+    /// concludes from a property of the leaf that no retry can change, so it is
+    /// skipped outright rather than re-armed.
+    /// </para>
+    /// <para>
+    /// It never retires the pin, and that is what separates it from
+    /// <see cref="ReactivationOutcome.Orphaned"/>. An orphan's pin protects
+    /// nothing; a terminal consumer's pin still guards WAL its leaf needs, so it
+    /// stays in the cursor floor and the tree stays blocked until it is repaired
+    /// by other means.
+    /// </para>
+    /// <para>
+    /// Deliberately separate from <see cref="ReactivationOutcome"/>: that enum is
+    /// the metric arm of one touch, whereas this is the budget's standing. A
+    /// later terminal kind can be reached from a touch whose outcome is an
+    /// ordinary one, such as a completed drive graded no-advance (issue #3453),
+    /// and it is carried on <see cref="ReactivationTouchResult.Terminal"/>
+    /// without adding a metric arm.
+    /// </para>
+    /// </remarks>
+    internal enum ReactivationTerminal
+    {
+        /// <summary>The consumer is still eligible for reactivation.</summary>
+        None,
+
+        /// <summary>
+        /// The leaf refused the drive with a <see cref="LeafProjectionStaleException"/>:
+        /// its projection is latched stale (issue #3451) and it rethrows the same
+        /// fault on every drive until an operator rebuilds it (issue #3454).
+        /// Leaf-wide, so every pin of that leaf is terminal once one is.
+        /// </summary>
+        LatchedStale,
+    }
 
     /// <summary>
     /// What a single reactivation touch established about the blocking leaf.
@@ -1082,6 +1155,32 @@ internal sealed class LatticeWalGcScheduler(
         /// </para>
         /// </remarks>
         Orphaned,
+
+        /// <summary>
+        /// The leaf resolved and refused the drive with a
+        /// <see cref="LeafProjectionStaleException"/>: its projection is latched
+        /// stale (issue #3451) and activation cannot heal it (issue #3478).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Why this is terminal rather than refundable.</b> The latch is a
+        /// persisted property of the leaf, cleared only by an operator rebuild
+        /// (issue #3454), so every later drive rethrows the same exception.
+        /// Counted as <see cref="Faulted"/> it was refunded, then charged, then
+        /// abandoned and re-armed, and the leaf was re-driven for the life of the
+        /// process. The consumer is marked
+        /// <see cref="ReactivationTerminal.LatchedStale"/> instead and skipped
+        /// for the rest of the episode.
+        /// </para>
+        /// <para>
+        /// <b>Why the pin is not retired, unlike <see cref="Orphaned"/>.</b> A
+        /// latched leaf is live and still needs every WAL entry above its
+        /// checkpoint to be rebuilt, so the pin keeps holding the floor and the
+        /// tree stays blocked. The scheduler reports the tree once per pass
+        /// instead of re-driving it.
+        /// </para>
+        /// </remarks>
+        LatchedStale,
     }
 
     /// <summary>
@@ -1112,6 +1211,7 @@ internal sealed class LatticeWalGcScheduler(
             ReactivationOutcome.Faulted => LatticeMetrics.BlockedLeafReactivationFaulted,
             ReactivationOutcome.Undelivered => LatticeMetrics.BlockedLeafReactivationUndelivered,
             ReactivationOutcome.Orphaned => LatticeMetrics.BlockedLeafReactivationOrphaned,
+            ReactivationOutcome.LatchedStale => LatticeMetrics.BlockedLeafReactivationLatchedStale,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -3575,9 +3675,13 @@ internal sealed class LatticeWalGcScheduler(
         // no evidence here that any particular touch is futile, only that none
         // is happening, and the sweep remains the sole remedy. Suppressed once
         // some consumer on this tree has been abandoned, so the two alarms
-        // cannot both fire for one condition.
+        // cannot both fire for one condition. Suppressed likewise once some
+        // consumer has gone terminal (issue #3478): a terminal consumer is not
+        // attempted by design, so the elapsed time since the last attempt says
+        // nothing about reachability, and the tree already has its own report.
         if (!observation.Escalated
             && !observation.AnyAbandoned
+            && !observation.AnyTerminal
             && now - (observation.LastAnyAttempt ?? observation.EpisodeStarted) >= UnreachableBlockEscalation)
         {
             observation = observation with { Escalated = true };
@@ -3625,6 +3729,35 @@ internal sealed class LatticeWalGcScheduler(
 
             var consumerId = blockingConsumerIds[i];
             var budget = budgets[consumerId];
+
+            // A terminal consumer is skipped before every other gate (issue
+            // #3478). Ahead of the give-up branch because abandonment is a pause
+            // that re-arms, and re-arming a consumer no drive can help is the
+            // loop this state exists to end; ahead of the leaf dedupe because it
+            // is not a touch and must not claim the leaf's slot. The pin is left
+            // registered, so it keeps holding the cursor floor.
+            //
+            // For the latched-stale verdict this gate is backed by the leaf-wide
+            // check below, which covers the driven pin as well as its siblings;
+            // it is the per-pin gate a terminal kind with no leaf-wide scope
+            // (a NoAdvance give-up, issue #3453) relies on alone.
+            if (budget.Terminal != ReactivationTerminal.None)
+            {
+                continue;
+            }
+
+            // A sibling pin of a leaf already latched stale is terminal without
+            // being driven. The latch is leaf-wide, so its drive would rethrow
+            // the same fault - and it would get one, because the dedupe below
+            // only collapses pins touched on the same pass, while a latched
+            // leaf's other partition pins come due on later ones.
+            if (observation.LatchedStaleLeaves is { } latchedLeaves
+                && TryResolveLeafGrainId(treeId, consumerId, out var latchedLeafGrainId)
+                && latchedLeaves.Contains(latchedLeafGrainId))
+            {
+                budgets[consumerId] = budget with { Terminal = ReactivationTerminal.LatchedStale };
+                continue;
+            }
 
             if (budget.Attempts >= MaxReactivationAttempts)
             {
@@ -3734,6 +3867,7 @@ internal sealed class LatticeWalGcScheduler(
 
         if (touching is null)
         {
+            ReportLatchedStaleLeaves(treeId, observation);
             return;
         }
 
@@ -3806,8 +3940,78 @@ internal sealed class LatticeWalGcScheduler(
                 };
             }
 
+            // Latch a terminal verdict on the budget, where the touch loop reads
+            // it before every other gate (issue #3478). The attempt is left
+            // charged, which also keeps the entry out of pruning for the rest of
+            // the episode - a pruned terminal consumer would be re-admitted
+            // fresh and driven again.
+            if (outcomes[i].Terminal != ReactivationTerminal.None)
+            {
+                current = current with { Terminal = outcomes[i].Terminal };
+                observation = MarkTerminal(observation, outcomes[i]);
+            }
+
             budgets[touching[i]] = current;
         }
+
+        _blockedConsumers[treeId] = observation;
+        ReportLatchedStaleLeaves(treeId, observation);
+    }
+
+    /// <summary>
+    /// Records a touch's terminal verdict on the tree's blocked observation
+    /// (issue #3478).
+    /// </summary>
+    /// <remarks>
+    /// Kept as the one place a verdict reaches the observation, so a later
+    /// terminal kind (issue #3453) adds its tree-level bookkeeping here rather
+    /// than at the call site. A latched-stale verdict is leaf-wide, so its leaf
+    /// is remembered and the leaf's sibling pins are made terminal undriven.
+    /// </remarks>
+    private static BlockedConsumerObservation MarkTerminal(
+        BlockedConsumerObservation observation,
+        ReactivationTouchResult result)
+    {
+        if (result.Terminal == ReactivationTerminal.LatchedStale)
+        {
+            var leaves = observation.LatchedStaleLeaves ?? [];
+            leaves.Add(result.Leaf);
+            return observation with { AnyTerminal = true, LatchedStaleLeaves = leaves };
+        }
+
+        return observation with { AnyTerminal = true };
+    }
+
+    /// <summary>
+    /// Reports, once per pass, a tree that stays blocked by leaves the sweep has
+    /// stopped driving because they are latched stale (issue #3478).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The replacement for the per-drive warning that used to fire on every
+    /// cooldown. The sweep no longer acts on these leaves, so without this line
+    /// a tree whose WAL is retained behind them would go quiet in the log while
+    /// its bytes kept growing - the remedy stopping must not read as the problem
+    /// stopping.
+    /// </para>
+    /// <para>
+    /// A warning rather than an information line because it describes a tree
+    /// whose WAL is retained and cannot be released without an operator; it is
+    /// once per pass because a blocked tree is held at the cadence floor, which
+    /// bounds it at that rate and no more.
+    /// </para>
+    /// </remarks>
+    private void ReportLatchedStaleLeaves(string treeId, BlockedConsumerObservation observation)
+    {
+        if (observation.LatchedStaleLeaves is not { Count: > 0 } latched)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "WAL GC tree {Tree} is blocked by {LatchedStaleLeaves} latched stale leaves; activation cannot heal them, so the reactivation sweep no longer drives them. Their pins stay in the cursor floor so no WAL they need is trimmed, and the WAL stays retained until each leaf is rebuilt by an operator (issues #3478, #3454).",
+            treeId,
+            latched.Count);
     }
 
     /// <summary>
@@ -3970,6 +4174,13 @@ internal sealed class LatticeWalGcScheduler(
     /// it to the ordinary eligible pool under the unchanged cooldown, never to
     /// an immediate retry.
     /// </para>
+    /// <para>
+    /// <b>Nor is a terminal consumer.</b> The sweep stopped driving it (issue
+    /// #3478), so a floor that later clears was cleared by something else - an
+    /// operator rebuild of a latched leaf - and crediting it would both inflate
+    /// the ratio and advance the heal epoch, shortening every other consumer's
+    /// backoff on evidence that says nothing about headroom.
+    /// </para>
     /// </remarks>
     private void CreditHealedConsumers(
         BlockedConsumerObservation observation,
@@ -3981,7 +4192,8 @@ internal sealed class LatticeWalGcScheduler(
         foreach (var (consumerId, budget) in observation.Budgets)
         {
             if (budget.Attempts > 0 && !budget.Abandoned && !budget.HealCredited
-                && !budget.OffsetAdvanceOwed)
+                && !budget.OffsetAdvanceOwed
+                && budget.Terminal == ReactivationTerminal.None)
             {
                 // Advance the heal epoch before recording. A credited heal is
                 // direct evidence that a blocked leaf managed to activate,
@@ -4498,6 +4710,32 @@ internal sealed class LatticeWalGcScheduler(
 
             return new ReactivationTouchResult(ReactivationOutcome.Undelivered, requireOffsetAdvance);
         }
+        catch (LeafProjectionStaleException ex)
+        {
+            // The leaf's projection is latched stale (issue #3451): the leaf is
+            // live and reached, and it refuses the drive with a persisted
+            // verdict that only an operator rebuild clears (issue #3454). This
+            // is the one fault that is evidence about the LEAF rather than the
+            // silo, so it must not reach the refundable Faulted arm below -
+            // there it was refunded, charged, abandoned and re-armed, and the
+            // same leaf was re-driven on every cooldown for the life of the
+            // process (issue #3478). Terminal instead; logged at information
+            // because the tree-level warning is emitted once per pass by
+            // ReportLatchedStaleLeaves, and a per-drive warning is exactly the
+            // noise this fixes.
+            logger.LogInformation(
+                ex,
+                "WAL GC found leaf {Leaf} on tree {Tree} latched stale while driving it to clear blocking pin {Consumer}; activation cannot heal it, so the sweep stops driving this leaf. Its pins are kept, so they still hold the cursor floor and no WAL it needs is trimmed; an operator rebuild of the leaf is required (issue #3454).",
+                leafGrainId,
+                treeId,
+                blockingConsumerId);
+
+            return new ReactivationTouchResult(
+                ReactivationOutcome.LatchedStale,
+                requireOffsetAdvance,
+                ReactivationTerminal.LatchedStale,
+                leafGrainId);
+        }
         catch (Exception ex)
         {
             logger.LogWarning(
@@ -4523,9 +4761,23 @@ internal sealed class LatticeWalGcScheduler(
     /// - the advance was not observed, and not observing it is treated as it not
     /// having happened.
     /// </param>
+    /// <param name="Terminal">
+    /// Whether the touch established that no further drive of this consumer can
+    /// help, and why (issue #3478). Carried separately from
+    /// <paramref name="Outcome"/> so that a terminal verdict reached on an
+    /// ordinary outcome - a completed drive graded no-advance, say (issue #3453)
+    /// - needs no metric arm of its own.
+    /// </param>
+    /// <param name="Leaf">
+    /// The leaf the touch resolved to, when <paramref name="Terminal"/> is
+    /// leaf-wide; otherwise the default id. Lets the sweep make the leaf's other
+    /// pins terminal without driving them.
+    /// </param>
     private readonly record struct ReactivationTouchResult(
         ReactivationOutcome Outcome,
-        bool OffsetAdvanceOwed);
+        bool OffsetAdvanceOwed,
+        ReactivationTerminal Terminal = ReactivationTerminal.None,
+        GrainId Leaf = default);
 
     /// <summary>
     /// Reads one materialiser consumer's durable pin offset, on the same axis

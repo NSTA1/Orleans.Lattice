@@ -115,6 +115,7 @@ public partial class BPlusLeafGrainTests
 
     private static ILeafReplayCoordinatorGrain BuildCoordinator(long head, params CommitLogSliceEntry[] entries)
     {
+        ReachableWalFixture.EnsureReachable(head, entries);
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
         coord.ReadSliceAsync(
@@ -238,7 +239,7 @@ public partial class BPlusLeafGrainTests
         // and the previous deactivation - this test is the regression
         // gate against that bug class.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -258,7 +259,7 @@ public partial class BPlusLeafGrainTests
         // re-apply every Delete in the WAL slice to materialise the
         // tombstone in the rebuilt projection.
         var entry = new CommitLogSliceEntry(1, BuildDelete("k1", hlcPhysical: 100));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -335,7 +336,7 @@ public partial class BPlusLeafGrainTests
     {
         var txId = Guid.NewGuid();
         var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         // Guards the NO-RECORD path (issue #2165): with the durable
         // replay-work ledger disabled the clamp is the only thing keeping the
         // prepare alive across a teardown, so it must still pin the
@@ -361,7 +362,7 @@ public partial class BPlusLeafGrainTests
         // copied onto the LwwValue, not branched in the dispatch).
         var txId = Guid.NewGuid();
         var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Array.Empty<byte>(), isTombstone: true));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         // No-record path (issue #2165); see the sibling prepared-set guard.
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
@@ -384,7 +385,7 @@ public partial class BPlusLeafGrainTests
         // tombstone itself, not merely the fact that an offset was skipped.
         var txId = Guid.NewGuid();
         var entry = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Array.Empty<byte>(), isTombstone: true));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 1024);
 
         await ActivateAsync(grain);
@@ -408,7 +409,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var prepared = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Encoding.UTF8.GetBytes("v1")));
         var terminal = new CommitLogSliceEntry(2, BuildTerminal(txId, committed: true));
-        var coord = BuildCoordinator(head: 2, prepared, terminal);
+        var coord = BuildCoordinator(head: 3, prepared, terminal);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -427,7 +428,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var prepared = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Encoding.UTF8.GetBytes("v1")));
         var terminal = new CommitLogSliceEntry(2, BuildTerminal(txId, committed: false));
-        var coord = BuildCoordinator(head: 2, prepared, terminal);
+        var coord = BuildCoordinator(head: 3, prepared, terminal);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -446,7 +447,7 @@ public partial class BPlusLeafGrainTests
         var prepared1 = new CommitLogSliceEntry(1, BuildPreparedSet(tx1, "k1", Encoding.UTF8.GetBytes("v1")));
         var commit1 = new CommitLogSliceEntry(2, BuildTerminal(tx1, committed: true));
         var prepared2 = new CommitLogSliceEntry(3, BuildPreparedSet(tx2, "k2", Encoding.UTF8.GetBytes("v2")));
-        var coord = BuildCoordinator(head: 3, prepared1, commit1, prepared2);
+        var coord = BuildCoordinator(head: 4, prepared1, commit1, prepared2);
         // No-record path (issue #2165); see the sibling prepared-set guard.
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 0);
 
@@ -475,7 +476,7 @@ public partial class BPlusLeafGrainTests
         var prepared2 = new CommitLogSliceEntry(5, BuildPreparedSet(tx2, "k5", Encoding.UTF8.GetBytes("v5")));
         var entry6 = new CommitLogSliceEntry(6, BuildCommittedSet("k6", Encoding.UTF8.GetBytes("v6")));
         var prepared3 = new CommitLogSliceEntry(7, BuildPreparedSet(tx3, "k7", Encoding.UTF8.GetBytes("v7")));
-        var coord = BuildCoordinator(head: 7, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
+        var coord = BuildCoordinator(head: 8, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
         // No-record path (issue #2165). This guard is specifically valuable
         // here: it tests MIN-versus-MAX aggregate selection, and with the
         // ledger enabled every prepare is skipped so the aggregate is bypassed
@@ -510,7 +511,7 @@ public partial class BPlusLeafGrainTests
         var prepared2 = new CommitLogSliceEntry(5, BuildPreparedSet(tx2, "k5", Encoding.UTF8.GetBytes("v5")));
         var entry6 = new CommitLogSliceEntry(6, BuildCommittedSet("k6", Encoding.UTF8.GetBytes("v6")));
         var prepared3 = new CommitLogSliceEntry(7, BuildPreparedSet(tx3, "k7", Encoding.UTF8.GetBytes("v7")));
-        var coord = BuildCoordinator(head: 7, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
+        var coord = BuildCoordinator(head: 8, entry1, prepared1, entry3, entry4, prepared2, entry6, prepared3);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, maxDurableUnresolvedReplayWork: 1024);
 
         await ActivateAsync(grain);
@@ -538,7 +539,7 @@ public partial class BPlusLeafGrainTests
     {
         var entry1 = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
         var entry2 = new CommitLogSliceEntry(2, BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2")));
-        var coord = BuildCoordinator(head: 2, entry1, entry2);
+        var coord = BuildCoordinator(head: 3, entry1, entry2);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -554,7 +555,7 @@ public partial class BPlusLeafGrainTests
         var entry1 = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
         var entry2 = new CommitLogSliceEntry(2, BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2"), hlcPhysical: 200));
         var entry3 = new CommitLogSliceEntry(3, BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3"), hlcPhysical: 300));
-        var coord = BuildCoordinator(head: 3, entry1, entry2, entry3);
+        var coord = BuildCoordinator(head: 4, entry1, entry2, entry3);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             persistedCheckpoint: 1,
@@ -574,7 +575,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         // ReadSliceAsync invoked with fromExclusive = persistedCheckpoint = 1.
-        await coord.Received(1).ReadSliceAsync(1, 3, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await coord.Received(1).ReadSliceAsync(1, 4, Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("seeded"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k2"))!), Is.EqualTo("v2"));
@@ -588,7 +589,7 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var prepared = new CommitLogSliceEntry(1, BuildPreparedSet(txId, "k1", Encoding.UTF8.GetBytes("v1")));
         var terminal = new CommitLogSliceEntry(2, BuildTerminal(txId, committed: true));
-        var coord = BuildCoordinator(head: 2, prepared, terminal);
+        var coord = BuildCoordinator(head: 3, prepared, terminal);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         // First activation - full replay, checkpoint advances to 2.
@@ -633,14 +634,22 @@ public partial class BPlusLeafGrainTests
             entries[i] = new CommitLogSliceEntry(i + 1, mutation);
         }
 
-        var coord = BuildCoordinator(head: totalEntries, entries);
+        var coord = BuildCoordinator(head: totalEntries + 1, entries);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
 
-        // Three slices required for 600 entries at budget 256.
-        await coord.Received(3).ReadSliceAsync(
-            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // Three slices required for 600 entries at budget 256. Each stitching
+        // read is pinned by its start offset rather than by a total call count:
+        // with the reachable head (601, exclusive) production also issues one
+        // trailing empty read at (600, 601], which is issue #3489 and is not
+        // what this test guards.
+        await coord.Received(1).ReadSliceAsync(
+            -1, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await coord.Received(1).ReadSliceAsync(
+            256, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await coord.Received(1).ReadSliceAsync(
+            512, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         // Spot-check first / boundary / last to confirm every slice was
         // applied (not just the first).
@@ -662,7 +671,7 @@ public partial class BPlusLeafGrainTests
         // grows unboundedly. NSubstitute captures the largest budget
         // observed across all calls.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, _, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -694,7 +703,7 @@ public partial class BPlusLeafGrainTests
             new CommitLogSliceEntry(6, BuildTerminal(tx2, committed: false)),
             new CommitLogSliceEntry(7, BuildCommittedSet("e", Encoding.UTF8.GetBytes("ev"))),
         };
-        var coord = BuildCoordinator(head: 7, entries);
+        var coord = BuildCoordinator(head: 8, entries);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         await ActivateAsync(grain);
@@ -715,7 +724,7 @@ public partial class BPlusLeafGrainTests
         // activation must surface as OperationCanceledException, not
         // silently complete the replay.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, _, _, _) = CreateGrainWithMaterialiser(coord);
 
         using var cts = new CancellationTokenSource();
@@ -767,7 +776,7 @@ public partial class BPlusLeafGrainTests
         }
         entries.Add(new CommitLogSliceEntry(42, BuildPreparedSet(txId, "p", Encoding.UTF8.GetBytes("pv"), hlcPhysical: 200)));
 
-        var coord = BuildCoordinator(head: 42, entries.ToArray());
+        var coord = BuildCoordinator(head: 43, entries.ToArray());
         // No-record path (issue #2165). The clamp is this test's INSTRUMENT
         // for offset stamping, not its subject, so it must keep observing the
         // clamp to keep testing the stamp.
@@ -800,7 +809,7 @@ public partial class BPlusLeafGrainTests
             .Returns(Task.FromResult(FallOffLogDecision.TailReplay));
 
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, detector: detector);
 
         await ActivateAsync(grain);
@@ -891,7 +900,7 @@ public partial class BPlusLeafGrainTests
         // outrun the checkpoint is via trim, and trim requires the
         // replication package).
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, detector: null);
 
         await ActivateAsync(grain);
@@ -914,7 +923,7 @@ public partial class BPlusLeafGrainTests
             new CommitLogSliceEntry(0, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0"), hlcPhysical: 100)),
             new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 101)),
         };
-        var coord = BuildCoordinator(head: 1, entries);
+        var coord = BuildCoordinator(head: 2, entries);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             persistedCheckpoint: -1);
@@ -1031,14 +1040,14 @@ public partial class BPlusLeafGrainTests
         // and break legitimate reactivation after a GC.
         var reader = Substitute.For<ICommitLogReader>();
         reader.GetHeadOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(42L));
+            .Returns(Task.FromResult(43L));
         reader.GetTailOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(41L));
         var detectorServices = new ServiceCollection().AddSingleton<ICommitLogReader>(reader).BuildServiceProvider();
         var detector = new LatticeFallOffLogDetector(detectorServices);
 
         var coord = BuildCoordinator(
-            head: 42,
+            head: 43,
             new CommitLogSliceEntry(41, BuildCommittedSet("tail-a", Encoding.UTF8.GetBytes("a"), hlcPhysical: 410)),
             new CommitLogSliceEntry(42, BuildCommittedSet("tail-b", Encoding.UTF8.GetBytes("b"), hlcPhysical: 420)));
         coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(41L));
@@ -1053,7 +1062,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42),
-                "The leaf must replay the surviving live tail and advance the checkpoint to the head.");
+                "The leaf must replay the surviving live tail and advance the checkpoint to its newest entry.");
         });
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("tail-a"))!), Is.EqualTo("a"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("tail-b"))!), Is.EqualTo("b"));
@@ -1074,7 +1083,7 @@ public partial class BPlusLeafGrainTests
         // redundant (idempotent but wasteful) RPC.
         var reporter = Substitute.For<ILeafCursorReporter>();
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 500));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, _, _, _) = CreateGrainWithMaterialiser(coord, reporter: reporter);
 
         await ActivateAsync(grain);
@@ -1167,7 +1176,7 @@ public partial class BPlusLeafGrainTests
         var foreign = new CommitLogSliceEntry(
             1,
             BuildCommittedSetWithShardIndex("k-foreign", Encoding.UTF8.GetBytes("foreign"), shardIndex: 2));
-        var coord = BuildCoordinator(head: 1, foreign);
+        var coord = BuildCoordinator(head: 2, foreign);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 1);
@@ -1187,7 +1196,7 @@ public partial class BPlusLeafGrainTests
         var owned = new CommitLogSliceEntry(
             1,
             BuildCommittedSetWithShardIndex("k-mine", Encoding.UTF8.GetBytes("v"), shardIndex: 3));
-        var coord = BuildCoordinator(head: 1, owned);
+        var coord = BuildCoordinator(head: 2, owned);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 3);
@@ -1207,7 +1216,7 @@ public partial class BPlusLeafGrainTests
         // projection.
         // Seed an owned entry first so we can prove it survived.
         var coord = BuildCoordinator(
-            head: 2,
+            head: 3,
             new CommitLogSliceEntry(
                 1,
                 BuildCommittedSetWithShardIndex("k1", Encoding.UTF8.GetBytes("alive"), shardIndex: 1, hlcPhysical: 100)),
@@ -1237,7 +1246,7 @@ public partial class BPlusLeafGrainTests
         var entry = new CommitLogSliceEntry(
             1,
             BuildCommittedSetWithShardIndex("k", Encoding.UTF8.GetBytes("v"), shardIndex: 42));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         // Pre-condition: ShardIndex is null (no seedState callback set it).
@@ -1326,7 +1335,7 @@ public partial class BPlusLeafGrainTests
                 TransactionId = txId,
                 ShardIndex = 9,
             });
-        var coord = BuildCoordinator(head: 2, prepared, terminal);
+        var coord = BuildCoordinator(head: 3, prepared, terminal);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 1);
@@ -1364,7 +1373,7 @@ public partial class BPlusLeafGrainTests
                 "z-foreign",
                 Encoding.UTF8.GetBytes("foreign"),
                 shardIndex: 1));
-        var coord = BuildCoordinator(head: 1, foreign);
+        var coord = BuildCoordinator(head: 2, foreign);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s =>
@@ -1394,7 +1403,7 @@ public partial class BPlusLeafGrainTests
                 "k-mine",
                 Encoding.UTF8.GetBytes("v"),
                 shardIndex: 1));
-        var coord = BuildCoordinator(head: 1, owned);
+        var coord = BuildCoordinator(head: 2, owned);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s =>
@@ -1424,7 +1433,7 @@ public partial class BPlusLeafGrainTests
                 "k-legacy",
                 Encoding.UTF8.GetBytes("v"),
                 shardIndex: 1));
-        var coord = BuildCoordinator(head: 1, legacy);
+        var coord = BuildCoordinator(head: 2, legacy);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s => s.ShardIndex = 1
@@ -1456,7 +1465,7 @@ public partial class BPlusLeafGrainTests
                 "k-inherited",
                 Encoding.UTF8.GetBytes("v"),
                 shardIndex: 1));
-        var coord = BuildCoordinator(head: 1, entry);
+        var coord = BuildCoordinator(head: 2, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             seedState: s =>
@@ -1486,7 +1495,7 @@ public partial class BPlusLeafGrainTests
         var k2Mut = BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2"), hlcPhysical: 2);
         var k3Mut = BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3"), hlcPhysical: 3);
         var coord = BuildCoordinator(
-            head: 3,
+            head: 4,
             new CommitLogSliceEntry(1, k1Mut),
             new CommitLogSliceEntry(2, k2Mut),
             new CommitLogSliceEntry(3, k3Mut));

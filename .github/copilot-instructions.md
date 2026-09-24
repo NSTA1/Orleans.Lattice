@@ -73,6 +73,9 @@ authoritative, maintained inventory, grouped by the seam each package fills. The
 matching capability catalogue is [FEATURES.md](../FEATURES.md). Convention:
 package `foo` lives at `src/foo/`, `test/foo/`, and
 `docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code).
+The top-level `videos/` folder is the educational video series, a HyperFrames
+(HTML-to-video) workspace with its own CI lane; its conventions live in the
+**video-production** skill (`.github/skills/video-production/SKILL.md`).
 
 ## Target Framework & Language
 

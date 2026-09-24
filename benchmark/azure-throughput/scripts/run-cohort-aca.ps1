@@ -266,7 +266,11 @@ param(
 	# Extra silo env vars as "NAME=value" strings, appended last so they win.
 	# For one-off diagnostic arms that do not warrant a dedicated parameter.
 	[string[]] $ExtraSiloEnv = @(),
-	[int] $SettleSec = 30
+	[int] $SettleSec = 30,
+	# Longest tolerated mid-run freeze (cumulative ops not advancing while
+	# inFlight > 0) before the cell is graded WEDGE rather than HEALTHY. A
+	# saturated cell keeps advancing; a frozen one does not. 0 disables.
+	[int] $FreezeWedgeSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -527,10 +531,19 @@ try {
 	# delivered real throughput is HEALTHY and its failure count is carried
 	# as data (Read-SiloLogStats already extracts it), not as grounds for
 	# exclusion.
+	#
+	# The one saturated-looking shape that is NOT kept HEALTHY is a mid-run
+	# freeze: the cell delivers throughput, then the cumulative ops counter
+	# stops advancing while in-flight stays pinned, because every call is
+	# parked and none completes. That is a wedge that happened to start after
+	# some work had landed, and grading it HEALTHY lets its failure count read
+	# as saturation (#3475: 128 in-flight sagas frozen for ~400 s, 70% failed,
+	# graded HEALTHY).
 	$producerDone = @($lines | Where-Object { $_.Contains('[producer] DONE') }).Count -gt 0
 	$productive = @($lines | Where-Object {
 		$_.Contains('[silo] t=') -and ($_ -match 'ops/sec=\s*([\d,]+)') -and ([long]($Matches[1] -replace ',','') -gt 0)
 	}).Count
+	$longestFreeze = Get-SiloProgressLongestStall -Lines @($lines)
 
 	$verdictState = 'HEALTHY'
 	$verdictDetail = ''
@@ -540,12 +553,15 @@ try {
 	} elseif ($productive -eq 0) {
 		$verdictState = 'WEDGE'
 		$verdictDetail = ' (no productive window: every call outlived the measurement window)'
+	} elseif ($FreezeWedgeSec -gt 0 -and $longestFreeze -ge $FreezeWedgeSec) {
+		$verdictState = 'WEDGE'
+		$verdictDetail = (' (mid-run freeze: no completion for {0:N0}s with work in flight)' -f $longestFreeze)
 	}
 
 	Add-Content -Path $logPath -Encoding utf8 -Value (Format-CohortVerdictLogBlock `
 		-VerdictState $verdictState -VerdictDetail $verdictDetail -DrainTailSamples 0)
 	$verdictColour = if ($verdictState -eq 'HEALTHY') { 'Green' } else { 'Red' }
-	Write-Host "[cohort] verdict=$verdictState productiveWindows=$productive" -ForegroundColor $verdictColour
+	Write-Host "[cohort] verdict=$verdictState productiveWindows=$productive longestFreezeSec=$([Math]::Round($longestFreeze,1))" -ForegroundColor $verdictColour
 
 	[pscustomobject]@{
 		NamePrefix    = $NamePrefix

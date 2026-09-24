@@ -165,7 +165,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetRequiredService<RepoContextCoverageProbeReporter>(),
                 sp.GetRequiredService<RepoContextSymbolWalkReporter>(),
-                sp.GetRequiredService<RepoContextIndexingPacer>()));
+                sp.GetRequiredService<RepoContextIndexingPacer>(),
+                sp.GetService<IWalSaturationSignal>()));
         services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton(sp => new RepoContextVectorPlaneReDeriver(
             sp.GetRequiredService<IGrainFactory>(),

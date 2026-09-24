@@ -67,7 +67,7 @@ Nothing is lost. The entries are durable before the append returns, and reconcil
 
 A caller that genuinely needs read-after-write - a controlled hand-off, an operator consistency probe, or a test - awaits the provider's phase-two flush barrier, which drains the completions outstanding at the moment of the call and then rethrows any that failed. Prefer that barrier over sleeping or polling for an expected count.
 
-`PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely.
+`PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely. The deadline abandons only the worker's wait, not the transaction: an abandoned submit stays fenced on its partition until it actually completes, and the post-failure reconcile and tail read wait for that fence, so a late-landing transaction can never be overwritten by a resync that read the partition before it landed.
 
 ### Overlap rejection
 

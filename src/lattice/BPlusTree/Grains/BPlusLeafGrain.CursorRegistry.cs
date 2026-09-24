@@ -84,11 +84,28 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
     /// <see cref="FlushPendingCheckpointAsync"/> after every successful
-    /// persist; never throws. Under multi-partition WAL the leaf reports
+    /// persist. Under multi-partition WAL the leaf reports
     /// one cursor per partition so the per-shard WAL GC trims each
     /// partition independently against its own slowest consumer.
     /// </summary>
-    private async Task ReportCursorIfActiveAsync()
+    /// <remarks>
+    /// A failed per-partition cursor report is contained and logged here. The
+    /// method as a whole is NOT guaranteed never to throw (an earlier summary
+    /// said it was): reading grain state, resolving options, and the durable
+    /// pin flush can all throw, most notably "Attempt to access an invalid
+    /// activation" once a deactivation deadline has torn the activation down
+    /// (issue #3393). Its caller, the checkpoint-flush tail, contains and
+    /// counts that.
+    /// </remarks>
+    /// <param name="publishDurablePin">
+    /// Whether to follow the cursor report with the durable pin publish (the
+    /// batched flush on the first real frontier, the debounced mirror
+    /// thereafter). <see langword="false"/> only on the teardown persist's tail,
+    /// which has already published the pin through the awaited batched flush as
+    /// its first step (issue #3393), so a fire-and-forget mirror queued behind
+    /// it would be redundant work on a path with a deadline.
+    /// </param>
+    private async Task ReportCursorIfActiveAsync(bool publishDurablePin = true)
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
@@ -139,8 +156,13 @@ internal sealed partial class BPlusLeafGrain
         // retention floor leaves Zero promptly; every subsequent advance uses
         // the cheap per-consumer debounced mirror. The pin store coalesces the
         // durable write itself in both cases - a pin that lags the leaf's true
-        // frontier only retains more WAL, which is always GC-safe. Never throws
-        // (the flush swallows transient failures).
+        // frontier only retains more WAL, which is always GC-safe. Skipped when
+        // the caller has already published the pin itself (issue #3393).
+        if (!publishDurablePin)
+        {
+            return;
+        }
+
         if (!_durableFrontierBarriered)
         {
             await FlushDurableMaterialiserFrontierAsync();
@@ -163,14 +185,70 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The <c>frontier_pin</c> graceful-deactivation barrier: publishes the
+    /// durable pin through <see cref="FlushDurableMaterialiserFrontierAsync"/>,
+    /// and SKIPS rather than faults once the deactivation deadline has torn the
+    /// activation down (issue #3393).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Before the fix this barrier threw "Attempt to access an invalid
+    /// activation" from its first state read whenever an earlier barrier had
+    /// consumed the deadline, which was the norm in the recorded drain. It now
+    /// checks the token before that read and skips, and catches the same
+    /// fault if the teardown lands mid-flush. Both are counted on the existing
+    /// <c>frontier_pin</c> reason of
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierFailures"/> and logged
+    /// as a teardown skip.
+    /// </para>
+    /// <para>
+    /// The catch is deliberately narrow: an <see cref="InvalidOperationException"/>
+    /// only, only while the deadline token is cancelled, and never a
+    /// <see cref="ILatticeDomainFault"/>, which is a real domain refusal rather
+    /// than a torn-down activation. The same exception with the token NOT
+    /// cancelled still propagates, into the barrier's own fault containment,
+    /// so a genuine defect is still reported as a fault.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">The deactivation deadline.</param>
+    internal async Task FlushDurableMaterialiserFrontierOnDeactivateAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierFrontierPin, fault: null);
+            return;
+        }
+
+        try
+        {
+            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+            when (cancellationToken.IsCancellationRequested && ex is not ILatticeDomainFault)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierFrontierPin, ex);
+        }
+    }
+
+    /// <summary>
     /// Publishes this leaf's current real checkpoint frontier as a WAL
     /// retention pin (one per WAL partition) via
     /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>,
-    /// gated on <c>Clock &gt; Zero</c>. Unlike the per-consumer debounced mirror
+    /// gated on <c>Clock &gt; Zero</c> except for the never-written release
+    /// described below. Unlike the per-consumer debounced mirror
     /// on <see cref="ReportCursorIfActiveAsync"/>, the whole partition set goes
     /// in one batched round-trip per routed pin shard and is merged into the
     /// durable store's monotonic-max state immediately, so the trim floor
     /// reflects this leaf's checkpoint without waiting on a debounce window.
+    /// <para>
+    /// For a never-written leaf (<c>Clock == Zero</c>) the flush publishes only
+    /// when at least one partition resolves to the <c>(Zero, X)</c> release of
+    /// issue #3453 - a scanned-through <b>persisted</b> checkpoint <c>X &gt;= 0</c>
+    /// on a partition with no live row - and is otherwise a no-op exactly as
+    /// before. The in-memory registry is untouched on this path;
+    /// <see cref="ReportCursorIfActiveAsync"/> keeps its <c>Clock &gt; Zero</c>
+    /// guard, so the registry still never receives a Zero cursor.
+    /// </para>
     /// The store's own durable write is coalesced (see
     /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>);
     /// a pin that lags this leaf's true frontier only retains more WAL and is
@@ -178,9 +256,15 @@ internal sealed partial class BPlusLeafGrain
     /// activation and again on graceful deactivation (after the final checkpoint
     /// flush) so a leaf that goes dormant leaves its frontier behind for the
     /// WAL GC. Idempotent (the pin store's monotonic-max merge no-ops a
-    /// stale/equal frontier) and never throws; a no-op when the host has no
+    /// stale/equal frontier); a no-op when the host has no
     /// cursor reporter (pre-WAL), the tree id is unset, or the leaf has not
-    /// checkpointed yet.
+    /// checkpointed yet. It is NOT guaranteed never to throw (an earlier
+    /// summary said it was): it reads grain state, which throws "Attempt to
+    /// access an invalid activation" once the activation has been torn down,
+    /// and the reporter honours the token. The deactivation barrier calls it
+    /// through <see cref="FlushDurableMaterialiserFrontierOnDeactivateAsync"/>,
+    /// which turns that teardown case into a counted skip (issue #3393); every
+    /// other caller contains it itself.
     /// </summary>
     /// <param name="cancellationToken">
     /// Deadline for the flush. This runs on the deactivation path, where
@@ -189,17 +273,36 @@ internal sealed partial class BPlusLeafGrain
     /// hook overruns - so a flush that ignores the token cannot be interrupted,
     /// the grain never returns in time, and the caller's exception handling
     /// never gets the chance to swallow it (issue 1965). Passing the token
-    /// through lets the flush abandon promptly, which is safe because the pin
-    /// is best-effort: the WAL is the durability boundary and the next
-    /// activation re-reports the frontier.
+    /// through lets the flush abandon promptly. Abandoning is NOT made safe by
+    /// a later re-report: a leaf that deactivates is typically not reactivated
+    /// for a long time, and its last published pin holds the shared WAL's trim
+    /// floor until it is. It is safe because the teardown persist publishes its
+    /// own pin first, before this barrier runs (issue #3393), so an abandoned
+    /// flush here leaves the pin at the final persisted checkpoint rather than
+    /// at an older one; and a pin that lags only retains more WAL.
     /// </param>
-    private async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// <see langword="internal"/> rather than private so the #3476 clamp and
+    /// #3453 never-written fixtures can drive the batched publisher directly
+    /// with a pending advance above the persisted checkpoint. Since issue #3393
+    /// no deactivation barrier reaches this with that shape - the expired-deadline
+    /// publisher those fixtures used now skips - so a direct call is the only
+    /// way to keep the clamp observable.
+    /// </remarks>
+    internal async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
     {
+        // Issue #3453: a never-written leaf (Clock == Zero) is no longer turned
+        // away here unconditionally. Its release branches resolve to
+        // (Zero, -1), which is byte-identical to the block pin, so for it the
+        // only expressible release is (Zero, X) with X its PERSISTED
+        // checkpoint - see the never-written arm of
+        // ResolveDurablePinForPartition. The flush therefore still returns
+        // without publishing unless at least one partition resolves through
+        // that arm; every other Zero-clock outcome is exactly the pin the
+        // activation seed already published, so skipping it keeps this path
+        // byte-identical to before for every leaf the fix does not release.
         var clock = state.State.Clock;
-        if (clock <= HybridLogicalClock.Zero)
-        {
-            return 0;
-        }
+        var neverWritten = clock <= HybridLogicalClock.Zero;
 
         var reporter = ResolveCursorReporter();
         if (reporter is null)
@@ -217,16 +320,37 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        if (neverWritten && !HasNeverWrittenScannedThroughPartition(partitionCount, partitionsWithLiveData))
+        {
+            return 0;
+        }
+
         var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
             partitionCount, partitionsWithLiveData, treeId);
         var reports = new MaterialiserPinReport[partitionCount];
-        var emptyWalReleases = 0;
+        var releases = 0;
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             var (frontier, offset) = ResolveDurablePinForPartition(
-                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
+                partition, clock, partitionsWithLiveData, partitionsWithEmptyWal,
+                releaseNeverWrittenScannedThrough: true);
             reports[partition] = new MaterialiserPinReport(consumerId, frontier, offset);
+
+            if (neverWritten)
+            {
+                // Issue #3453: count the partitions released as (Zero, X), for
+                // the same reason the #3103 releases below are counted - the
+                // drive's replay-based predicate cannot score a release whose
+                // leaf has no applied data. The #3103 arm is NOT counted for a
+                // never-written leaf: it resolves to (Zero, -1), the block pin.
+                if (IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
+                {
+                    releases++;
+                }
+
+                continue;
+            }
 
             // Count the partitions this flush released under the #3103 rule -
             // ones that held live rows and no checkpoint, and so would have
@@ -240,13 +364,42 @@ internal sealed partial class BPlusLeafGrain
                 && partitionsWithLiveData[partition]
                 && GetCurrentCheckpointForPartition(partition) < 0)
             {
-                emptyWalReleases++;
+                releases++;
             }
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
             treeId, reports, cancellationToken);
-        return emptyWalReleases;
+        return releases;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="partition"/> of a never-written leaf
+    /// (<c>Clock == Zero</c>) has a durable scanned-through checkpoint it may
+    /// publish as a <c>(Zero, X)</c> release (issue #3453): the partition holds
+    /// no live cache row and its <b>persisted</b> checkpoint is <c>&gt;= 0</c>.
+    /// </summary>
+    /// <remarks>
+    /// The persisted checkpoint, never the pending one
+    /// (<see cref="GetCurrentCheckpointForPartition"/>): published offsets merge
+    /// by monotonic maximum, so an over-report can never be lowered, and every
+    /// replay starts from the persisted offset (issue #3476).
+    /// </remarks>
+    private bool IsNeverWrittenScannedThroughPartition(int partition, bool[] partitionsWithLiveData)
+        => !partitionsWithLiveData[partition]
+            && GetPersistedCheckpointForPartition(partition) >= 0;
+
+    private bool HasNeverWrittenScannedThroughPartition(int partitionCount, bool[] partitionsWithLiveData)
+    {
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            if (IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -293,6 +446,17 @@ internal sealed partial class BPlusLeafGrain
     /// the literal Zero, so the seeded frontier is Zero either way. The gate is
     /// therefore doing offset work only, which is precisely why its absence here
     /// was survivable rather than harmless.
+    /// </para>
+    /// <para>
+    /// The seed deliberately does <b>not</b> opt in to the never-written
+    /// <c>(Zero, X)</c> release of issue #3453, although it runs only for a
+    /// Zero-clock leaf. That release publishes the <b>persisted</b>
+    /// scanned-through checkpoint and is reserved for the flush paths - the
+    /// starvation drive, which persists the replay's advance before it
+    /// publishes, and the deactivation barrier. At activation the seed has no
+    /// such ordering to rely on, and the hazard described above is precisely a
+    /// Zero-clock offset published from this seam; keeping the seed on the
+    /// coverage-gated arms leaves its behaviour byte-identical to before.
     /// </para>
     /// </summary>
     private async Task SeedDurableMaterialiserFrontierAsync()
@@ -703,6 +867,17 @@ internal sealed partial class BPlusLeafGrain
     /// reasoning. See <see cref="ComputeEmptyWalPartitionsAsync"/>.
     /// </description></item>
     /// <item><description>
+    /// <b>Never-written, scanned through</b> (issue #3453, only when
+    /// <paramref name="releaseNeverWrittenScannedThrough"/> is set): the leaf's
+    /// clock is <see cref="HybridLogicalClock.Zero"/>, the partition holds no
+    /// live row, and its <b>persisted</b> checkpoint <c>X &gt;= 0</c> records
+    /// only entries the replay skipped as another leaf's work. Resolves to
+    /// <c>(Zero, X)</c>: for such a leaf every release above collapses to
+    /// <c>(Zero, -1)</c>, the block pin itself, so this is the only release its
+    /// encoding can express. Only the flush paths opt in; the activation seed
+    /// does not (see <see cref="SeedDurableMaterialiserFrontierAsync"/>).
+    /// </description></item>
+    /// <item><description>
     /// <b>Data-bearing, not durably recoverable</b>: the partition holds live
     /// data whose only durable copy is the WAL prefix from offset 0, because
     /// it either never durably checkpointed (offset <c>&lt; 0</c>, the
@@ -714,16 +889,31 @@ internal sealed partial class BPlusLeafGrain
     /// <item><description>
     /// <b>Data-bearing and snapshot-covered</b>: a durable snapshot covers the
     /// checkpointed prefix, so the pin authorises trimming up to
-    /// <c>min(checkpoint, coveredOffset)</c> - never past what the snapshot
-    /// durably holds. The guaranteed cadence capture (see
+    /// <c>min(persistedCheckpoint, coveredOffset)</c> - never past what the
+    /// snapshot durably holds. The guaranteed cadence capture (see
     /// <c>MaybeRunPeriodicSnapshotRecheckAsync</c>) ensures a block pin always
     /// has a bounded path to coverage and trim, so retention stays bounded.
     /// </description></item>
     /// </list>
+    /// <para>
+    /// <b>Invariant (issue #3476): a published offset never exceeds the
+    /// partition's persisted projection checkpoint.</b> The <c>checkpoint &lt; 0</c>
+    /// release tests above read the current checkpoint (persisted or pending),
+    /// but the offset a data-bearing partition publishes is bounded by the
+    /// PERSISTED checkpoint alone. A pending advance lives only in this
+    /// activation's memory, while every replay starts from the persisted offset
+    /// and faults when the WAL tail has passed persisted + 1, so a pin above it
+    /// authorises exactly the trim that latches the leaf. Snapshot coverage
+    /// above the persisted checkpoint does not relax the bound: a live
+    /// activation's replay does not rehydrate from the blob, and the pin
+    /// store's monotonic-max merge means an over-reported offset can never be
+    /// withdrawn.
+    /// </para>
     /// </summary>
     private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
         int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData,
-        bool[]? partitionsWithEmptyWal = null)
+        bool[]? partitionsWithEmptyWal = null,
+        bool releaseNeverWrittenScannedThrough = false)
     {
         var checkpoint = GetCurrentCheckpointForPartition(partition);
 
@@ -783,18 +973,72 @@ internal sealed partial class BPlusLeafGrain
             return (clock, checkpoint);
         }
 
+        // Issue #3453: a never-written leaf (Clock == Zero) that has scanned
+        // this partition through a PERSISTED checkpoint X >= 0 over entries it
+        // skipped as another leaf's work, and holds no live row here. For such
+        // a leaf the release branches above resolve to (Zero, -1), which is
+        // byte-identical to the block pin, so no drive could ever lift it and
+        // the WAL GC scheduler looped on NoAdvance. (Zero, X) is the only
+        // release its encoding can express: an offset >= 0 puts the consumer in
+        // the GC's offset coverage set, which already exempts a Zero frontier
+        // from blocking (#3094), and the offset floor then retains everything
+        // above X - including any later write that routes to this leaf.
+        //
+        // X is the PERSISTED checkpoint, never `checkpoint` above (which is
+        // max(persisted, pending)). The pin store merges offsets by monotonic
+        // max, so an over-report can never be withdrawn, and every replay -
+        // including a cold rebuild - starts from the persisted offset (#3476).
+        //
+        // Opt-in, and only FlushDurableMaterialiserFrontierAsync opts in.
+        // SeedDurableMaterialiserFrontierAsync deliberately does not: its
+        // issue-2150 hazard is a Zero-clock leaf publishing a RAW checkpoint
+        // beyond durable coverage from the activation seed. This arm publishes
+        // the persisted checkpoint only, and only from the flush paths (the
+        // starvation drive, which persists before it publishes, and the
+        // deactivation barrier). A persisted scanned-through checkpoint is safe
+        // for a never-written leaf because it owns no row whose only durable
+        // copy is the WAL prefix at or below X: a cold activation with no
+        // snapshot and an empty cache replays under the -1 sentinel, which the
+        // fall-off detector exempts, and the #945 guard compares the WAL tail
+        // against this same persisted checkpoint.
+        if (releaseNeverWrittenScannedThrough
+            && clock <= HybridLogicalClock.Zero
+            && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
+        {
+            return (HybridLogicalClock.Zero, GetPersistedCheckpointForPartition(partition));
+        }
+
         // Data-bearing partition (live cache rows) OR a durably-checkpointed
         // partition whose in-memory cache is momentarily empty. Either way the
         // checkpointed prefix's only durable copy - absent a snapshot - is the
         // WAL, so authorise trimming only as far as a durable snapshot covers.
+        //
+        // Issue #3476: and never past the PERSISTED checkpoint. `checkpoint`
+        // above is max(persisted, pending), and the pending half is an advance
+        // held only in this activation's memory. Every replay this activation
+        // (or a crash-recovered successor that does not rehydrate a snapshot)
+        // runs starts from the persisted offset, and the #945 guard and the
+        // fall-off-log detector fault it when the WAL tail has passed
+        // persisted + 1. A pin above the persisted checkpoint licenses exactly
+        // that trim: the #3224 drive recheck restamps coverage up to the
+        // pending checkpoint, so both arms of min(checkpoint, covered) could
+        // sit above it, the GC trimmed to the pin, and the next replay latched
+        // the leaf. Because the pin store merges by monotonic max, an
+        // over-reported offset can never be taken back, so the clamp has to
+        // hold at publication. The pending advance reaches the pin as soon as
+        // it persists: FlushPendingCheckpointAsync republishes through
+        // ReportCursorIfActiveAsync, and the starvation drive persists before
+        // it republishes.
         var covered = DurableSnapshotCoverageForPartition(partition);
-        var safeOffset = Math.Min(checkpoint, covered);
+        var safeOffset = Math.Min(GetPersistedCheckpointForPartition(partition), covered);
         if (safeOffset < 0)
         {
-            // Never checkpointed (checkpoint < 0, #1490) OR checkpointed but
-            // uncovered (covered < 0, the residual cold-restart prefix loss and
-            // the empty-cache misclassification): the whole WAL from offset 0
-            // is the only durable copy - retain the Zero block pin.
+            // Never checkpointed (checkpoint < 0, #1490), checkpointed only in
+            // memory so far (a pending first checkpoint over a persisted -1,
+            // #3476), OR checkpointed but uncovered (covered < 0, the residual
+            // cold-restart prefix loss and the empty-cache misclassification):
+            // the whole WAL from offset 0 is the only durable copy - retain the
+            // Zero block pin.
             return (HybridLogicalClock.Zero, -1L);
         }
 

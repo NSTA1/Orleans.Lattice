@@ -118,8 +118,7 @@ public class WalSaturationCrossPartitionBlockingTests
         LatticeOptions options)
     {
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);

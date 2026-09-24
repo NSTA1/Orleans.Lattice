@@ -677,18 +677,20 @@ public class AzureTableWalStorageOptionsTests
     }
 
     [Test]
-    public void PhaseTwoCommitTimeout_defaults_to_three_seconds()
+    public void PhaseTwoCommitTimeout_defaults_to_twelve_seconds()
     {
-        // The library default bounds the phase-2 commit seam at 3 s so a
+        // The library default bounds the phase-2 commit seam at 12 s so a
         // wedged manifest commit faults instead of stalling the per-shard
-        // drain loop indefinitely. null remains an explicit opt-out for the
-        // historical unbounded behaviour. The constant exists so a future
-        // re-tune happens in exactly one place.
+        // drain loop indefinitely, while a real-Azure brown-out (phase-2
+        // commits up to 6 s, #3458) costs latency rather than a failure
+        // storm. null remains an explicit opt-out for the historical
+        // unbounded behaviour. The constant exists so a future re-tune
+        // happens in exactly one place.
         var options = new AzureTableWalStorageOptions();
 
-        Assert.That(options.PhaseTwoCommitTimeout, Is.EqualTo(TimeSpan.FromSeconds(3)));
+        Assert.That(options.PhaseTwoCommitTimeout, Is.EqualTo(TimeSpan.FromSeconds(12)));
         Assert.That(AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout,
-            Is.EqualTo(TimeSpan.FromSeconds(3)));
+            Is.EqualTo(TimeSpan.FromSeconds(12)));
     }
 
     [Test]

@@ -634,6 +634,58 @@ try {
 }
 
 Write-Host ''
+Write-Host 'Get-SiloProgressLongestStall' -ForegroundColor Cyan
+
+function _ProgressLine([double] $t, [long] $ops, [int] $inFlight) {
+	'[silo] t={0,6:F1}s ops={1,12:N0} ops/sec={2,10} inFlight={3,3}' -f $t, $ops, 0, $inFlight
+}
+
+# The #3475 shape: throughput, then the counter freezes with work pinned.
+$frozen = @(
+	(_ProgressLine 1 0 4), (_ProgressLine 10 1200 60), (_ProgressLine 20 2569 74)
+) + @(21..440 | ForEach-Object { _ProgressLine $_ 2569 128 })
+$fz = Get-SiloProgressLongestStall -Lines $frozen
+_Assert -Name 'a counter frozen with work in flight measures the whole freeze' `
+	-Condition ($fz -eq 420) -Detail "expected 420, got $fz"
+
+# Saturated but moving: the counter advances every line, however slowly.
+$slow = @(1..300 | ForEach-Object { _ProgressLine $_ (10 * $_) 128 })
+$sl = Get-SiloProgressLongestStall -Lines $slow
+_Assert -Name 'a slow but advancing counter is not a freeze' `
+	-Condition ($sl -eq 0) -Detail "expected 0, got $sl"
+
+# Idle: an unchanged counter with nothing in flight is not a freeze.
+$idle = @(1..200 | ForEach-Object { _ProgressLine $_ 5000 0 })
+$id = Get-SiloProgressLongestStall -Lines $idle
+_Assert -Name 'an idle silo (inFlight=0) is not a freeze' `
+	-Condition ($id -eq 0) -Detail "expected 0, got $id"
+
+# An idle line inside a stall resets it, and the longest interval wins.
+$mixed = @(
+	(_ProgressLine 1 100 8), (_ProgressLine 11 100 8), (_ProgressLine 12 100 0),
+	(_ProgressLine 13 100 8), (_ProgressLine 43 100 8), (_ProgressLine 44 200 8)
+)
+$mx = Get-SiloProgressLongestStall -Lines $mixed
+_Assert -Name 'an idle line splits a stall and the longest interval wins' `
+	-Condition ($mx -eq 30) -Detail "expected 30, got $mx"
+
+# Unrelated and unparseable lines are ignored; no lines is zero.
+$noise = @('[phaseA] t=10.0s instrument=x', '[silo] t= garbage', $null, '')
+_Assert -Name 'no parseable progress lines measures zero' `
+	-Condition ((Get-SiloProgressLongestStall -Lines $noise) -eq 0 -and (Get-SiloProgressLongestStall -Lines @()) -eq 0) `
+	-Detail 'expected 0 for noise and for an empty stream'
+
+# The real log shape carries thousands separators and padded fields.
+$real = @(
+	'[silo] t=   20.0s ops=       2,569 ops/sec=       118 inFlight= 74',
+	'[silo] t=   40.0s ops=       2,569 ops/sec=         0 inFlight=128',
+	'[silo] t=  100.0s ops=       2,569 ops/sec=         0 inFlight=128'
+)
+$rl = Get-SiloProgressLongestStall -Lines $real
+_Assert -Name 'the production line shape parses' `
+	-Condition ($rl -eq 80) -Detail "expected 80, got $rl"
+
+Write-Host ''
 $summaryColor = if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' }
 Write-Host ("Total: {0} passed, {1} failed" -f $script:_PassCount, $script:_FailCount) `
 	-ForegroundColor $summaryColor

@@ -50,7 +50,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
+public sealed partial class ShardRootGrainLeafReclaimWallClockBoundTests
 {
     private const string TreeId = "reclaim-clock-tree";
     private const string ShardKey = TreeId + "/0";
@@ -104,8 +104,28 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
         public required List<GrainId> ChildIds { get; init; }
         public required List<string?> Separators { get; init; }
         public required RecordingLoggerFactory Logs { get; init; }
+        public required IBPlusInternalGrain Root { get; init; }
+        public required FakePersistentState<ShardRootState> State { get; init; }
+        public required Dictionary<GrainId, IBPlusLeafGrain> Leaves { get; init; }
 
         public int ProbeCount => ProbeOrder.Count;
+
+        /// <summary>
+        /// Records a clear owed by an earlier fold against a leaf that is
+        /// already off the chain, and makes that clear take
+        /// <paramref name="clearDelay"/>. Every pass retries owed clears in its
+        /// prologue, before the walk is entered, so this is how a test puts a
+        /// known, real amount of prologue time on the pass's clock. The clear
+        /// succeeds, so it is owed for exactly one pass.
+        /// </summary>
+        public void OweSlowClear(TimeSpan clearDelay)
+        {
+            var owed = GrainId.Create("leaf", $"clock-owed-{State.State.PendingLeafClears.Count}");
+            var leaf = Substitute.For<IBPlusLeafGrain>();
+            leaf.ClearGrainStateAsync().Returns(_ => Task.Delay(clearDelay));
+            Leaves[owed] = leaf;
+            State.State.PendingLeafClears.Add(owed);
+        }
 
         /// <summary>
         /// The single pass-summary line, which must be present after every
@@ -147,9 +167,16 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
     /// here would be measuring the stub instead of the grain.
     /// </para>
     /// </summary>
+    /// <param name="descentDelay">
+    /// Paid by the root's routing-table fetch, which is the grain call a pass
+    /// makes to descend to the head of the chain when it has no cached
+    /// snapshot. It lets a test land the deadline between the descent and the
+    /// probe that follows it.
+    /// </param>
     private static ChainHarness CreateHarness(
         TimeSpan backgroundDrainMaxDuration,
-        int? candidateIndex = CandidateIndex)
+        int? candidateIndex = CandidateIndex,
+        TimeSpan? descentDelay = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -178,6 +205,9 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
             separators.Add(i == 0 ? null : LeafKey(i));
         }
 
+        var root = Substitute.For<IBPlusInternalGrain>();
+        var leaves = new Dictionary<GrainId, IBPlusLeafGrain>();
+
         var harness = new ChainHarness
         {
             LeafIds = leafIds,
@@ -186,18 +216,23 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
             ChildIds = [.. leafIds],
             Separators = separators,
             Logs = new RecordingLoggerFactory(),
+            Root = root,
+            State = state,
+            Leaves = leaves,
         };
 
         var factory = Substitute.For<IGrainFactory>();
 
-        var root = Substitute.For<IBPlusInternalGrain>();
-        root.GetRoutingTableAsync().Returns(_ => Task.FromResult(harness.Snapshot()));
+        root.GetRoutingTableAsync().Returns(async _ =>
+        {
+            if (descentDelay is { } delay) await Task.Delay(delay);
+            return harness.Snapshot();
+        });
         root.GetChildIdsAsync().Returns(_ => Task.FromResult(new List<GrainId>(harness.ChildIds)));
         root.RemoveChildAsync(Arg.Any<GrainId>())
             .Returns(ci => Task.FromResult(harness.RemoveChild(ci.Arg<GrainId>())));
         factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(root);
 
-        var leaves = new Dictionary<GrainId, IBPlusLeafGrain>();
         foreach (var id in leafIds)
         {
             var self = id;
@@ -321,9 +356,10 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
     /// <para>
     /// This is also the honest statement of the degenerate configuration: a
     /// deadline shorter than a single probe buys no folds at all. That is not a
-    /// failure mode to hide, because the pass still advances its cursor (see
-    /// the resumption test), so even here the walk makes forward progress
-    /// rather than spinning on the same prefix.
+    /// failure mode to hide. Where such a pass reaches its walk at all it still
+    /// advances its cursor (see the resumption test); where its prologue has
+    /// already consumed the deadline it now stands down before probing
+    /// anything, and leaves the cursor where it was (issue 2682).
     /// </para>
     /// </summary>
     [Test]
@@ -379,16 +415,22 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
     /// from there. Without it a bounded walk would re-walk the same prefix
     /// forever and never reach the tail of a chain longer than one pass.
     /// <para>
-    /// This is asserted at the least forgiving setting, where the deadline has
-    /// expired before the walk loop is entered, because that is the only
-    /// configuration in which a pass could plausibly record nothing at all.
-    /// Progress here is progress everywhere.
+    /// This used to be asserted with a deadline that had already expired
+    /// before the walk was entered, on the reasoning that it was the least
+    /// forgiving setting. That only held because the entry probe ran without
+    /// consulting the deadline, so an expired pass still probed one leaf and
+    /// moved its cursor on by one - the uncounted, unbounded probe issue 2682
+    /// removes. Such a pass now probes nothing and leaves the cursor alone
+    /// (pinned in the probe-accounting partial), so resumption is asserted
+    /// here with a deadline that expires part-way through each walk: every
+    /// pass must pick up at the leaf after the last one its predecessor probed.
     /// </para>
     /// </summary>
     [Test]
     public async Task Successive_passes_resume_rather_than_re_walking_the_same_prefix()
     {
-        var h = CreateHarness(ExpiredBeforeFirstProbe);
+        // Room for a handful of the 15ms probes, and far short of the chain.
+        var h = CreateHarness(TimeSpan.FromMilliseconds(200), candidateIndex: null);
 
         await h.Grain.ReclaimEmptyLeavesAsync(8);
         var firstPass = h.ProbeOrder.ToArray();
@@ -401,16 +443,20 @@ public sealed class ShardRootGrainLeafReclaimWallClockBoundTests
         await h.Grain.ReclaimEmptyLeavesAsync(8);
         var thirdPass = h.ProbeOrder.ToArray();
 
+        int IndexOf(GrainId id) => Array.IndexOf(h.LeafIds, id);
+
         Assert.Multiple(() =>
         {
             Assert.That(firstPass, Is.Not.Empty);
             Assert.That(firstPass[0], Is.EqualTo(h.LeafIds[0]),
                 "the first pass starts at the head, having no cursor to resume from");
+            Assert.That(firstPass, Has.Length.LessThan(ChainLength),
+                "the first pass must stop on the deadline, or there is nothing to resume");
             Assert.That(secondPass, Is.Not.Empty);
-            Assert.That(secondPass[0], Is.EqualTo(h.LeafIds[1]),
+            Assert.That(IndexOf(secondPass[0]), Is.EqualTo(IndexOf(firstPass[^1]) + 1),
                 "a pass stopped by the deadline must record where it stopped");
             Assert.That(thirdPass, Is.Not.Empty);
-            Assert.That(thirdPass[0], Is.EqualTo(h.LeafIds[2]),
+            Assert.That(IndexOf(thirdPass[0]), Is.EqualTo(IndexOf(secondPass[^1]) + 1),
                 "resumption must keep advancing rather than settling on one leaf");
         });
     }

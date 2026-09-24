@@ -453,3 +453,22 @@ tools/tla2tools.jar
 # path is overridable with REPOCONTEXT_BACKUP_PATH, so this pattern covers the
 # default location only, which is the one that lands inside the repository.
 samples/RepoContextContainer/backup-sink/
+
+# The videos/ HyperFrames workspace (see videos/README.md). Renders, key-frame
+# snapshots and narration are build output, and none is committed until the
+# hosting decision in videos/series.md is made. assets/brand/site/ is the copy
+# of the docs site's design system (docs-site/template/public) that the
+# workspace makes before every render; the source is the only tracked copy.
+# The remaining entries are what `hyperframes init` and project-scoped skill
+# installs write: agent files full of em-dashes that the hygiene gates reject,
+# and a local .env the CLI loads for provider API keys. Install HyperFrames
+# skills per user (`-g`) instead.
+videos/renders/
+videos/snapshots/
+videos/assets/brand/site/
+videos/.env
+videos/AGENTS.md
+videos/CLAUDE.md
+videos/.agents/
+videos/.claude/
+videos/skills-lock.json

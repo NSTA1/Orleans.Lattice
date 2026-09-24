@@ -112,6 +112,12 @@ public partial class BPlusLeafGrainTests
     /// first consume the prime and leave the others asserting against a tree that
     /// was already primed - an order-dependent green.
     /// </param>
+    /// <param name="detectorDecisionForPartition">
+    /// A per-partition fall-off-log decision, consulted before
+    /// <paramref name="detectorDecision"/>. Issue #3477's multi-partition
+    /// fixture uses it to make exactly one named partition stale, so the latch
+    /// can be shown to refuse that partition's hints and no other's.
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -123,7 +129,8 @@ public partial class BPlusLeafGrainTests
             Exception? saveFailure = null,
             int walPartitions = 1,
             string? treeId = null,
-            Func<FallOffLogDecision>? detectorDecision = null)
+            Func<FallOffLogDecision>? detectorDecision = null,
+            Func<int, FallOffLogDecision>? detectorDecisionForPartition = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -181,7 +188,10 @@ public partial class BPlusLeafGrainTests
         detector.ClassifyAsync(
                 Arg.Any<string>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<TimeSpan>(),
                 Arg.Any<ResolvedLatticeOptions>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(detectorDecision?.Invoke() ?? FallOffLogDecision.TailReplay));
+            .Returns(ci => Task.FromResult(
+                detectorDecisionForPartition?.Invoke(ci.ArgAt<int>(1))
+                ?? detectorDecision?.Invoke()
+                ?? FallOffLogDecision.TailReplay));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);

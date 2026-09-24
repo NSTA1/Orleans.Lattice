@@ -7,15 +7,17 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Covers which grain overload a bulk WAL append carrying exactly one entry
-/// dispatches to, as selected by
-/// <see cref="LatticeOptions.WalBatchedSingleEntryAppends"/>.
+/// Covers which grain overload a single-entry WAL append - a bulk append
+/// carrying exactly one entry, or a point append - dispatches to, as selected
+/// by <see cref="LatticeOptions.WalBatchedSingleEntryAppends"/>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <see cref="WalCommitLogWriter.AppendManyAsync"/> historically collapsed a
 /// single-entry bulk append onto <see cref="IWalShardGrain.AppendAsync"/> to
-/// match that overload's per-call allocation cost. That overload takes an
+/// match that overload's per-call allocation cost, and
+/// <see cref="WalCommitLogWriter.AppendAsync"/> always dispatched a point
+/// append there (#812). That overload takes an
 /// <b>exclusive</b> grain turn, and an Orleans activation stays busy across
 /// awaits, so the partition is held for a whole provider round trip. Under a
 /// wide fan-out whose per-leaf slices are one entry each - the dominant shape
@@ -39,7 +41,8 @@ public class WalCommitLogWriterSingleEntryDispatchTests
     private const string TreeId = "tree-single-entry-dispatch";
 
     private static (WalCommitLogWriter Writer, IWalShardGrain Shard) CreateWriter(
-        bool batchedSingleEntryAppends)
+        bool batchedSingleEntryAppends,
+        TimeSpan? dispatchTimeout = null)
     {
         var shard = Substitute.For<IWalShardGrain>();
         shard
@@ -60,6 +63,10 @@ public class WalCommitLogWriterSingleEntryDispatchTests
         {
             WalBatchedSingleEntryAppends = batchedSingleEntryAppends,
         };
+        if (dispatchTimeout is { } timeout)
+        {
+            options.WalAppendDispatchTimeout = timeout;
+        }
 
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
@@ -162,6 +169,91 @@ public class WalCommitLogWriterSingleEntryDispatchTests
             await shard.DidNotReceive().AppendBatchAsync(
                 Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>());
         }
+    }
+
+    [Test]
+    public async Task AppendAsync_point_append_takes_exclusive_overload_when_option_disabled()
+    {
+        // The control arm: with the option off a point append keeps the
+        // historical exclusive-turn dispatch, so the option stays a real
+        // off-switch for the point path as well as the bulk path.
+        var (writer, shard) = CreateWriter(batchedSingleEntryAppends: false);
+
+        var offset = await writer.AppendAsync(MakeMutation("k0"));
+
+        await shard.Received(1).AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
+        await shard.DidNotReceive().AppendBatchAsync(
+            Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>());
+        Assert.That(offset, Is.EqualTo(7L));
+    }
+
+    [TestCase(false, TestName = "AppendAsync_point_append_takes_interleaving_overload_when_option_enabled_finite_deadline")]
+    [TestCase(true, TestName = "AppendAsync_point_append_takes_interleaving_overload_when_option_enabled_infinite_deadline")]
+    public async Task AppendAsync_point_append_takes_interleaving_overload_when_option_enabled(bool infiniteDeadline)
+    {
+        // #812: a point append on the exclusive overload admits one entry
+        // per partition per provider round trip, which is the whole
+        // set-point ceiling. Both dispatch-deadline branches must route
+        // through the interleaving overload, or the fix covers only one of
+        // them and the other silently keeps the serialisation.
+        var (writer, shard) = CreateWriter(
+            batchedSingleEntryAppends: true,
+            dispatchTimeout: infiniteDeadline ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(30));
+
+        var offset = await writer.AppendAsync(MakeMutation("k0"));
+
+        await shard.Received(1).AppendBatchAsync(
+            Arg.Is<IReadOnlyList<WalRecord>>(e => e.Count == 1 && e[0].Key == "k0"),
+            Arg.Any<CancellationToken>());
+        await shard.DidNotReceive().AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
+
+        // The offset must be the batched dispatch's single result, not a
+        // default or a silently-retained singular call.
+        Assert.That(offset, Is.EqualTo(100L));
+    }
+
+    [Test]
+    public void AppendAsync_batched_point_append_still_trips_the_dispatch_deadline()
+    {
+        // Rerouting must not bypass the writer-side dispatch deadline: a
+        // wedged shard on the batched overload surfaces the same typed
+        // TimeoutException the exclusive overload does.
+        var (writer, shard) = CreateWriter(
+            batchedSingleEntryAppends: true,
+            dispatchTimeout: TimeSpan.FromMilliseconds(50));
+        var never = new TaskCompletionSource<IReadOnlyList<long>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        shard.AppendBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(never.Task);
+
+        Assert.That(
+            async () => await writer.AppendAsync(MakeMutation("k0")).WaitAsync(TimeSpan.FromSeconds(10)),
+            Throws.TypeOf<TimeoutException>()
+                .With.Message.Contains(nameof(LatticeOptions.WalAppendDispatchTimeout)));
+    }
+
+    [Test]
+    public void AppendAsync_batched_point_append_failure_propagates_and_counts_as_provider_failure()
+    {
+        // The provider-failure counter feeds the saturation sampler; a
+        // rerouted point append that faults must still be counted, and the
+        // original exception must reach the caller unwrapped.
+        var (writer, shard) = CreateWriter(batchedSingleEntryAppends: true);
+        shard.AppendBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<long>>(
+                new InvalidOperationException("simulated batched provider failure")));
+        var before = WalCommitLogWriter._providerFailureCounts
+            .Where(kv => kv.Key.TreeId == TreeId)
+            .Sum(kv => kv.Value);
+
+        Assert.That(
+            async () => await writer.AppendAsync(MakeMutation("k0")),
+            Throws.InstanceOf<InvalidOperationException>()
+                .With.Message.Contains("simulated batched provider failure"));
+
+        var after = WalCommitLogWriter._providerFailureCounts
+            .Where(kv => kv.Key.TreeId == TreeId)
+            .Sum(kv => kv.Value);
+        Assert.That(after - before, Is.EqualTo(1L));
     }
 
     [Test]

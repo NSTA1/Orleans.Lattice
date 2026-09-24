@@ -377,7 +377,7 @@ var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
 // Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
 // manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
 // When the env var is ABSENT the option is left at the library default
-// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 3 s) - the deploy
+// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 12 s) - the deploy
 // script only emits this var when the operator overrides it. When SUPPLIED the
 // value is honoured verbatim: 0 explicitly disables the deadline (null - the
 // historical unbounded behaviour), > 0 sets that finite deadline. A finite

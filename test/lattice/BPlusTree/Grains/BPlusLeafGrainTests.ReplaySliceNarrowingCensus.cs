@@ -100,7 +100,7 @@ public partial class BPlusLeafGrainTests
         // the field condition. 256 is refused, 64 is refused, 16 is served -
         // so the loop narrows precisely as often as the coordinator refuses.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
@@ -137,7 +137,7 @@ public partial class BPlusLeafGrainTests
         // shown which tree was buffering hardest, because every tree in the
         // silo would have summed into one series.
         var entries = PressuredReplayEntries(12);
-        var coord = new PressuredReplayCoordinator(head: 12, sliceSize: 4, affordableBudget: 16, entries);
+        var coord = new PressuredReplayCoordinator(head: 13, sliceSize: 4, affordableBudget: 16, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
@@ -187,7 +187,7 @@ public partial class BPlusLeafGrainTests
         // fabricated sample that reads as a real observation.
         var entries = PressuredReplayEntries(12);
         var coord = new PressuredReplayCoordinator(
-            head: 12, sliceSize: 4, affordableBudget: int.MaxValue, entries);
+            head: 13, sliceSize: 4, affordableBudget: int.MaxValue, entries);
         var store = new InMemorySnapshotStore();
         var state = NewResumableState();
         var (grain, _) = BuildResumableLeaf(state, coord.Stub, store.Stub, reclassifyEveryN: 1);
