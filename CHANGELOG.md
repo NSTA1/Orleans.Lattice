@@ -62,6 +62,30 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## Released
 
+## [2026-09-24]
+
+Patch release: `Orleans.Lattice`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry.Azure`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication` and `Orleans.Lattice.Caching.AzureBlob` advance to `9.7.1`, and `Orleans.Lattice.Explorer.Core` and `Orleans.Lattice.Explorer.UI` advance to `9.4.2` from the `release/9.4` line. Every other package stays where the 2026-09-21 and 2026-09-23 waves left it. Packages that depend on a patched package still require its `9.7.0`, so reference `Orleans.Lattice`, `Orleans.Lattice.Backup` or `Orleans.Lattice.Replication` directly to pick up those fixes. The core fix stops new WAL damage but does not repair a leaf that was already affected: such a leaf still fails to activate with `LeafProjectionStaleException`.
+
+### Fixed
+
+- **WAL - Garbage collection could trim past a leaf's saved checkpoint.** A leaf's durable pin included its unsaved pending checkpoint, so WAL GC could trim entries the leaf's next replay still needed. The pin now never exceeds the saved checkpoint, and a GC-driven replay saves its checkpoint first. ([#3476](https://github.com/NSTA1/Orleans.Lattice/issues/3476)) (`Orleans.Lattice` 9.7.1)
+
+- **WAL - An unreadable cursor registry released the durability hold.** A failed cursor-registry read counted the tree's cursors as durable, so the durability hold disengaged and GC could trim WAL entries with no durability evidence. That failure now engages the hold and is logged. ([#3366](https://github.com/NSTA1/Orleans.Lattice/issues/3366)) (`Orleans.Lattice` 9.7.1)
+
+- **Backup - A schedule could outlive an unpersisted scope.** A storage fault while recording a backup scope changed only memory, so a retried `EnsureScheduleAsync` registered reminders that later found no scope and captured nothing. A failed write now restores the scope, so the retry persists it. ([#3471](https://github.com/NSTA1/Orleans.Lattice/issues/3471)) (`Orleans.Lattice.Backup` 9.7.1)
+
+- **Replication - A failed receive-fence write was never retried.** A storage fault during a saga pause or resume changed only memory, so the retry was a no-op: a lost pause let inbound apply resume mid-saga, and a lost resume left the tree paused with no owner. A failed write now restores the owner. ([#3470](https://github.com/NSTA1/Orleans.Lattice/issues/3470)) (`Orleans.Lattice.Replication` 9.7.1)
+
+- **Storage - Blob cache clobbered a concurrent rewrite.** The sliding renewal and the expired-entry eviction were unconditional, so a `Set` from another replica landing between the read and that write lost its expiry or was deleted. Both now require the read version's ETag. ([#3461](https://github.com/NSTA1/Orleans.Lattice/issues/3461)) (`Orleans.Lattice.Caching.AzureBlob` 9.7.1)
+
+### Security
+
+- **Security - Keyword-named metrics passed the telemetry allow-list.** The deny-all gate skipped any metric named like a PromQL keyword, so `up or min` read `min` with only `up` admitted. Such a keyword now counts as a metric name wherever Prometheus parses it as one. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Telemetry` 9.7.1)
+
+- **Security - MCP telemetry packages resolved the unpatched facade.** `Orleans.Lattice.Api.Mcp.Telemetry` and `Orleans.Lattice.Api.Mcp.Telemetry.Azure` are republished with no code change, so they require the patched `Orleans.Lattice.Api.Telemetry` 9.7.1 instead of resolving 9.7.0. ([#3465](https://github.com/NSTA1/Orleans.Lattice/issues/3465)) (`Orleans.Lattice.Api.Mcp.Telemetry` 9.7.1, `Orleans.Lattice.Api.Mcp.Telemetry.Azure` 9.7.1)
+
+- **Explorer - The default credential store was one sign-in for the whole process.** Registered as a singleton, the in-memory store let every circuit of a multi-user head read the last operator's credential. It is now scoped per circuit; a head that registers its own store is unaffected. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386)) (`Orleans.Lattice.Explorer.Core` 9.4.2, `Orleans.Lattice.Explorer.UI` 9.4.2)
+
 ## [2026-09-23]
 
 Patch release: `Orleans.Lattice.Storage.File` advances to `9.7.1`. No other package changes in this wave.

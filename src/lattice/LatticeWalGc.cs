@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 
@@ -554,7 +555,8 @@ public sealed class LatticeWalGc(
         var cursorAuthority = await ClassifyCursorAuthorityAsync(
             treeName, offsetCoverage.CoveredConsumerIds, cancellationToken).ConfigureAwait(false);
         var holdConfigured = holdCeiling is { } hc && hc > 0
-            && cursorAuthority == WalGcCursorAuthority.Volatile;
+            && cursorAuthority is WalGcCursorAuthority.Volatile
+                or WalGcCursorAuthority.Unreadable;
         var holdHasBudget = holdConfigured
             && retainedBefore is { } rb && rb < holdCeiling!.Value;
 
@@ -568,9 +570,16 @@ public sealed class LatticeWalGc(
             // churn - that clears itself when the leaves re-pin. An operator
             // seeing a hold mid-upgrade needs to know it will end without them,
             // and the stop reason alone cannot tell them.
-            var holdEngagedReason = HasEverPinnedDurableFloor(treeName)
-                ? LatticeMetrics.ReasonHoldEngagedPinRegressed
-                : LatticeMetrics.ReasonHoldEngagedNeverPinned;
+            //
+            // `cursor_unreadable` takes precedence over both because it is not a
+            // statement about the pin history at all: the registry did not
+            // answer, so neither of the other two arms has been measured and
+            // reporting either would assert a fact this pass does not have.
+            var holdEngagedReason = cursorAuthority == WalGcCursorAuthority.Unreadable
+                ? LatticeMetrics.ReasonHoldEngagedCursorUnreadable
+                : HasEverPinnedDurableFloor(treeName)
+                    ? LatticeMetrics.ReasonHoldEngagedPinRegressed
+                    : LatticeMetrics.ReasonHoldEngagedNeverPinned;
             LatticeMetrics.WalGcDurabilityHoldEngaged.Add(1, treeTag, holdEngagedReason, tenantTag);
         }
 
@@ -2065,6 +2074,39 @@ public sealed class LatticeWalGc(
         /// boundary. This is the issue #3300 shape and the only arm that holds.
         /// </summary>
         Volatile = 2,
+
+        /// <summary>
+        /// The cursor registry could not be read, so what is watching this tree
+        /// is unknown (issue #3366). Holds exactly as <see cref="Volatile"/>
+        /// does, and is carried as its own value so that "could not measure" is
+        /// never reported as a measurement.
+        /// <para>
+        /// This arm previously did not exist: a registry fault returned
+        /// <see cref="Durable"/>, on the reasoning that an unread registry is
+        /// not evidence that nothing durable is watching. That is true, and it
+        /// is symmetric - an unread registry is equally not evidence that
+        /// something durable <em>is</em> watching - so it does not select
+        /// between the two answers. What breaks the tie is which way the answer
+        /// fails, and the permissive one was chosen while being described as
+        /// failing closed. It is not: <see cref="Durable"/> disables the hold,
+        /// so the trim proceeds with no durability evidence at all. Retaining
+        /// bytes on an unreadable registry costs bounded disk the hold ceiling
+        /// already caps; releasing them costs acknowledged writes nothing can
+        /// reconstruct. Those costs are not comparable, so the tie breaks
+        /// toward the hold.
+        /// </para>
+        /// <para>
+        /// Deliberately NOT folded into <see cref="Volatile"/>, though both
+        /// engage the hold. They indict different subsystems and call for
+        /// different repairs - <see cref="Volatile"/> is a correctly observed
+        /// stalled materialiser, this is a registry that did not answer - and
+        /// collapsing them would leave a tree holding because its registry is
+        /// unreachable indistinguishable from one holding because its
+        /// materialiser is stalled, sending an operator to repair the wrong
+        /// thing.
+        /// </para>
+        /// </summary>
+        Unreadable = 3,
     }
 
     /// <summary>
@@ -2077,10 +2119,11 @@ public sealed class LatticeWalGc(
     /// method returns before snapshotting when the durable pin store is empty
     /// or unreachable - and an empty pin store is exactly the issue #3300 state
     /// this classification has to be correct in. Folding it in would blind the
-    /// predicate on its own target. Fails closed to
-    /// <see cref="WalGcCursorAuthority.Durable"/> on any registry error, so a
-    /// transient registry fault relaxes the hold rather than engaging it: an
-    /// unread registry is not evidence that nothing durable is watching.
+    /// predicate on its own target. A registry error classifies as
+    /// <see cref="WalGcCursorAuthority.Unreadable"/>, which engages the hold:
+    /// an unread registry is not evidence that nothing durable is watching, but
+    /// nor is it evidence that something is, and of the two answers only one
+    /// can destroy acknowledged writes (issue #3366).
     /// </remarks>
     private async Task<WalGcCursorAuthority> ClassifyCursorAuthorityAsync(
         string treeName,
@@ -2092,9 +2135,19 @@ public sealed class LatticeWalGc(
         {
             snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return WalGcCursorAuthority.Durable;
+            // Logged rather than swallowed: the previous bare catch made the
+            // fault undiagnosable, so a registry that had been failing for
+            // weeks was indistinguishable from one answering "durable". Resolved
+            // from the service provider rather than injected, because this class
+            // is otherwise metrics-only and widening its constructor would churn
+            // every call site that builds one.
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                ex,
+                "WAL GC: cursor registry unreadable for tree {TreeName}; engaging durability hold (issue #3366).",
+                treeName);
+            return WalGcCursorAuthority.Unreadable;
         }
 
         var sawAdmittingCursor = false;

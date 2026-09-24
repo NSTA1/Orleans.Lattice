@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Caching.AzureBlob.Tests;
 /// </summary>
 [TestFixture]
 [Category("AzureStorageEmulator")]
-public sealed class AzureBlobDistributedCacheFaultInjectionTests
+public sealed partial class AzureBlobDistributedCacheFaultInjectionTests
 {
     private static readonly DateTimeOffset Start = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 

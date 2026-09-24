@@ -10,8 +10,15 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     public string Etag => string.Empty;
     public bool RecordExists => true;
 
-    /// <summary>Number of times <see cref="WriteStateAsync"/> has been called.</summary>
+    /// <summary>Number of times <see cref="WriteStateAsync"/> has completed successfully.</summary>
     public int WriteCount { get; private set; }
+
+    /// <summary>
+    /// When set, the next <see cref="WriteStateAsync"/> call throws this
+    /// exception instead of incrementing <see cref="WriteCount"/>. Cleared
+    /// after one throw, so a retry succeeds.
+    /// </summary>
+    public Exception? ThrowOnWrite { get; set; }
 
     public Task ClearStateAsync()
     {
@@ -23,6 +30,12 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
 
     public Task WriteStateAsync()
     {
+        if (ThrowOnWrite is { } ex)
+        {
+            ThrowOnWrite = null;
+            return Task.FromException(ex);
+        }
+
         WriteCount++;
         return Task.CompletedTask;
     }
