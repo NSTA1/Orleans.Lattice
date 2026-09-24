@@ -1833,7 +1833,7 @@ internal sealed class LatticeWalGcScheduler(
 
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             treeIds = await Bounded(registry.GetAllTreeIdsAsync(), EnumerationBudget, stoppingToken)
                 .ConfigureAwait(false);
         }

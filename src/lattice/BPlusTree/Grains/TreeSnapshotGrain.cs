@@ -99,7 +99,7 @@ internal sealed class TreeSnapshotGrain(
         var sourceResolved = await optionsResolver.ResolveAsync(SourceTreeId);
 
         // Validate destination tree doesn't already exist.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         if (await registry.ExistsAsync(destinationTreeId))
             throw new InvalidOperationException(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
@@ -125,7 +125,7 @@ internal sealed class TreeSnapshotGrain(
         // MaxLeafKeys / MaxInternalChildren are propagated only when the
         // caller overrode them (resize case); otherwise the registry-grain's
         // seeding fills defaults.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var entry = new TreeRegistryEntry
         {
             MaxLeafKeys = maxLeafKeys,

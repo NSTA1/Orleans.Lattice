@@ -270,7 +270,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
         TenantId tenant,
         CancellationToken cancellationToken)
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         // Prefix-scoped: a bounded range scan over the tenant's own contiguous key
         // range rather than a read of the whole cluster catalog.

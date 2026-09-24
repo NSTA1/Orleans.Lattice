@@ -121,6 +121,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts no raw ProcessorCount pool sizing across packages, not instrument declarations",
             ["RawAsyncEnumerableAdoptionGuardTests"] =
                 "asserts every raw IAsyncEnumerable enumeration in src is wrapped or justified, not instrument declarations",
+            ["RegistryAcquisitionSeamGuardTests"] =
+                "asserts every ILatticeRegistry acquisition in src goes through the timing seam, not instrument declarations",
             ["SecurityInstructionsCoverageTests"] =
                 "asserts the security instructions cover the packages they claim, not instruments",
             ["SerializableExceptionDeepCopyGateEnrolmentTests"] =

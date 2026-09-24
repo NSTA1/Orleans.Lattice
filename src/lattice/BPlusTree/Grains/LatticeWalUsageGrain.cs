@@ -77,7 +77,7 @@ internal sealed class LatticeWalUsageGrain(
             // activation that is otherwise saturated with foreground
             // mutations. The registry is the source of truth for alias
             // resolution and is not in the per-write path.
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             var entry = await registry.GetEntryAsync(TreeId);
             var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
             cancellationToken.ThrowIfCancellationRequested();

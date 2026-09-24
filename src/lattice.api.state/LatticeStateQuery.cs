@@ -457,7 +457,7 @@ internal sealed class LatticeStateQuery(
         // catalog is returned unfiltered exactly as before, at zero cost.
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         // Enumerating the registry is infrastructure: run it under a system-origin
         // scope so the enumeration is not itself filtered or denied by the gate.
@@ -791,7 +791,7 @@ internal sealed class LatticeStateQuery(
         // the tag-index catalog is returned unfiltered exactly as before.
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
 
         // Enumerating the registry is infrastructure: run it under a system-origin
         // scope so the enumeration is not itself filtered or denied by the gate.
@@ -1386,7 +1386,7 @@ internal sealed class LatticeStateQuery(
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
         var physicalTreeId = await registry.ResolveAsync(bindTreeId).ConfigureAwait(false);
         var depthLimit = request.EffectiveDepthLimit;
         var budget = new NodeBudget { Remaining = request.EffectiveMaxNodes };

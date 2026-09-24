@@ -130,7 +130,7 @@ internal sealed class TreeReshardGrain(
         }
 
         // Inspect the current map to validate grow-only semantics.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var currentMap = await registry.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
@@ -161,7 +161,7 @@ internal sealed class TreeReshardGrain(
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"), tenantTag);
 #if LATTICE_DIAG
             // DIAG-PATH1: diagnose why currentCount mis-tracks the pinned ShardCount.
-            var diagRegistry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var diagRegistry = grainFactory.GetLatticeRegistry();
             var diagEntry = await diagRegistry.GetEntryAsync(TreeId);
             var diagMap = await diagRegistry.GetShardMapAsync(TreeId);
             var diagPhysical = diagMap?.GetPhysicalShardIndices()?.Count;
@@ -356,7 +356,7 @@ internal sealed class TreeReshardGrain(
     internal async Task MigrateAsync()
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var currentMap = await registry.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
@@ -539,7 +539,7 @@ internal sealed class TreeReshardGrain(
 
     private async Task<string> ResolvePhysicalTreeIdAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         return await registry.ResolveAsync(TreeId);
     }
 
@@ -618,7 +618,7 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     private async Task UpdateShardCountPinAsync(int newShardCount)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var existing = await registry.GetEntryAsync(TreeId);
         var updated = (existing ?? new State.TreeRegistryEntry()) with { ShardCount = newShardCount };
         await registry.UpdateAsync(TreeId, updated);

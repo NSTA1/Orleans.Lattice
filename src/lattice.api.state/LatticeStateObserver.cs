@@ -100,7 +100,7 @@ internal sealed class LatticeStateObserver(
             throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
         }
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
         var physicalTreeId = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false)
             ?? effectiveTreeId;
         var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
