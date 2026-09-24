@@ -84,11 +84,28 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
     /// <see cref="FlushPendingCheckpointAsync"/> after every successful
-    /// persist; never throws. Under multi-partition WAL the leaf reports
+    /// persist. Under multi-partition WAL the leaf reports
     /// one cursor per partition so the per-shard WAL GC trims each
     /// partition independently against its own slowest consumer.
     /// </summary>
-    private async Task ReportCursorIfActiveAsync()
+    /// <remarks>
+    /// A failed per-partition cursor report is contained and logged here. The
+    /// method as a whole is NOT guaranteed never to throw (an earlier summary
+    /// said it was): reading grain state, resolving options, and the durable
+    /// pin flush can all throw, most notably "Attempt to access an invalid
+    /// activation" once a deactivation deadline has torn the activation down
+    /// (issue #3393). Its caller, the checkpoint-flush tail, contains and
+    /// counts that.
+    /// </remarks>
+    /// <param name="publishDurablePin">
+    /// Whether to follow the cursor report with the durable pin publish (the
+    /// batched flush on the first real frontier, the debounced mirror
+    /// thereafter). <see langword="false"/> only on the teardown persist's tail,
+    /// which has already published the pin through the awaited batched flush as
+    /// its first step (issue #3393), so a fire-and-forget mirror queued behind
+    /// it would be redundant work on a path with a deadline.
+    /// </param>
+    private async Task ReportCursorIfActiveAsync(bool publishDurablePin = true)
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
@@ -139,8 +156,13 @@ internal sealed partial class BPlusLeafGrain
         // retention floor leaves Zero promptly; every subsequent advance uses
         // the cheap per-consumer debounced mirror. The pin store coalesces the
         // durable write itself in both cases - a pin that lags the leaf's true
-        // frontier only retains more WAL, which is always GC-safe. Never throws
-        // (the flush swallows transient failures).
+        // frontier only retains more WAL, which is always GC-safe. Skipped when
+        // the caller has already published the pin itself (issue #3393).
+        if (!publishDurablePin)
+        {
+            return;
+        }
+
         if (!_durableFrontierBarriered)
         {
             await FlushDurableMaterialiserFrontierAsync();
@@ -159,6 +181,52 @@ internal sealed partial class BPlusLeafGrain
                 reporter.NoteDurableMaterialiserFrontier(
                     treeId, consumerId, frontier, offset);
             }
+        }
+    }
+
+    /// <summary>
+    /// The <c>frontier_pin</c> graceful-deactivation barrier: publishes the
+    /// durable pin through <see cref="FlushDurableMaterialiserFrontierAsync"/>,
+    /// and SKIPS rather than faults once the deactivation deadline has torn the
+    /// activation down (issue #3393).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Before the fix this barrier threw "Attempt to access an invalid
+    /// activation" from its first state read whenever an earlier barrier had
+    /// consumed the deadline, which was the norm in the recorded drain. It now
+    /// checks the token before that read and skips, and catches the same
+    /// fault if the teardown lands mid-flush. Both are counted on the existing
+    /// <c>frontier_pin</c> reason of
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierFailures"/> and logged
+    /// as a teardown skip.
+    /// </para>
+    /// <para>
+    /// The catch is deliberately narrow: an <see cref="InvalidOperationException"/>
+    /// only, only while the deadline token is cancelled, and never a
+    /// <see cref="ILatticeDomainFault"/>, which is a real domain refusal rather
+    /// than a torn-down activation. The same exception with the token NOT
+    /// cancelled still propagates, into the barrier's own fault containment,
+    /// so a genuine defect is still reported as a fault.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">The deactivation deadline.</param>
+    internal async Task FlushDurableMaterialiserFrontierOnDeactivateAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierFrontierPin, fault: null);
+            return;
+        }
+
+        try
+        {
+            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+            when (cancellationToken.IsCancellationRequested && ex is not ILatticeDomainFault)
+        {
+            RecordDeactivationBarrierSkip(LatticeMetrics.DeactivationBarrierFrontierPin, ex);
         }
     }
 
@@ -188,9 +256,15 @@ internal sealed partial class BPlusLeafGrain
     /// activation and again on graceful deactivation (after the final checkpoint
     /// flush) so a leaf that goes dormant leaves its frontier behind for the
     /// WAL GC. Idempotent (the pin store's monotonic-max merge no-ops a
-    /// stale/equal frontier) and never throws; a no-op when the host has no
+    /// stale/equal frontier); a no-op when the host has no
     /// cursor reporter (pre-WAL), the tree id is unset, or the leaf has not
-    /// checkpointed yet.
+    /// checkpointed yet. It is NOT guaranteed never to throw (an earlier
+    /// summary said it was): it reads grain state, which throws "Attempt to
+    /// access an invalid activation" once the activation has been torn down,
+    /// and the reporter honours the token. The deactivation barrier calls it
+    /// through <see cref="FlushDurableMaterialiserFrontierOnDeactivateAsync"/>,
+    /// which turns that teardown case into a counted skip (issue #3393); every
+    /// other caller contains it itself.
     /// </summary>
     /// <param name="cancellationToken">
     /// Deadline for the flush. This runs on the deactivation path, where
@@ -199,11 +273,23 @@ internal sealed partial class BPlusLeafGrain
     /// hook overruns - so a flush that ignores the token cannot be interrupted,
     /// the grain never returns in time, and the caller's exception handling
     /// never gets the chance to swallow it (issue 1965). Passing the token
-    /// through lets the flush abandon promptly, which is safe because the pin
-    /// is best-effort: the WAL is the durability boundary and the next
-    /// activation re-reports the frontier.
+    /// through lets the flush abandon promptly. Abandoning is NOT made safe by
+    /// a later re-report: a leaf that deactivates is typically not reactivated
+    /// for a long time, and its last published pin holds the shared WAL's trim
+    /// floor until it is. It is safe because the teardown persist publishes its
+    /// own pin first, before this barrier runs (issue #3393), so an abandoned
+    /// flush here leaves the pin at the final persisted checkpoint rather than
+    /// at an older one; and a pin that lags only retains more WAL.
     /// </param>
-    private async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// <see langword="internal"/> rather than private so the #3476 clamp and
+    /// #3453 never-written fixtures can drive the batched publisher directly
+    /// with a pending advance above the persisted checkpoint. Since issue #3393
+    /// no deactivation barrier reaches this with that shape - the expired-deadline
+    /// publisher those fixtures used now skips - so a direct call is the only
+    /// way to keep the clamp observable.
+    /// </remarks>
+    internal async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
     {
         // Issue #3453: a never-written leaf (Clock == Zero) is no longer turned
         // away here unconditionally. Its release branches resolve to
