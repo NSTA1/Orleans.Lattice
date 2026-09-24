@@ -131,10 +131,36 @@ normalize_path() {
 # ---------------------------------------------------------------------------
 # 1. Discover packages. A package is a subdirectory of src/ - unchanged, and
 #    the reason a new src/{name}/ needs no workflow edit.
+#
+#    Plus an explicit allow-list of TEST-ONLY packages: a test project with no
+#    src/ counterpart that PR CI must still select and run. Without this, such
+#    a project is owned by no package, is never seeded, never planned into a
+#    leg, and never runs on a pull request - which is exactly how
+#    test/lattice.integration came to be executed only by publish.yml, after
+#    merge, while packages were already being pushed to NuGet (issue #3329).
+#
+#    This is an allow-list rather than "every directory under test/ is a
+#    package" because the other counterpart-less test directories must NOT be
+#    swept in: test/lattice.explorer.uitests is a Playwright suite owned by
+#    ui-tests.yml, test/azure-throughput-silo and test/microbench are covered
+#    by the samples/benchmark job, and test/shared is a library, not a suite.
+#
+#    Each entry is verified to exist and to hold a test project, so a rename or
+#    deletion fails the selector loudly here instead of silently dropping the
+#    suite back out of CI - the same failure mode this list exists to fix.
 # ---------------------------------------------------------------------------
 packages=()
 for dir in src/*/; do
   packages+=("$(basename "$dir")")
+done
+
+TEST_ONLY_PACKAGES=(lattice.integration)
+for name in "${TEST_ONLY_PACKAGES[@]}"; do
+  if [ ! -d "test/$name" ] || ! compgen -G "test/$name/*.Tests.csproj" > /dev/null; then
+    echo "::error::select-test-packages.sh: test-only package 'test/$name' is missing or holds no *.Tests.csproj. Update TEST_ONLY_PACKAGES (and its mirror in select-test-packages-selftest.sh) if it was renamed or removed." >&2
+    exit 1
+  fi
+  packages+=("$name")
 done
 
 if [ ${#packages[@]} -eq 0 ]; then
@@ -159,9 +185,10 @@ if [ -d samples ]; then
 fi
 
 # ownerOf[<csproj>] is the owning package, populated once below. A path under
-# src/<pkg>/ or test/<pkg>/ for a discovered package is owned by that package;
-# everything else (test/shared/, test/lattice.integration/) owns none, and is
-# simply absent from the map.
+# src/<pkg>/ or test/<pkg>/ for a discovered package is owned by that package -
+# including a test-only package such as test/lattice.integration/, which has no
+# src/ counterpart but is a package by the allow-list above. Everything else
+# (test/shared/) owns none, and is simply absent from the map.
 declare -A ownerOf=()
 
 populate_owner() {
@@ -182,9 +209,8 @@ populate_owner() {
 #
 #    Nodes are csproj paths under src/ and test/. Edges run consumer ->
 #    producer; the reverse index is what the walk uses. Unowned projects
-#    (test/shared/Orleans.Lattice.Testing, test/lattice.integration) are nodes
-#    too: they own no package, but a dependency routed through them must still
-#    be traversed.
+#    (test/shared/Orleans.Lattice.Testing) are nodes too: they own no package,
+#    but a dependency routed through them must still be traversed.
 # ---------------------------------------------------------------------------
 projects=()
 while IFS= read -r proj; do

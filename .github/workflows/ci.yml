@@ -1728,7 +1728,8 @@ jobs:
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
     # AzureStorageEmulator-category integration tests (in storage.azuretable,
-    # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
+    # caching.azureblob, backup.azureblob, and lattice.integration) drive via
+    # `UseDevelopmentStorage=true`.
     # Without it those tests self-skip (Assert.Inconclusive) and never validate their
     # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
     # publishing 10000-10002 to the runner host makes the SDK dev endpoints
@@ -1742,10 +1743,33 @@ jobs:
           - 10002:10002
     # Carried over from the serial job, and load-bearing. Legs are bin-packed
     # dynamically, so any leg can contain storage.azuretable, caching.azureblob,
-    # or backup.azureblob. Without the service those fixtures self-skip via
+    # backup.azureblob, or lattice.integration. Without the service those
+    # fixtures self-skip via
     # Assert.Inconclusive, which NUnit counts as neither passed, failed, nor
     # skipped - the run still prints `Passed!` with `Skipped: 0` and only the
     # total drops. That is a silent coverage hole, so every leg gets Azurite.
+    #
+    # lattice.integration is the newest member of that list and is why the
+    # executed-count assertion below is not optional. Until #3329 it had NO PR
+    # lane at all: it has no src/ counterpart, so select-test-packages.sh -
+    # which discovered packages only from src/* - left it owned by no package
+    # and it was never planned onto a leg. Its only execution site was the
+    # post-merge release gate in publish.yml, which is why epic #2368 could
+    # rework WAL cursor durability and merge fully green while the one suite
+    # exercising sender-restart cursor behaviour never ran on it. It now reaches
+    # a leg via the TEST_ONLY_PACKAGES allow-list in select-test-packages.sh;
+    # publish.yml keeps its gate as a post-merge backstop.
+    #
+    # The non-zero executed-test assertion that keeps this lane honest lives in
+    # summarise-test-legs.py's vacuity check, invoked by the aggregate step of
+    # the `test-summary` job below: run-test-leg.py reads
+    # ResultSummary/Counters@executed out of the TRX and classifies a
+    # clean-exit zero-executed run as "empty" rather than "passed", and the
+    # summariser fails the build when any (package, shard) sums to zero
+    # executed. That is what distinguishes "Azurite was up and the suite ran"
+    # from "every fixture called Assert.Inconclusive and the leg reported
+    # success anyway" - a distinction `Passed!` alone cannot make, because
+    # NUnit counts an inconclusive as neither passed, failed, nor skipped.
 
     steps:
       - uses: actions/checkout@v5
