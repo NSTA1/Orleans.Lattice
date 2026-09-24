@@ -140,6 +140,16 @@ internal sealed partial class BPlusLeafGrain
     /// against the wrong offset space, and the skip path opens no scope and
     /// starts no state machine - the split path is hot.
     /// </para>
+    /// <para>
+    /// A hint is also refused outright on a partition a starvation drive has
+    /// latched as stale (issue #3477). That partition's WAL was trimmed past an
+    /// offset its persisted checkpoint still needs, so the range between the
+    /// checkpoint and the hinted head was never applied here. Stamping the hint
+    /// would persist a checkpoint past rows the leaf does not hold - silent loss
+    /// - and, because the latch is keyed on the persisted checkpoints, would
+    /// clear the latch with nothing repaired. Only an apply or an operator reset
+    /// may move a latched partition.
+    /// </para>
     /// </summary>
     /// <param name="partition">The WAL partition ordinal the hint targets.</param>
     /// <param name="offset">The hinted WAL head offset. Non-positive offsets are ignored.</param>
@@ -150,7 +160,35 @@ internal sealed partial class BPlusLeafGrain
             return ValueTask.CompletedTask;
         }
 
+        if (IsPartitionStaleLatched(partition))
+        {
+            LogCheckpointHintRefused(partition, offset);
+            return ValueTask.CompletedTask;
+        }
+
         return new ValueTask(StampCheckpointHintAsync(partition, offset));
+    }
+
+    /// <summary>
+    /// Logs, once per latch, that a checkpoint hint was refused on a stale
+    /// partition (issue #3477).
+    /// </summary>
+    private void LogCheckpointHintRefused(int partition, long offset)
+    {
+        var latch = _projectionStaleDriveLatch;
+        if (ReferenceEquals(_checkpointHintRefusalLoggedFor, latch))
+        {
+            return;
+        }
+
+        _checkpointHintRefusalLoggedFor = latch;
+        ResolveLogger()?.LogWarning(
+            "Leaf {Leaf} on tree {Tree} refused a checkpoint hint to offset {Offset} on WAL partition {Partition}: a starvation drive found this partition stale, so the range between its persisted checkpoint ({Checkpoint}) and the hint was trimmed before this leaf applied it. Stamping the hint would persist a checkpoint past rows the leaf does not hold. The persisted checkpoint is left where it is; see docs/lattice/projection-rebuild.md.",
+            context.GrainId,
+            state.State.TreeId,
+            offset,
+            partition,
+            GetPersistedCheckpointForPartition(partition));
     }
 
     /// <summary>
