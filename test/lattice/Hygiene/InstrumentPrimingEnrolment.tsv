@@ -346,6 +346,9 @@ src/lattice/LatticeMetrics.cs#StorageWalCompressionSkipped	unresolved	reason=bou
 src/lattice/LatticeMetrics.cs#StorageWalStoredBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#StorageWalUncompressedBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#TreeLifecycle	unresolved	reason=dimension kind: no declaration found for kindTag
+src/lattice/LatticeMetrics.cs#TxRegistryWriteDuration	none	
+src/lattice/LatticeMetrics.cs#TxRegistryWriteMutations	none	
+src/lattice/LatticeMetrics.cs#TxRegistryWrites	none	
 src/lattice/LatticeMetrics.cs#ViewAggregationApplied	none	
 src/lattice/LatticeMetrics.cs#ViewAggregationRejected	none	
 src/lattice/LatticeMetrics.cs#ViewApplied	none	

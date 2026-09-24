@@ -29,6 +29,17 @@ namespace Orleans.Lattice.BPlusTree;
 /// registry has flipped to <c>Committed</c>, the prepared bucket is
 /// invisible and readers continue to see the pre-saga state.
 /// </para>
+/// <para>
+/// Group commit (issue #3475): the mutating calls and the per-transaction
+/// reads are <see cref="AlwaysInterleaveAttribute"/>, so they are admitted
+/// while a state write is outstanding. Mutations that arrive during a write
+/// are carried together by the next one, and every mutating call still
+/// returns only after a write that includes its mutation is durable. Reads
+/// are read-committed: a read that would depend on a not-yet-durable
+/// mutation waits for that write, and recomputes if it failed. The
+/// tree-wide snapshots and <see cref="ObserveCrossTreeInFlightAsync"/> stay
+/// non-interleaved and apply the same barrier.
+/// </para>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 [Alias(TypeAliases.ITxRegistryGrain)]
@@ -41,6 +52,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="InvalidOperationException"/> if the saga was previously
     /// recorded as <see cref="TxStatus.Aborted"/>.
     /// </summary>
+    [AlwaysInterleave]
     Task MarkCommittedAsync(Guid txid);
 
     /// <summary>
@@ -50,6 +62,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="InvalidOperationException"/> if the saga was previously
     /// recorded as <see cref="TxStatus.Committed"/>.
     /// </summary>
+    [AlwaysInterleave]
     Task MarkAbortedAsync(Guid txid);
 
     /// <summary>
@@ -73,6 +86,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// two coordinators for one decision and every consumer resolves it from
     /// whichever map it probes first. Nothing is mutated when this throws.
     /// </exception>
+    [AlwaysInterleave]
     Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
 
     /// <summary>
@@ -99,6 +113,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="RegisterExternalDecisionAuthorityAsync"/>; see that member for
     /// why the two maps must stay disjoint. Nothing is mutated when this throws.
     /// </exception>
+    [AlwaysInterleave]
     Task RegisterReceiverDecisionAuthorityAsync(Guid txid, string receiverCoordinatorKey);
 
     /// <summary>
@@ -133,6 +148,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// a single unreachable grain into a silent disclosure of superseded data.
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<TxStatus> GetStatusAsync(Guid txid);
 
     /// <summary>
@@ -142,6 +158,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="TxStatus.Indeterminate"/> for a recorded-but-aged-out one,
     /// exactly as the single-key form).
     /// </summary>
+    [AlwaysInterleave]
     Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids);
 
     /// <summary>
@@ -169,6 +186,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// and never an incorrect one.
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<TxStatus> GetRecordedStatusAsync(Guid txid);
 
     /// <summary>
@@ -258,24 +276,26 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// </para>
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the probe
-    /// bypasses the registry's per-turn token entirely. Under heavy
-    /// saga workloads the registry's main RPCs
-    /// (<c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> /
-    /// <c>ForgetAsync</c>) hold the turn for the duration of their
-    /// state-write await; without interleave the probe queues behind
-    /// every in-flight saga decision, defeating the whole point of the
-    /// cheap-probe optimisation. Interleave is safe because the writer
-    /// performs every in-memory mutation - the Decisions map, the
-    /// tombstone map, and both counters - synchronously before its first
-    /// await (<c>state.WriteStateAsync()</c>), so a probe that observes
-    /// a post-bump term necessarily also observes the post-mutation
-    /// in-memory maps; conversely a probe that interleaves
-    /// before the writer started its turn observes both the pre-bump
-    /// terms and the pre-mutation maps. There is no observable
-    /// window where the two diverge. Aligned <see cref="long"/> reads
-    /// are JIT-atomic on every supported runtime architecture and the
-    /// surrounding Task continuation establishes the memory barrier
-    /// needed to see the most recent committed write.
+    /// never queues behind a registry state write. Since group commit
+    /// (issue #3475) every mutating call interleaves too, and its in-memory
+    /// mutation - the Decisions map, the tombstone map, and both counters -
+    /// is applied synchronously and then held pending until a shared write
+    /// carrying it is durable. The probe deliberately does <b>not</b> wait
+    /// for that write, so it can report a token that already includes an
+    /// un-durable mutation (it could before group commit too: the probe
+    /// interleaved with a writer awaiting its own write). That is safe
+    /// because the token is only an equality comparison against a token
+    /// taken from a read-committed <see cref="SnapshotWithRevisionAsync"/>:
+    /// a token that runs ahead of durable state can only mismatch, and a
+    /// mismatch costs a conservative snapshot refetch, which itself waits
+    /// for the write. If the write then fails and the mutation is rolled
+    /// back, the token returns to its durable value, which the probe's
+    /// consumer treats the same way. Group commit does not widen this:
+    /// the terms still move synchronously with the maps, so a probe never
+    /// sees a token and a map from different mutations. Aligned
+    /// <see cref="long"/> reads are JIT-atomic on every supported runtime
+    /// architecture and the surrounding Task continuation establishes the
+    /// memory barrier needed to see the most recent write.
     /// </para>
     /// </summary>
     [AlwaysInterleave]
@@ -290,6 +310,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// anymore so that observation is consistent with the absence of
     /// any pending mutation.
     /// </summary>
+    [AlwaysInterleave]
     Task ForgetAsync(Guid txid);
 
     /// <summary>
@@ -316,6 +337,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// recently-completed sagas.
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task RegisterParticipantAsync(Guid txid, int shardIndex);
 
     /// <summary>
@@ -348,7 +370,43 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// in-memory check.
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task RegisterParticipantsAsync(Guid txid, IReadOnlyList<int> shardIndices);
+
+    /// <summary>
+    /// Admission gate for a <b>new</b> atomic-write saga, called by the saga
+    /// before it persists its execute phase or touches any shard. Completes
+    /// when the registry's estimated persisted row size is below
+    /// <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/> (or the
+    /// bound is disabled), and otherwise throws
+    /// <see cref="LatticeSaturatedException"/> with
+    /// <see cref="LatticeSaturationSource.TxRegistryCapacity"/>.
+    /// <para>
+    /// The estimate is a count-weighted sum over the registry's maps (O(1) in
+    /// the tombstone count; it walks only the open snapshot pins), never a
+    /// re-serialisation, so the healthy path is a synchronous answer
+    /// with no state write. Over the budget, the gate first reclaims any
+    /// tombstones that have aged out of
+    /// <see cref="LatticeOptions.TxDecisionRetention"/> (one group-committed
+    /// write, the same prune <see cref="ForgetAsync"/> runs inline) and only
+    /// refuses if the row is still over budget after that. This is what lets
+    /// admission resume on an idle tree that has no in-flight saga left to
+    /// call <see cref="ForgetAsync"/>.
+    /// </para>
+    /// <para>
+    /// Interleaves, because a gate that queued behind in-flight writes would
+    /// re-introduce the serialisation group commit removes. It reads the
+    /// in-memory maps including mutations not yet durable; that only ever
+    /// over-counts relative to the durable row, which is the safe direction
+    /// for an admission bound, and no decision is disclosed. The gate is a
+    /// probe rather than a reservation, so concurrent sagas that pass it
+    /// together may overshoot the budget by their own entries; the headroom
+    /// between the default budget and the storage limit absorbs that.
+    /// Refs issue #3501, which tracks lifting the ceiling itself.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task EnsureSagaAdmissionAsync();
 
     /// <summary>
     /// Returns the sorted set of physical shard indices that have
@@ -359,6 +417,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="ForgetAsync"/>). The result is sorted ascending so
     /// callers can use it as a deterministic broadcast target list.
     /// </summary>
+    [AlwaysInterleave]
     Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid);
 
     /// <summary>
@@ -411,6 +470,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// gate (legacy peer); a positive value names the total number of
     /// distinct source-shard terminals the saga shipped.
     /// </param>
+    [AlwaysInterleave]
     Task<TerminalTallyResult> RecordTerminalArrivalAsync(
         Guid txid,
         int sourceShardIndex,
@@ -442,6 +502,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// (a single cursor only ever installs one pin under one pinId).
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task PinSnapshotAsync(Guid pinId, IReadOnlyCollection<Guid> txids, TimeSpan ttl);
 
     /// <summary>
@@ -455,6 +516,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <see cref="LatticeCursorSnapshotExpiredException"/> on its next
     /// step.
     /// </summary>
+    [AlwaysInterleave]
     Task<bool> RefreshPinAsync(Guid pinId, TimeSpan ttl);
 
     /// <summary>
@@ -462,6 +524,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// missing pinId is a safe no-op (the pin may have been expired by
     /// the prune pass before the cursor's close call arrived).
     /// </summary>
+    [AlwaysInterleave]
     Task UnpinSnapshotAsync(Guid pinId);
 
     /// <summary>
@@ -471,6 +534,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <c>orleans.lattice.registry.snapshot.pin_count</c> gauge reads
     /// this).
     /// </summary>
+    [AlwaysInterleave]
     Task<int> GetPinnedDecisionCountAsync();
 }
 

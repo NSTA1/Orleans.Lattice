@@ -217,6 +217,41 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void TxRegistryAdmissionBudgetBytes_defaults_to_768_KiB()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeOptions.DefaultTxRegistryAdmissionBudgetBytes, Is.EqualTo(768L * 1024));
+            Assert.That(new LatticeOptions().TxRegistryAdmissionBudgetBytes, Is.EqualTo(LatticeOptions.DefaultTxRegistryAdmissionBudgetBytes));
+            Assert.That(Validate(_ => { }).Succeeded, Is.True);
+        });
+    }
+
+    [Test]
+    public void TxRegistryAdmissionBudgetBytes_null_succeeds()
+    {
+        var result = Validate(o => o.TxRegistryAdmissionBudgetBytes = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(4_000_000L)]
+    public void TxRegistryAdmissionBudgetBytes_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.TxRegistryAdmissionBudgetBytes = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void TxRegistryAdmissionBudgetBytes_below_one_fails(long value)
+    {
+        var result = Validate(o => o.TxRegistryAdmissionBudgetBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("TxRegistryAdmissionBudgetBytes"));
+    }
+
+    [Test]
     public void AdmissionAdvisoryLiveKeys_null_succeeds()
     {
         var result = Validate(o => o.AdmissionAdvisoryLiveKeys = null);

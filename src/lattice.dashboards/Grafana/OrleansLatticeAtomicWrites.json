@@ -483,6 +483,42 @@
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_participants_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
         { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_participants_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
       ]
+    },
+    {
+      "id": 104,
+      "title": "Tx registry writes (rate) by outcome",
+      "description": "tx_registry.writes: whole-state writes issued by the per-tree saga decision registry (TxRegistryGrain). Every atomic saga records its participants, decision and cleanup through this one activation per tree, and the registry group-commits (issue #3475): at most one write is in flight and mutations that arrive meanwhile join the next write. A write rate that stays flat while saga throughput climbs is coalescing at work. Any sustained outcome=fault rate is alert-worthy: a faulted write fails every mutation it carried back to its caller. Emitted only when the registry writes, so an empty result means no atomic sagas ran.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
+      "fieldConfig": { "defaults": { "unit": "wps" }, "overrides": [] },
+      "targets": [
+        { "refId": "W", "expr": "sum by (outcome) (rate(orleans_lattice_tx_registry_writes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 105,
+      "title": "Tx registry group-commit coalescing factor (mutations per write)",
+      "description": "tx_registry.write.mutations: mean registry mutations carried by one TxRegistryGrain state write, derived as rate(sum) / rate(count). 1 means each write acknowledged a single caller; N means one durable write acknowledged N callers. A mean stuck at 1 under heavy atomic load means there was no concurrency to coalesce. Emitted only when the registry writes.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 72 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "M", "expr": "sum (rate(orleans_lattice_tx_registry_write_mutations_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_tx_registry_write_mutations_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "mean mutations per write" }
+      ]
+    },
+    {
+      "id": 106,
+      "title": "Tx registry write duration (mean ms) by outcome",
+      "description": "tx_registry.write.duration: mean duration of one TxRegistryGrain whole-state write, derived as rate(sum) / rate(count). The registry serialises its writes, so the reciprocal of this duration bounds how many writes per second one tree's registry can issue. It grows with the registry row, which carries a tombstone per completed saga for TxDecisionRetention; see the TxRegistryAdmissionBudgetBytes option. Emitted only when the registry writes.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 80 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "D", "expr": "sum by (outcome) (rate(orleans_lattice_tx_registry_write_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (outcome) (rate(orleans_lattice_tx_registry_write_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "{{outcome}}" }
+      ]
     }
   ]
 }

@@ -300,6 +300,10 @@ internal sealed class AtomicWriteGrain(
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
             ValidateInputs(entries, entryDeletes);
+            // Registry row-size admission gate: refuses a new saga before it
+            // mutates, persists, or touches anything, so a refusal leaves the
+            // saga NotStarted and a retry starts cleanly.
+            await EnsureTxRegistryAdmissionAsync(treeId);
             // Capture the per-entry delete (tombstone) channel once, before
             // Prepare, so a reminder-driven replay reuses it verbatim. Stored
             // only when at least one entry is a delete; an all-upsert batch
@@ -389,6 +393,7 @@ internal sealed class AtomicWriteGrain(
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
             ValidateInputs(entries);
+            await EnsureTxRegistryAdmissionAsync(treeId);
             // Capture the guard before Prepare so a reminder-driven Prepare
             // replay re-applies the identical predicate.
             state.State.Guard = predicate;
@@ -457,6 +462,7 @@ internal sealed class AtomicWriteGrain(
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
             ValidateInputs(entries, entryDeletes);
+            await EnsureTxRegistryAdmissionAsync(treeId);
             // Capture the guard and the coordinator key before Prepare so a
             // reminder-driven Prepare replay re-applies the identical guard and
             // re-parks against the same coordinator.
@@ -987,6 +993,17 @@ internal sealed class AtomicWriteGrain(
             }
         }
     }
+
+    /// <summary>
+    /// Asks the per-tree transaction registry whether a new saga may start
+    /// (issue #3475). Throws <see cref="LatticeSaturatedException"/> with
+    /// <see cref="LatticeSaturationSource.TxRegistryCapacity"/> when the
+    /// registry's persisted row is at its admission budget. Called only on the
+    /// fresh-saga path, before any state is mutated or persisted, so a replay
+    /// of an already-admitted saga is never refused.
+    /// </summary>
+    private Task EnsureTxRegistryAdmissionAsync(string treeId) =>
+        grainFactory.GetGrain<ITxRegistryGrain>(treeId).EnsureSagaAdmissionAsync();
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.

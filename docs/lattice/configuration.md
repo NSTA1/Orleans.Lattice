@@ -189,6 +189,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`StorageUsageRollupBudget`](#storageusagerollupbudget) | `TimeSpan` | 20 seconds | No (cluster-wide; read from the default options) |
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
+| [`TxRegistryAdmissionBudgetBytes`](#txregistryadmissionbudgetbytes) | `long?` | 768 KiB | Yes |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalAppendDispatchTimeout`](#walappenddispatchtimeout) | `TimeSpan` | 30 seconds | Yes |
 | [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
@@ -1321,6 +1322,25 @@ Once the window elapses the decision is *masked* rather than deleted: `GetStatus
 Expired tombstones are physically purged by the next `ForgetAsync` call against the registry (an inline prune pass); a `MarkCommittedAsync` / `MarkAbortedAsync` carrying the *same* outcome is recognised as idempotent and deliberately leaves the tombstone in place, so it can never resurrect a decision the tree already retired. A tombstone held by a live point-in-time cursor pin is skipped by both the purge and the read-side mask, so a pinned snapshot keeps reading its decisions for as long as the pin lives. Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
 
 This option can be changed freely at any time.
+
+### `TxRegistryAdmissionBudgetBytes`
+
+Fail-safe admission bound on the per-tree `ITxRegistryGrain` row (default: 768 KiB, `null` disables it). The registry persists its whole state as one grain-state row, and every `ForgetAsync` leaves a tombstone in that row for [`TxDecisionRetention`](#txdecisionretention). Group commit (issue #3475) lets one tree run far more sagas per second than before. So the tombstone count, which is roughly throughput multiplied by retention, can now grow the row past what a storage provider accepts in a single row: about 1 MB for Azure Table grain state. Once the row is that large, every registry write fails, and with it every saga on the tree.
+
+The bound refuses **new** sagas before they do any work, and never refuses work already under way. Before each new saga registers, the registry computes an O(1) estimate of its row size from dictionary counts. The estimate is deliberately weighted to over-count against the real JSON row. If the estimate exceeds the budget, the registry first purges any tombstones that have aged out of the retention window. If the estimate is still over budget, the saga fails with a `LatticeSaturatedException` whose `SaturationSource` is `LatticeSaturationSource.TxRegistryCapacity`.
+
+The refusal is retryable, but only after a back-off: capacity returns as tombstones age out, which takes seconds. The library never retries this refusal itself. `MarkCommittedAsync`, `MarkAbortedAsync`, `ForgetAsync`, recovery, and every status read are never refused, so in-flight sagas always complete, and completing them is what frees room.
+
+Ceiling maths. One tombstone costs about 116 bytes of JSON, so a 1 MB row holds about 8,600 tombstones. At the default 60 s retention, that is about 143 sagas/s sustained per tree. The estimate weights a tombstone at 128 bytes, so the 768 KiB default admits about 6,100 tombstones, or about 100 sagas/s per tree at 60 s retention, and leaves headroom for concurrent admissions to overshoot, since each check is a probe and not a reservation. To raise the ceiling, shorten `TxDecisionRetention`, subject to its own safety guidance, or spread atomic writes across trees. Issue #3501 tracks moving tombstones out of the single row.
+
+```csharp verify
+siloBuilder.ConfigureLattice("orders", o =>
+{
+    o.TxRegistryAdmissionBudgetBytes = 512 * 1024;
+});
+```
+
+Set `null` only on a storage provider with no practical per-row limit. The value must be at least 1 when set. This option can be changed freely at any time.
 
 ### `VersionVectorRetention`
 

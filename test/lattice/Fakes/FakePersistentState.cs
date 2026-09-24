@@ -112,6 +112,25 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// </summary>
     public Action<T>? OnWriteState { get; set; }
 
+    /// <summary>
+    /// When set, every <see cref="WriteStateAsync"/> awaits this hook before
+    /// doing anything else (including honouring <see cref="ThrowOnWrite"/>).
+    /// Lets a test hold a write open - for example on a
+    /// <see cref="TaskCompletionSource"/> it releases later - so that calls
+    /// arriving meanwhile can be observed queueing behind, or coalescing into,
+    /// the outstanding write.
+    /// </summary>
+    public Func<Task>? BeforeWrite { get; set; }
+
+    /// <summary>
+    /// Highest number of <see cref="WriteStateAsync"/> calls that were ever
+    /// outstanding at the same time. A grain that promises a single writer
+    /// must never drive this above one.
+    /// </summary>
+    public int MaxConcurrentWrites { get; private set; }
+
+    private int _writesOutstanding;
+
     public Task ClearStateAsync()
     {
         if (ThrowOnClear is { } ex)
@@ -141,7 +160,32 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
         return Task.CompletedTask;
     }
 
-    public async Task WriteStateAsync()
+    public Task WriteStateAsync()
+    {
+        if (BeforeWrite is null)
+        {
+            return WriteStateCoreAsync();
+        }
+
+        return WriteStateGatedAsync();
+    }
+
+    private async Task WriteStateGatedAsync()
+    {
+        var outstanding = Interlocked.Increment(ref _writesOutstanding);
+        if (outstanding > MaxConcurrentWrites) MaxConcurrentWrites = outstanding;
+        try
+        {
+            await BeforeWrite!();
+            await WriteStateCoreAsync();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _writesOutstanding);
+        }
+    }
+
+    private async Task WriteStateCoreAsync()
     {
         if (ThrowOnWrite is { } ex)
         {
