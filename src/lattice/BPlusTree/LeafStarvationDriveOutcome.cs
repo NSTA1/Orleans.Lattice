@@ -107,9 +107,12 @@ internal enum LeafStarvationDriveOutcome
     /// <see cref="MemoryRefused"/> is, and more urgently. A drive that ran to
     /// completion and lifted nothing says the leaf is structurally blocked and
     /// further touches are wasted. An abandoned drive says the opposite: nothing
-    /// was learned about the leaf at all, because storage did not answer inside
-    /// the budget, and the correct remedy is to look at the storage provider
-    /// rather than at the leaf. Folding them would report an unanswered read as
+    /// was learned about the leaf at all, because the drive ran out of budget
+    /// before its replay finished. That is either replay-permit contention on
+    /// the silo (the drive never acquired a permit, so storage never saw it) or
+    /// a replay that storage could not complete in time; the paired warning log
+    /// says which, because the two have opposite remedies (issue #3479). Neither
+    /// is a fact about the leaf. Folding them would report an unanswered read as
     /// a permanent structural block - the precise misreading that kept issue
     /// #2368 open, since the unbounded drive's silence was taken for a leaf that
     /// had nothing to give.
