@@ -823,7 +823,16 @@ internal sealed partial class ShardRootGrain
             }
 
             await ReplacePendingChildLinkAsync(item.Intent, added);
-            work.AddRange(added);
+
+            // Link the parent's own divisions next, before any remaining item
+            // at this height (issue #3523). Those items re-descend from the
+            // root, and until the parent's new sibling is linked the root still
+            // routes its whole range to the parent. A later separator at or
+            // above the parent's split key would then land in the parent's left
+            // half, which no descent reaches for that key once the sibling is
+            // linked: the child and every key on it are lost. Appending the
+            // residuals to the end of the list did exactly that.
+            work.InsertRange(next + 1, added);
         }
     }
 
