@@ -272,6 +272,17 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
+    public void Wal_ReadFilteredAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        // The filtered replay read (issue #3565) returns the same raw commit
+        // log, narrowed to one leaf's keys, so it needs the same guard.
+        var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-readfiltered/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await wal.ReadFilteredAsync(0, long.MaxValue, 1000, new WalKeyFilter("a", "z"), CancellationToken.None));
+    }
+
+    [Test]
     public void Wal_AppendAsync_direct_external_call_without_internal_origin_is_refused()
     {
         var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-append/0");

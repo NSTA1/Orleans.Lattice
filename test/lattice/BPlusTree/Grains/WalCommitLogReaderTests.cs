@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// once clamped to zero, would wrongly replay the whole log from the head.
 /// </summary>
 [TestFixture]
-public sealed class WalCommitLogReaderTests
+public sealed partial class WalCommitLogReaderTests
 {
     private const string TreeId = "tree-reader";
 

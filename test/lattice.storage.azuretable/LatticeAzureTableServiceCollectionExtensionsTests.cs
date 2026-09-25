@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <c>AddWalStorage</c> overload) is registered before or after it.
 /// </summary>
 [TestFixture]
-public class LatticeAzureTableServiceCollectionExtensionsTests
+public partial class LatticeAzureTableServiceCollectionExtensionsTests
 {
     [Test]
     public void AddAzureTableWalStorage_throws_on_null_builder()

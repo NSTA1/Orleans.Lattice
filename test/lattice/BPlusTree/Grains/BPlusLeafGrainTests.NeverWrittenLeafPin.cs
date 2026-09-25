@@ -417,22 +417,10 @@ public partial class BPlusLeafGrainTests
         {
             var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
             coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(_head));
-            coord.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var fromExclusive = call.ArgAt<long>(0);
-                    var toInclusive = call.ArgAt<long>(1);
-                    var budget = call.ArgAt<int>(2);
-                    var slice = new List<CommitLogSliceEntry>();
-                    foreach (var e in _entries)
-                    {
-                        if (e.Offset <= fromExclusive) continue;
-                        if (e.Offset > toInclusive) break;
-                        slice.Add(e);
-                        if (slice.Count >= budget) break;
-                    }
-                    return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice);
-                });
+
+            // Served from the live list, so entries appended after activation are
+            // read too, through whichever overload the leaf's ownership selects.
+            ReplaySliceStub.ServeBothOverloads(coord, _entries);
             Coordinator = coord;
         }
 

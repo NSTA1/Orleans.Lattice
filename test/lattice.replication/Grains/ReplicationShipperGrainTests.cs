@@ -326,6 +326,9 @@ public partial class ReplicationShipperGrainTests
             });
         }
 
+        public ValueTask<WalShardPage> ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken cancellationToken)
+            => throw new NotSupportedException("The leaf replay read is not exercised by the shipper.");
+
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 

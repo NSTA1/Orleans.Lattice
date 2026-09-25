@@ -193,6 +193,10 @@ internal sealed partial class BPlusLeafGrain
         var frontier = freeze.FrontierPerPartition;
         var partitionCount = Math.Min(frontier.Count, capturedHead.Length);
 
+        // The ownership every slice is judged by and pushed down with (issue
+        // #3565), captured once for the whole fold so the two cannot diverge.
+        var ownership = LeafReplayOwnership.Capture(state.State, replayShardMap);
+
         // Pass 1: fold each partition's own (frontier, capturedHead] tail.
         // Saga terminals and DeleteRange are deferred to pass 2 for the same
         // multi-partition saga-atomicity and tombstone-ordering reasons the
@@ -218,7 +222,7 @@ internal sealed partial class BPlusLeafGrain
             // and the counter's priming together, starting at the configured
             // width (issue #2898).
             var sliceReader = new ReplaySliceReader(
-                coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget);
+                coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget, ownership.Filter);
 
             while (fromExclusive < toInclusive)
             {
@@ -246,12 +250,7 @@ internal sealed partial class BPlusLeafGrain
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    if (!ShouldApplyDuringReplay(
-                        entry.Mutation,
-                        state.State.ShardIndex,
-                        state.State.LowKeyInclusive,
-                        state.State.HighKeyExclusive,
-                        replayShardMap))
+                    if (!ownership.ShouldApply(entry.Mutation))
                     {
                         continue;
                     }
