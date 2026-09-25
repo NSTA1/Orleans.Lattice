@@ -134,6 +134,15 @@ internal sealed class LeafCacheGrain(
     /// </summary>
     private GrainId PrimaryLeafId => _cachedPrimaryLeafId ??= GrainId.Parse(context.GrainId.Key.ToString()!);
 
+    private IBPlusLeafGrain? _primaryLeaf;
+
+    /// <summary>
+    /// Reference to the primary leaf, resolved once per activation. A bare
+    /// <c>GetGrain</c> per call re-resolves the interface type and rebuilds the
+    /// proxy on every read that delegates to the primary.
+    /// </summary>
+    private IBPlusLeafGrain PrimaryLeaf => _primaryLeaf ??= grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+
     /// <summary>
     /// Throws <see cref="StaleShardRoutingException"/> if <paramref name="key"/>
     /// hashes into a virtual slot the primary leaf has reported as moved
@@ -240,7 +249,7 @@ internal sealed class LeafCacheGrain(
             // is visible on the existing cache-miss instrument.
             if (payloadEvicted && !_pendingKeys.Contains(key) && !cached.IsMigrated)
                 LatticeMetrics.CacheMisses.Add(1, CacheTreeTag(), CacheTenantTag());
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            var leaf = PrimaryLeaf;
             return await leaf.GetAsync(key);
         }
 
@@ -271,7 +280,7 @@ internal sealed class LeafCacheGrain(
             && !cached.IsExpired(nowTicks);
         if (_pendingKeys.Contains(key) || (hasCached && cached.IsMigrated))
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            var leaf = PrimaryLeaf;
             return await leaf.ExistsAsync(key);
         }
 
@@ -408,7 +417,7 @@ internal sealed class LeafCacheGrain(
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG cache-delegate-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} keys=[{string.Join(',', delegated)}]");
 #endif
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            var leaf = PrimaryLeaf;
             delegatedResult = await leaf.GetManyAsync(delegated);
         }
 
@@ -538,7 +547,7 @@ internal sealed class LeafCacheGrain(
             ? preRev
             : 0L;
 
-        var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(primaryId);
+        var primaryLeaf = PrimaryLeaf;
 
         // Refresh the pending-key set BEFORE fetching the delta. The
         // ordering matters: a saga drain (TxCommit/TxAbort) between
@@ -770,7 +779,7 @@ internal sealed class LeafCacheGrain(
     {
         if (_treeId is null)
         {
-            var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            var primaryLeaf = PrimaryLeaf;
             _treeId = await primaryLeaf.GetTreeIdAsync() ?? string.Empty;
         }
         return optionsMonitor.Get(_treeId).CacheTtl;
