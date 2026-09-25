@@ -631,15 +631,23 @@ internal sealed class LeafCursorReporter(
     private async Task DirectStorePinAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
     {
         var grainId = ResolvePinGrainId(grainKey);
-        var bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(options);
+        var configuredBuckets = WalMaterialiserPinRouting.ResolveBucketCount(options);
         var gate = _directStoreLocks.GetOrAdd(grainKey, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // The shard's layout width is no longer just the configured count:
+            // the pin grain widens it automatically once the pin map outgrows
+            // its per-slot byte budget, and records the width it wrote under on
+            // bucket zero. Route by the wider of the two, so a teardown write
+            // lands in the slot the grain would own and never records a width
+            // narrower than the one already persisted.
+            var bucketCount = await ResolveDirectStoreWidthAsync(grainId, configuredBuckets).ConfigureAwait(false);
+
             // Group by destination slot so each durable blob is read-modified-
-            // written once. At the default bucket count of one this yields a
-            // single group under the legacy slot name, so the write is
-            // byte-for-byte what every pre-bucketing build performed.
+            // written once. At a width of one this yields a single group under
+            // the legacy slot name, so the write is byte-for-byte what every
+            // pre-bucketing build performed.
             var grouped = GroupByBucketSlot(bucket, bucketCount);
             foreach (var group in grouped)
             {
@@ -663,6 +671,31 @@ internal sealed class LeafCursorReporter(
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Resolves the layout width a teardown write routes by: the wider of the
+    /// configured bucket count and the width recorded on bucket zero. A stamp
+    /// of one (the shard was narrowed back to the legacy slot) or zero (never
+    /// recorded) defers to the configured count. A failed probe also defers to
+    /// the configured count: every activation reads the legacy slot and every
+    /// slot below the wider of its configured count and the recorded width, so
+    /// either choice stays readable.
+    /// </summary>
+    private async Task<int> ResolveDirectStoreWidthAsync(GrainId grainId, int configuredBuckets)
+    {
+        try
+        {
+            var probe = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
+            await pinStorage!.ReadStateAsync(WalMaterialiserPinRouting.BucketStateName(0), grainId, probe)
+                .ConfigureAwait(false);
+            var recorded = probe.State?.PersistedBucketCount ?? 0;
+            return recorded >= 2 ? Math.Max(configuredBuckets, recorded) : configuredBuckets;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return configuredBuckets;
         }
     }
 

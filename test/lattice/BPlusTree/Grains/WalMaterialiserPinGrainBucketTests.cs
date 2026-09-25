@@ -270,6 +270,48 @@ public sealed class WalMaterialiserPinGrainBucketTests
             "tree deletion is the one path that must clear the legacy slot too, or a deleted tree's pins would pin its WAL forever");
     }
 
+    [Test]
+    public async Task ClearAsync_translates_a_legacy_slot_conflict_and_refuses_a_repeat_clear()
+    {
+        // The tree-delete clear of the legacy slot must get the same issue #3572
+        // conflict handling as every other legacy write: a landed-then-conflicted
+        // write poisons the activation's ETag, so swallowing it would report a
+        // clear that may not have landed, and a repeat clear on the same
+        // activation would short-circuit on the already-empty in-memory map.
+        var store = new BucketStore();
+        var row = new DurableStateRow<WalMaterialiserPinState>
+        {
+            Value = new WalMaterialiserPinState
+            {
+                Pins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [ConsumerC] = Hlc(300) },
+            },
+        };
+        var legacy = new LandedConflictPersistentState<WalMaterialiserPinState>(row);
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(PinGrainId());
+        var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        options.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            WalMaterialiserPinBuckets = 4,
+            WalMaterialiserPinFlushIntervalMs = 0,
+        });
+        var grain = new WalMaterialiserPinGrain(context, legacy, options, logger: null, pinStorage: store);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await grain.ReportAsync(ConsumerA, Hlc(100));
+
+        legacy.LandThenConflictWhen = static s => s.Pins.Count == 0 && s.Offsets.Count == 0;
+
+        var ex = Assert.ThrowsAsync<LatticeStateWriteFailedException>(() => grain.ClearAsync());
+        Assert.That(ex!.Conflict, Is.True);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+
+        var attempts = legacy.WriteAttempts;
+        Assert.ThrowsAsync<LatticeStateWriteFailedException>(() => grain.ClearAsync(),
+            "a repeat clear on the conflicted activation must fail fast rather than report success");
+        Assert.That(legacy.WriteAttempts, Is.EqualTo(attempts), "the repeat clear must not issue another write");
+        Assert.That(row.Value!.Pins, Is.Empty, "the conflicted clear landed, so the durable legacy slot is empty");
+    }
+
     /// <summary>
     /// In-memory <see cref="IGrainStorage"/> standing in for the durable
     /// "lattice" provider, recording which slots were written so a test can

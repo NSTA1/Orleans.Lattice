@@ -62,10 +62,12 @@ internal sealed class WalMaterialiserPinState
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> value in force
-    /// when this slot was last written, recorded so an activation can discover a
-    /// layout wider than its own configuration and read the slots it would
-    /// otherwise not know to look for.
+    /// The layout width in force when this slot was last written, recorded so
+    /// an activation can discover a layout wider than its own configuration and
+    /// read the slots it would otherwise not know to look for. The width is at
+    /// least <see cref="LatticeOptions.WalMaterialiserPinBuckets"/>, and can be
+    /// wider because the shard splits itself once a slot outgrows its byte
+    /// budget (issue #3576). Bucket zero's value is the authoritative one.
     /// <para>
     /// Without this, <b>lowering</b> the bucket count would strand every pin
     /// living in a now-out-of-range slot. A stranded pin is invisible to the
@@ -80,7 +82,11 @@ internal sealed class WalMaterialiserPinState
     /// <para>
     /// Zero (the value state written before this field existed deserialises to,
     /// and the value written by the default single-slot layout) means "no
-    /// bucketing", so a pre-bucketing deployment reads exactly as it always did.
+    /// layout recorded", so a pre-bucketing deployment reads exactly as it
+    /// always did. One, on bucket zero, records that a split shard was
+    /// consolidated back into the legacy slot, so a later activation does not
+    /// mistake the stale buckets for the live layout. Two or more is the
+    /// bucketed width.
     /// </para>
     /// </summary>
     [Id(2)]

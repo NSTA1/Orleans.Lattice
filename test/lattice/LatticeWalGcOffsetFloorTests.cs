@@ -243,9 +243,11 @@ public sealed partial class LatticeWalGcOffsetFloorTests
             "The swallowed pin-store failure must tick the offset-floor-unavailable counter exactly once per pass.");
         Assert.That(observedTree, Is.EqualTo(Tree), "The measurement must be tagged with the tree.");
 
-        // Behaviour is preserved: the pass still completes on the HLC floor
-        // alone (no offset floor), trimming exactly as the null-offset control.
-        Assert.That(report.EntriesTrimmed, Is.EqualTo(4));
+        // Issue #3576: an unreadable offset census fails the pass closed. It
+        // used to complete on the HLC floor alone and trim all four entries,
+        // including the reaps above the leaf's checkpoint that the offset floor
+        // exists to retain - the very over-trim the null-offset control shows.
+        Assert.That(report.EntriesTrimmed, Is.Zero);
     }
 
     [Test]

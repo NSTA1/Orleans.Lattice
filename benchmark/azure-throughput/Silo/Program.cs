@@ -77,6 +77,14 @@
 //                           which also makes the coalescing threshold above
 //                           unreachable. Set to 0 for the control arm of the
 //                           #3408 A/B; leave unset for the fix arm.
+//   BENCH_WAL_MATERIALISER_PIN_BUCKETS
+//                           Floor on the durable WAL materialiser pin buckets
+//                           per pin shard (defaults to
+//                           LatticeOptions.DefaultWalMaterialiserPinBuckets, i.e.
+//                           1). The store splits itself above the floor once a
+//                           slot outgrows its byte budget (#3576), so the default
+//                           is safe for a large preseed; raise it only to start
+//                           from a wider layout for an A/B.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -281,6 +289,7 @@ var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPar
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
 var walBatchedSingleEntryAppends = ReadBool("BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS", LatticeOptions.DefaultWalBatchedSingleEntryAppends);
+var walMaterialiserPinBuckets = ReadInt("BENCH_WAL_MATERIALISER_PIN_BUCKETS", LatticeOptions.DefaultWalMaterialiserPinBuckets);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
 // the shape the replay admission gate is sized to refuse, and refusing it here
 // is a measurement artefact rather than a finding.
@@ -567,7 +576,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends} txRegistryShards={txRegistryShards}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends} txRegistryShards={txRegistryShards} walMaterialiserPinBuckets={walMaterialiserPinBuckets}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -774,6 +783,10 @@ builder.UseOrleans(silo =>
         // a wide fan-out of single-entry leaf slices stops serialising
         // the partition behind one provider round trip (#3408).
         o.WalBatchedSingleEntryAppends = walBatchedSingleEntryAppends;
+        // A floor, not the layout: the pin store widens itself past it once a
+        // slot outgrows its byte budget (#3576). Assigned unconditionally
+        // because the default IS the library default.
+        o.WalMaterialiserPinBuckets = walMaterialiserPinBuckets;
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library
