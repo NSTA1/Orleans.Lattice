@@ -59,6 +59,8 @@ public class TreeMergeIntegrationTests
             Assert.That(result, Is.Not.Null, $"Key '{key}' missing in target after merge");
             Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo(value));
         }
+
+        await LeafChainTiling.AssertTreeTilesAsync(_cluster.GrainFactory, targetTree, "after the tree merge");
     }
 
     [Test]

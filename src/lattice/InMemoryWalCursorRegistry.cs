@@ -192,12 +192,26 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     && !Nullable.Equals(nextBlockedAtHlc, existing.BlockedAtHlc);
                 var shouldInvalidate = cursorAdvanced || vectorReported || blockedFloorChanged;
 
+                // Position age (#3131): only a strict advance from a real
+                // position proves the consumer is draining. A re-report of the
+                // same position - a leaf re-asserting its persisted clock on
+                // activation or on an idempotent checkpoint - refreshes the
+                // report time but not this. The first real position after a
+                // blocked-floor-only (Zero) registration is an assertion, not
+                // an advance.
+                var cursorAdvancedAtTicks = cursorAdvanced && existing.Cursor > HybridLogicalClock.Zero
+                    ? nowTicks
+                    : existing.CursorAdvancedAtTicks;
+
                 state.PerConsumer[consumerId] = new WalCursorSnapshot(
                     consumerId,
                     advancedCursor,
                     nowTicks,
                     mergedVector,
-                    nextBlockedAtHlc);
+                    nextBlockedAtHlc)
+                {
+                    CursorAdvancedAtTicks = cursorAdvancedAtTicks,
+                };
 
                 if (shouldInvalidate)
                 {
@@ -211,7 +225,12 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     cursor,
                     nowTicks,
                     defensiveClone,
-                    blockedAtHlcSpecified ? blockedAtHlc : null);
+                    blockedAtHlcSpecified ? blockedAtHlc : null)
+                {
+                    // The registering report asserts a position; it does not
+                    // show the consumer draining, so position age starts unknown.
+                    CursorAdvancedAtTicks = 0,
+                };
 
                 // A new consumer always affects the meet - its absence
                 // was the previous floor. Invalidate unconditionally.
@@ -305,14 +324,10 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             HybridLogicalClock? min = null;
             foreach (var snapshot in state.PerConsumer.Values)
             {
-                // Skip blocked-floor-only consumers (registered
-                // with cursor=Zero) so a buffer pin does not disable
-                // the drain-lag frontier, matching the GC cursor meet.
-                if (snapshot.Cursor <= HybridLogicalClock.Zero)
-                {
-                    continue;
-                }
-                if (snapshot.LastReportedAtTicks < reportedAtOrAfterTicks)
+                // Blocked-floor-only, cold, and position-stale leaf
+                // consumers are excluded; the predicate is shared with the
+                // sampler's lagging-consumer count so the two agree.
+                if (!WalDrainLagEligibility.IsEligible(snapshot, reportedAtOrAfterTicks))
                 {
                     continue;
                 }

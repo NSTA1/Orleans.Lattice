@@ -67,6 +67,7 @@ public partial class ShardRootGrainSplitTests
         leaf.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(false));
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
+        leaf.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.GetWithVersionAsync(Arg.Any<string>()).Returns(Task.FromResult(versionedReadback));
         leaf.GetOrSetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult(
             getOrSetReturnsExisting

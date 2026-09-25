@@ -38,7 +38,10 @@ public sealed record RepoContextRepoSummary
 
     /// <summary>
     /// The last-ingested marker recorded on the repository root, or
-    /// <see langword="null"/> when none was written.
+    /// <see langword="null"/> when none was written. It is re-stamped by every
+    /// completed indexing pass, including one that walked the tree and found nothing
+    /// to change, so it reads as the time the index was last verified current rather
+    /// than the time a file last changed.
     /// </summary>
     public string? LastIngested { get; init; }
 

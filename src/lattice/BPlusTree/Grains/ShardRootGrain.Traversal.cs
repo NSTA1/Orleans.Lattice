@@ -373,9 +373,19 @@ internal sealed partial class ShardRootGrain
     [MethodImpl(MethodImplOptions.NoInlining)]
     private async ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotSlowAsync(GrainId internalId)
     {
+        // A fetch that overlaps an invalidation may carry the pre-mutation
+        // table, and caching it would pin that stale table until the node next
+        // splits - routing every key of a newly linked child to its donor.
+        // Cache only when no invalidation ran while the fetch was in flight
+        // (issue #3523); the caller still gets the snapshot it fetched.
+        var generation = Volatile.Read(ref _routingGeneration);
         var grain = ResolveInternalGrain(internalId);
         var snapshot = await grain.GetRoutingTableAsync();
-        _routingTableCache[internalId] = snapshot;
+        if (generation == Volatile.Read(ref _routingGeneration))
+        {
+            _routingTableCache[internalId] = snapshot;
+        }
+
         return snapshot;
     }
 
@@ -387,11 +397,42 @@ internal sealed partial class ShardRootGrain
     /// existing internal node's children list. The method is a no-op when
     /// the entry is absent (e.g. the very first split before any read
     /// traversed through the parent).
+    /// <para>
+    /// Every call also advances <see cref="_routingGeneration"/>, the cheap
+    /// local signal <see cref="MergeGroupAsync"/> reads to decide whether a
+    /// batch grouped earlier may now straddle a leaf boundary (issue #2125),
+    /// and that a cache-miss fetch reads to decide whether the table it
+    /// fetched may still be cached (issue #3523).
+    /// Internal rather than private so the merge re-grouping tests can move
+    /// routing under a batch without a real split.
+    /// </para>
     /// </summary>
-    private void InvalidateRoutingTable(GrainId internalId)
+    internal void InvalidateRoutingTable(GrainId internalId)
     {
         _routingTableCache.TryRemove(internalId, out _);
+        Interlocked.Increment(ref _routingGeneration);
     }
+
+    /// <summary>
+    /// Advances on every <see cref="InvalidateRoutingTable"/> call. Read by
+    /// <see cref="MergeManyAsync"/> when it groups a batch and re-read by
+    /// <see cref="MergeGroupAsync"/> before it dispatches a group, so a group
+    /// built against routing that has since moved is re-grouped instead of
+    /// being handed wholesale to the leaf its first key routed to. It is a
+    /// plain in-memory counter: reading it adds no grain call, and it resets
+    /// with the activation, which is harmless because a group never outlives
+    /// the call that built it.
+    /// </summary>
+    private long _routingGeneration;
+
+    /// <summary>
+    /// How many times <see cref="MergeGroupAsync"/> took the re-grouping path.
+    /// A test seam only: it lets a unit test prove the normal path (first
+    /// attempt, unchanged routing) never re-groups.
+    /// </summary>
+    internal long MergeRegroupCount => Volatile.Read(ref _mergeRegroupCount);
+
+    private long _mergeRegroupCount;
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<byte[]?> TraverseForReadAsync(string key)
@@ -636,11 +677,15 @@ internal sealed partial class ShardRootGrain
     /// skipped.
     /// </para>
     /// <para>
-    /// The whole remaining ancestor chain is captured rather than just the
-    /// immediate parent, because a parent that overflows while accepting
-    /// promotes to its own parent; a resume holding only the immediate parent
-    /// would have to rediscover the rest by descent, on exactly the topology
-    /// the interrupted link is the reason to distrust.
+    /// The ancestor path the caller captured on its way down is deliberately
+    /// not what the split is linked against. Under concurrent
+    /// <c>SetManyAsync</c> turns that path goes stale between capture and link,
+    /// and a separator delivered to a parent whose range no longer covers it is
+    /// accepted and routed to by nothing (issue #3523). Every link instead runs
+    /// under <see cref="_splitLinkGate"/> and re-descends from the current root;
+    /// see <see cref="LinkSplitAsync"/>. A parent that divides while accepting
+    /// has its own division recorded before the landed link is retired, one
+    /// level at a time, so a resume never has to rediscover a chain.
     /// </para>
     /// <para>
     /// Every caller that promotes a split routes through here. That is
@@ -651,105 +696,306 @@ internal sealed partial class ShardRootGrain
     /// </remarks>
     private Task<SplitResult?> PropagateSplitAsync(SplitResult? splitResult, Stack<GrainId> path)
     {
-        if (splitResult is null || path.Count == 0)
-        {
-            return Task.FromResult(splitResult);
-        }
-
-        // Stack<T> enumerates top-to-bottom, which is the order the old loop's
-        // repeated Pop() visited - nearest ancestor first. The stack is then
-        // drained so it returns to the pool empty, exactly as the Pop() loop
-        // left it.
-        var ancestors = new List<GrainId>(path.Count);
-        while (path.Count > 0)
-        {
-            ancestors.Add(path.Pop());
-        }
-
-        return PropagateSplitCoreAsync(splitResult, ancestors);
+        // The captured path is not used to link (see remarks); the stack is
+        // drained so it returns to the pool empty, exactly as the old Pop()
+        // loop left it.
+        path.Clear();
+        return splitResult is null ? NullSplitTask : LinkSplitAsync(splitResult);
     }
 
     /// <summary>
     /// Ancestor-list overload of <see cref="PropagateSplitAsync(SplitResult?, Stack{GrainId})"/>
     /// for the batch write paths, which capture each leaf's parent path as a
-    /// root-first list rather than a descent stack.
+    /// root-first list rather than a descent stack. The list is used only to
+    /// group keys by leaf; linking re-descends (see
+    /// <see cref="LinkSplitAsync"/>).
     /// </summary>
     private Task<SplitResult?> PropagateSplitAsync(SplitResult? splitResult, IReadOnlyList<GrainId> parentsRootFirst)
-    {
-        if (splitResult is null || parentsRootFirst.Count == 0)
-        {
-            return Task.FromResult(splitResult);
-        }
+        => splitResult is null ? NullSplitTask : LinkSplitAsync(splitResult);
 
-        var ancestors = new List<GrainId>(parentsRootFirst.Count);
-        for (var i = parentsRootFirst.Count - 1; i >= 0; i--)
-        {
-            ancestors.Add(parentsRootFirst[i]);
-        }
-
-        return PropagateSplitCoreAsync(splitResult, ancestors);
-    }
-
-    private async Task<SplitResult?> PropagateSplitCoreAsync(
-        SplitResult splitResult,
-        List<GrainId> ancestorsNearestFirst)
-    {
-        var intent = new PendingChildLink
-        {
-            PromotedKey = splitResult.PromotedKey,
-            ChildId = splitResult.NewSiblingId,
-            ChildIsLeaf = splitResult.ChildIsLeaf,
-            Ancestors = ancestorsNearestFirst,
-        };
-
-        await RecordPendingChildLinkAsync(intent);
-
-        var residual = await ApplyPendingChildLinkAsync(intent);
-
-        await ClearPendingChildLinkAsync(intent);
-
-        return residual;
-    }
+    private static readonly Task<SplitResult?> NullSplitTask = Task.FromResult<SplitResult?>(null);
 
     /// <summary>
-    /// Walks one pending link up its recorded ancestor chain, returning
-    /// whatever split bubbles out of the top for the caller to promote into a
-    /// new root.
-    /// </summary>
-    private async Task<SplitResult?> ApplyPendingChildLinkAsync(PendingChildLink intent)
-    {
-        SplitResult? split = new SplitResult
-        {
-            PromotedKey = intent.PromotedKey,
-            NewSiblingId = intent.ChildId,
-            ChildIsLeaf = intent.ChildIsLeaf,
-        };
-
-        for (var i = 0; i < intent.Ancestors.Count && split is not null; i++)
-        {
-            var parentId = intent.Ancestors[i];
-            var parentGrain = ResolveInternalGrain(parentId);
-            split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
-            InvalidateRoutingTable(parentId);
-        }
-
-        return split;
-    }
-
-    /// <summary>
-    /// Persists the intent to link a freshly split sibling into the tree,
-    /// before the first ancestor is asked to accept it.
+    /// Links every division <paramref name="splitResult"/> describes - its
+    /// primary split and each forwarded or combined one it carries - into the
+    /// tree, under <see cref="_splitLinkGate"/>, and always returns
+    /// <see langword="null"/> so a caller's promotion loop is a no-op
+    /// (issue #3523).
     /// </summary>
     /// <remarks>
-    /// A failure here is reported to the caller and the entry is withdrawn from
-    /// the activation, which is the safe direction: nothing has been linked yet,
-    /// so the write simply fails and the sibling is disposed of by the ordinary
-    /// interrupted-split recovery rather than being stranded reachable-by-chain
-    /// but unreachable-by-descent.
+    /// <para>
+    /// <b>Why a gate, and why a fresh descent.</b> Internal nodes store no key
+    /// range, and <c>AcceptSplitAsync</c> inserts whatever separator it is
+    /// given. A separator delivered to a parent whose range does not cover it
+    /// is therefore accepted, persisted, and routed to by nothing: its child is
+    /// spliced into the sibling chain but no descent reaches it, and every key
+    /// on it is lost to reads. The ancestor path a writer captured on its way
+    /// down is exactly that wrong parent as soon as a concurrent
+    /// <c>SetManyAsync</c> turn (the method is <c>[AlwaysInterleave]</c>) has
+    /// divided a node on it or promoted the root in between. So every link
+    /// runs one at a time per shard, and each re-descends from the current
+    /// root, bypassing the routing cache, to the node one level above the
+    /// dividing child. Under the gate nothing else links or promotes, so that
+    /// parent is still the right one when it is asked to accept.
+    /// </para>
+    /// <para>
+    /// The gate is entered only on a split, never on the per-key write path,
+    /// and it is taken before <c>_promotionGate</c> everywhere, so the two
+    /// cannot deadlock.
+    /// </para>
+    /// <para>
+    /// Every caller of this overload hands over a division a leaf reported, so
+    /// it is linked at leaf level regardless of
+    /// <see cref="SplitResult.ChildIsLeaf"/>. Reading an unset flag as a root
+    /// division would wrap the root around a leaf rather than link it.
+    /// </para>
     /// </remarks>
-    private async Task RecordPendingChildLinkAsync(PendingChildLink intent)
+    private Task<SplitResult?> LinkSplitAsync(SplitResult splitResult)
+        => LinkSplitAsync(splitResult, 0);
+
+    /// <summary>
+    /// <see cref="LinkSplitAsync(SplitResult)"/> for a caller that knows the
+    /// height of the new sibling: 0 for a leaf, the number of internal levels
+    /// at and below it for an internal node, or <c>-1</c> for a division of the
+    /// current root.
+    /// </summary>
+    private async Task<SplitResult?> LinkSplitAsync(SplitResult splitResult, int height)
     {
-        state.State.PendingChildLinks.Add(intent);
+        await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            await LinkSplitLockedAsync(splitResult, height);
+        }
+        finally
+        {
+            _inFlightChildLinks.Clear();
+            _splitLinkGate.Release();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// One outstanding link: a division, the height of its new sibling (0 for
+    /// a leaf, <c>-1</c> for a sibling of the current root, as a bulk graft
+    /// delivers), and the durable intent that records it, when one has been
+    /// written.
+    /// </summary>
+    private readonly record struct LinkWork(SplitResult Split, int Height, PendingChildLink? Intent);
+
+    private async Task LinkSplitLockedAsync(SplitResult splitResult, int height)
+    {
+        var work = new List<LinkWork>(1 + (splitResult.Additional?.Length ?? 0));
+        foreach (var single in FlattenSplit(splitResult))
+        {
+            work.Add(new LinkWork(single, height, null));
+        }
+
+        // A root-level division is recorded by PendingPromotion; every other
+        // one is recorded here, all in one write, before the first is linked,
+        // so a fault part-way through strands records rather than siblings.
+        if (height >= 0)
+        {
+            await RecordPendingChildLinksAsync(work);
+        }
+
+        await DrainLinkWorkLockedAsync(work);
+    }
+
+    private async Task DrainLinkWorkLockedAsync(List<LinkWork> work)
+    {
+        for (var next = 0; next < work.Count; next++)
+        {
+            var item = work[next];
+            var residuals = await LinkOneLockedAsync(item);
+            if (residuals is null)
+            {
+                continue;
+            }
+
+            // The parent divided on accepting: record every resulting division
+            // and retire the one that landed in a single write, then link the
+            // new ones one level up.
+            var added = new List<LinkWork>(residuals.Count);
+            foreach (var residual in residuals)
+            {
+                added.Add(new LinkWork(residual, item.Height + 1, null));
+            }
+
+            await ReplacePendingChildLinkAsync(item.Intent, added);
+
+            // Link the parent's own divisions next, before any remaining item
+            // at this height (issue #3523). Those items re-descend from the
+            // root, and until the parent's new sibling is linked the root still
+            // routes its whole range to the parent. A later separator at or
+            // above the parent's split key would then land in the parent's left
+            // half, which no descent reaches for that key once the sibling is
+            // linked: the child and every key on it are lost. Appending the
+            // residuals to the end of the list did exactly that.
+            work.InsertRange(next + 1, added);
+        }
+    }
+
+    /// <summary>
+    /// Links one division by fresh descent, promoting the root when the
+    /// division is of the root itself, and returns the divisions the accepting
+    /// parent made in turn (or <see langword="null"/>). A link that needed no
+    /// further division has its intent retired here.
+    /// </summary>
+    private async Task<List<SplitResult>?> LinkOneLockedAsync(LinkWork item)
+    {
+        var split = item.Split;
+        if (item.Height < 0 || RootIsLeafTyped)
+        {
+            if (RootIsLeafTyped && item.Height != 0)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} cannot link internal child {split.NewSiblingId} under separator '{split.PromotedKey}': the root is a leaf.");
+            }
+
+            await PromoteRootLockedAsync(split);
+            await ClearPendingChildLinkAsync(item.Intent);
+            return null;
+        }
+
+        var pathRootFirst = await DescendForLinkAsync(split.PromotedKey);
+        var rootHeight = pathRootFirst.Count;
+        if (item.Height >= rootHeight)
+        {
+            if (item.Height > rootHeight)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} cannot link child {split.NewSiblingId} of height {item.Height} under separator '{split.PromotedKey}': the tree is only {rootHeight} internal levels deep.");
+            }
+
+            // The current root is what divided.
+            await PromoteRootLockedAsync(split);
+            await ClearPendingChildLinkAsync(item.Intent);
+            return null;
+        }
+
+        // pathRootFirst[i] sits at height rootHeight - i, so the parent of a
+        // child at height h is at index rootHeight - h - 1.
+        var parentId = pathRootFirst[rootHeight - item.Height - 1];
+        var residual = await ResolveInternalGrain(parentId).AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
+        InvalidateRoutingTable(parentId);
+
+        if (residual is null)
+        {
+            await ClearPendingChildLinkAsync(item.Intent);
+            return null;
+        }
+
+        var residuals = new List<SplitResult>(1 + (residual.Additional?.Length ?? 0));
+        residuals.AddRange(FlattenSplit(residual));
+        return residuals;
+    }
+
+    /// <summary>
+    /// Yields the primary division of <paramref name="split"/> and every entry
+    /// of its <see cref="SplitResult.Additional"/>, each as a single split with
+    /// <see cref="SplitResult.Forwarded"/> cleared. Every division is linked by
+    /// fresh descent, so whether it was forwarded no longer matters.
+    /// </summary>
+    private static IEnumerable<SplitResult> FlattenSplit(SplitResult split)
+    {
+        yield return split.Additional is null && !split.Forwarded
+            ? split
+            : split with { Additional = null, Forwarded = false };
+
+        if (split.Additional is { } extras)
+        {
+            foreach (var extra in extras)
+            {
+                yield return extra.Additional is null && !extra.Forwarded
+                    ? extra
+                    : extra with { Additional = null, Forwarded = false };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Descends from the current root to the deepest internal node routing
+    /// <paramref name="key"/>, reading every routing table fresh from its node
+    /// rather than from the cache, and returns the internal nodes on the way,
+    /// root first.
+    /// </summary>
+    private async Task<List<GrainId>> DescendForLinkAsync(string key)
+    {
+        var path = new List<GrainId>(4);
+        var currentId = state.State.RootNodeId!.Value;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            path.Add(currentId);
+            var snapshot = await ResolveInternalGrain(currentId).GetRoutingTableAsync();
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
+
+            // Decided by node type as well as by flag, so a ChildrenAreLeaves
+            // bit that lies about internal children (issue 899) does not stop
+            // the descent a level early.
+            if (childrenAreLeaves && IsLeafGrainId(childId))
+            {
+                return path;
+            }
+
+            currentId = childId;
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} link descent for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
+    }
+
+    /// <summary>
+    /// Measures how many internal levels sit at and below
+    /// <paramref name="internalId"/>: 1 when its children are leaves. Used only
+    /// to resume a recorded link whose child is an internal node.
+    /// </summary>
+    private async Task<int> MeasureInternalHeightAsync(GrainId internalId)
+    {
+        var currentId = internalId;
+        for (var height = 1; height <= MaxTreeDescentLevels; height++)
+        {
+            var (childId, childrenAreLeaves) = await ResolveInternalGrain(currentId).GetLeftmostChildWithMetadataAsync();
+            if (childrenAreLeaves && IsLeafGrainId(childId))
+            {
+                return height;
+            }
+
+            currentId = childId;
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} height measurement from {internalId} exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
+    }
+
+    private static PendingChildLink NewPendingChildLink(SplitResult split) => new()
+    {
+        PromotedKey = split.PromotedKey,
+        ChildId = split.NewSiblingId,
+        ChildIsLeaf = split.ChildIsLeaf,
+        Ancestors = [],
+    };
+
+    /// <summary>
+    /// Persists the intent to link every division in <paramref name="work"/>,
+    /// in one write, before the first ancestor is asked to accept any of them.
+    /// </summary>
+    /// <remarks>
+    /// A failure here is reported to the caller and the entries are withdrawn
+    /// from the activation, which is the safe direction: nothing has been
+    /// linked yet, so the write simply fails and the siblings are disposed of by
+    /// the ordinary interrupted-split recovery rather than being stranded
+    /// reachable-by-chain but unreachable-by-descent.
+    /// </remarks>
+    private async Task RecordPendingChildLinksAsync(List<LinkWork> work)
+    {
+        for (var i = 0; i < work.Count; i++)
+        {
+            var intent = NewPendingChildLink(work[i].Split);
+            work[i] = work[i] with { Intent = intent };
+            state.State.PendingChildLinks.Add(intent);
+            _inFlightChildLinks.Add(intent);
+        }
 
         try
         {
@@ -757,13 +1003,58 @@ internal sealed partial class ShardRootGrain
         }
         catch
         {
-            RemovePendingChildLink(intent);
+            foreach (var item in work)
+            {
+                RemovePendingChildLink(item.Intent!);
+            }
+
             throw;
         }
     }
 
     /// <summary>
-    /// Retires a link that every ancestor has now accepted.
+    /// Retires <paramref name="landed"/>, whose parent accepted it and divided,
+    /// and records the divisions that parent made, in a single write. The
+    /// entries in <paramref name="added"/> gain their intents here.
+    /// </summary>
+    /// <remarks>
+    /// The accept has already landed, so a failure to persist is logged rather
+    /// than surfaced and the in-memory records are kept: the next shard write
+    /// persists them, and until then the divisions are linked from memory
+    /// exactly as before. Surfacing it would abandon the parent's division,
+    /// which is the loss this record exists to prevent.
+    /// </remarks>
+    private async Task ReplacePendingChildLinkAsync(PendingChildLink? landed, List<LinkWork> added)
+    {
+        if (landed is not null)
+        {
+            RemovePendingChildLink(landed);
+        }
+
+        for (var i = 0; i < added.Count; i++)
+        {
+            var intent = NewPendingChildLink(added[i].Split);
+            added[i] = added[i] with { Intent = intent };
+            state.State.PendingChildLinks.Add(intent);
+            _inFlightChildLinks.Add(intent);
+        }
+
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard {ShardIndex} of tree '{TreeId}' linked a child whose parent then divided, but could not persist the pending link for that division; it is linked from memory and recorded on the next shard write.",
+                MyShardIndex,
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Retires a link that has landed.
     /// </summary>
     /// <remarks>
     /// A failure to persist the retirement is logged and swallowed rather than
@@ -772,9 +1063,9 @@ internal sealed partial class ShardRootGrain
     /// is that a later resume re-delivers a separator the parent already holds,
     /// which <c>AcceptSplitAsync</c> recognises as a duplicate and skips.
     /// </remarks>
-    private async Task ClearPendingChildLinkAsync(PendingChildLink intent)
+    private async Task ClearPendingChildLinkAsync(PendingChildLink? intent)
     {
-        if (!RemovePendingChildLink(intent))
+        if (intent is null || !RemovePendingChildLink(intent))
         {
             return;
         }
@@ -804,6 +1095,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private bool RemovePendingChildLink(PendingChildLink intent)
     {
+        _inFlightChildLinks.Remove(intent);
         var links = state.State.PendingChildLinks;
         for (var i = 0; i < links.Count; i++)
         {
@@ -825,15 +1117,19 @@ internal sealed partial class ShardRootGrain
     /// <para>
     /// Runs from the ordinary pre-operation preamble, so a tree that is being
     /// used repairs itself on its next write without any sweep or operator
-    /// action. Each entry is retired only once its whole ancestor chain has
-    /// accepted, so an entry that fails again is left in place for the next
-    /// attempt rather than dropped - a dropped link is exactly the failure this
-    /// record exists to prevent, and it is not made better by being dropped
-    /// deliberately.
+    /// action. Each entry is retired only once it has landed, so an entry that
+    /// fails again is left in place for the next attempt rather than dropped -
+    /// a dropped link is exactly the failure this record exists to prevent, and
+    /// it is not made better by being dropped deliberately.
     /// </para>
     /// <para>
-    /// The list is snapshotted before the walk because completing a link can
-    /// itself split an ancestor and append a further entry.
+    /// It runs under <see cref="_splitLinkGate"/>, and every link records and
+    /// resolves its intent without releasing that gate, so every entry seen
+    /// here is genuinely stranded rather than a concurrent turn's link in
+    /// flight - re-delivering one of those against its own captured topology is
+    /// how a resume used to race the link it was meant to back up. Each entry
+    /// re-descends like any other link (<see cref="LinkSplitAsync"/>), so the
+    /// ancestors it recorded are not trusted.
     /// </para>
     /// </remarks>
     private async Task ResumePendingChildLinksAsync()
@@ -843,42 +1139,50 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var pending = state.State.PendingChildLinks.ToArray();
-
-        foreach (var intent in pending)
+        await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
         {
-            SplitResult? residual;
+            var pending = state.State.PendingChildLinks.ToArray();
 
-            try
+            foreach (var intent in pending)
             {
-                residual = await ApplyPendingChildLinkAsync(intent);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "Shard {ShardIndex} of tree '{TreeId}' could not re-deliver the pending link for child {ChildId} under separator '{PromotedKey}'; it stays recorded and the next operation retries it. Until it lands, that child is spliced into the sibling chain but no descent reaches it.",
+                try
+                {
+                    var split = new SplitResult
+                    {
+                        PromotedKey = intent.PromotedKey,
+                        NewSiblingId = intent.ChildId,
+                        ChildIsLeaf = intent.ChildIsLeaf,
+                    };
+
+                    var height = intent.ChildIsLeaf ? 0 : await MeasureInternalHeightAsync(intent.ChildId);
+                    await DrainLinkWorkLockedAsync([new LinkWork(split, height, intent)]);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "Shard {ShardIndex} of tree '{TreeId}' could not re-deliver the pending link for child {ChildId} under separator '{PromotedKey}'; it stays recorded and the next operation retries it. Until it lands, that child is spliced into the sibling chain but no descent reaches it.",
+                        MyShardIndex,
+                        TreeId,
+                        intent.ChildId,
+                        intent.PromotedKey);
+
+                    continue;
+                }
+
+                logger.LogInformation(
+                    "Shard {ShardIndex} of tree '{TreeId}' completed an interrupted split: child {ChildId} is now routed under separator '{PromotedKey}'.",
                     MyShardIndex,
                     TreeId,
                     intent.ChildId,
                     intent.PromotedKey);
-
-                continue;
             }
-
-            while (residual is not null)
-            {
-                residual = await PromoteRootAsync(residual);
-            }
-
-            await ClearPendingChildLinkAsync(intent);
-
-            logger.LogInformation(
-                "Shard {ShardIndex} of tree '{TreeId}' completed an interrupted split: child {ChildId} is now routed under separator '{PromotedKey}'.",
-                MyShardIndex,
-                TreeId,
-                intent.ChildId,
-                intent.PromotedKey);
+        }
+        finally
+        {
+            _inFlightChildLinks.Clear();
+            _splitLinkGate.Release();
         }
     }
 
@@ -1255,99 +1559,36 @@ internal sealed partial class ShardRootGrain
             $"ShardRootGrain {context.GrainId} edge descent from {nodeId} exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
     }
 
-    private async Task<SplitResult?> PromoteRootAsync(SplitResult splitResult)
+    /// <summary>
+    /// Links a split a caller could not propagate against an ancestor path -
+    /// a division of a single-leaf root, or of the root itself - and always
+    /// returns <see langword="null"/>. Routed through
+    /// <see cref="LinkSplitAsync"/> so it serialises with every other link.
+    /// </summary>
+    /// <remarks>
+    /// A leaf-level split that arrives here after an interleaved turn has
+    /// already promoted the root is linked by descent like any other, rather
+    /// than wrapped under a new root or - as it used to be once the live root
+    /// was two or more levels deep - dropped with a warning on the reasoning
+    /// that a peer promotion had absorbed it. Nothing had: the dropped sibling
+    /// was spliced, pinned and unreachable, and its keys lost (issue #3523).
+    /// </remarks>
+    private Task<SplitResult?> PromoteRootAsync(SplitResult splitResult) => LinkSplitAsync(splitResult);
+
+    /// <summary>
+    /// Wraps the current root and <paramref name="splitResult"/>'s sibling
+    /// under a new root. Only <see cref="LinkOneLockedAsync"/> calls it, under
+    /// <see cref="_splitLinkGate"/>, having established that the division is of
+    /// the current root.
+    /// </summary>
+    private async Task PromoteRootLockedAsync(SplitResult splitResult)
     {
-        // Serialise the entire promotion sequence (Phase 1 persist +
-        // Phase 2 complete) against other interleaved SetManyAsync turns
-        // on this activation. SetManyAsync is [AlwaysInterleave] for
-        // throughput, which means two concurrent turns can race here.
-        // Without the gate, turn A's `state.State.PendingPromotion = A;`
-        // can be overwritten by turn B before A's CompletePromotionAsync
-        // observes it, silently corrupting the tree topology - and even
-        // when A wins the assignment, turn B can read the stale
-        // RootIsLeaf flag (still `true` on disk while A's promotion is
-        // mid-flight) and seed the new internal root with the wrong
-        // childrenAreLeaves bit, which is exactly the
-        // InvalidCastException SeedChildParentAsync surfaced on the
-        // U9k step 2 ladder. The promotion gate is distinct from the
-        // _stateWriteGate (which only serialises individual storage
-        // writes) because promotion is a multi-await sequence that
-        // includes cross-grain Initialize / Seed calls between two
-        // shard-root persistence sites.
+        // The promotion gate still serialises the two-phase sequence (persist
+        // intent, then complete) against ResumePendingPromotionAsync. Every
+        // path takes _splitLinkGate first, so the order is fixed.
         await _promotionGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            // Re-validate the current root shape under the gate. The
-            // caller computed `splitResult` from a TraverseForWrite /
-            // SetManyLocalOnly pass that observed the tree shape BEFORE
-            // the gate was entered. The U9k step 2 race is asymmetric:
-            // turn A enters `SetManyLocalOnlyAsync` when the root is a
-            // leaf and computes a leaf-level bubble
-            // (`splitResult.ChildIsLeaf == true`); turn B then promotes
-            // the root, flipping `state.State.RootIsLeaf` to false.
-            // When turn A finally reaches the gate, wrapping a second
-            // new root above the just-promoted internal one would seed
-            // it with `childrenAreLeaves = true` against an internal
-            // child - the inverted-cast InvalidCastException observed
-            // on the U9k step 2 ladder. The non-race case has
-            // `splitResult.ChildIsLeaf == state.State.RootIsLeaf` by
-            // construction (the bubble was produced by the current
-            // root splitting), so the asymmetric predicate below
-            // fires only when an interleaved peer promotion has
-            // landed between the splitter and us. A symmetric
-            // `ChildrenAreLeaves == ChildIsLeaf` check would ALSO
-            // false-positive every legitimate depth->=1 root split
-            // (where the splitting root produced a same-level bubble
-            // and the live root is, correctly, internal), so this
-            // predicate is deliberately one-sided.
-            if (splitResult.ChildIsLeaf && !RootIsLeafTyped && state.State.PendingPromotion is null)
-            {
-                var currentRootId = state.State.RootNodeId!.Value;
-                var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
-                if (rootSnapshot.ChildrenAreLeaves)
-                {
-                    // The current root sits exactly one level above
-                    // our leaf-level bubble, so feed the bubble into
-                    // the existing root via AcceptSplitAsync. If the
-                    // root itself splits in turn we return its bubble
-                    // so the caller's `while (split is not null)`
-                    // loop re-enters PromoteRootAsync for the next
-                    // level up.
-                    var currentRoot = ResolveInternalGrain(currentRootId);
-                    var rebubble = await currentRoot.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
-                    InvalidateRoutingTable(currentRootId);
-                    return rebubble;
-                }
-                // Deeper race: the live root is at depth >= 2 (its
-                // children are themselves internal nodes) but our
-                // bubble is leaf-level. The legacy behaviour here wrapped
-                // a brand-new root ABOVE the depth->=2 root and seeded it
-                // with childrenAreLeaves = true (because the bubble is
-                // leaf-level) - even though the new root's children are
-                // the internal nodes below it. That baked a permanently
-                // inconsistent root whose ChildrenAreLeaves flag lied
-                // about its children, which every later sorted-scan then
-                // walked into and crashed on with the issue 899
-                // InvalidCastException (cast BPlusInternalGrain to
-                // IBPlusLeafGrain) - a fault that survived silo restarts
-                // because the corruption was persisted, not cached.
-                //
-                // Mirror the resume-path handling in CompletePromotionAsync:
-                // the leaf-level bubble's NewSiblingId belongs deeper in
-                // the tree than we can safely splice from here, and in
-                // practice it was already absorbed by the interleaved peer
-                // promotion that deepened the root (so the leaf is
-                // reachable via the live topology). Drop the stale bubble
-                // rather than wrapping a corrupt root; the caller's write
-                // retry envelope re-routes the user-visible mutation against
-                // the current topology.
-                logger.LogWarning(
-                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); dropping the stale leaf-level bubble instead of wrapping a corrupt root.",
-                    context.GrainId,
-                    rootSnapshot.ChildrenAreLeaves);
-                return null;
-            }
-
             state.State.PendingPromotion = splitResult;
             state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
             await WriteShardStateAsync();
@@ -1358,7 +1599,6 @@ internal sealed partial class ShardRootGrain
         {
             _promotionGate.Release();
         }
-        return null;
     }
 
     /// <summary>
@@ -1397,33 +1637,19 @@ internal sealed partial class ShardRootGrain
         // persisted intent legitimately needs to wrap.
         if (pending.ChildIsLeaf && !RootIsLeafTyped)
         {
-            var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
-            if (rootSnapshot.ChildrenAreLeaves)
-            {
-                var existingRoot = ResolveInternalGrain(currentRootId);
-                await existingRoot.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
-                InvalidateRoutingTable(currentRootId);
-                state.State.PendingPromotion = null;
-                await WriteShardStateAsync();
-                return;
-            }
-
-            // Deeper race on resume: leaf-level pending bubble against
-            // a root whose children are themselves internals. The
-            // bubble's NewSiblingId belongs deeper in the tree than
-            // we can safely splice from here; drop the stale intent
-            // and let the surrounding write retry envelope replay the
-            // user mutation against the current topology. In practice
-            // this only happens when the leaf-level bubble's
-            // NewSiblingId was already absorbed by a sibling
-            // promotion (so the leaf is reachable via the live
-            // topology) - dropping the intent simply releases the
-            // stuck recovery without re-wrapping.
+            // The pending bubble belongs inside the live topology, at whatever
+            // depth it now has. It used to be fed to the live root when that
+            // root's children were leaves - discarding any division the root
+            // made on accepting it - and dropped outright when the root was
+            // deeper, stranding the sibling (issue #3523). Convert it to a
+            // recorded child link instead, in one write, so the resume that
+            // runs next re-descends and links it at the right parent.
             logger.LogWarning(
-                "ShardRootGrain {ShardId} CompletePromotionAsync observed a depth->=2 race on resume (rootChildrenAreLeaves={RootChildrenAreLeaves}, pending.ChildIsLeaf=true); dropping the stale promotion intent.",
+                "ShardRootGrain {ShardId} CompletePromotionAsync found a leaf-level promotion intent for child {ChildId} over an internal root; re-recording it as a pending child link to be linked by descent.",
                 context.GrainId,
-                rootSnapshot.ChildrenAreLeaves);
+                pending.NewSiblingId);
             state.State.PendingPromotion = null;
+            state.State.PendingChildLinks.Add(NewPendingChildLink(pending));
             await WriteShardStateAsync();
             return;
         }

@@ -232,7 +232,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<State.TreeRegistryEntry?> FetchRegistryEntryAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
 #if LATTICE_DIAG
         // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
@@ -632,7 +632,7 @@ internal sealed class LatticeOptionsResolver(
 
     private async Task<State.WalPlacementPin> LoadWalPlacementAsync(string treeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         return await registry.GetWalPlacementAsync(treeId).ConfigureAwait(false);
     }
 

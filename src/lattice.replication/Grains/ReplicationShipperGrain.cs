@@ -4078,8 +4078,7 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private async Task<string> ResolveSourcePhysicalAsync()
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(
-            Orleans.Lattice.BPlusTree.LatticeConstants.RegistryTreeId);
+        var registry = _grainFactory.GetLatticeRegistry();
         var physical = await registry.ResolveAsync(_treeName);
         return string.IsNullOrEmpty(physical) ? _treeName : physical;
     }

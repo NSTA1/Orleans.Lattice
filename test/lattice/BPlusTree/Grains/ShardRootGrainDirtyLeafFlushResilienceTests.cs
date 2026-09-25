@@ -62,6 +62,7 @@ public class ShardRootGrainDirtyLeafFlushResilienceTests
         var factory = Substitute.For<IGrainFactory>();
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
+        leaf.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 

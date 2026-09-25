@@ -469,7 +469,7 @@ internal sealed class RegistryFanInGate(
 
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             results = new TreeRegistryEntry?[ids.Count];
 
             if (ids.Count == 1)

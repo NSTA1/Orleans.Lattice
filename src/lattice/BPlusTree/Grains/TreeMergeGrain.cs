@@ -86,7 +86,7 @@ internal sealed class TreeMergeGrain(
         }
 
         // Validate source tree exists.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         if (!await registry.ExistsAsync(sourceTreeId))
             throw new InvalidOperationException(
                 $"Source tree '{sourceTreeId}' does not exist.");
@@ -105,7 +105,7 @@ internal sealed class TreeMergeGrain(
         // Resolve both aliases and the source's current physical shard list
         // from the registry so that mid-merge map mutations (e.g. adaptive
         // splits on either side) can't mis-route subsequent ticks (audit bug #5).
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var sourceResolved = await registry.ResolveAsync(sourceTreeId);
         var targetResolved = await registry.ResolveAsync(TargetTreeId);
         var sourcePhysicalTreeId = string.IsNullOrEmpty(sourceResolved) ? sourceTreeId : sourceResolved;
@@ -409,7 +409,7 @@ internal sealed class TreeMergeGrain(
 
         if (!needsResolve) return;
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var sourceTreeId = state.State.SourceTreeId
             ?? throw new InvalidOperationException("Cannot resolve topology without a source tree id.");
         if (string.IsNullOrEmpty(state.State.SourcePhysicalTreeId))
@@ -480,7 +480,7 @@ internal sealed class TreeMergeGrain(
 
         // Resolve the target tree's shard map (falling back to the default
         // identity map when the tree has no custom map persisted).
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var targetResolvedOpts = await optionsResolver.ResolveAsync(TargetTreeId);
         var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, targetResolvedOpts.ShardCount);

@@ -99,6 +99,26 @@ internal sealed partial class BPlusInternalGrain(
 
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
+        // Serialised against OnChildDigestPublishedAsync, which is
+        // [AlwaysInterleave]: a child re-parented to this node can publish
+        // before the seeding below has finished, and two unserialised state
+        // writes on one activation fail the second with a stale etag (issue
+        // #3523). The upward flush stays outside the gate.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await InitializeLockedAsync(separatorKey, leftChild, rightChild, childrenAreLeaves);
+        }
+        finally
+        {
+            await ReleaseSplitGateAsync();
+        }
+
+        await FlushUpwardPublishAsync();
+    }
+
+    private async Task InitializeLockedAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
+    {
         // Snapshot mutated fields BEFORE any in-memory change so a failing
         // WriteStateAsync below can revert the activation to the state every
         // peer (and any future reactivation) observes from storage. Without
@@ -146,6 +166,22 @@ internal sealed partial class BPlusInternalGrain(
     }
 
     public async Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
+    {
+        // See InitializeAsync for why this runs under _splitGate.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await InitializeWithChildrenLockedAsync(separatorKeys, childIds, childrenAreLeaves);
+        }
+        finally
+        {
+            await ReleaseSplitGateAsync();
+        }
+
+        await FlushUpwardPublishAsync();
+    }
+
+    private async Task InitializeWithChildrenLockedAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
     {
         var children = new List<ChildEntry>(separatorKeys.Count);
         for (int i = 0; i < separatorKeys.Count; i++)
@@ -316,14 +352,21 @@ internal sealed partial class BPlusInternalGrain(
         // 1-2 in flight under steady load); the surrounding interleave
         // lets all read traffic (Route*, GetRoutingTable*) overlap.
         await _splitGate.WaitAsync().ConfigureAwait(true);
+        SplitResult? result;
         try
         {
-            return await AcceptSplitCoreAsync(promotedKey, newChild);
+            result = await AcceptSplitCoreAsync(promotedKey, newChild);
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
+
+        // Digest publish outside the gate and failure-contained (issue #3523):
+        // the split is durable, and a publish fault here used to discard the
+        // SplitResult, leaving its new sibling unlinked.
+        await FlushUpwardPublishContainedAsync(nameof(AcceptSplitAsync));
+        return result;
     }
 
     /// <summary>
@@ -391,9 +434,13 @@ internal sealed partial class BPlusInternalGrain(
             if (string.Compare(promotedKey, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
             {
                 // The promotion belongs to the new sibling - forward it there.
+                // The sibling can divide on accepting it, and that division is
+                // as real as this node's own: returning only pendingRecovery
+                // used to discard it, leaving the sibling's new node created,
+                // persisted, and routed to by nothing (issue #3523).
                 var sibling = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.SplitSiblingId!.Value);
-                await sibling.AcceptSplitAsync(promotedKey, newChild);
-                return pendingRecovery;
+                var forwarded = await sibling.AcceptSplitAsync(promotedKey, newChild);
+                return SplitResult.Combine(pendingRecovery, forwarded);
             }
             // Otherwise fall through to insert the promotion in THIS node.
         }
@@ -485,7 +532,11 @@ internal sealed partial class BPlusInternalGrain(
             await SeedChildParentAsync(newChild, state.State.ChildrenAreLeaves);
         }
 
-        return pendingRecovery ?? splitResult;
+        // Both divisions are owed to the parent when a recovery completed an
+        // interrupted split and this insert then overflowed again. Returning
+        // `pendingRecovery ?? splitResult` kept the first and silently dropped
+        // the second (issue #3523).
+        return SplitResult.Combine(pendingRecovery, splitResult);
     }
 
     public async Task SetTreeIdAsync(string treeId)
@@ -558,10 +609,9 @@ internal sealed partial class BPlusInternalGrain(
         // is grafted, double-counting the moved subtree one level up. When
         // we are the root (no parent), the shard root rebuilds the digest
         // chain from the promoted SplitResult, so there is nothing to push.
-        if (state.State.ParentId is { } parentId)
-        {
-            await PublishUpwardAsync(parentId);
-        }
+        // Deferred to after the gate is released (issue #3523); AcceptSplitAsync
+        // flushes it before returning this result to the caller.
+        MarkUpwardPublishPending();
 
         // Phase 2: Execute cross-grain operations using the persisted identity.
         return await CompleteSplitAsync();

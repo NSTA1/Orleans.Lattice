@@ -50,6 +50,7 @@ public class ShardRootGrainShadowForwardTests
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<long>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
+        leaf.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>()).Returns(
             Task.FromResult(new RangeDeleteResult { Deleted = 0, PastRange = true }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));

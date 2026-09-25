@@ -151,19 +151,10 @@ public class LeafChainGrowthIntegrityIntegrationTests
         Assert.That(first.LowKeyInclusive, Is.Null, "the leftmost leaf must be unbounded below");
         Assert.That(last.HighKeyExclusive, Is.Null, "the rightmost leaf must be unbounded above");
 
-        // (3) Consecutive leaves tile the keyspace with no gap and no overlap.
-        // A gap is a span owned by nobody, whose writes vanish on the next
-        // projection rebuild; an overlap is a span two leaves both materialise.
-        for (var i = 0; i < chain.Count - 1; i++)
-        {
-            var here = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i]).GetKeyRangeAsync();
-            var next = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i + 1]).GetKeyRangeAsync();
-
-            Assert.That(here.HighKeyExclusive, Is.EqualTo(next.LowKeyInclusive),
-                $"after growth: leaf {i} ends at '{here.HighKeyExclusive}' but leaf {i + 1} begins at "
-                + $"'{next.LowKeyInclusive}', so that span is owned by "
-                + $"{(here.HighKeyExclusive is null ? "both" : "nobody")}");
-        }
+        // (3) Consecutive leaves tile the keyspace with no gap, and routing
+        // agrees with the chain. A gap is a span owned by nobody, whose writes
+        // vanish on the next projection rebuild.
+        await LeafChainTiling.AssertTilesAsync(_cluster.GrainFactory, shard, "after growth");
 
         // (4) Every seeded key is reachable by descent, and lands on the leaf
         // whose declared range contains it - the property the tiling above is
@@ -210,14 +201,7 @@ public class LeafChainGrowthIntegrityIntegrationTests
         Assert.That(chain.Count, Is.GreaterThan(8),
             "precondition: the descending seed must also have split the tree many times");
 
-        for (var i = 0; i < chain.Count - 1; i++)
-        {
-            var here = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i]).GetKeyRangeAsync();
-            var next = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i + 1]).GetKeyRangeAsync();
-
-            Assert.That(here.HighKeyExclusive, Is.EqualTo(next.LowKeyInclusive),
-                $"after descending growth: leaf {i} and leaf {i + 1} do not tile");
-        }
+        await LeafChainTiling.AssertTilesAsync(_cluster.GrainFactory, shard, "after descending growth");
 
         var backward = new List<GrainId>();
         var cursor = (GrainId?)chain[^1];

@@ -210,8 +210,48 @@ public class ShardRootGrainRoutingTableCacheTests
         // Second write: cache was invalidated, must re-fetch the snapshot.
         await h.Grain.SetAsync("k2", [2]);
 
-        // Total fetches: 1 (first write) + 1 (second write after invalidation) = 2.
+        // Total fetches: 1 (first write) + 1 (the link's fresh descent, which
+        // bypasses the cache) + 1 (second write after invalidation) = 3.
+        // Without the invalidation the second write would hit the cache: 2.
+        await h.Internal.Received(3).GetRoutingTableAsync();
+    }
+
+    [Test]
+    public async Task A_fetch_that_overlaps_an_invalidation_is_not_cached()
+    {
+        // A cache-miss fetch that is in flight when the node is invalidated
+        // may carry the pre-mutation table. Caching it pinned that stale
+        // table until the node next split, routing every key of a newly
+        // linked child to its donor (issue #3523). The fetching caller still
+        // routes with what it fetched; only the cache declines it, so the
+        // next traversal fetches afresh.
+        var h = CreateHarness();
+        var fetch = new TaskCompletionSource<RoutingTableSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Internal.GetRoutingTableAsync().Returns(
+            _ => fetch.Task,
+            _ => Task.FromResult(new RoutingTableSnapshot
+            {
+                SeparatorKeys = [null],
+                ChildIds = [h.LeafId],
+                ChildrenAreLeaves = true,
+            }));
+
+        var inFlight = h.Grain.SetAsync("k1", [1]);
+        h.Grain.InvalidateRoutingTable(h.State.State.RootNodeId!.Value);
+        fetch.SetResult(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [h.LeafId],
+            ChildrenAreLeaves = true,
+        });
+        await inFlight;
+
+        await h.Grain.SetAsync("k2", [2]);
+        await h.Grain.SetAsync("k3", [3]);
+
+        // 1 (overlapped, declined) + 1 (k2, cached) + 0 (k3 hits) = 2.
         await h.Internal.Received(2).GetRoutingTableAsync();
+        await h.Leaf.Received(1).SetAsync("k1", Arg.Any<byte[]>());
     }
 
     [Test]
@@ -248,9 +288,10 @@ public class ShardRootGrainRoutingTableCacheTests
         await h.Grain.SetAsync("k3", [3]);
         await h.Grain.SetAsync("k4", [4]);
 
-        // Fetch count: 1 (k1, populating) + 1 (k2, after invalidation post-split)
-        // + 0 (k3, k4 hit the re-populated cache) = 2.
-        await h.Internal.Received(2).GetRoutingTableAsync();
+        // Fetch count: 1 (k1, populating) + 1 (k2's link re-descending fresh,
+        // bypassing the cache) + 1 (k3, after invalidation post-split)
+        // + 0 (k4 hits the re-populated cache) = 3.
+        await h.Internal.Received(3).GetRoutingTableAsync();
     }
 
     [Test]

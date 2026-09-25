@@ -283,8 +283,10 @@ services:
     # mode of an undersized grant is a STORAGE fault, not a container kill, so
     # a value copied from a larger host degrades the stack while `docker ps`
     # still reports it healthy. The derive script sizes it from the corpus and
-    # clamps it to what the host can actually offer, and REFUSES rather than
-    # silently granting less when the clamp binds below the requirement.
+    # clamps it to what the host can actually offer. It REFUSES when the host
+    # cannot offer even the floor, and when the clamp binds between the floor
+    # and the requirement it grants the ceiling and names the shortfall - it
+    # never grants less silently (#2832).
     mem_limit: "${REPOCONTEXT_MEM_LIMIT:?unset - run ./scripts/New-TuningEnv.ps1 to derive it from this host and corpus, or set it by hand from .env.example. No default by design: a memory grant nobody measured is the defect this overlay exists to stop (issue #2779).}"
 
   embedder:

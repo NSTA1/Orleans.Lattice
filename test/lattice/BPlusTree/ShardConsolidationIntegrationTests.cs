@@ -108,6 +108,7 @@ public partial class ShardConsolidationIntegrationTests
         await AssertAllReadableAsync(tree, expected, "after the fold");
         Assert.That(await tree.CountAsync(), Is.EqualTo(expected.Count),
             "A fold must neither lose nor duplicate a key in the tree's count.");
+        await LeafChainTiling.AssertTreeTilesAsync(_cluster.GrainFactory, treeId, "after the shard fold");
     }
 
     [Test]

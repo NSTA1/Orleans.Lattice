@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Saturated, so it never engages the writer admission gate's fast-fail.
 /// </summary>
 [TestFixture]
-public class WalSaturationSamplerDrainLagTests
+public partial class WalSaturationSamplerDrainLagTests
 {
     private static int _treeIdSeed;
     private string _treeId = null!;

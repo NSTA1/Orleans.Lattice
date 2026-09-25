@@ -109,6 +109,23 @@ sequenceDiagram
 
 Internal nodes themselves use the same two-phase split pattern as leaves. If an internal node crashes mid-split, the next `AcceptSplitAsync` call resumes the incomplete split before processing the caller's promotion - routing it to the correct node (locally or to the new sibling) based on the split key.
 
+## Span Admission
+
+Every leaf that has been split declares the keyspace it owns as a half-open span, `[LowKeyInclusive, HighKeyExclusive)`. Routing is what normally delivers a key to the leaf that declares it, but routing is a snapshot: a write or a merge batch can be resolved against the routing table just before a concurrent split or fold moves the boundary, and arrive at a leaf that no longer declares the key. **Span admission** is the leaf's own defence against that. Before committing a key, a leaf checks it against its declared span; a key outside the span is forwarded to the neighbouring leaf on the key's side (`NextSibling` for a key at or above the high bound, `PrevSibling` for one below the low bound), and that leaf applies the same check. Forwarding is per key, so a batch that straddles a boundary is split into per-leaf sub-batches rather than rejected.
+
+The shard root narrows how often a leaf has to forward at all. A `MergeManyAsync` batch is grouped by leaf once, up front, and each group is normally dispatched to the leaf its first key routed to. When the shard root's routing has moved since the batch was grouped - it bumps a local routing generation whenever it invalidates its cached routing table or promotes a new root - or when a group is being retried, the group is re-routed key by key and split into fresh per-leaf groups before it is merged, so a split that landed mid-batch does not turn the rest of the group into leaf-to-leaf forwards. The check is one local read on the normal path: a first attempt with unchanged routing takes no extra lookup and no extra allocation.
+
+### Fail-open
+
+When an out-of-span key has nowhere to go - the pointer on the key's side is null, or names the leaf itself - the leaf **fails open**: it commits the key locally rather than refusing the write. This is deliberate, and it is not free. Replay admits by declared span (see [Why routing is retired last](#why-routing-is-retired-last)), so a row committed outside its leaf's span is one that leaf will not reinstate on its own rebuild; whether it survives a cold restart depends on the checkpoint position of the leaf that does declare it. A fail-open is therefore the shape that precedes a silent loss, and it is counted:
+
+- **`orleans.lattice.leaf.span_fail_open_commits`** advances once per key committed this way, tagged `tree`, `reason` (`no_sibling` or `self_reference`) and `origin` (`client_write`, `merge`, or `cross_shard_migration`), and the leaf logs a warning naming itself and its tree, rate-limited to one line per silo every ten seconds. The `origin` tag separates a deliberate cross-shard migration graft from an accidental fall-back on the foreground or merge path. See [Metrics](metrics.md).
+- A healthy tree never advances it, so the series is not pre-minted: an absent series is the healthy reading, and any non-zero value is worth investigating. The behaviour itself is unchanged - the counter makes the fall-back visible; it does not refuse the write.
+
+### Bulk-loaded leaves declare no span
+
+A leaf built by `BulkLoadAsync`, like the single leaf of a tree that has never split, declares **no span at all**: both bounds are null, so it owns every key, never forwards, and never advances the fail-open counter. Giving bulk-loaded leaves a real span is a **breaking change**, not a tidy-up. The span a leaf declares is also the filter its replay applies, so assigning bounds to an existing bulk-loaded leaf would silently drop every row it holds outside the new bounds on the next rebuild. Any change that assigns spans to bulk-loaded leaves must therefore land together with the fail-open counter above, so that the rows it would strand are visible before they are lost.
+
 ## Empty Leaf Reclaim
 
 Splitting is the only direction the tree had for a long time. A leaf was allocated whenever a key range grew past `MaxLeafKeys`, and nothing ever took one back when the range shrank again. A range that grew to a thousand leaves and was then emptied kept all thousand: each an activation to schedule, a state row to store, and a hop in every range scan that crosses it. The cost was paid in proportion to the **high-water mark** of the range rather than to the rows that are actually live, and it never subsided.
@@ -170,7 +187,7 @@ This ordering is load-bearing, and it is the reverse of the one the fold origina
 
 The reason a gap is not survivable is that the two admission rules disagree about what a leaf owns:
 
-- the **write path** admits by **routing** - a leaf writes whatever the shard root sent it, with no span check;
+- the **write path** admits by **routing** - a leaf writes whatever the shard root sent it, and [span admission](#span-admission) can only forward an out-of-span key to a neighbour, failing open when there is none;
 - **WAL replay** admits by **declared span** - `ShouldApplyDuringReplay` drops any record outside the leaf's own `[low, high)`.
 
 So any interval in which routing resolves a key to a leaf whose declared span does not cover it is a **silent-loss window**: the write is appended to the log, merged into the projection and acknowledged, and is then filtered out the moment that projection is rebuilt. Durable, readable, and gone on restart.
