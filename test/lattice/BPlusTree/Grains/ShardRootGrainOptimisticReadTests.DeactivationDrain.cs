@@ -137,6 +137,52 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     }
 
     [Test]
+    public async Task ForceDeactivateAsync_fences_and_defers_while_SetManyWherePredicateAsync_is_in_flight()
+    {
+        var (grain, leaf, context, _) = await CreateDeactivationHarnessAsync();
+        var predicate = LatticePredicateNode.Member("Score");
+        var gate = new TaskCompletionSource<ConditionalSetManyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        leaf.SetManyWherePredicateAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), predicate)
+            .Returns(gate.Task);
+        var filter = (IIncomingGrainCallFilter)grain;
+        var method = typeof(IShardRootGrain).GetMethod(nameof(IShardRootGrain.SetManyWherePredicateAsync))!;
+        var write = filter.Invoke(QuiesceCallContext(method.Name,
+            () => grain.SetManyWherePredicateAsync([new("write", [1])], predicate), method));
+        Assert.That(write.IsCompleted, Is.False);
+
+        await filter.Invoke(QuiesceCallContext(nameof(IShardRootGrain.ForceDeactivateAsync),
+            grain.ForceDeactivateAsync)).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(grain.DeactivationRequested, Is.True);
+        context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        gate.SetResult(new ConditionalSetManyResult { WrittenKeys = ["write"] });
+        await write.WaitAsync(TimeSpan.FromSeconds(5));
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+    }
+
+    [Test]
+    public async Task SetManyWherePredicateAsync_admitted_after_flush_suspension_is_refused_before_leaf_dispatch()
+    {
+        var (grain, leaf, context, suspend) = await CreateDeactivationHarnessAsync();
+        var gate = new TaskCompletionSource<SplitResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = InvokeGatedWrite(grain, leaf, false, gate);
+        await suspend();
+
+        var predicate = LatticePredicateNode.Member("Score");
+        var method = typeof(IShardRootGrain).GetMethod(nameof(IShardRootGrain.SetManyWherePredicateAsync))!;
+        var refused = Assert.ThrowsAsync<ShardRootDeactivatingException>(() =>
+            ((IIncomingGrainCallFilter)grain).Invoke(QuiesceCallContext(method.Name,
+                () => grain.SetManyWherePredicateAsync([new("refused", [2])], predicate), method)));
+        Assert.That(ShardActivationRetry.IsTransientSiloChurn(refused!), Is.True);
+        await leaf.DidNotReceive().SetManyWherePredicateAsync(
+            Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode>());
+        context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+
+        gate.SetResult(null);
+        await inFlight.WaitAsync(TimeSpan.FromSeconds(5));
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+    }
+
+    [Test]
     public async Task Serial_turn_does_not_wait_for_in_flight_SetManyAsync()
     {
         var (grain, leaf, _, _) = await CreateDeactivationHarnessAsync();

@@ -1552,60 +1552,68 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
-        ThrowIfRejectedForAnyKey(entries);
-        // The affected-record count is the guard-passing subset, known only once
-        // the local apply completes, so the operation is counted here and the
-        // record count published on the success path below.
-        RecordWrite(records: 0);
-
-        if (entries.Count == 0) return Array.Empty<string>();
-
-        // Online-resize shadow-forward of the whole conditional batch in
-        // parallel with the local apply. The destination shard re-evaluates
-        // the guard against its own copy; LWW reconciles any interleaving with
-        // the drain reader. The forwarded written set is discarded - this
-        // shard's local apply is authoritative for the returned set.
-        var forwardTask = TrackShadowForward(
-            (entries, predicate),
-            static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
-
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
-        IReadOnlyList<string> written = Array.Empty<string>();
-        var localApplyTs = Stopwatch.GetTimestamp();
+        BeginBatchWrite();
         try
         {
-            written = await SetManyWhereLocalOnlyAsync(entries, predicate);
-        }
-        catch (Exception ex)
-        {
-            localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
-        }
-        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
-            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            LatticeTenantLabel.ForTree(TreeId));
+            await PrepareForOperationAsync();
+            ThrowIfRejectedForAnyKey(entries);
+            // The affected-record count is the guard-passing subset, known only once
+            // the local apply completes, so the operation is counted here and the
+            // record count published on the success path below.
+            RecordWrite(records: 0);
 
-        if (localFailure is null)
-        {
-            var forwardTs = Stopwatch.GetTimestamp();
+            if (entries.Count == 0) return Array.Empty<string>();
+
+            // Online-resize shadow-forward of the whole conditional batch in
+            // parallel with the local apply. The destination shard re-evaluates
+            // the guard against its own copy; LWW reconciles any interleaving with
+            // the drain reader. The forwarded written set is discarded - this
+            // shard's local apply is authoritative for the returned set.
+            var forwardTask = TrackShadowForward(
+                (entries, predicate),
+                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
+
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+            IReadOnlyList<string> written = Array.Empty<string>();
+            var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                await forwardTask;
+                written = await SetManyWhereLocalOnlyAsync(entries, predicate);
             }
-            finally
+            catch (Exception ex)
             {
-                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
-                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    LatticeTenantLabel.ForTree(TreeId));
+                localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
             }
-            RecordRecordsWritten(written.Count);
-            return written;
-        }
+            LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+                Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
 
-        localFailure.Throw();
-        return written; // unreachable - Throw() always throws.
+            if (localFailure is null)
+            {
+                var forwardTs = Stopwatch.GetTimestamp();
+                try
+                {
+                    await forwardTask;
+                }
+                finally
+                {
+                    LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                        Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        LatticeTenantLabel.ForTree(TreeId));
+                }
+                RecordRecordsWritten(written.Count);
+                return written;
+            }
+
+            localFailure.Throw();
+            return written; // unreachable - Throw() always throws.
+        }
+        finally
+        {
+            EndBatchWrite();
+        }
     }
 
     /// <summary>

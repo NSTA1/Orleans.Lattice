@@ -41,9 +41,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// holds back new point writes. It then waits for the point writes already in
 /// flight to drain before it runs.</description></item>
 /// <item><description>Every other always-interleave call (for example
-/// <see cref="IShardRootGrain.SetManyAsync"/> and the optimistic read) passes
-/// straight through. Batch writes count themselves only for deactivation, never
-/// for serial-turn exclusion.</description></item>
+/// <see cref="IShardRootGrain.SetManyAsync"/>,
+/// <see cref="IShardRootGrain.SetManyWherePredicateAsync"/> and the optimistic
+/// read) passes straight through. Both batch-write methods count themselves only
+/// for deactivation, never for serial-turn exclusion.</description></item>
 /// </list>
 /// <para>
 /// The steady-state cost to a point write is one counter check and one
@@ -159,7 +160,7 @@ internal sealed partial class ShardRootGrain
 
     private void CompleteDeferredDeactivation()
     {
-        // Both release paths retain the activation scheduler: SetManyAsync and
+        // All release paths retain the activation scheduler: both batch methods and
         // the point-write filter await without ConfigureAwait(false).
         if (!_deactivationRequested) return;
 
