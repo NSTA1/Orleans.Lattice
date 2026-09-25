@@ -1344,22 +1344,75 @@ public class LatticeOptions
     /// tombstones age out of <see cref="TxDecisionRetention"/>.
     /// </para>
     /// <para>
-    /// The default of 768 KiB (75% of 1 MiB) admits roughly 6 100 retained
-    /// tombstones at the conservative 128-byte weight the estimate uses, which
-    /// caps a tree at about 100 sustained sagas/s under the default retention.
-    /// That is well above today's single-registry throughput, and the bound
-    /// exists to turn a silent storage-limit stall into an attributed,
-    /// retryable back-pressure signal. Lifting the ceiling itself (a compact
-    /// binary row format, or sharding the registry) is tracked by issue #3501.
-    /// Set <see langword="null"/> to disable the bound (the pre-bound behaviour);
-    /// a storage provider with no per-row limit, or a tree that never runs
-    /// atomic sagas, loses nothing by leaving it enabled.
+    /// The budget applies to <b>each registry shard</b> separately (see
+    /// <see cref="TxRegistryShardCount"/>): every shard persists its own row and
+    /// admits against its own estimate, so the per-tree ceiling scales with the
+    /// shard count. The default of 768 KiB (75% of 1 MiB) admits roughly 6 100
+    /// retained tombstones per shard at the conservative 128-byte weight the
+    /// estimate uses, which is about 100 sustained sagas/s per shard under the
+    /// default retention, or about 800 sagas/s per tree with eight shards. The bound exists to turn a silent storage-limit stall into an
+    /// attributed, retryable back-pressure signal. Set <see langword="null"/> to
+    /// disable the bound (the pre-bound behaviour); a storage provider with no
+    /// per-row limit, or a tree that never runs atomic sagas, loses nothing by
+    /// leaving it enabled.
     /// </para>
     /// </summary>
     public long? TxRegistryAdmissionBudgetBytes { get; set; } = DefaultTxRegistryAdmissionBudgetBytes;
 
     /// <summary>Default value for <see cref="TxRegistryAdmissionBudgetBytes"/> (768 KiB, 786 432 bytes).</summary>
     public const long DefaultTxRegistryAdmissionBudgetBytes = 768 * 1024;
+
+    /// <summary>
+    /// Number of saga decision registry shards new atomic-write sagas are minted
+    /// across, per tree. Each shard is a separate transaction registry grain
+    /// activation with its own persisted row, its own
+    /// <see cref="TxRegistryAdmissionBudgetBytes"/> admission budget, and its own
+    /// decisions revision, so the sustained atomic-saga rate a single tree can
+    /// retain within <see cref="TxDecisionRetention"/> scales linearly with this
+    /// value.
+    /// <para>
+    /// <b>Opt-in, and only once every silo runs a version that understands
+    /// sharded ids.</b> The default of <c>1</c> keeps the pre-sharding layout:
+    /// one registry per tree, keyed by the bare tree id, and plain transaction ids
+    /// that always route to it, so a cluster mid-way through a rolling upgrade -
+    /// where an older silo resolves every txid against the bare-tree-id registry
+    /// - behaves exactly as before. Raise it only after the whole cluster (and any
+    /// replication peer that applies this cluster's sagas) runs this version.
+    /// </para>
+    /// <para>
+    /// The value only decides which shards <b>new</b> transaction ids are minted
+    /// across. A saga's shard is stamped into its transaction id when the id is
+    /// minted, and every later registry call for that saga - from the saga
+    /// coordinator, a leaf resolving a pending intent, a shard root, a split, or a
+    /// replication receiver - routes by the stamped index alone, never by this
+    /// setting. Tree-wide reads (multi-key <c>GetManyAsync</c> reads, scans,
+    /// cursors, backups, replication bootstrap) cover every shard up to the
+    /// tree's durable shard high-water mark, which a shard raises before its
+    /// first write, plus the legacy registry. Silos configured with different
+    /// values therefore agree on every read, and changing the value in either
+    /// direction on a live cluster is safe: raising it spreads new sagas across
+    /// more shards, and lowering it (to <c>1</c> included) reroutes nothing and
+    /// still reads every shard already written to.
+    /// </para>
+    /// <para>
+    /// Sagas minted before an upgrade (or under a value of <c>1</c>) keep routing
+    /// to the legacy registry, which the tree-wide reads always include, so
+    /// enabling sharding needs no migration and the legacy row drains within one
+    /// retention window. A value of <c>8</c> lifts the per-tree ceiling from about
+    /// 100 to about 800 sustained sagas/s at the default budget and retention,
+    /// while keeping a tree-wide read at nine registry calls, which a per-silo
+    /// coalescer shares across concurrent reads. Must be between <c>1</c> and
+    /// <see cref="MaxTxRegistryShardCount"/>. Read from the global (unnamed)
+    /// options.
+    /// </para>
+    /// </summary>
+    public int TxRegistryShardCount { get; set; } = DefaultTxRegistryShardCount;
+
+    /// <summary>Default value for <see cref="TxRegistryShardCount"/> (1, the unsharded legacy layout).</summary>
+    public const int DefaultTxRegistryShardCount = 1;
+
+    /// <summary>Upper bound for <see cref="TxRegistryShardCount"/> (256): the shard index is stamped into one byte of the transaction id.</summary>
+    public const int MaxTxRegistryShardCount = 256;
 
     /// <summary>
     /// Hard cap on how long the per-tree transaction registry will retain a

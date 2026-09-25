@@ -74,7 +74,7 @@ public partial class LatticeCursorGrainTests
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult<IGrainReminder?>(reminder));
 
-        var opts = new LatticeOptions();
+        var opts = new LatticeOptions { TxRegistryShardCount = 1 };
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);

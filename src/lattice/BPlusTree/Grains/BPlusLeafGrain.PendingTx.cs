@@ -190,8 +190,6 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<Guid, HashSet<string>>? _backstoppedTerminals;
 
-    private ITxRegistryGrain? registry;
-
     /// <summary>
     /// Records a prepared-phase per-key mutation in the pending-tx map.
     /// The entry is invisible to readers until a matching terminal mark
@@ -916,8 +914,9 @@ internal sealed partial class BPlusLeafGrain
 
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-        return await registry.GetStatusAsync(txid);
+        return await TxRegistryRouting
+            .GetRegistry(grainFactory, treeId, txid)
+            .GetStatusAsync(txid);
     }
 
     /// <summary>
@@ -1091,8 +1090,9 @@ internal sealed partial class BPlusLeafGrain
         TxStatus recorded;
         try
         {
-            registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-            recorded = await registry.GetRecordedStatusAsync(txid);
+            recorded = await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetRecordedStatusAsync(txid);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1216,8 +1216,8 @@ internal sealed partial class BPlusLeafGrain
             return (hidden, pendingKeys);
         }
 
-        registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-        var outcomes = await registry.GetStatusManyAsync(txids);
+        var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
+            grainFactory, treeId, txids);
         return (outcomes, pendingKeys);
     }
 

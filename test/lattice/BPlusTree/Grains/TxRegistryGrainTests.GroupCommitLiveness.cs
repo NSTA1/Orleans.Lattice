@@ -27,15 +27,22 @@ public partial class TxRegistryGrainTests
         var rng = new Random(seed);
         var rngLock = new object();
         var injectedFaults = 0;
+        var writeAttempts = 0;
         state.BeforeWrite = async () =>
         {
             int delayMs;
-            bool fault;
             lock (rngLock)
             {
                 delayMs = rng.Next(0, 4);
-                fault = rng.NextDouble() < 0.07;
             }
+
+            // Fault injection is deterministic in the write count (issue #3563):
+            // group commit coalesces the run into few enough writes that a
+            // per-write probability can inject none at all. The second write
+            // always fails, then one in eleven after it; the latency jitter
+            // stays seeded.
+            var attempt = Interlocked.Increment(ref writeAttempts);
+            var fault = attempt == 2 || (attempt > 2 && attempt % 11 == 0);
             if (delayMs > 0)
             {
                 await Task.Delay(delayMs);
@@ -65,7 +72,7 @@ public partial class TxRegistryGrainTests
                     await OnTurnAsync(turn, call);
                     return;
                 }
-                catch (IOException) when (attempt < 200)
+                catch (TxRegistryWriteFailedException) when (attempt < 200)
                 {
                     // Callers retry a failed registry write; so does the saga.
                 }
@@ -115,7 +122,7 @@ public partial class TxRegistryGrainTests
                         await OnTurnAsync(turn, () => grain.UnpinSnapshotAsync(pin));
                     }
                 }
-                catch (IOException)
+                catch (TxRegistryWriteFailedException)
                 {
                     // A reader that mutates (pins) sees the same injected faults.
                 }

@@ -180,8 +180,11 @@ internal sealed partial class ShardRootGrain
             // with the per-tree registry so the saga's terminal
             // broadcast can discover us authoritatively, regardless
             // of any routing flips between prepare and broadcast.
-            var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
-            await registry.RegisterParticipantAsync(txid, MyShardIndex);
+            var registry = TxRegistryRouting.GetRegistry(
+                grainFactory, TreeId, txid);
+            await TxRegistryWriteRetry.RunAsync(
+                (registry, txid, shard: MyShardIndex),
+                static s => s.registry.RegisterParticipantAsync(s.txid, s.shard));
         }
         catch
         {

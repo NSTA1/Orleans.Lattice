@@ -26,6 +26,7 @@ public partial class LatticeCursorGrainTests
             existingState: null,
             options: new LatticeOptions
             {
+                TxRegistryShardCount = 1,
                 MaxCursorSnapshotPinTtl = TimeSpan.FromMinutes(30),
                 MaxPinnedSagaDecisions = 100,
             },
@@ -99,6 +100,7 @@ public partial class LatticeCursorGrainTests
             existingState: null,
             options: new LatticeOptions
             {
+                TxRegistryShardCount = 1,
                 MaxCursorSnapshotPinTtl = TimeSpan.FromMinutes(30),
                 MaxPinnedSagaDecisions = 100,
             },
@@ -133,6 +135,7 @@ public partial class LatticeCursorGrainTests
             existingState: null,
             options: new LatticeOptions
             {
+                TxRegistryShardCount = 1,
                 MaxCursorSnapshotPinTtl = TimeSpan.FromMinutes(30),
                 MaxPinnedSagaDecisions = 100,
             },
@@ -165,6 +168,7 @@ public partial class LatticeCursorGrainTests
             existingState: null,
             options: new LatticeOptions
             {
+                TxRegistryShardCount = 1,
                 MaxCursorSnapshotPinTtl = TimeSpan.FromMinutes(30),
                 MaxPinnedSagaDecisions = 100,
             },

@@ -81,7 +81,7 @@ public partial class AtomicWriteGrainTests
                 return results;
             });
 
-        var opts = options ?? new LatticeOptions();
+        var opts = options ?? new LatticeOptions { TxRegistryShardCount = 1 };
         var routing = new RoutingInfo(
             TreeId,
             ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));

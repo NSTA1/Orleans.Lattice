@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -216,8 +217,39 @@ internal sealed partial class TxRegistryGrain
         _flushing = true;
         try
         {
-            while (_pending is { } group)
+            while (_pending is not null)
             {
+                if (!_shardHighWaterRaised)
+                {
+                    // Raise before detaching the pending group. The registry's
+                    // mutators interleave, so a mutation applied while the raise
+                    // is outstanding joins this group; were the group detached
+                    // first, that mutation would ride on this group's write
+                    // unrecorded, and a later failure of its own group would roll
+                    // it back in memory while storage kept it.
+                    var raiseStarted = Stopwatch.GetTimestamp();
+                    Exception? raiseFailure = null;
+                    try
+                    {
+                        await RaiseShardHighWaterAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        raiseFailure = ex;
+                    }
+
+                    if (raiseFailure is not null)
+                    {
+                        var unraised = _pending!;
+                        _pending = null;
+                        RecordWrite(unraised.MutationCount, Stopwatch.GetElapsedTime(raiseStarted), ok: false);
+                        RunRollbacks(unraised);
+                        unraised.Completion.TrySetException(TranslateWriteFailure(raiseFailure, ownWrite: false));
+                        continue;
+                    }
+                }
+
+                var group = _pending!;
                 _pending = null;
                 _inFlight = group;
                 var started = Stopwatch.GetTimestamp();
@@ -244,6 +276,7 @@ internal sealed partial class TxRegistryGrain
                 // of state that never became durable, so it fails too. Undo the
                 // newest mutations first so each undo restores exactly the
                 // state its own mutation observed.
+                var surfaced = TranslateWriteFailure(failure, ownWrite: true);
                 var queued = _pending;
                 _pending = null;
                 if (queued is not null)
@@ -251,14 +284,69 @@ internal sealed partial class TxRegistryGrain
                     RunRollbacks(queued);
                 }
                 RunRollbacks(group);
-                group.Completion.TrySetException(failure);
-                queued?.Completion.TrySetException(failure);
+                group.Completion.TrySetException(surfaced);
+                queued?.Completion.TrySetException(surfaced);
             }
         }
         finally
         {
             _flushing = false;
         }
+    }
+
+    /// <summary>
+    /// Converts a failed write's fault into the
+    /// <see cref="TxRegistryWriteFailedException"/> its callers observe, so a
+    /// storage provider's exception type never crosses a grain-call boundary
+    /// (a client without that provider cannot load it). When
+    /// <paramref name="ownWrite"/> is set and the fault is an
+    /// optimistic-concurrency conflict (<see cref="InconsistentStateException"/>),
+    /// storage holds a row this activation never read, so the activation
+    /// deactivates and the next call reloads it; the exception type alone is the
+    /// discriminator, matching <c>ShardRootGrain</c>.
+    /// </summary>
+    private TxRegistryWriteFailedException TranslateWriteFailure(Exception failure, bool ownWrite)
+    {
+        if (failure is TxRegistryWriteFailedException already)
+        {
+            return already;
+        }
+
+        var conflict = ownWrite && IsWriteConflict(failure);
+        if (conflict)
+        {
+            logger.LogWarning(
+                failure,
+                "Registry {RegistryKey} lost an optimistic-concurrency check on its state write; deactivating so the next call reloads from storage.",
+                GrainKey);
+            this.DeactivateOnIdle();
+        }
+        else
+        {
+            logger.LogWarning(
+                failure,
+                "Registry {RegistryKey} failed its state write; the group was rolled back and its callers may retry.",
+                GrainKey);
+        }
+
+        return new TxRegistryWriteFailedException(GrainKey, failure, conflict);
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="failure"/> (or an
+    /// exception it wraps) is an <see cref="InconsistentStateException"/>.
+    /// </summary>
+    internal static bool IsWriteConflict(Exception failure)
+    {
+        for (var e = failure; e is not null; e = e.InnerException)
+        {
+            if (e is InconsistentStateException)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -284,6 +372,33 @@ internal sealed partial class TxRegistryGrain
                 this.DeactivateOnIdle();
             }
         });
+    }
+
+    /// <summary>
+    /// Whether this activation has made its shard's index durable in the tree's
+    /// <see cref="ITxRegistryHighWaterGrain"/> mark (issue #3501). Always
+    /// <see langword="true"/> for the legacy registry, which every tree-wide read
+    /// covers unconditionally.
+    /// </summary>
+    private bool _shardHighWaterRaised;
+
+    /// <summary>
+    /// Raises the tree's shard high-water mark to cover this shard before the
+    /// activation's first state write, so a tree-wide read that could miss this
+    /// shard's decisions (its mark is below this shard's index) provably ran
+    /// before any of them were durable. A failure fails the pending write group,
+    /// which rolls back and surfaces the fault to its callers exactly as a
+    /// storage failure would; the next write retries the raise.
+    /// </summary>
+    private async Task RaiseShardHighWaterAsync()
+    {
+        if (TxRegistryRouting.TryParseShardKey(GrainKey, out var treeId, out var shard))
+        {
+            var mark = await grainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).RaiseShardHighWaterAsync(shard + 1);
+            TxRegistryHighWaterCache.Observe(grainFactory, treeId, mark);
+        }
+
+        _shardHighWaterRaised = true;
     }
 
     /// <summary>Records one registry write on the group-commit instruments.</summary>

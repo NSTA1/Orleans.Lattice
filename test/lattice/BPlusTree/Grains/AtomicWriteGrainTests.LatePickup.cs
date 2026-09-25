@@ -87,7 +87,7 @@ public partial class AtomicWriteGrainTests
             .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
 
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var opts = new LatticeOptions();
+        var opts = new LatticeOptions { TxRegistryShardCount = 1 };
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
