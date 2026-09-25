@@ -71,6 +71,111 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Pushes the filter down to the WAL grain page by page through
+    /// <see cref="IWalShardGrain.ReadFilteredAsync"/>, so an excluded payload
+    /// is dropped before it crosses the grain boundary - and, with a provider
+    /// that implements the filtered read, before it is ever decoded.
+    /// <para>
+    /// Each page is asked to examine at most the budget that remains, and is
+    /// charged for the offset span it covers. The span is an upper bound on what
+    /// the page examined, since offsets only ever skip forward, so the whole read
+    /// examines no more than <paramref name="maxExamined"/> entries - never
+    /// fewer than one while the window holds any.
+    /// </para>
+    /// <para>
+    /// A page ends with a routing-only entry when its last examined entry was
+    /// excluded. That entry is held back until the next page is known to be
+    /// empty, so only the window's final such entry is delivered and a caller
+    /// is not handed the markers of pages that turned out not to be the last.
+    /// </para>
+    /// </remarks>
+    public async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxExamined,
+        WalKeyFilter filter,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        if (shardIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(shardIndex), shardIndex, "Shard index must be non-negative.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxExamined, 1);
+
+        // Same overflow guard as ReadAsync: an exclusive lower bound of
+        // long.MaxValue selects nothing, and + 1 would wrap to long.MinValue.
+        if (fromOffsetExclusive == long.MaxValue || toOffsetInclusive <= fromOffsetExclusive)
+        {
+            yield break;
+        }
+
+        var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
+        var nextSequence = fromOffsetExclusive + 1;
+        long remaining = maxExamined;
+        var markerPending = false;
+        var markerOffset = 0L;
+        var marker = default(LatticeMutation);
+
+        while (remaining > 0 && nextSequence <= toOffsetInclusive)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // A plain await, deliberately: this reader runs inside the replay
+            // coordinator's grain turn and issues a grain call per page, so each
+            // page must resume on the activation's scheduler with its
+            // RequestContext intact (see BoundedFanOut and the writer's audit in
+            // WalCommitLogWriterConfigureAwaitAuditTests).
+            var page = await grain
+                .ReadFilteredAsync(nextSequence, toOffsetInclusive, (int)Math.Min(PageSize, remaining), filter, cancellationToken);
+            var entries = page.Entries;
+            if (entries.Count == 0)
+            {
+                break;
+            }
+
+            // A non-empty page moves past the previous page's marker, so that
+            // marker is no longer the window's last examined entry.
+            markerPending = false;
+            var last = entries.Count - 1;
+            for (var i = 0; i <= last; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sequenced = entries[i];
+                var mutation = WalRecordConverter.FromWalRecord(sequenced.Entry);
+                if (i == last && filter.Excludes(mutation.Kind, mutation.Key))
+                {
+                    markerPending = true;
+                    markerOffset = sequenced.Sequence;
+                    marker = mutation;
+                    break;
+                }
+
+                yield return (sequenced.Sequence, mutation);
+            }
+
+            // A page that fails to advance would repeat itself forever. The WAL
+            // grain derives NextSequence from the last entry it returned, so a
+            // non-empty page always advances; this guard makes that local.
+            if (page.NextSequence <= nextSequence)
+            {
+                break;
+            }
+
+            remaining -= page.NextSequence - nextSequence;
+            nextSequence = page.NextSequence;
+        }
+
+        if (markerPending)
+        {
+            yield return (markerOffset, marker);
+        }
+    }
+    /// <inheritdoc />
     public Task<long> GetHeadOffsetAsync(
         string treeId,
         int shardIndex,

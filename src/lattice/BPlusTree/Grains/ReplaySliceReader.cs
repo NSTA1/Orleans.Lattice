@@ -49,6 +49,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// scope the activation-time local had. Instances are not thread-safe and are
 /// not intended to be shared across concurrent replays.
 /// </para>
+/// <para>
+/// It also carries the ownership filter the replay pushes down to storage
+/// (issue #3565), so every slice of one partition replay is read through the same
+/// <see cref="WalKeyFilter"/>. A reader built with a bounded filter reads every
+/// slice through the filtered overload; one built without reads them unfiltered,
+/// exactly as before. The site must judge each slice with the ownership that built
+/// the filter - see <see cref="LeafReplayOwnership"/>, which pairs the two.
+/// </para>
 /// </summary>
 internal sealed class ReplaySliceReader
 {
@@ -72,6 +80,7 @@ internal sealed class ReplaySliceReader
     private readonly string _treeId;
     private readonly int _partition;
     private readonly int _initialBudget;
+    private readonly WalKeyFilter _filter;
 
     private int _budget;
 
@@ -105,11 +114,20 @@ internal sealed class ReplaySliceReader
     /// unreplayable partition at activation, which is a far worse failure than
     /// a narrow read.
     /// </param>
+    /// <param name="filter">
+    /// The ownership the replaying leaf judges records by, pushed down to storage
+    /// so the slices omit the records it would reject (issue #3565). Omitted -
+    /// unbounded - by a site that does not filter that way, which then reads
+    /// unfiltered slices exactly as before. A site that supplies a filter must
+    /// judge every slice by the same ownership; see
+    /// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync(long, long, int, WalKeyFilter, CancellationToken)"/>.
+    /// </param>
     internal ReplaySliceReader(
         ILeafReplayCoordinatorGrain coordinator,
         string treeId,
         int partition,
-        int initialBudget = InitialBudget)
+        int initialBudget = InitialBudget,
+        WalKeyFilter filter = default)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(treeId);
@@ -117,6 +135,7 @@ internal sealed class ReplaySliceReader
         _coordinator = coordinator;
         _treeId = treeId;
         _partition = partition;
+        _filter = filter;
         // Clamp rather than throw, and do not "tidy" this into agreement with
         // the validator. The two guards sit on the same value at seams where
         // failure costs differently, so their postures differ deliberately.
@@ -150,6 +169,9 @@ internal sealed class ReplaySliceReader
     /// sites owning their own width.
     /// </summary>
     internal int Budget => _budget;
+
+    /// <summary>The ownership filter every slice is read through.</summary>
+    internal WalKeyFilter Filter => _filter;
 
     /// <summary>
     /// Reads one slice of <c>(fromExclusive, toInclusive]</c>, narrowing the
@@ -214,11 +236,21 @@ internal sealed class ReplaySliceReader
             IReadOnlyList<CommitLogSliceEntry> slice;
             try
             {
-                slice = await _coordinator.ReadSliceAsync(
-                    fromExclusive,
-                    toInclusive,
-                    _budget,
-                    cancellationToken);
+                // A bounded filter takes the filtered overload (issue #3565); an
+                // unbounded one keeps the unfiltered read, which is the same
+                // result without the push-down.
+                slice = !_filter.IsUnbounded
+                    ? await _coordinator.ReadSliceAsync(
+                        fromExclusive,
+                        toInclusive,
+                        _budget,
+                        _filter,
+                        cancellationToken)
+                    : await _coordinator.ReadSliceAsync(
+                        fromExclusive,
+                        toInclusive,
+                        _budget,
+                        cancellationToken);
             }
             catch (Exception ex) when (_budget > 1 && BPlusLeafGrain.IsReadMemoryPressure(ex))
             {

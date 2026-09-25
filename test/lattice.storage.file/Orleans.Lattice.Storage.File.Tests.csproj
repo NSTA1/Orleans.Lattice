@@ -30,6 +30,8 @@
   <ItemGroup>
     <!-- One provider-to-probe adapter shared by every WAL provider's contract fixture. -->
     <Compile Include="..\lattice\ContractProbes\WalStorageProviderContractProbe.cs" Link="Shared\WalStorageProviderContractProbe.cs" />
+    <!-- The shared differential allocation harness, so the file shard's allocation test keeps the core suite's discipline. -->
+    <Compile Include="..\lattice\Fakes\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
   </ItemGroup>
 
 </Project>

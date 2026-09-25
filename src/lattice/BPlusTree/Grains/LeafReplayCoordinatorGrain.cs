@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,9 +34,13 @@ internal sealed class LeafReplayCoordinatorGrain(
     private int _shardIndex = -1;
     private ICommitLogReader? _reader;
 
-    // Last-served slice cache - V1 amortisation surface.
+    // Last-served slice cache - V1 amortisation surface. The filter is part of
+    // the key (issue #3565): a slice read for one leaf's ownership omits the
+    // records excluded from it, so serving it to a leaf that owns something
+    // else would hand that leaf a window with its own records missing.
     private long _cachedFromExclusive = -1;
     private long _cachedToInclusive = -1;
+    private WalKeyFilter _cachedFilter;
     private DateTime _cachedAtUtc = DateTime.MinValue;
     private IReadOnlyList<CommitLogSliceEntry>? _cachedEntries;
 
@@ -67,11 +72,27 @@ internal sealed class LeafReplayCoordinatorGrain(
         _reader = context.ActivationServices.GetRequiredService<ICommitLogReader>();
     }
 
-    public async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
+    public Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
         long toOffsetInclusive,
         int budget,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, default, cancellationToken);
+
+    public Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int budget,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken = default) =>
+        ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+
+    private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceCoreAsync(
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int budget,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (budget <= 0)
@@ -96,6 +117,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         if (_cachedEntries is not null
             && _cachedFromExclusive == fromOffsetExclusive
             && _cachedToInclusive == toOffsetInclusive
+            && _cachedFilter == filter
             && DateTime.UtcNow - _cachedAtUtc < SliceCacheTtl)
         {
             // Issue #2899. The key is the range, and narrowing spends WIDTH,
@@ -113,21 +135,34 @@ internal sealed class LeafReplayCoordinatorGrain(
                 : _cachedEntries.Take(budget).ToList();
         }
 
-        var collected = new List<CommitLogSliceEntry>();
+        IReadOnlyList<CommitLogSliceEntry> result;
         try
         {
-            await foreach (var (offset, mutation) in _reader!.ReadAsync(
-                _treeId!, _shardIndex, fromOffsetExclusive, cancellationToken))
+            if (filter.IsUnbounded)
             {
-                if (offset > toOffsetInclusive)
+                // An unbounded filter excludes nothing, so it takes the
+                // unfiltered read and leaves that path exactly as it was.
+                var collected = new List<CommitLogSliceEntry>();
+                await foreach (var (offset, mutation) in _reader!.ReadAsync(
+                    _treeId!, _shardIndex, fromOffsetExclusive, cancellationToken))
                 {
-                    break;
+                    if (offset > toOffsetInclusive)
+                    {
+                        break;
+                    }
+                    collected.Add(new CommitLogSliceEntry(offset, mutation));
+                    if (collected.Count >= budget)
+                    {
+                        break;
+                    }
                 }
-                collected.Add(new CommitLogSliceEntry(offset, mutation));
-                if (collected.Count >= budget)
-                {
-                    break;
-                }
+
+                result = collected;
+            }
+            else
+            {
+                result = await ReadFilteredSliceAsync(
+                    fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -143,12 +178,63 @@ internal sealed class LeafReplayCoordinatorGrain(
             throw;
         }
 
-        var result = (IReadOnlyList<CommitLogSliceEntry>)collected;
         _cachedFromExclusive = fromOffsetExclusive;
         _cachedToInclusive = toOffsetInclusive;
+        _cachedFilter = filter;
         _cachedAtUtc = DateTime.UtcNow;
         _cachedEntries = result;
         return result;
+    }
+
+    /// <summary>
+    /// Reads one filtered slice. The budget bounds the entries the read
+    /// examines, and what it keeps is gathered in a pooled buffer, because on a
+    /// partition shared by many leaves a slice keeps little of its window and
+    /// only the exact-length result needs to be allocated.
+    /// </summary>
+    private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadFilteredSliceAsync(
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int budget,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var buffer = ArrayPool<CommitLogSliceEntry>.Shared.Rent(Math.Min(budget, 64));
+        var count = 0;
+        try
+        {
+            await foreach (var (offset, mutation) in _reader!.ReadFilteredAsync(
+                _treeId!, _shardIndex, fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken))
+            {
+                if (offset > toOffsetInclusive)
+                {
+                    break;
+                }
+
+                if (count == buffer.Length)
+                {
+                    var larger = ArrayPool<CommitLogSliceEntry>.Shared.Rent(buffer.Length * 2);
+                    buffer.AsSpan(0, count).CopyTo(larger);
+                    ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer, clearArray: true);
+                    buffer = larger;
+                }
+
+                buffer[count++] = new CommitLogSliceEntry(offset, mutation);
+
+                // Defensive only: a reader that honours the examined bound can
+                // never deliver more entries than it was allowed to examine.
+                if (count >= budget)
+                {
+                    break;
+                }
+            }
+
+            return count == 0 ? EmptySlice : buffer.AsSpan(0, count).ToArray();
+        }
+        finally
+        {
+            ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     public async Task<long> GetHeadOffsetAsync(CancellationToken cancellationToken = default)

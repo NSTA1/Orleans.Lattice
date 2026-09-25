@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
+using Orleans.Serialization.Session;
 
 namespace Orleans.Lattice.Storage.AzureTable;
 
@@ -77,7 +79,8 @@ public static class LatticeAzureTableServiceCollectionExtensions
             sp.GetRequiredService<IOptions<AzureTableWalStorageOptions>>(),
             sp.GetRequiredService<Serializer<WalRecord>>(),
             sp.GetService<IWalSaturationSignal>(),
-            sp.GetServices<ILatticeCompressor>()));
+            sp.GetServices<ILatticeCompressor>(),
+            new WalRecordRoutingReader(sp.GetRequiredService<SerializerSessionPool>())));
 
         // Durable WAL storage must not silently pair with a never-registered
         // (process-local, restart-wiped) cursor registry: that pairing trims

@@ -53,6 +53,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     private readonly Func<ReadOnlySequence<byte>, WalRecord> _decode;
     private readonly IWalReadPressureGovernor _governor;
     private readonly IFileWalFileSystem _fileSystem;
+    private readonly WalRecordRoutingReader? _routing;
     private readonly ConcurrentDictionary<(string TreeId, int ShardIndex), FileWalShard> _shards = new();
     private bool _disposed;
 
@@ -83,6 +84,24 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         Serializer<WalRecord> serializer,
         IWalReadPressureGovernor governor,
         IFileWalFileSystem fileSystem)
+        : this(options, serializer, governor, fileSystem, routing: null)
+    {
+    }
+
+    /// <summary>
+    /// The constructor <see cref="LatticeFileServiceCollectionExtensions.AddFileWalStorage"/>
+    /// uses. <paramref name="routing"/> lets <see cref="ReadFilteredAsync"/>
+    /// classify a record from its routing prefix without decoding it (issue
+    /// #3565); a provider built without one - through the public constructor,
+    /// which has no serializer session pool to build it from - still returns
+    /// the same records, but decodes every one it examines.
+    /// </summary>
+    internal FileWalStorageProvider(
+        IOptions<FileWalStorageOptions> options,
+        Serializer<WalRecord> serializer,
+        IWalReadPressureGovernor governor,
+        IFileWalFileSystem fileSystem,
+        WalRecordRoutingReader? routing)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -114,6 +133,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         _serializer = serializer;
         _governor = governor;
         _fileSystem = fileSystem;
+        _routing = routing;
 
         // Cached so the decode path allocates no delegate per read: the one
         // thing a memory-pressure fix must not do is allocate on the page it
@@ -248,6 +268,75 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// With the routing reader the DI registration supplies, each examined
+    /// record is classified from a short read of its routing prefix, and a
+    /// record the filter excludes is skipped without its payload being read in
+    /// full or decoded - so on a partition shared by many leaves the read
+    /// allocates in proportion to what the caller owns, not to the window (issue
+    /// #3565). The page arrives in pooled buffers that are returned when the
+    /// enumeration completes.
+    /// </remarks>
+    public async IAsyncEnumerable<WalEntry> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        WalKeyFilter filter,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per read.");
+        }
+
+        ThrowIfDisposed();
+
+        var shard = GetShard(treeId, shardIndex);
+        var (offsets, records, count) = await shard
+            .SnapshotFilteredAsync(
+                fromOffsetExclusive,
+                toOffsetInclusive,
+                maxEntries,
+                _options.MaxReadBatchBytes,
+                filter,
+                filter.IsUnbounded ? null : _routing,
+                _decode,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new WalEntry
+                {
+                    Offset = offsets[i],
+                    Mutation = WalRecordConverter.FromWalRecord(in records[i]),
+                };
+            }
+        }
+        finally
+        {
+            // Empty arrays mean the window held nothing and were never rented.
+            if (offsets.Length > 0)
+            {
+                ArrayPool<long>.Shared.Return(offsets);
+            }
+
+            if (records.Length > 0)
+            {
+                ArrayPool<WalRecord>.Shared.Return(records, clearArray: true);
+            }
+        }
+    }
     /// <inheritdoc />
     public async Task<WalShardEncodedPage> ReadEncodedAsync(
         string treeId,

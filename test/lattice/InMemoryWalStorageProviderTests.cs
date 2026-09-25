@@ -360,6 +360,31 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
+    public async Task ReadFilteredAsync_applies_the_shard_axis()
+    {
+        // The range axis is pinned by the shared provider contract; the shard
+        // axis is pinned here, since the contract probe carries only bounds.
+        var sut = new InMemoryWalStorageProvider();
+        var keys = Enumerable.Range(0, 24).Select(i => $"k{i:D2}").ToArray();
+        await sut.AppendBatchAsync(Tree, 0, keys.Select((k, i) => Entry(i, k)).ToArray(), CancellationToken.None);
+        var map = ShardMap.CreateDefault(64, 4);
+
+        var collected = new List<WalEntry>();
+        await foreach (var w in sut.ReadFilteredAsync(Tree, 0, -1, long.MaxValue, 100, new WalKeyFilter(null, null, map, 2), CancellationToken.None))
+        {
+            collected.Add(w);
+        }
+
+        var owned = keys.Where(k => map.Resolve(k) == 2).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(owned, Is.Not.Empty.And.Length.LessThan(keys.Length), "Both verdicts must occur for the test to mean anything.");
+            Assert.That(collected.Where(w => w.Mutation.Value is not null).Select(w => w.Mutation.Key), Is.EqualTo(owned));
+            Assert.That(collected[^1].Offset, Is.EqualTo(23L), "The last examined entry is always delivered.");
+        });
+    }
+
+    [Test]
     public async Task TrimAsync_removes_entries_through_the_supplied_offset()
     {
         var sut = new InMemoryWalStorageProvider();

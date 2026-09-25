@@ -264,6 +264,71 @@ public interface IWalStorageProvider
     }
 
     /// <summary>
+    /// Filtered counterpart of <see cref="ReadAsync"/> for a reader that owns
+    /// <paramref name="filter"/> and discards every key-scoped record outside it
+    /// - the leaf replay read path (issue #3565). It examines the entries of the
+    /// window
+    /// <c>(<paramref name="fromOffsetExclusive"/>, <paramref name="toOffsetInclusive"/>]</c>
+    /// in ascending offset order, at most <paramref name="maxEntries"/> of them,
+    /// and yields the subset the reader needs:
+    /// <list type="bullet">
+    /// <item><description>every examined entry the filter does not exclude
+    /// (<see cref="WalKeyFilter.Excludes"/>), in full;</description></item>
+    /// <item><description>no excluded entry, except that when the <b>last entry
+    /// examined</b> is excluded it is yielded <i>routing-only</i> - its offset,
+    /// <see cref="LatticeMutation.Kind"/> and <see cref="LatticeMutation.Key"/>
+    /// exact, every other field default - so a reader that advances by the last
+    /// offset it receives still moves past everything that was
+    /// dropped.</description></item>
+    /// </list>
+    /// The enumeration is therefore empty exactly when the window holds no
+    /// entry, as for <see cref="ReadAsync"/>, and <paramref name="maxEntries"/>
+    /// bounds the work of a read, not merely its result.
+    /// <para>
+    /// The point of the seam is that a provider can decide exclusion before it
+    /// materialises a payload, so a leaf replaying a partition shared with many
+    /// siblings no longer allocates every sibling's value bytes. The default
+    /// implementation drains <see cref="ReadAsync"/> and applies the same rule
+    /// to the decoded entries: the same entries reach the caller, so a provider
+    /// that has not overridden it keeps working, but it pays the full decode.
+    /// With an unbounded filter (<see cref="WalKeyFilter.IsUnbounded"/>) the
+    /// result equals <see cref="ReadAsync"/> over the window.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="fromOffsetExclusive">Strict lower-bound offset of the window; pass <c>-1</c> to read from the start of the log.</param>
+    /// <param name="toOffsetInclusive">Inclusive upper-bound offset of the window. No entry above it is examined.</param>
+    /// <param name="maxEntries">Maximum number of entries to examine; must be at least <c>1</c>. At most this many are yielded.</param>
+    /// <param name="filter">The reader's ownership.</param>
+    /// <param name="cancellationToken">Cancellation token observed between every yielded entry.</param>
+    IAsyncEnumerable<WalEntry> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per read.");
+        }
+
+        return BPlusTree.WalFilteredRead.ApplyAsync(
+            ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken),
+            toOffsetInclusive,
+            maxEntries,
+            filter,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Returns the highest <see cref="WalEntry.Offset"/> ever assigned for
     /// <paramref name="treeId"/> / <paramref name="shardIndex"/>, or <c>-1</c>
     /// when the shard has never accepted an entry. Used by the WAL grain on

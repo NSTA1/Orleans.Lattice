@@ -21,6 +21,7 @@ Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> ent
 Task AppendEncodedBatchAsync(string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken);
 IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken);
 Task<WalShardEncodedPage> ReadEncodedAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, IWalRecordEncoder encoder, CancellationToken cancellationToken); // optional, default drains ReadAsync and re-encodes
+IAsyncEnumerable<WalEntry> ReadFilteredAsync(string treeId, int shardIndex, long fromOffsetExclusive, long toOffsetInclusive, int maxEntries, WalKeyFilter filter, CancellationToken cancellationToken); // optional, default drains ReadAsync and filters
 Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken);
@@ -73,6 +74,31 @@ var entry = new WalEntry
     },
 };
 ```
+
+### Filtered replay read (`ReadFilteredAsync`)
+
+A WAL partition is shared by every leaf whose keys hash to it, but a leaf replaying the partition on activation applies only the records it owns. `ReadFilteredAsync` lets that replay hand its ownership to the provider as a `WalKeyFilter`, so a provider that can tell a record's key without decoding the record skips the records the leaf would discard (issue #3565). Before it existed, a leaf replaying a busy shared partition decoded every other leaf's value bytes only to drop them.
+
+The read examines the entries of the window `(fromOffsetExclusive, toOffsetInclusive]` in ascending offset order, at most `maxEntries` of them, and yields:
+
+- every examined entry the filter does not exclude, in full;
+- no excluded entry, except that when the **last entry examined** is excluded it is yielded *routing-only*: its offset, `Kind`, and `Key` exact, and every other field default.
+
+The trailing routing-only entry keeps the paging contract intact. A reader continues from the last offset it received, so a window holding only other leaves' records would otherwise look empty and end the replay early. With it, an empty enumeration still means the window holds no entry, exactly as for `ReadAsync`. `maxEntries` bounds the entries **examined**, not the entries yielded, so one read costs the same however little of its window the reader owns.
+
+A `WalKeyFilter` has two axes, and a key must satisfy both to be owned: a half-open key range, where `null` means no bound, and optionally the slots of one shard under a `ShardMap`. Only key-scoped records can be excluded - a record that is not about a single key is always delivered - and the default filter excludes nothing.
+
+```csharp verify
+// Owns [m, n): "mango" is owned, and a write to "zebra" is excluded.
+var byRange = new WalKeyFilter("m", "n");
+var ownsMango = byRange.Owns("mango");
+var skipsZebra = byRange.Excludes(MutationKind.Set, "zebra");
+
+// Owns [m, n), narrowed to the keys the shard map routes to shard 1.
+var byRangeAndShard = new WalKeyFilter("m", "n", ShardMap.CreateDefault(64, 4), 1);
+```
+
+The default interface implementation drains `ReadAsync` and applies the same rule to the decoded entries. It returns the same entries, so a provider that has not overridden it keeps working, but it pays the full decode the seam exists to avoid. With an unbounded filter (`WalKeyFilter.IsUnbounded`) the result equals `ReadAsync` over the window. Each shipped provider overrides it; see the provider catalogue below.
 
 ### Byte accounting (`GetRetainedByteSizeAsync`, `GetPhysicalByteSizeAsync`)
 
@@ -205,10 +231,13 @@ Default implementation shipped in core. Stores every appended entry in a thread-
 - **Atomicity**: validates the supplied offsets are dense ahead of any state mutation; a rejected batch leaves observable state untouched.
 - **Throughput**: lock-per-shard append (uncontended outside fan-in benchmarks).
 - **Recovery**: none - the provider is process-scoped and reports an empty log on restart.
+- **Filtered read**: copies the window out under the shard lock - a struct copy per entry, with no payload duplicated - and filters it after the lock is released, so appends never wait on the filter.
 
 ### `AzureTableWalStorageProvider`
 
 Durable Azure Table Storage implementation shipped in the optional `Orleans.Lattice.Storage.AzureTable` NuGet package. It overrides the zero-copy append overload so the WAL grain's already-encoded payload bytes are stored verbatim, and implements activation-time reconciliation so its multi-phase commit protocol stays consistent across crash boundaries.
+
+Its `ReadFilteredAsync` classifies each row from the routing prefix of its payload, inflating a compressed row into a pooled buffer rather than a new array, and decodes only the rows the reader owns. The table service still returns every row of the window, because the key is stored inside the payload, so the saving is the per-row decode and its allocations rather than the transfer.
 
 Its storage and row layout, transactional append pipeline, retry and saturation handling, compression, capacity planning, and the Azurite-backed test setup are documented in the dedicated [Azure Table WAL docs](../lattice.storage.azuretable/README.md) - start with [configuration](../lattice.storage.azuretable/configuration.md), [architecture](../lattice.storage.azuretable/architecture.md), and [chaos tests](../lattice.storage.azuretable/chaos-tests.md).
 
@@ -221,6 +250,7 @@ Durable local-disk implementation shipped in the optional `Orleans.Lattice.Stora
 - **Recovery**: `ReconcileAsync` rolls every committed batch forward, truncates a torn or uncommitted tail, and reclaims space already trimmed.
 - **Reclamation**: a trim writes a durable trim marker, and space is physically reclaimed by rewriting the file once the configured dead-byte policy is met. It is the one shipped provider that overrides `EvaluateCompactionAsync`, and the one that reports a trim point past its last entry through `GetHighestOffsetAsync`.
 - **Byte accounting**: overrides both `GetRetainedByteSizeAsync` and `GetPhysicalByteSizeAsync`; the physical figure is the file length, dead bytes included.
+- **Filtered read**: classifies each record from the first kilobyte of its payload, read into a stack buffer, so a record the reader does not own costs one short read and no allocation. A record whose key does not fit in that prefix is decoded in full instead, which gives the same answer more slowly.
 
 Its options, on-disk framing, compaction policy, and recovery behaviour are documented in the dedicated [File WAL docs](../lattice.storage.file/README.md) - see [configuration](../lattice.storage.file/configuration.md) and [architecture](../lattice.storage.file/architecture.md).
 
@@ -234,6 +264,7 @@ Authoring a custom provider is purely an exercise in implementing the contract. 
 4. Make `TrimAsync` idempotent and safe to interrupt - a crash mid-trim must leave the WAL in a state where a subsequent trim resumes correctly.
 5. **Optional fast path.** Override `AppendEncodedBatchAsync` when the backend stores binary payloads natively. The default implementation decodes each segment through the supplied `IWalRecordEncoder` and delegates to `AppendBatchAsync`, so a provider that only implements `AppendBatchAsync` keeps working - overriding the zero-copy overload skips the round-trip and stores the grain's already-encoded bytes directly.
 6. **Optional activation-time recovery.** Override `ReconcileAsync` if the backend's commit protocol can leave the durable state inconsistent across crash boundaries (e.g. a multi-phase commit, as in the Azure Tables provider). The default implementation is a no-op, suitable for backends whose append is atomic in a single operation. The WAL grain calls `ReconcileAsync` in `OnActivateAsync` before reading the highest offset, so the activation seam is quiescent for the duration.
+7. **Optional filtered read.** Override `ReadFilteredAsync` when the backend can read a record's key without materialising its payload. An override must yield exactly what the default implementation would for the same window - the owned entries in full, and the last examined entry routing-only when it is excluded - and must count excluded entries against `maxEntries`. The WAL grain re-applies the rule to whatever the provider yields, so an override that delivers too much never leaks another leaf's payload to a replaying leaf; it only forgoes the saving.
 
 The `InMemoryWalStorageProvider` source under `src/lattice/InMemoryWalStorageProvider.cs` is the canonical reference implementation; the `AzureTableWalStorageProvider` source under `src/lattice.storage.azuretable/` is the canonical durable reference implementation.
 

@@ -584,6 +584,10 @@ internal static class TypeAliases
     internal const string WalShardShippingEntry = "olr.ws";
     internal const string WalShardShippingPage = "olr.wg";
 
+    // Ownership filter a WAL replay read pushes down to storage (issue #3565):
+    // a key range plus an optional owned-virtual-slot bitmap.
+    internal const string WalKeyFilter = "ol.wkf";
+
     // Per-tree pinned WAL placement + ILatticeAdmin managed-move surface.
     // The pin is durable registry state; the move DTOs are the public
     // admin contract for auditing and relocating a partition's log between

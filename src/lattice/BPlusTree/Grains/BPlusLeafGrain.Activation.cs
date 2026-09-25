@@ -3218,6 +3218,16 @@ internal sealed partial class BPlusLeafGrain
     /// scenario). DeleteRange / TxCommit / TxAbort are applied
     /// unconditionally; unknown <see cref="MutationKind"/> values are
     /// dropped (defensive forward-compat).
+    /// <para>
+    /// The same ownership is also pushed down to storage (issue #3565): each
+    /// partition replay reads through a <see cref="ReplaySliceReader"/> carrying
+    /// the leaf's range and, when the registry has a shard map, its shard's
+    /// slots, so the records the filter would reject are dropped before their
+    /// payloads are decoded, and the loop judges every slice by that same
+    /// ownership. Filtered slices are no longer offset-dense, so the warm-cache
+    /// proof checks a filtered window by the partition's retained floor rather
+    /// than by density.
+    /// </para>
     /// </remarks>
     private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
@@ -3402,6 +3412,11 @@ internal sealed partial class BPlusLeafGrain
         // leaf to reject its own writes - in that case replay falls back to
         // the legacy stamp-based axis.
         var replayShardMap = await ResolveReplayShardMapAsync(treeId);
+
+        // The ownership every partition's slices are judged by AND filtered by
+        // (issue #3565), captured from one read of the leaf's state so the two
+        // cannot diverge mid-replay. See LeafReplayOwnership.
+        var replayOwnership = LeafReplayOwnership.Capture(state.State, replayShardMap);
 
         var anyAdvanced = false;
         // Pass 1: per-partition tail replay, deferring every saga
@@ -3649,12 +3664,29 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
             if (maxApplied > perPartitionMaxApplied[partition])
                 perPartitionMaxApplied[partition] = maxApplied;
+
+            // The warm-cache proof needs this partition's window read whole, and
+            // a filtered replay (issue #3565) cannot show that by density: its
+            // slices skip other owners' records by design, so ReplayPartitionAsync
+            // checks only that offsets ascend. A trim only ever removes a prefix,
+            // so nothing in the window was lost exactly when the oldest readable
+            // offset, taken now the read is done, is still at or below the first
+            // offset the window needed - the boundary the cold-replay guard above
+            // uses for the same question.
+            if (warmReplayProven && !_warmCacheReplayFailed && !replayOwnership.Filter.IsUnbounded)
+            {
+                var floor = await grainFactory
+                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
+                    .GetTailOffsetAsync(cancellationToken);
+                if (floor > checkpoint + 1)
+                    _warmCacheReplayFailed = true;
+            }
         }
 
         // Pass 2: drain every deferred saga terminal (and DeleteRange
@@ -5842,7 +5874,7 @@ internal sealed partial class BPlusLeafGrain
         List<DeferredTerminal> deferredTerminals,
         DeferredOffsetLedger deferredOffsets,
         bool drainDeferredInline,
-        ShardMap? replayShardMap,
+        LeafReplayOwnership replayOwnership,
         int maxRecordsPerTurn,
         int maxDurableUnresolvedWork,
         long? probedHead,
@@ -5872,8 +5904,22 @@ internal sealed partial class BPlusLeafGrain
         // the prime still happens on a replay that returns before reading
         // anything, which is what makes a later zero a measurement. The width
         // it starts at is configured (issue #2898).
+        //
+        // It also carries this leaf's ownership down to storage (issue #3565).
+        // A partition interleaves the writes of every sibling leaf of every
+        // shard, and before the push-down every one of them was decoded, payload
+        // and all, and carried across two grain boundaries only to be rejected
+        // by the ownership test below - the partition gap's whole payload once
+        // per leaf, which on a tree with large values was the dominant
+        // allocation of the process. The filter comes from replayOwnership,
+        // which also supplies the judgement below, so a slice is never judged by
+        // different ownership than it was filtered with.
         var sliceReader = new ReplaySliceReader(
-            coordinator, treeId, partition, (await GetOptionsAsync()).WalReplaySliceBudget);
+            coordinator,
+            treeId,
+            partition,
+            (await GetOptionsAsync()).WalReplaySliceBudget,
+            replayOwnership.Filter);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed
@@ -6238,15 +6284,16 @@ internal sealed partial class BPlusLeafGrain
                 cancellationToken.ThrowIfCancellationRequested();
                 // Maxima alone cannot certify the cache: a provider may return a
                 // surviving suffix after trimming between classification and read.
-                if (entry.Offset != maxApplied + 1)
+                // An unfiltered slice proves it did not by being offset-dense. A
+                // filtered slice is sparse by design (issue #3565), so here it is
+                // held only to ascending offsets, and the caller proves its window
+                // by the retained floor once the partition is read.
+                if (replayOwnership.Filter.IsUnbounded
+                        ? entry.Offset != maxApplied + 1
+                        : entry.Offset <= maxApplied)
                     _warmCacheReplayFailed = true;
 
-                if (ShouldApplyDuringReplay(
-                    entry.Mutation,
-                    state.State.ShardIndex,
-                    state.State.LowKeyInclusive,
-                    state.State.HighKeyExclusive,
-                    replayShardMap))
+                if (replayOwnership.ShouldApply(entry.Mutation))
                 {
                     // This entry is this leaf's own work: it either goes
                     // through ILeafProjection.Apply now, or is deferred to
@@ -6610,6 +6657,13 @@ internal sealed partial class BPlusLeafGrain
                 // the partition, not how much of it was its own. Moving this
                 // inside the filter is a severe regression, not a tightening -
                 // see the declaration of maxApplied above.
+                //
+                // Since the key-range push-down (issue #3565) most such entries
+                // never reach this loop at all: storage drops them, and the slice
+                // is no longer offset-dense. The advance still covers them,
+                // because the reader always delivers the window's last examined
+                // entry - routing-only when it is foreign - so the next offset
+                // this loop sees is at or beyond every record that was dropped.
                 if (entry.Offset > maxApplied)
                     maxApplied = entry.Offset;
 

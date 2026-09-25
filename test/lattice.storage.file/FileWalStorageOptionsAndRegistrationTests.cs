@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Storage.File.Tests;
 /// DI registration.
 /// </summary>
 [TestFixture]
-public sealed class FileWalStorageOptionsAndRegistrationTests
+public sealed partial class FileWalStorageOptionsAndRegistrationTests
 {
     private ServiceProvider _services = null!;
     private Serializer<WalRecord> _serializer = null!;

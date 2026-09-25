@@ -235,6 +235,10 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     // FrozenDictionary-at-construction pattern in
     // OrleansBinaryReplicationBatchEncoder.
     private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
+
+    // Classifies a row from its routing prefix for the filtered read (issue
+    // #3565); null when the provider was built without a serializer session pool.
+    private readonly WalRecordRoutingReader? _routing;
     private readonly ILatticeCompressor? _activeCompressor;
     private readonly byte _activeCompressionTag;
     private readonly int _compressionMinPayloadBytes;
@@ -332,6 +336,24 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         Serializer<WalRecord> serializer,
         IWalSaturationSignal? saturationSignal,
         IEnumerable<ILatticeCompressor>? compressors)
+        : this(options, serializer, saturationSignal, compressors, routing: null)
+    {
+    }
+
+    /// <summary>
+    /// The constructor <see cref="LatticeAzureTableServiceCollectionExtensions.AddAzureTableWalStorage"/>
+    /// uses. <paramref name="routing"/> lets <see cref="ReadFilteredAsync"/>
+    /// classify a row from its routing prefix without decoding it (issue
+    /// #3565); a provider built through a public constructor, which has no
+    /// serializer session pool to build one from, returns the same rows but
+    /// decodes every one it examines.
+    /// </summary>
+    internal AzureTableWalStorageProvider(
+        IOptions<AzureTableWalStorageOptions> options,
+        Serializer<WalRecord> serializer,
+        IWalSaturationSignal? saturationSignal,
+        IEnumerable<ILatticeCompressor>? compressors,
+        WalRecordRoutingReader? routing)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -340,6 +362,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             nameof(options));
         _serializer = serializer;
         _saturationSignal = saturationSignal;
+        _routing = routing;
         _pipelinePhaseTwoTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagPipelinePhaseTwo,
             _options.PipelinePhaseTwoCommits);

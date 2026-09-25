@@ -38,7 +38,8 @@ public partial class BPlusLeafGrainTests
         int? maxLeafReplayEntries = null,
         TimeSpan? starvationDriveBudget = null,
         ILoggerProvider? loggerProvider = null,
-        int? maxConcurrentReplays = null)
+        int? maxConcurrentReplays = null,
+        ShardMap? registryShardMap = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -110,7 +111,12 @@ public partial class BPlusLeafGrainTests
             baseOptions: baseOptions,
             maxLeafKeys: 128,
             shardCount: 1,
-            factory: grainFactory);
+            factory: grainFactory,
+            // Optional so every test that does not care keeps the stamp-based
+            // shard axis: replay resolves ownership through the registry's routing
+            // map only when one is published, and only then pushes the shard axis
+            // down to storage (issue #3565).
+            shardMap: registryShardMap);
         var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         seedEntries?.Invoke(grain.EntriesForTest);
         return (grain, state, coordinator, reporter);
@@ -121,29 +127,10 @@ public partial class BPlusLeafGrainTests
         ReachableWalFixture.EnsureReachable(head, entries);
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
-        coord.ReadSliceAsync(
-                Arg.Any<long>(),
-                Arg.Any<long>(),
-                Arg.Any<int>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var fromExclusive = call.ArgAt<long>(0);
-                var toInclusive = call.ArgAt<long>(1);
-                var budget = call.ArgAt<int>(2);
-                var slice = new List<CommitLogSliceEntry>();
-                foreach (var e in entries)
-                {
-                    if (e.Offset <= fromExclusive)
-                        continue;
-                    if (e.Offset > toInclusive)
-                        break;
-                    slice.Add(e);
-                    if (slice.Count >= budget)
-                        break;
-                }
-                return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice);
-            });
+        // Both slice overloads, from the one shared stub: a leaf that owns a bounded
+        // range pushes it down with the filtered overload (issue #3565).
+        ReplaySliceStub.ServeBothOverloads(coord, entries);
+
         return coord;
     }
 
