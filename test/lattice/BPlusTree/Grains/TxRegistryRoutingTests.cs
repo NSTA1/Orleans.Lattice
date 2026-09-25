@@ -90,7 +90,7 @@ public class TxRegistryRoutingTests
         Assert.Multiple(() =>
         {
             Assert.That(TxRegistryRouting.ShardOf(id), Is.EqualTo(200));
-            Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo("tree-route~s200"));
+            Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo("_lattice_txshard_200_tree-route"));
         });
     }
 
@@ -107,7 +107,7 @@ public class TxRegistryRoutingTests
         Assert.Multiple(() =>
         {
             Assert.That(ids.Select(id => TxRegistryRouting.ShardKey(TreeId, id)), Is.EqualTo(before));
-            Assert.That(before, Has.All.StartsWith("tree-route~s"));
+            Assert.That(before, Has.All.StartsWith(TxRegistryRouting.ShardKeyPrefix).And.All.EndsWith("_" + TreeId));
             Assert.That(TxRegistryRouting.ShardKey(TreeId, lowered), Is.EqualTo(TreeId));
         });
     }
@@ -142,13 +142,13 @@ public class TxRegistryRoutingTests
         var id = TxRegistryRouting.MintTransactionId(8);
         var shard = TxRegistryRouting.ShardOf(id);
 
-        Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo($"{TreeId}~s{shard}"));
+        Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo($"_lattice_txshard_{shard}_{TreeId}"));
     }
 
     [Test]
     public void ShardKeyAt_formats_the_shard_suffix()
     {
-        Assert.That(TxRegistryRouting.ShardKeyAt(TreeId, 12), Is.EqualTo("tree-route~s12"));
+        Assert.That(TxRegistryRouting.ShardKeyAt(TreeId, 12), Is.EqualTo("_lattice_txshard_12_tree-route"));
     }
 
     [TestCase(0)]
@@ -161,7 +161,7 @@ public class TxRegistryRoutingTests
     [Test]
     public void EnumerateKeys_with_high_water_one_covers_shard_zero_and_the_legacy_key()
     {
-        Assert.That(TxRegistryRouting.EnumerateKeys(TreeId, 1), Is.EqualTo(new[] { "tree-route~s0", TreeId }));
+        Assert.That(TxRegistryRouting.EnumerateKeys(TreeId, 1), Is.EqualTo(new[] { "_lattice_txshard_0_tree-route", TreeId }));
     }
 
     [Test]
@@ -171,7 +171,7 @@ public class TxRegistryRoutingTests
         Assert.Multiple(() =>
         {
             Assert.That(keys, Has.Length.EqualTo(LatticeOptions.MaxTxRegistryShardCount + 1));
-            Assert.That(keys[^2], Is.EqualTo("tree-route~s255"));
+            Assert.That(keys[^2], Is.EqualTo("_lattice_txshard_255_tree-route"));
             Assert.That(keys[^1], Is.EqualTo(TreeId));
         });
     }
@@ -180,21 +180,25 @@ public class TxRegistryRoutingTests
     public void EnumerateKeys_returns_every_shard_then_the_legacy_key()
     {
         var keys = TxRegistryRouting.EnumerateKeys(TreeId, 3);
-        Assert.That(keys, Is.EqualTo(new[] { "tree-route~s0", "tree-route~s1", "tree-route~s2", TreeId }));
+        Assert.That(keys, Is.EqualTo(new[] { "_lattice_txshard_0_tree-route", "_lattice_txshard_1_tree-route", "_lattice_txshard_2_tree-route", TreeId }));
     }
 
-    [TestCase("tree-route~s0", "tree-route", false)]
-    [TestCase("tree-route~s255", "tree-route", false)]
+    [TestCase("_lattice_txshard_0_tree-route", "tree-route", false)]
+    [TestCase("_lattice_txshard_255_tree-route", "tree-route", false)]
+    [TestCase("_lattice_txshard_3_a_b_7", "a_b_7", false)]
+    [TestCase("_lattice_txshard_3_orders~s4", "orders~s4", false)]
     [TestCase("tree-route", "tree-route", true)]
-    [TestCase("tree-route~s256", "tree-route~s256", true)]
-    [TestCase("tree-route~s1000", "tree-route~s1000", true)]
-    [TestCase("tree-route~sx", "tree-route~sx", true)]
-    [TestCase("tree-route~s", "tree-route~s", true)]
-    [TestCase("tree-route~s-1", "tree-route~s-1", true)]
-    [TestCase("~s3", "~s3", true)]
-    [TestCase("a~sb~s4", "a~sb", false)]
-    [TestCase("a~s4~sb", "a~s4~sb", true)]
-    public void TreeIdFromKey_and_IsLegacyKey_parse_only_a_trailing_numeric_suffix(string key, string expectedTree, bool expectedLegacy)
+    [TestCase("_lattice_txshard_256_tree-route", "_lattice_txshard_256_tree-route", true)]
+    [TestCase("_lattice_txshard_1000_tree-route", "_lattice_txshard_1000_tree-route", true)]
+    [TestCase("_lattice_txshard_03_tree-route", "_lattice_txshard_03_tree-route", true)]
+    [TestCase("_lattice_txshard_x_tree-route", "_lattice_txshard_x_tree-route", true)]
+    [TestCase("_lattice_txshard__tree-route", "_lattice_txshard__tree-route", true)]
+    [TestCase("_lattice_txshard_-1_tree-route", "_lattice_txshard_-1_tree-route", true)]
+    [TestCase("_lattice_txshard_3_", "_lattice_txshard_3_", true)]
+    [TestCase("_lattice_txshard_3", "_lattice_txshard_3", true)]
+    [TestCase("_lattice_trees", "_lattice_trees", true)]
+    [TestCase("x_lattice_txshard_3_tree", "x_lattice_txshard_3_tree", true)]
+    public void TreeIdFromKey_and_IsLegacyKey_parse_only_a_well_formed_shard_key(string key, string expectedTree, bool expectedLegacy)
     {
         Assert.Multiple(() =>
         {
@@ -203,6 +207,59 @@ public class TxRegistryRoutingTests
         });
     }
 
+    [TestCase("orders~s3")]
+    [TestCase("orders~s0")]
+    [TestCase("orders_3")]
+    [TestCase("3_orders")]
+    [TestCase("t/acme/orders~s12")]
+    public void A_tree_named_like_a_shard_key_keeps_a_legacy_key_distinct_from_every_shard_key(string treeId)
+    {
+        // Tree ids are arbitrary strings, so a user tree may carry the old
+        // "~s{n}" suffix or digits and underscores. Its legacy key is itself,
+        // it parses back to itself, and it never equals any shard key of any
+        // tree - so two trees can never share a registry row.
+        var shardKeys = TxRegistryRouting.EnumerateKeys("orders", LatticeOptions.MaxTxRegistryShardCount)
+            .Concat(TxRegistryRouting.EnumerateKeys(treeId, LatticeOptions.MaxTxRegistryShardCount))
+            .Where(k => !TxRegistryRouting.IsLegacyKey(k))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TxRegistryRouting.ShardKey(treeId, Guid.NewGuid()), Is.EqualTo(treeId));
+            Assert.That(TxRegistryRouting.IsLegacyKey(treeId), Is.True);
+            Assert.That(TxRegistryRouting.TreeIdFromKey(treeId), Is.EqualTo(treeId));
+            Assert.That(shardKeys, Has.None.EqualTo(treeId));
+            Assert.That(
+                TxRegistryRouting.EnumerateKeys(treeId, 4).Select(TxRegistryRouting.TreeIdFromKey),
+                Has.All.EqualTo(treeId));
+        });
+    }
+
+    [Test]
+    public void Shard_keys_live_in_the_reserved_system_namespace_that_no_public_tree_can_use()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TxRegistryRouting.ShardKeyPrefix, Does.StartWith(LatticeConstants.SystemTreePrefix));
+            Assert.That(TxRegistryRouting.ShardKeyAt("orders", 3), Does.StartWith(LatticeConstants.SystemTreePrefix));
+            Assert.That(LatticeConstants.RegistryTreeId, Does.Not.StartWith(TxRegistryRouting.ShardKeyPrefix));
+            Assert.That(LatticeConstants.WalTreePrefix, Does.Not.StartWith(TxRegistryRouting.ShardKeyPrefix));
+            Assert.That(LatticeConstants.QueueTreePrefix, Does.Not.StartWith(TxRegistryRouting.ShardKeyPrefix));
+        });
+    }
+
+    [Test]
+    public void TreeIdFromKey_round_trips_a_system_tree_shard_key()
+    {
+        var key = TxRegistryRouting.ShardKeyAt(LatticeConstants.RegistryTreeId, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TxRegistryRouting.TryParseShardKey(key, out var treeId, out var shard), Is.True);
+            Assert.That(treeId, Is.EqualTo(LatticeConstants.RegistryTreeId));
+            Assert.That(shard, Is.EqualTo(7));
+        });
+    }
     [Test]
     public void TreeIdFromKey_round_trips_every_shard_key()
     {

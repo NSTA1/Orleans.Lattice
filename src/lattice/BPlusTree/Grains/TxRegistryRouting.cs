@@ -36,11 +36,30 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal static class TxRegistryRouting
 {
     /// <summary>
-    /// Separates a registry grain key from its shard suffix. Storage-safe: the
-    /// registry is persistent and keyed storage backends reject <c>/</c>,
-    /// <c>\</c>, <c>#</c> and <c>?</c> in a grain key.
+    /// Leads every shard key: <c>{ShardKeyPrefix}{shard}{ShardKeyTreeSeparator}{treeId}</c>.
+    /// <para>
+    /// A tree id is an arbitrary non-empty string, so no suffix or infix
+    /// separator can be kept out of it, and a shape such as <c>{treeId}~s{n}</c>
+    /// lets a legacy key for a tree literally named <c>orders~s3</c> parse as
+    /// shard 3 of <c>orders</c>. Leading with a prefix inside the reserved
+    /// <see cref="LatticeConstants.SystemTreePrefix"/> namespace instead makes
+    /// the shard keys disjoint from every legacy key: the public surface refuses
+    /// a user tree id in that namespace, and no library-composed system tree
+    /// id uses this sub-prefix. The fixed prefix is followed by the shard's
+    /// canonical decimal digits and a separator, so the tree id is everything
+    /// after the first separator and may itself contain anything.
+    /// </para>
+    /// <para>
+    /// Storage-safe: the registry is persistent and keyed storage backends
+    /// reject <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c> in a grain key.
+    /// </para>
     /// </summary>
-    public const string ShardSeparator = "~s";
+    public const string ShardKeyPrefix = LatticeConstants.SystemTreePrefix + "txshard_";
+
+    /// <summary>
+    /// Separates a shard key's shard index from the tree id that follows it.
+    /// </summary>
+    public const string ShardKeyTreeSeparator = "_";
 
     /// <summary>The UUID version stamped into a sharded transaction id.</summary>
     public const int ShardedTransactionIdVersion = 8;
@@ -141,7 +160,7 @@ internal static class TxRegistryRouting
 
     /// <summary>
     /// Returns the registry grain key owning <paramref name="txid"/> on
-    /// <paramref name="treeId"/>: <c>{treeId}~s{shard}</c> for a sharded id, or
+    /// <paramref name="treeId"/>: <c>_lattice_txshard_{shard}_{treeId}</c> for a sharded id, or
     /// the bare <paramref name="treeId"/> (the legacy registry) otherwise.
     /// </summary>
     /// <param name="treeId">The physical tree id.</param>
@@ -156,14 +175,19 @@ internal static class TxRegistryRouting
 
     /// <summary>
     /// Returns the registry grain key for shard <paramref name="shard"/> of
-    /// <paramref name="treeId"/>.
+    /// <paramref name="treeId"/>: <c>_lattice_txshard_{shard}_{treeId}</c> (see
+    /// <see cref="ShardKeyPrefix"/> for why the shard leads and the tree id trails).
     /// </summary>
     /// <param name="treeId">The physical tree id.</param>
     /// <param name="shard">The shard index.</param>
     /// <returns>The registry grain key.</returns>
     [GrainKeyBuilder]
     public static string ShardKeyAt(string treeId, int shard) =>
-        string.Concat(treeId, ShardSeparator, shard.ToString(CultureInfo.InvariantCulture));
+        string.Concat(
+            ShardKeyPrefix,
+            shard.ToString(CultureInfo.InvariantCulture),
+            ShardKeyTreeSeparator,
+            treeId);
 
     /// <summary>
     /// Enumerates the registry grain keys a tree-wide read covers when shards
@@ -205,9 +229,10 @@ internal static class TxRegistryRouting
         grainFactory.GetGrain<ITxRegistryGrain>(ShardKey(treeId, txid));
 
     /// <summary>
-    /// Strips a shard suffix from a registry grain key, yielding the tree id.
-    /// Parsed from the end and only when the suffix is entirely digits, so a
-    /// legacy key whose tree id merely contains the separator is returned whole.
+    /// Strips the shard framing from a registry grain key, yielding the tree id.
+    /// A key that is not a well-formed shard key (see
+    /// <see cref="TryParseShardKey"/>) is a legacy key and is returned whole,
+    /// whatever characters its tree id contains.
     /// </summary>
     /// <param name="key">The registry grain key.</param>
     /// <returns>The tree id the key belongs to.</returns>
@@ -223,9 +248,15 @@ internal static class TxRegistryRouting
     public static bool IsLegacyKey(string key) => !TryParseShardKey(key, out _, out _);
 
     /// <summary>
-    /// Parses a registry grain key into its tree id and shard index. Returns
-    /// <see langword="false"/> (with <paramref name="treeId"/> set to the whole
-    /// key and <paramref name="shard"/> to <c>-1</c>) for a legacy key.
+    /// Parses a registry grain key into its tree id and shard index. A shard key
+    /// is exactly <see cref="ShardKeyPrefix"/>, the shard's canonical decimal
+    /// digits (no leading zero, below
+    /// <see cref="LatticeOptions.MaxTxRegistryShardCount"/>),
+    /// <see cref="ShardKeyTreeSeparator"/>, and a non-empty tree id. Anything
+    /// else - including a tree id that merely contains digits, underscores, or
+    /// an older <c>~s{n}</c> suffix - is a legacy key: this returns
+    /// <see langword="false"/>, with <paramref name="treeId"/> set to the whole
+    /// key and <paramref name="shard"/> to <c>-1</c>.
     /// </summary>
     /// <param name="key">The registry grain key.</param>
     /// <param name="treeId">The tree id the key belongs to.</param>
@@ -233,17 +264,19 @@ internal static class TxRegistryRouting
     /// <returns>Whether <paramref name="key"/> addresses a shard.</returns>
     public static bool TryParseShardKey(string key, out string treeId, out int shard)
     {
-        var idx = key.LastIndexOf(ShardSeparator, StringComparison.Ordinal);
-        if (idx > 0)
+        if (key.StartsWith(ShardKeyPrefix, StringComparison.Ordinal))
         {
-            var suffix = key.AsSpan(idx + ShardSeparator.Length);
-            if (!suffix.IsEmpty
-                && suffix.Length <= 3
-                && IsAllDigits(suffix)
-                && int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out shard)
+            var rest = key.AsSpan(ShardKeyPrefix.Length);
+            var separator = rest.IndexOf(ShardKeyTreeSeparator, StringComparison.Ordinal);
+            if (separator > 0
+                && separator <= 3
+                && separator < rest.Length - 1
+                && IsAllDigits(rest[..separator])
+                && (separator == 1 || rest[0] != '0')
+                && int.TryParse(rest[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out shard)
                 && shard < LatticeOptions.MaxTxRegistryShardCount)
             {
-                treeId = key[..idx];
+                treeId = key[(ShardKeyPrefix.Length + separator + 1)..];
                 return true;
             }
         }

@@ -310,8 +310,10 @@ outcome via dial-back until their pending entries are drained.
 A tree's decision registry can be split into
 `LatticeOptions.TxRegistryShardCount` shards (default 1, which keeps the
 unsharded layout), each a separate `ITxRegistryGrain` activation keyed
-`{treeId}~s{n}` with its own persisted row, its own admission budget, and
-its own decisions revision. Every
+`_lattice_txshard_{n}_{treeId}` with its own persisted row, its own admission budget, and
+its own decisions revision. The shard leads the key inside the reserved
+`_lattice_` namespace, so no tree id - including one that itself contains
+digits, underscores, or a `~s3` suffix - can collide with a shard key. Every
 completed saga leaves a tombstone in its shard's row for
 `TxDecisionRetention`, so a single row caps the saga rate a tree can
 retain. Splitting the registry lifts that ceiling linearly with the shard

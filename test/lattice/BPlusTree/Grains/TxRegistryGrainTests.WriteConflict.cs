@@ -46,8 +46,8 @@ public partial class TxRegistryGrainTests
     public void A_non_conflict_write_failure_is_translated_without_deactivating()
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("tx-registry", "tree-x~s4"));
-        var (grain, state) = CreateGrain(treeId: "tree-x~s4", context: context, grainFactory: RaisingFactory());
+        context.GrainId.Returns(GrainId.Create("tx-registry", TxRegistryRouting.ShardKeyAt("tree-x", 4)));
+        var (grain, state) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 4), context: context, grainFactory: RaisingFactory());
         state.ThrowOnWrite = new IOException("storage unavailable");
 
         var ex = Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkAbortedAsync(Guid.NewGuid()));
@@ -55,7 +55,7 @@ public partial class TxRegistryGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(ex!.Conflict, Is.False);
-            Assert.That(ex.RegistryKey, Is.EqualTo("tree-x~s4"));
+            Assert.That(ex.RegistryKey, Is.EqualTo(TxRegistryRouting.ShardKeyAt("tree-x", 4)));
             Assert.That(ex.FaultType, Is.EqualTo(typeof(IOException).FullName));
             Assert.That(ex.Message, Does.Contain("storage unavailable"));
         });
@@ -81,13 +81,13 @@ public partial class TxRegistryGrainTests
         // A conflict on the high-water grain's own row is that grain's to
         // handle; the registry's row was never written, so it stays valid.
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("tx-registry", "tree-x~s1"));
+        context.GrainId.Returns(GrainId.Create("tx-registry", TxRegistryRouting.ShardKeyAt("tree-x", 1)));
         var factory = Substitute.For<IGrainFactory>();
         var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
         highWater.RaiseShardHighWaterAsync(Arg.Any<int>())
             .Returns(Task.FromException<int>(new InconsistentStateException("high-water etag")));
         factory.GetGrain<ITxRegistryHighWaterGrain>("tree-x").Returns(highWater);
-        var (grain, state) = CreateGrain(treeId: "tree-x~s1", context: context, grainFactory: factory);
+        var (grain, state) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 1), context: context, grainFactory: factory);
 
         var ex = Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkCommittedAsync(Guid.NewGuid()));
 
@@ -118,7 +118,7 @@ public partial class TxRegistryGrainTests
             if (++writes > 1) state.ThrowOnWrite = new IOException("second write");
             return Task.CompletedTask;
         };
-        var (grain, _) = CreateGrain(state: state, treeId: "tree-x~s3", grainFactory: factory);
+        var (grain, _) = CreateGrain(state: state, treeId: TxRegistryRouting.ShardKeyAt("tree-x", 3), grainFactory: factory);
         var a = Guid.NewGuid();
         var b = Guid.NewGuid();
 
@@ -148,7 +148,7 @@ public partial class TxRegistryGrainTests
         var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
         highWater.RaiseShardHighWaterAsync(Arg.Any<int>()).Returns(raise.Task, Task.FromResult(4));
         factory.GetGrain<ITxRegistryHighWaterGrain>("tree-x").Returns(highWater);
-        var (grain, state) = CreateGrain(treeId: "tree-x~s3", grainFactory: factory);
+        var (grain, state) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 3), grainFactory: factory);
         var a = Guid.NewGuid();
         var b = Guid.NewGuid();
 

@@ -40,7 +40,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TreeSnapshotGrain` | `{sourceTreeId}` | `"my-tree"` |
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
-| `TxRegistryGrain` | `{treeId}~s{n}` via `TxRegistryRouting.ShardKey` (sharded), or `{treeId}` for the legacy registry that version-4 txids route to | `"my-tree~s3"` |
+| `TxRegistryGrain` | `_lattice_txshard_{n}_{treeId}` via `TxRegistryRouting.ShardKey` (sharded; the shard leads inside the reserved `_lattice_` namespace so no tree id can collide with it), or `{treeId}` for the legacy registry that version-4 txids route to | `"_lattice_txshard_3_my-tree"` |
 | `TxRegistryHighWaterGrain` | `{treeId}` (one durable shard high-water mark per tree) | `"my-tree"` |
 | `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1op-42"` |
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |

@@ -154,7 +154,7 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 | Soft delete / purge | `TreeDeletionGrain` | `{treeId}` | Deleted flag and timestamp, purge progress (next shard index, per-shard retries), and a purge-complete flag; the soft-delete window is read from `SoftDeleteDuration`, not persisted | Yes |
 | Tombstone compaction | `TombstoneCompactionGrain` | `{treeId}` | `TombstoneCompactionState` - per-shard compaction cursor | Yes |
 | Atomic write saga | `AtomicWriteGrain` | `{treeId}/{operationId}` | Saga phase (prepare, prepared, execute, compensate, completed, or precondition-failed), the entries with their captured pre-values, and per-step progress; the retention period is `AtomicWriteRetention`, applied by the retention reminder | Yes (keepalive + retention) |
-| Per-tree tx registry (sharded) | `TxRegistryGrain` | `{treeId}~s{n}` (`{treeId}` for the legacy, pre-sharding registry) | `TxRegistryState` - per-transaction commit/abort decisions with bounded retention window | No |
+| Per-tree tx registry (sharded) | `TxRegistryGrain` | `_lattice_txshard_{n}_{treeId}` (`{treeId}` for the legacy, pre-sharding registry) | `TxRegistryState` - per-transaction commit/abort decisions with bounded retention window | No |
 | Tx registry shard high-water | `TxRegistryHighWaterGrain` | `{treeId}` | `TxRegistryHighWaterState` - the highest registry shard index plus one ever written, which bounds tree-wide registry reads | No |
 
 ### Durability and transport grains

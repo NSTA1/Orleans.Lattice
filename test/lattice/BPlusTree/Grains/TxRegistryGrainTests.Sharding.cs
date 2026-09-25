@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Registry-shard identity and per-shard admission (issue #3501). A shard is
-/// keyed <c>{treeId}~s{n}</c>; it must report the bare tree id it belongs to,
+/// keyed <c>_lattice_txshard_{n}_{treeId}</c>; it must report the bare tree id it belongs to,
 /// and its admission budget covers only its own row.
 /// </summary>
 public partial class TxRegistryGrainTests
@@ -23,7 +23,7 @@ public partial class TxRegistryGrainTests
     public void Shard_keyed_registry_refusal_names_the_bare_tree_id()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        var (grain, state) = CreateGrain(treeId: "tree-x~s3", options: SmallBudgetOptions(), timeProvider: clock);
+        var (grain, state) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 3), options: SmallBudgetOptions(), timeProvider: clock);
         SeedTombstones(state.State, 200, clock.GetUtcNow());
         Assume.That(grain.EstimatedRowBytes(), Is.GreaterThanOrEqualTo(16 * 1024));
 
@@ -40,8 +40,8 @@ public partial class TxRegistryGrainTests
     public async Task A_full_shard_does_not_refuse_admission_on_a_sibling_shard()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
-        var (full, fullState) = CreateGrain(treeId: "tree-x~s0", options: SmallBudgetOptions(), timeProvider: clock);
-        var (sibling, siblingState) = CreateGrain(treeId: "tree-x~s1", options: SmallBudgetOptions(), timeProvider: clock);
+        var (full, fullState) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 0), options: SmallBudgetOptions(), timeProvider: clock);
+        var (sibling, siblingState) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 1), options: SmallBudgetOptions(), timeProvider: clock);
         SeedTombstones(fullState.State, 200, clock.GetUtcNow());
         Assume.That(full.EstimatedRowBytes(), Is.GreaterThanOrEqualTo(16 * 1024));
 
@@ -65,7 +65,7 @@ public partial class TxRegistryGrainTests
             raisedBeforeWrite.Add(highWater.ReceivedCalls().Count());
             return Task.CompletedTask;
         };
-        var (grain, _) = CreateGrain(state: state, treeId: "tree-x~s5", grainFactory: factory);
+        var (grain, _) = CreateGrain(state: state, treeId: TxRegistryRouting.ShardKeyAt("tree-x", 5), grainFactory: factory);
 
         await grain.MarkCommittedAsync(Guid.NewGuid());
         await grain.MarkCommittedAsync(Guid.NewGuid());
@@ -102,7 +102,7 @@ public partial class TxRegistryGrainTests
             _ => Task.FromException<int>(new InvalidOperationException("high-water down")),
             _ => Task.FromResult(3));
         factory.GetGrain<ITxRegistryHighWaterGrain>("tree-x").Returns(highWater);
-        var (grain, state) = CreateGrain(treeId: "tree-x~s2", grainFactory: factory);
+        var (grain, state) = CreateGrain(treeId: TxRegistryRouting.ShardKeyAt("tree-x", 2), grainFactory: factory);
         var first = Guid.NewGuid();
 
         Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkCommittedAsync(first));
@@ -115,6 +115,26 @@ public partial class TxRegistryGrainTests
         await grain.MarkCommittedAsync(Guid.NewGuid());
         Assert.That(state.WriteCount, Is.EqualTo(1));
         await highWater.Received(2).RaiseShardHighWaterAsync(3);
+    }
+
+    [Test]
+    public async Task Legacy_registry_of_a_tree_named_like_an_old_shard_key_keeps_its_own_identity()
+    {
+        // A tree may literally be named "orders~s3" (tree ids are arbitrary
+        // strings). Its legacy registry must be that tree's, not shard 3 of
+        // "orders": no high-water raise on "orders", and refusals name it whole.
+        var factory = Substitute.For<IGrainFactory>();
+        var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
+        factory.GetGrain<ITxRegistryHighWaterGrain>(Arg.Any<string>()).Returns(highWater);
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (grain, state) = CreateGrain(treeId: "orders~s3", options: SmallBudgetOptions(), timeProvider: clock, grainFactory: factory);
+
+        await grain.MarkCommittedAsync(Guid.NewGuid());
+        await highWater.DidNotReceiveWithAnyArgs().RaiseShardHighWaterAsync(default);
+
+        SeedTombstones(state.State, 200, clock.GetUtcNow());
+        var ex = Assert.ThrowsAsync<LatticeSaturatedException>(() => grain.EnsureSagaAdmissionAsync());
+        Assert.That(ex!.TreeId, Is.EqualTo("orders~s3"));
     }
 
     [Test]

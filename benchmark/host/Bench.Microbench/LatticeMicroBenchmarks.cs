@@ -724,6 +724,12 @@ public class LatticeMicroBenchmarks
         _grainFactory.RouteByString<IAtomicWriteGrain>(GetOrCreateAtomicSaga);
         _grainFactory.RouteByString<ITxRegistryGrain>(GetOrCreateTxRegistry);
 
+        // The tree-wide registry fan-out (snapshot, decisions-revision probe)
+        // reads the durable shard high-water mark on every call. The bench
+        // runs the legacy unsharded layout, so a stub reporting zero keeps the
+        // fan-out on the legacy key without a thrown NotSupportedException.
+        _grainFactory.RouteByString<ITxRegistryHighWaterGrain>(static _ => BenchTxRegistryHighWaterGrain.Instance);
+
         // Cross-tree atomic-write coordinator route: a real
         // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
         // IReminderRegistry as the per-tree sub-sagas (keepalive +
@@ -4610,4 +4616,24 @@ internal sealed class LatencyInjectingWalStorageProvider(
     /// <inheritdoc />
     public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
         => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
+}
+
+/// <summary>
+/// Allocation-free stand-in for the durable per-tree registry shard high-water
+/// grain. The micro-benchmarks run the legacy unsharded registry layout, so the
+/// mark is always zero and a tree-wide registry fan-out covers only the legacy
+/// key.
+/// </summary>
+internal sealed class BenchTxRegistryHighWaterGrain : ITxRegistryHighWaterGrain
+{
+    /// <summary>The shared instance returned for every tree id.</summary>
+    public static readonly BenchTxRegistryHighWaterGrain Instance = new();
+
+    private static readonly Task<int> Zero = Task.FromResult(0);
+
+    /// <inheritdoc />
+    public Task<int> GetShardHighWaterAsync() => Zero;
+
+    /// <inheritdoc />
+    public Task<int> RaiseShardHighWaterAsync(int shardCount) => Task.FromResult(shardCount);
 }

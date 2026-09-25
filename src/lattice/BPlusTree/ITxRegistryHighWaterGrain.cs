@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Durable, monotone per-tree record of how many saga decision registry shards
 /// may hold a decision (issue #3501). Keyed by the physical tree id.
 /// <para>
-/// A registry shard <c>{treeId}~s{n}</c> raises the mark to at least
+/// A registry shard <c>_lattice_txshard_{n}_{treeId}</c> raises the mark to at least
 /// <c>n + 1</c> and awaits the durable raise <b>before</b> its first state write
 /// in each activation, so no shard ever holds a decision the mark does not
 /// cover. Tree-wide registry reads (snapshots, the decisions revision, the
