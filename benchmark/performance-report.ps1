@@ -222,8 +222,12 @@ param(
 	# partition recovery. -1 inherits the shipping library default; 0 is the
 	# control arm reproducing the pre-#3402 release-the-whole-herd behaviour.
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
-
-	[string] $NamePrefix,
+	# Layer 3 only. True-throughput escalation: a cell whose first cohort
+	# completes at least this fraction of the offered load is re-run at double
+	# the per-silo rung, at most -MaxRungEscalations times. 0 disables it and
+	# publishes whatever each row's starting rung measured.
+	[double] $SaturationRatio = 0.9,
+	[int] $MaxRungEscalations = 3,
 	[string] $ParametersFile
 )
 
@@ -565,15 +569,31 @@ $Layer2Rows = @(
 # The grid is |workloads| x |SiloCounts| x N cohorts; at 9 x 5 x 2 that is
 # 90 cohorts, which is the cost of covering the whole public surface.
 #
-# RungPerSilo matches each workload's Layer 2 Rung exactly (the Layer 2 rows
-# that carry no Rung take the sweep-wide '4000:5:45' default). That equality
-# is load-bearing: it is what makes the N=1 Layer 3 cell directly comparable
-# to the published Layer 2 cell, which in turn is the anchor that tells a
-# reader whether the ACA host is a fair stand-in for the Layer 2 VM. The rung
-# is PER SILO and multiplied by the silo count at cohort time, so per-silo
-# demand is constant as the cluster grows and the curve measures capacity
-# rather than a fixed load spread thinner. The rationale for each rung's
-# value lives on the matching $Layer2Rows entry and is not repeated here.
+# RungPerSilo is the STARTING per-silo rung, not a fixed one. Layer 3
+# publishes true throughput: a cell whose completed-work rate reaches
+# -SaturationRatio (default 0.9) of the offered rate measured the offered
+# load, not the system, so Invoke-Layer3Cohorts doubles the rung and re-runs
+# the cell (up to -MaxRungEscalations times) until the cell plateaus below
+# what was offered. The saturating rung a workload settles on at one silo
+# count is carried forward as the starting rung for the next, larger count.
+# Starting rungs are therefore set well above each workload's known per-silo
+# capacity so escalation is the exception; they deliberately no longer match
+# the Layer 2 rungs, which hold a single silo below saturation for a
+# different purpose. The rung is PER SILO and multiplied by the silo count at
+# cohort time, so per-silo demand never falls as the cluster grows.
+#
+# FlushConcurrencyPerSilo is the client's in-flight bound per silo. The
+# atomic and cross-tree modes run their sagas sequentially inside each flush
+# slot, and the point modes fan out at most that many calls per slot, so for
+# those workloads this bound - not the offered rate - is what an
+# undersized client would measure. The rig default of 8 was measured to cap
+# them below the cluster's own ceiling; 64 lifts that cap clear of it (the
+# 2-key sagas reach the transaction-registry refusal ceiling there). The
+# point modes' in-flight call count is this bound squared (slots x per-slot
+# fan-out), so get-point, whose calls complete in milliseconds, takes 16.
+#
+# CohortsPerCell raises -N for one workload. get-point needs it: its per-cell
+# result is bimodal across cohorts, so the median of 2 is a coin toss.
 #
 # ChartGroup places each workload on one of the absolute-throughput charts.
 # The nine span four orders of magnitude (tens of keys/s for 2-key cross-tree
@@ -596,7 +616,9 @@ $Layer3Rows = @(
 		WorkloadMode = 'get-point';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'reads';
-		RungPerSilo = '4000:5:45';
+		RungPerSilo = '8000:5:45';
+		FlushConcurrencyPerSilo = 16;
+		CohortsPerCell = 3;
 	},
 	@{
 		Label = '`GetManyAsync` (4,096 keys/call)';
@@ -604,7 +626,7 @@ $Layer3Rows = @(
 		WorkloadMode = 'get-many';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'reads';
-		RungPerSilo = '4000:5:45';
+		RungPerSilo = '16000:5:45';
 	},
 	@{
 		Label = '`SetAsync` (point write)';
@@ -612,7 +634,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'set-point';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'writes';
-		RungPerSilo = '200:5:45';
+		RungPerSilo = '1200:5:45';
+		FlushConcurrencyPerSilo = 64;
 	},
 	@{
 		Label = '`SetAsync` (point write + async materialised view)';
@@ -620,7 +643,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'set-point-mv';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'writes';
-		RungPerSilo = '200:5:45';
+		RungPerSilo = '1200:5:45';
+		FlushConcurrencyPerSilo = 64;
 	},
 	@{
 		Label = '`SetManyAsync` (4,096 keys/call)';
@@ -628,7 +652,7 @@ $Layer3Rows = @(
 		WorkloadMode = 'set-many';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'writes';
-		RungPerSilo = '1200:5:45';
+		RungPerSilo = '2400:5:45';
 	},
 	@{
 		Label = '`SetManyAtomicAsync` (64 keys/saga)';
@@ -636,7 +660,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'set-many-atomic';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'atomic';
-		RungPerSilo = '100:5:45';
+		RungPerSilo = '800:5:45';
+		FlushConcurrencyPerSilo = 64;
 	},
 	@{
 		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree)';
@@ -644,7 +669,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'set-many-atomic-2';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'atomic';
-		RungPerSilo = '20:5:45';
+		RungPerSilo = '200:5:45';
+		FlushConcurrencyPerSilo = 64;
 	},
 	@{
 		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees)';
@@ -652,7 +678,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'cross-tree-atomic-2';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'atomic';
-		RungPerSilo = '8:5:45';
+		RungPerSilo = '100:5:45';
+		FlushConcurrencyPerSilo = 64;
 	},
 	@{
 		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees)';
@@ -660,7 +687,8 @@ $Layer3Rows = @(
 		WorkloadMode = 'cross-tree-atomic-64';
 		ThroughputUnit = 'keys/s';
 		ChartGroup = 'atomic';
-		RungPerSilo = '150:5:45';
+		RungPerSilo = '800:5:45';
+		FlushConcurrencyPerSilo = 64;
 	}
 )
 
@@ -1296,6 +1324,12 @@ function Invoke-Layer3Cohorts {
 		[int] $WalAdmissionCallBudgetSec = 15,
 		[int] $WalAppendCoalescingInFlightThreshold = -1,
 		[int] $WalSaturationRecoveryReleaseBatch = -1,
+		# True-throughput escalation. A cohort whose completed-work rate is
+		# at least SaturationRatio x the offered rate measured the offered
+		# load, not the cluster, so its rung is doubled and the cohort re-run,
+		# at most MaxRungEscalations times per cell. 0 disables escalation.
+		[double] $SaturationRatio = 0.9,
+		[int] $MaxRungEscalations = 3,
 		# Cells from an earlier run of this sweep (state.layer3.cohorts),
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
@@ -1324,93 +1358,152 @@ function Invoke-Layer3Cohorts {
 		foreach ($k in @($ExistingCells[$mode].Keys)) { $cells[$mode]["$k"] = @($ExistingCells[$mode][$k]) }
 	}
 
+	# The saturating per-silo rung each workload settled on at the previous
+	# (smaller) silo count. Per-silo capacity does not grow as silos are
+	# added, so a rung that saturated N silos is the right place to start
+	# N+1 and saves re-climbing the escalation ladder at every count. Seeded
+	# from resumed cells so a resumed sweep does not restart low.
+	$carryVehiclesPerSilo = @{}
+	foreach ($mode in @($cells.Keys)) {
+		foreach ($k in @($cells[$mode].Keys)) {
+			foreach ($c in @($cells[$mode][$k])) {
+				if (-not $c) { continue }
+				$sc = [int](Get-StateOr $c 'siloCount' ([int]$k))
+				if ($sc -le 0) { continue }
+				$v = [int]([int](Get-StateOr $c 'rungVehicles' 0) / $sc)
+				if (-not $carryVehiclesPerSilo.ContainsKey($mode) -or $v -gt $carryVehiclesPerSilo[$mode]) { $carryVehiclesPerSilo[$mode] = $v }
+			}
+		}
+	}
+
 	foreach ($silos in ($SiloCounts | Sort-Object)) {
 		foreach ($row in $rows) {
 			$mode = $row.WorkloadMode
-			if ($cells[$mode].ContainsKey("$silos") -and @($cells[$mode]["$silos"]).Count -ge $N) {
+			$cellN = [Math]::Max($N, [int](Get-StateOr $row 'CohortsPerCell' $N))
+			$fcPerSilo = [int](Get-StateOr $row 'FlushConcurrencyPerSilo' 8)
+			if ($cells[$mode].ContainsKey("$silos") -and @($cells[$mode]["$silos"]).Count -ge $cellN) {
 				Write-Host "[layer3] silos=$silos mode=${mode}: $(@($cells[$mode]["$silos"]).Count) cohort(s) already recorded; skipping (resume)" -ForegroundColor DarkGray
 				continue
 			}
 			$perSilo = Resolve-Rung -Spec $row.RungPerSilo
-			$vehicles = $perSilo.Vehicles * $silos
-			Write-Host "[layer3] silos=$silos mode=$mode rung=${vehicles}veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $($perSilo.Vehicles) veh/silo)" -ForegroundColor Cyan
+			$vehPerSilo = $perSilo.Vehicles
+			if ($carryVehiclesPerSilo.ContainsKey($mode) -and $carryVehiclesPerSilo[$mode] -gt $vehPerSilo) { $vehPerSilo = $carryVehiclesPerSilo[$mode] }
 
 			$cohortList = New-Object System.Collections.Generic.List[object]
 			# A cell resumed with fewer than N cohorts is topped up rather
 			# than re-run: its recorded cohorts are kept and numbering
 			# continues after them, so raising -N on -Resume adds tie-break
 			# cohorts to a cell without discarding what it already paid for.
+			# The top-up runs at the recorded cohorts' rung so a cell never
+			# mixes offered loads.
 			$firstCohort = 1
 			if ($cells[$mode].ContainsKey("$silos")) {
 				foreach ($existing in @($cells[$mode]["$silos"])) { if ($existing) { $cohortList.Add($existing) } }
 				$firstCohort = $cohortList.Count + 1
+				if ($cohortList.Count -gt 0) { $vehPerSilo = [int]([int](Get-StateOr $cohortList[0] 'rungVehicles' ($vehPerSilo * $silos)) / $silos) }
 			}
-			for ($i = $firstCohort; $i -le $N; $i++) {
-				Write-Host "[layer3] cohort $i/$N silos=$silos mode=$mode ..." -ForegroundColor DarkGray
-				# `| Out-Host` for exactly the reason Invoke-Layer2Cohorts
-				# gives: run-cohort-aca.ps1 emits a lot of az/cohort progress
-				# chatter, and without this it lands on THIS function's
-				# success stream and is returned alongside the cells hashtable.
-				#
-				# The cohort's own return object is deliberately not captured
-				# from the pipeline. Filtering a mixed stream for the one
-				# [pscustomobject] carrying a LogPath works until some az
-				# call emits an object too, and it also swallows the progress
-				# output an unattended multi-hour sweep needs to show. The
-				# log path is fully determined by (prefix, silos, mode, tag),
-				# so derive it instead of fishing for it - same shape as
-				# Layer 2's directory-diff discovery, minus the guessing.
-				$cohortTag = "c$i"
-				$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
-				if (Test-Path $expectedLog) { Remove-Item $expectedLog -Force }
-				try {
-					& $runCohort `
-						-NamePrefix       $AcaPrefix `
-						-SiloCount        $silos `
-						-WorkloadMode     $mode `
-						-DurationSec      $perSilo.DurationSec `
-						-VehiclesPerSilo  $perSilo.Vehicles `
-						-TickHz           $perSilo.TickHz `
-						-BatchSize        $BatchSize `
-						-ShardCount       $ShardCount `
-						-WalPartitions    $WalPartitions `
-						-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
-						-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
-						-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
-						-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
-						-CohortTag        $cohortTag | Out-Host
-				} catch {
-					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
-					continue
+			Write-Host "[layer3] silos=$silos mode=$mode rung=$($vehPerSilo * $silos)veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $vehPerSilo veh/silo) flushConcurrency=$fcPerSilo/silo cohorts=$cellN" -ForegroundColor Cyan
+
+			for ($i = $firstCohort; $i -le $cellN; $i++) {
+				# Probes run at a rung the cell went on to outgrow. They are
+				# recorded on the accepted cohort as evidence for why the
+				# published rung is what it is, never aggregated.
+				$probes = New-Object System.Collections.Generic.List[object]
+				$escalations = 0
+				$accepted = $null
+				while ($true) {
+					$vehicles = $vehPerSilo * $silos
+					$offered = $vehicles * $perSilo.TickHz
+					Write-Host "[layer3] cohort $i/$cellN silos=$silos mode=$mode veh/silo=$vehPerSilo offered=$offered keys/s ..." -ForegroundColor DarkGray
+					# `| Out-Host` for exactly the reason Invoke-Layer2Cohorts
+					# gives: run-cohort-aca.ps1 emits a lot of az/cohort progress
+					# chatter, and without this it lands on THIS function's
+					# success stream and is returned alongside the cells hashtable.
+					#
+					# The cohort's own return object is deliberately not captured
+					# from the pipeline. The log path is fully determined by
+					# (prefix, silos, mode, tag), so derive it instead of fishing
+					# for it.
+					$cohortTag = "c$i"
+					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
+					if (Test-Path $expectedLog) { Remove-Item $expectedLog -Force }
+					try {
+						& $runCohort `
+							-NamePrefix       $AcaPrefix `
+							-SiloCount        $silos `
+							-WorkloadMode     $mode `
+							-DurationSec      $perSilo.DurationSec `
+							-VehiclesPerSilo  $vehPerSilo `
+							-TickHz           $perSilo.TickHz `
+							-BatchSize        $BatchSize `
+							-FlushConcurrencyPerSilo $fcPerSilo `
+							-ShardCount       $ShardCount `
+							-WalPartitions    $WalPartitions `
+							-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
+							-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
+							-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
+							-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+							-CohortTag        $cohortTag | Out-Host
+					} catch {
+						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
+						break
+					}
+					if (-not (Test-Path $expectedLog)) {
+						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): no cohort log at $expectedLog; skipping"
+						break
+					}
+					$parsed = Read-SiloLogStats -SiloLogPath $expectedLog -WorkloadMode $mode -BatchSize $BatchSize
+					$entry = @{
+						cohortName      = [System.IO.Path]::GetFileNameWithoutExtension($expectedLog)
+						siloLog         = $expectedLog
+						siloCount       = $silos
+						steadyMean      = $parsed.SteadyMean
+						finalOps        = $parsed.FinalOps
+						finalActiveSec  = $parsed.FinalActiveSec
+						finalThroughput = $parsed.FinalThroughput
+						perCallP50Ms    = $parsed.PerCallP50Ms
+						perCallP75Ms    = $parsed.PerCallP75Ms
+						perCallP90Ms    = $parsed.PerCallP90Ms
+						perCallP99Ms    = $parsed.PerCallP99Ms
+						inFlightMax     = $parsed.InFlightMax
+						failed          = $parsed.Failed
+						verdict         = $parsed.Verdict
+						rungVehicles    = $vehicles
+						rungTickHz      = $perSilo.TickHz
+						rungDurationSec = $perSilo.DurationSec
+						flushConcurrencyPerSilo = $fcPerSilo
+						offerBound      = $false
+						executionState  = 'unknown'
+					}
+					Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed of {3} offered ({4} steady-mean, failed={5})" -f $parsed.Verdict, $mode, $parsed.FinalThroughput, $offered, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
+
+					# Only the first cohort of a cell escalates, so every cohort
+					# the cell publishes ran at the same offered load. A cohort
+					# that is not HEALTHY is not evidence of headroom either way,
+					# so it never escalates.
+					$reachedOffered = ($SaturationRatio -gt 0) -and ($parsed.Verdict -eq 'HEALTHY') -and ($null -ne $parsed.FinalThroughput) -and ([double]$parsed.FinalThroughput -ge ($SaturationRatio * $offered))
+					if (-not $reachedOffered) { $accepted = $entry; break }
+					if ($cohortList.Count -gt 0 -or $escalations -ge $MaxRungEscalations) {
+						$entry.offerBound = $true
+						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): completed $($parsed.FinalThroughput) of $offered offered keys/s, which is offer-bound; not escalating further ($escalations escalation(s) used). The cell is a lower bound."
+						$accepted = $entry
+						break
+					}
+					# Keep the probe's log under a name the next attempt will
+					# not overwrite, then double the offered load.
+					$probeLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.v$vehPerSilo.probe.log"
+					if (Test-Path $probeLog) { Remove-Item $probeLog -Force }
+					Move-Item $expectedLog $probeLog -Force
+					$probes.Add(@{ vehiclesPerSilo = $vehPerSilo; offeredKeysPerSec = $offered; finalThroughput = $parsed.FinalThroughput; siloLog = $probeLog })
+					Write-Host "[layer3]   offer-bound at $vehPerSilo veh/silo; escalating to $($vehPerSilo * 2) veh/silo" -ForegroundColor Yellow
+					$vehPerSilo = $vehPerSilo * 2
+					$escalations++
 				}
-				if (-not (Test-Path $expectedLog)) {
-					Write-Warning "[layer3] cohort $i/$N (silos=$silos mode=$mode): no cohort log at $expectedLog; skipping"
-					continue
-				}
-				$res = [pscustomobject]@{ LogPath = $expectedLog; ExecutionState = 'unknown' }
-				$parsed = Read-SiloLogStats -SiloLogPath $res.LogPath -WorkloadMode $mode -BatchSize $BatchSize
-				$cohortList.Add(@{
-					cohortName      = [System.IO.Path]::GetFileNameWithoutExtension($res.LogPath)
-					siloLog         = $res.LogPath
-					siloCount       = $silos
-					steadyMean      = $parsed.SteadyMean
-					finalOps        = $parsed.FinalOps
-					finalActiveSec  = $parsed.FinalActiveSec
-					finalThroughput = $parsed.FinalThroughput
-					perCallP50Ms    = $parsed.PerCallP50Ms
-					perCallP75Ms    = $parsed.PerCallP75Ms
-					perCallP90Ms    = $parsed.PerCallP90Ms
-					perCallP99Ms    = $parsed.PerCallP99Ms
-					inFlightMax     = $parsed.InFlightMax
-					failed          = $parsed.Failed
-					verdict         = $parsed.Verdict
-					rungVehicles    = $vehicles
-					rungTickHz      = $perSilo.TickHz
-					rungDurationSec = $perSilo.DurationSec
-					executionState  = (Get-StateOr $res 'ExecutionState' 'unknown')
-				})
-				Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed ({3} steady-mean, failed={4})" -f $parsed.Verdict, $mode, $parsed.FinalThroughput, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
+				if ($null -eq $accepted) { continue }
+				if ($probes.Count -gt 0) { $accepted['escalationProbes'] = @($probes.ToArray()) }
+				$cohortList.Add($accepted)
 			}
+			$carryVehiclesPerSilo[$mode] = $vehPerSilo
 			$cells[$mode]["$silos"] = @($cohortList.ToArray())
 
 			# Checkpoint after EVERY cell, not at the end of the sweep. An
@@ -1505,6 +1598,11 @@ function Aggregate-Layer3Cells {
 				perCallP99Ms        = if ($p99s.Count -gt 0) { [math]::Round((Get-Median $p99s), 2) } else { $null }
 				cohortN             = $throughputs.Count
 				offeredKeysPerSec   = [int](($healthy | Select-Object -First 1).rungVehicles) * [int](($healthy | Select-Object -First 1).rungTickHz)
+				flushConcurrencyPerSilo = (Get-StateOr ($healthy | Select-Object -First 1) 'flushConcurrencyPerSilo' 8)
+				# Every published cohort still reached the offered load after
+				# the escalation budget ran out: the cell is a lower bound on
+				# the cluster's throughput, and the table says so.
+				offerBound          = (@($healthy | Where-Object { -not (Get-StateOr $_ 'offerBound' $false) }).Count -eq 0)
 			}
 		}
 		if ($perCount.Count -eq 0) { continue }
@@ -2164,6 +2262,7 @@ function Render-Layer3Table {
 		foreach ($k in $keys) {
 			$cell = $byCount[$k]
 			$thr = Format-Throughput (Get-StateOr $cell 'sustainedThroughput') (Get-StateOr $row 'ThroughputUnit' 'keys/s')
+			if (Get-StateOr $cell 'offerBound' $false) { $thr = '>= ' + $thr }
 			$off = Format-Throughput (Get-StateOr $cell 'offeredKeysPerSec') (Get-StateOr $row 'ThroughputUnit' 'keys/s')
 			$sp  = Get-StateOr $cell 'speedup'
 			$ef  = Get-StateOr $cell 'efficiency'
@@ -2314,21 +2413,24 @@ function New-MetaHeaderForLayer3 {
 	$meta['walPartitions']         = (Get-StateOr $State 'layer3WalPartitions' 16)
 	$meta['walMaxPendingBatches']  = (Get-StateOr $State 'layer3WalMaxPendingBatches' 16)
 	$meta['responseTimeoutSec']    = (Get-StateOr $State 'responseTimeoutSec' 180)
-	# The per-silo rung. Offered load for a cell is this value x silo count,
-	# which is what holds per-silo demand constant as the cluster grows.
-	# Rendered from each row's RungPerSilo ('vehicles:tickHz:durationSec').
+	# The per-silo STARTING rung and client in-flight bound. Offered load for
+	# a cell is the rung x silo count, doubled while the cell stays
+	# offer-bound (see saturationRatio); the offered load each cell actually
+	# ran at is the table's Offered column.
 	$rungList = @()
 	foreach ($row in $Layer3Rows) {
 		$parts = ([string]$row.RungPerSilo).Split(':')
-		$rungList += ('{0}={1} veh/silo @ {2} Hz / {3}s' -f $row.WorkloadId, $parts[0], $parts[1], $parts[2])
+		$rungList += ('{0}={1} veh/silo @ {2} Hz / {3}s, flushConcurrency {4}/silo' -f $row.WorkloadId, $parts[0], $parts[1], $parts[2], (Get-StateOr $row 'FlushConcurrencyPerSilo' 8))
 	}
 	$meta['rungPerSilo']   = ($rungList -join '; ')
+	$meta['saturationRatio']    = (Get-StateOr $State 'layer3SaturationRatio' 0.9)
+	$meta['maxRungEscalations'] = (Get-StateOr $State 'layer3MaxRungEscalations' 3)
 	$meta['batchSize']     = (Get-StateOr $State 'batchSize' 4096)
 	$meta['cohortN']       = ((@($cohortN | Sort-Object -Unique)) -join '/')
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
 	return $meta
 }
 
@@ -2410,7 +2512,7 @@ function Render-ProvenanceNote {
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count (constant per-silo demand), and every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed."
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
@@ -2805,6 +2907,8 @@ function Main {
 			# driver does not override. Recorded so the header states the value
 			# that ran rather than New-EmptyState's Layer 2 default of 180.
 			$l3State['responseTimeoutSec']      = 420
+			$l3State.layer3SaturationRatio      = $SaturationRatio
+			$l3State.layer3MaxRungEscalations   = $MaxRungEscalations
 
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
@@ -2819,6 +2923,8 @@ function Main {
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 				-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+				-SaturationRatio    $SaturationRatio `
+				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
 				-OnCellComplete $checkpoint
 
