@@ -132,6 +132,15 @@ internal sealed partial class BPlusLeafGrain
     /// which a split has recorded the sibling identity but the successor pointer
     /// has not yet been persisted.
     /// </para>
+    /// <para>
+    /// While a division of this leaf is in flight the successor pointer is not
+    /// used: it already names the new sibling, which may not be initialised
+    /// yet, while the high bound is still the pre-split one. A key at or above
+    /// that bound goes to <c>OldNextSibling</c>, the real successor, instead
+    /// (issue #3583). Termination is unaffected, because that successor's low
+    /// bound is the pre-split high bound, so the forward still moves strictly
+    /// rightwards.
+    /// </para>
     /// </summary>
     private bool TryResolveSpanForwardTarget(string key, out GrainId target, out SpanFailOpenReason failOpen)
     {
@@ -145,8 +154,19 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // While a division is in flight - from the persist of its intent until
+        // CompleteSplitAsync narrows this leaf - NextSibling already names the
+        // new sibling, but HighKeyExclusive is still the pre-split bound and the
+        // new sibling may not be initialised yet. A key at or above that bound
+        // belongs to the real successor, which OldNextSibling holds until the
+        // narrow. Forwarding it to the new sibling instead lands it on a leaf
+        // with no declared span, which accepts and acknowledges it, and the
+        // sibling's initialisation then declares [splitKey, preSplitHigh)
+        // around it: an acknowledged write no read is routed to (issue #3583).
         var candidate = high is not null && string.CompareOrdinal(key, high) >= 0
-            ? state.State.NextSibling ?? state.State.SplitSiblingId
+            ? HasInterruptedSplit
+                ? state.State.OldNextSibling
+                : state.State.NextSibling ?? state.State.SplitSiblingId
             : state.State.PrevSibling;
 
         // A self-reference would spin the forward on this same grain, and a

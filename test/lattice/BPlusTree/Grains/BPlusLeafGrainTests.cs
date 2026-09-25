@@ -19,7 +19,8 @@ public partial class BPlusLeafGrainTests
         int maxLeafKeys = 128,
         ICommitLogWriter? commitLog = null,
         ILatticeMergeModeResolver? mergeModeResolver = null,
-        ILatticeEnvelopeCodec? envelopeCodec = null)
+        ILatticeEnvelopeCodec? envelopeCodec = null,
+        IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -61,6 +62,16 @@ public partial class BPlusLeafGrainTests
         {
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingStub);
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingStub);
+        }
+
+        // Per-identity stubs, registered after the catch-all so they take
+        // precedence, for tests that must tell two neighbouring leaves apart.
+        if (leafStubs is not null)
+        {
+            foreach (var (id, stub) in leafStubs)
+            {
+                grainFactory.GetGrain<IBPlusLeafGrain>(id).Returns(stub);
+            }
         }
         options ??= new LatticeOptions();
         // Structural sizing (MaxLeafKeys) now flows from the registry
