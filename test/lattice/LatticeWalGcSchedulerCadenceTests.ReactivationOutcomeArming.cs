@@ -53,7 +53,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     /// <summary>The terminal arms, which partition every attempted touch.</summary>
     private static readonly string[] TerminalOutcomeArms =
-        ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale"];
+        ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale", "admission_refused"];
 
     [Test]
     public void ReactivationOutcomeTag_arms_every_declared_terminal_outcome()
@@ -96,22 +96,33 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [Test]
     public void ReactivationOutcome_refund_classes_partition_the_enum()
     {
-        // Every member must fall on one side of the refund split, and both sides
+        // Every member must fall in exactly one budget class, and every class
         // must be occupied. A member added without being classified would take
-        // the default and silently join the unrefunded class, changing its cost
+        // the default and silently join the charged class, changing its cost
         // per abandonment from 6 to 3 - which is the exact quantity the epic's
-        // production diagnosis reads.
+        // production diagnosis reads. The uncharged class (issue #3575) sits
+        // outside the refund split: it is never charged, so it must never be
+        // refundable too, or the refund arithmetic would take it back twice.
         var members = Enum.GetValues<LatticeWalGcScheduler.ReactivationOutcome>();
         var refunded = members.Where(LatticeWalGcScheduler.IsRefundableReactivationOutcome).ToArray();
-        var charged = members.Where(m => !LatticeWalGcScheduler.IsRefundableReactivationOutcome(m)).ToArray();
+        var uncharged = members.Where(LatticeWalGcScheduler.IsUnchargedReactivationOutcome).ToArray();
+        var charged = members
+            .Where(m => !LatticeWalGcScheduler.IsRefundableReactivationOutcome(m)
+                && !LatticeWalGcScheduler.IsUnchargedReactivationOutcome(m))
+            .ToArray();
 
         Assert.Multiple(() =>
         {
-            Assert.That(refunded.Length + charged.Length, Is.EqualTo(members.Length));
+            Assert.That(refunded.Intersect(uncharged), Is.Empty,
+                "an outcome is either excused outright or refunded within the cap, never both.");
+            Assert.That(refunded.Length + uncharged.Length + charged.Length, Is.EqualTo(members.Length));
             Assert.That(refunded, Is.Not.Empty,
                 "with nothing refunded the cap and the backoff would be unreachable.");
             Assert.That(charged, Is.Not.Empty,
                 "with everything refunded no leaf would ever be abandoned, which is the permanent-retry failure the cap exists to stop.");
+            Assert.That(uncharged, Is.EquivalentTo(new[] { LatticeWalGcScheduler.ReactivationOutcome.AdmissionRefused }),
+                "only a refused admission is excused outright: it is the one outcome raised before the drive "
+                + "starts, so the one that says nothing at all about the leaf.");
         });
     }
 
@@ -123,30 +134,42 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             "latched stale", new InvalidOperationException("projection fell off the WAL"));
 
     /// <summary>
+    /// A drive the leaf's silo refuses admission to its WAL replay gate, as a
+    /// full GC share refuses it (issue #3575).
+    /// </summary>
+    private static Task<string?> AdmissionRefusedProbe() =>
+        throw new LatticeSaturatedException(
+            "no immediate starvation-drive capacity", "tree", LatticeSaturationSource.ReplayPermitAdmission);
+
+    /// <summary>
     /// Drives a blocked tree until its first reactivation verdict ends the
     /// consumer's retries, and returns the attempts charged by then.
     /// </summary>
     /// <remarks>
     /// Every other terminal arm is retried until the consumer is abandoned, so
     /// abandonment is the end of their story. A latched-stale verdict is
-    /// terminal for its pin (issue #3478): it never reaches abandonment, and a
-    /// wait for one would spin to its guard. For that arm the run waits for the
-    /// verdict itself and then runs a further hour, so a sweep that re-drove the
-    /// leaf would still show up as extra attempts and extra arm counts.
+    /// terminal for its pin (issue #3478), and a refused admission is never
+    /// charged at all (issue #3575): neither ever reaches abandonment, and a
+    /// wait for one would spin to its guard. For those arms the run waits for
+    /// the verdict itself and then runs a further hour, so a sweep that re-drove
+    /// a latched leaf, or that let refusals reach any other arm, would still
+    /// show up as extra attempts and extra arm counts.
     /// </remarks>
     private static async Task<int> AttemptsBeforeRetriesEndAsync(
         VirtualTimeProvider time,
         InstrumentRecorder recorder)
     {
         var guard = 0;
-        while (Outcomes(recorder, "abandoned") == 0 && Outcomes(recorder, "latched_stale") == 0)
+        while (Outcomes(recorder, "abandoned") == 0
+            && Outcomes(recorder, "latched_stale") == 0
+            && Outcomes(recorder, "admission_refused") == 0)
         {
             await TickAsync(time);
             Assert.That(++guard, Is.LessThan(400),
                 "the leaf never reached a verdict that ends its retries, so no terminal arm can be read from this run.");
         }
 
-        if (Outcomes(recorder, "latched_stale") > 0)
+        if (Outcomes(recorder, "latched_stale") > 0 || Outcomes(recorder, "admission_refused") > 0)
         {
             await AdvanceAtLeastAsync(time, TimeSpan.FromHours(1));
         }
@@ -182,13 +205,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     public async Task ExecuteAsync_records_each_terminal_outcome_on_its_own_arm_and_no_other()
     {
         // Every arm is asserted present on its own probe and absent on the other
-        // others, which makes this a 6x6 identity matrix rather than six
-        // independent assertions. That shape is what discharges #2938's own
-        // standard: each off-diagonal zero is proven observable by the diagonal
-        // entry in the same matrix, so no zero here is an unearned one. Six
-        // separate fixtures would each have had to carry a positive control of
-        // their own, and an absence with no control is precisely the defect
-        // being fixed.
+        // others, which makes this an identity matrix over the terminal arms
+        // rather than a set of independent assertions. That shape is what
+        // discharges #2938's own standard: each off-diagonal zero is proven
+        // observable by the diagonal entry in the same matrix, so no zero here
+        // is an unearned one. Separate fixtures would each have had to carry a
+        // positive control of their own, and an absence with no control is
+        // precisely the defect being fixed.
         var matrix = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal)
         {
             ["completed"] = await TerminalArmCountsAsync(
@@ -204,6 +227,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ["orphaned"] = await TerminalArmCountsAsync(
                 "arming-orphaned", () => Task.FromResult<string?>(null)),
             ["latched_stale"] = await TerminalArmCountsAsync("arming-latched-stale", LatchedStaleProbe),
+            ["admission_refused"] = await TerminalArmCountsAsync(
+                "arming-admission-refused", AdmissionRefusedProbe),
         };
 
         Assert.Multiple(() =>
@@ -242,6 +267,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ("sum-unresolvable", () => Task.FromResult<string?>("sum-unresolvable"), "not-a-materialiser-consumer-id"),
             ("sum-orphaned", () => Task.FromResult<string?>(null), null),
             ("sum-latched-stale", LatchedStaleProbe, null),
+            ("sum-admission-refused", AdmissionRefusedProbe, null),
         })
         {
             var time = new VirtualTimeProvider();
