@@ -3,9 +3,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// Outcome of <see cref="IShardRootGrain.TryGetOptimisticAsync"/>: either a validated
 /// point-read value or a request that the caller repeat the read on the serial
-/// <see cref="IShardRootGrain.GetAsync"/> path. The shard root never validates an
-/// absent key (a miss is always adjudicated serially), but a validated <c>null</c>
-/// remains representable and callers treat it as authoritative.
+/// <see cref="IShardRootGrain.GetAsync"/> path. A validated <c>null</c> proves
+/// absence in a leaf-owned range, and callers treat it as authoritative.
 /// <para>
 /// The <c>default</c> instance means "repeat on the serial path", so an
 /// uninitialised or default-returning result can never be mistaken for a
@@ -26,7 +25,8 @@ internal readonly record struct OptimisticReadResult
 
     /// <summary>
     /// <c>true</c> when the read was validated against the shard root's routing
-    /// epoch and <see cref="Value"/> is authoritative; <c>false</c> when the caller
+    /// epoch and either no overlapping point write or the leaf's ownership stamp, making <see cref="Value"/>
+    /// authoritative; <c>false</c> when the caller
     /// must repeat the read through the serial <see cref="IShardRootGrain.GetAsync"/>.
     /// </summary>
     [Id(1)]

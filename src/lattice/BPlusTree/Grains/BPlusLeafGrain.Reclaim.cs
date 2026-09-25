@@ -116,6 +116,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<bool> TryBeginRetirementAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
         if (_warmRescueInFlight)
             return false;
@@ -181,6 +182,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public Task AbandonRetirementAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _reclaimRetired = 0;
         return Task.CompletedTask;
     }
@@ -188,6 +190,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<bool> TryBeginOrphanRetirementAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
         if (_warmRescueInFlight)
             return false;
@@ -498,6 +501,7 @@ internal sealed partial class BPlusLeafGrain
         GrainId? newNext,
         string? absorbHighKeyExclusive)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
@@ -645,6 +649,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task AbsorbSuccessorRangeAsync(string? highKeyExclusive)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 

@@ -42,8 +42,22 @@ public sealed record VersionedValue
     [Id(3)] public LatticeMergeMode? MergeMode { get; init; }
 
     /// <summary>
+    /// Leaf activation identity for optimistic routing validation. Empty on old
+    /// wire replies and any read whose ownership was not proved synchronously.
+    /// Transport metadata only; not part of public value equality.
+    /// </summary>
+    [Id(4)] internal Guid LeafRoutingEpoch { get; init; }
+
+    /// <summary>
+    /// Leaf routing generation within <see cref="LeafRoutingEpoch"/>. Zero means
+    /// no ownership proof, never an initial generation that can validate.
+    /// </summary>
+    [Id(5)] internal long LeafRoutingGeneration { get; init; }
+
+    /// <summary>
     /// Compares two results by value: the <see cref="Value"/> bytes compared by
-    /// content plus every scalar field. The compiler-generated record equality
+    /// content plus every public scalar field, excluding routing transport metadata.
+    /// The compiler-generated record equality
     /// compares the <see cref="byte"/> array with
     /// <see cref="EqualityComparer{T}.Default"/>, which is reference equality, so
     /// two structurally identical results - and a result that round-trips through

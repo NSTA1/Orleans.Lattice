@@ -111,10 +111,6 @@ public class OptimisticReadSplitRaceIntegrationTests
         using var stop = new CancellationTokenSource();
         long reads = 0;
 
-        // Every write is a routing mutation that defers overlapping optimistic
-        // reads to the serial path, so both write loops pause briefly: without the
-        // gaps almost no read is served optimistically and the race is not tested.
-        //
         // Inserted keys sort between the hot keys ("h03-00017" lies between "h03"
         // and "h04"), so every split lands in a leaf that owns a hot key and moves
         // hot keys between leaves while they are being read.
@@ -126,10 +122,6 @@ public class OptimisticReadSplitRaceIntegrationTests
                 var key = $"h{rng.Next(HotKeyCount):D2}-{n:D5}";
                 await tree.SetAsync(key, BitConverter.GetBytes((long)n));
                 inserted.Enqueue(key);
-                if (n % 10 == 9)
-                {
-                    await Task.Delay(10);
-                }
             }
         });
 
@@ -139,7 +131,6 @@ public class OptimisticReadSplitRaceIntegrationTests
             {
                 await tree.SetAsync(hotKeys[i], BitConverter.GetBytes(v));
                 Volatile.Write(ref committed[i], v);
-                await Task.Delay(5);
             }
         })).ToArray();
 
