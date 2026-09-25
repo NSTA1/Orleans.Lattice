@@ -62,11 +62,20 @@ internal sealed partial class TxRegistryGrain(
     internal TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     /// <summary>
-    /// Tree id derived from the grain key. Used to resolve the
+    /// Tree id derived from the grain key (the shard framing, if any, stripped
+    /// by <see cref="TxRegistryRouting.TreeIdFromKey"/>). Used to resolve the
     /// per-tree <see cref="LatticeOptions"/> snapshot for
-    /// tombstone-retention configuration.
+    /// tombstone-retention and admission configuration.
     /// </summary>
-    private string TreeId => context.GrainId.Key.ToString()!;
+    private string TreeId => _treeId ??= TxRegistryRouting.TreeIdFromKey(GrainKey);
+
+    private string? _treeId;
+
+    /// <summary>
+    /// The full grain key: the bare tree id for the legacy (unsharded)
+    /// registry, or <c>_lattice_txshard_{n}_{treeId}</c> for a shard.
+    /// </summary>
+    private string GrainKey => context.GrainId.Key.ToString()!;
 
     /// <summary>
     /// Current per-tree tombstone retention. Re-read on every call so

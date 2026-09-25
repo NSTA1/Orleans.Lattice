@@ -169,6 +169,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.TxRegistryAdmissionBudgetBytes)} must be greater than or equal to 1 when set "
                 + "(null disables the transaction-registry row-size admission bound; a positive value refuses new atomic-write sagas with LatticeSaturatedException once the registry's estimated row size reaches it).");
         }
+        if (options.TxRegistryShardCount < 1 || options.TxRegistryShardCount > LatticeOptions.MaxTxRegistryShardCount)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.TxRegistryShardCount)} must be between 1 and {LatticeOptions.MaxTxRegistryShardCount} "
+                + "(1 keeps the single pre-sharding saga decision registry per tree; a larger value spreads saga decisions across that many registry shards).");
+        }
         if (options.AdmissionAdvisoryLiveKeys is { } advisoryLiveKeys && advisoryLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(

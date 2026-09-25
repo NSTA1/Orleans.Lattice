@@ -44,17 +44,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// one shard root overlap their leaf round trips instead of queueing one per
     /// round trip. This does not reintroduce the U9h-C "key missing mid-chaos"
     /// violation documented on <see cref="GetAsync"/>, because the value is only
-    /// returned when no other call that could change routing overlapped the read:
+    /// returned after validating root routing and, where required, leaf ownership:
     /// </para>
     /// <list type="bullet">
-    /// <item>The shard root counts every incoming call other than the pure point
-    /// reads in a grain-level call filter, and bumps a monotonic in-memory routing
-    /// epoch when each such call starts and finishes. Every writer of
+    /// <item>The shard root brackets incoming calls conservatively in a grain-level
+    /// filter, except allowlisted reads, diagnostics and point Sets. Point Sets
+    /// self-bracket prepare, split-link/promotion and retired-leaf retry work.
+    /// Brackets bump a routing epoch at entry and exit. Writers of
     /// <c>RootNodeId</c>, <c>RootIsLeaf</c>, <c>MovedAwaySlots</c>,
     /// <c>SplitInProgress</c>, pending promotion / bulk graft state and the leaf
-    /// moved-away seal runs inside such a call (or inside the bracketed read
-    /// prepare slow path), so the guard does not depend on an audit of individual
-    /// writers staying complete.</item>
+    /// moved-away seal run inside those brackets. Leaf-level changes that bypass
+    /// the shard root are additionally covered by leaf ownership stamps.</item>
     /// <item>The read captures the epoch and checks, in one synchronous block with
     /// no await, that no such call is in flight, that the routing state needs no
     /// prepare work, that no split is in progress and that the key's slot has not
@@ -71,16 +71,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <item>After the leaf returns, the epoch is compared again. Any change means a
     /// routing mutation overlapped the read, so the value is discarded and a serial
     /// retry is requested.</item>
-    /// <item>An absent (<c>null</c>) result is never validated. A fold can seal a
-    /// leaf's moved-away slots without a shard-root routing mutation, so an
-    /// unchanged epoch does not prove absence; the serial read adjudicates every
-    /// miss.</item>
+    /// <item>A present raw reply validates without leaf metadata when no point
+    /// write overlapped it. An admission epoch and in-flight count detect even a
+    /// write that starts and finishes during the leaf await. Otherwise, or for a
+    /// raw miss, a versioned reply must carry the same non-default leaf activation identity
+    /// and positive routing generation cached by a serial read. The leaf returns
+    /// that proof only with a synchronous observation in its owned key range,
+    /// outside topology transitions and awaited transaction visibility checks.
+    /// A matching proof validates both values and genuine absences; a null
+    /// without it always retries serially. Old-wire replies omit the proof and
+    /// cannot validate on this proof-required path.</item>
     /// </list>
     /// <para>
-    /// A validated read therefore observed routing state that no other call touched
-    /// for its whole duration, which is a stronger isolation than the serial
-    /// <see cref="GetAsync"/> itself has (it can already overlap the interleaved
-    /// <see cref="SetManyAsync"/>).
+    /// A validated read can linearize at the leaf's synchronous observation.
+    /// Concurrent value-only point writes do not invalidate routing, while a
+    /// topology change observed before the leaf samples its value prevents
+    /// validation against the old ownership stamp.
     /// </para>
     /// </summary>
     [AlwaysInterleave]

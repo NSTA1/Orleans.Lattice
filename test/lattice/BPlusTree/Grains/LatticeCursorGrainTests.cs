@@ -58,7 +58,9 @@ public partial class LatticeCursorGrainTests
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
 
-        var opts = options ?? new LatticeOptions();
+        // The registry is mocked as one grain keyed by the bare tree id, so
+        // these tests pin the unsharded layout (issue #3501).
+        var opts = options ?? new LatticeOptions { TxRegistryShardCount = 1 };
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
@@ -113,7 +115,9 @@ public partial class LatticeCursorGrainTests
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
 
-        var opts = options ?? new LatticeOptions();
+        // The registry is mocked as one grain keyed by the bare tree id, so
+        // these tests pin the unsharded layout (issue #3501).
+        var opts = options ?? new LatticeOptions { TxRegistryShardCount = 1 };
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);

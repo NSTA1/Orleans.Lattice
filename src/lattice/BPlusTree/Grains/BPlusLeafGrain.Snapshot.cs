@@ -781,9 +781,11 @@ internal sealed partial class BPlusLeafGrain
     /// the drive is requested, so a leaf that stays frozen is re-driven at most
     /// once per <see cref="CheckpointStallTicksBeforeDrive"/> ticks rather than
     /// on every tick, and the drive owns its own permit, budget, timeout and
-    /// single-flight latch. It relaxes no no-loss precondition: the drive
-    /// advances the checkpoint only from offsets it actually read out of the
-    /// WAL, so this adds no route to stamping coverage the leaf has not earned.
+    /// single-flight latch. A drive refused admission to the replay gate is
+    /// backed off for further thresholds on top of that (issue #3575). It
+    /// relaxes no no-loss precondition: the drive advances the checkpoint only
+    /// from offsets it actually read out of the WAL, so this adds no route to
+    /// stamping coverage the leaf has not earned.
     /// </para>
     /// <para>
     /// The distinct
@@ -2709,6 +2711,9 @@ internal sealed partial class BPlusLeafGrain
         // its own permit, budget, timeout, memory-refusal handling and
         // single-flight latch, so a tick cannot stack drives or outlive its
         // bound, and it short-circuits to NotDriven on a leaf with no tree id.
+        // It is admitted as a timer drive, which never takes the last free
+        // replay-gate slot, kept for the WAL GC sweep; a refusal is counted and
+        // backed off rather than thrown out of this callback (issue #3575).
         var starvationPartitionCount = Math.Max(1, resolved.WalPartitions);
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
@@ -2738,9 +2743,11 @@ internal sealed partial class BPlusLeafGrain
         // that has stopped advancing. Nothing is relaxed - the drive banks only
         // offsets it actually read - and the stall counter re-arms rather than
         // latches, so a leaf that stays frozen is re-driven once per threshold
-        // rather than on every tick. The one exception is a drive that found the
-        // projection stale: that verdict cannot clear by replay, so the drive is
-        // skipped until a persisted checkpoint moves (issue #3450).
+        // rather than on every tick, and a drive refused admission backs off
+        // for further thresholds (issue #3575). The one exception is a drive
+        // that found the projection stale: that verdict cannot clear by replay,
+        // so the drive is skipped until a persisted checkpoint moves (issue
+        // #3450).
         if (IsCheckpointStalledBehindLiveData(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);

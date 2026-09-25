@@ -133,7 +133,7 @@ public partial class TxRegistryGrainTests
         clock.Advance(retention + TimeSpan.FromSeconds(1));
         state.ThrowOnWrite = new InvalidOperationException("storage down");
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.EnsureSagaAdmissionAsync());
+        Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.EnsureSagaAdmissionAsync());
 
         Assert.Multiple(() =>
         {

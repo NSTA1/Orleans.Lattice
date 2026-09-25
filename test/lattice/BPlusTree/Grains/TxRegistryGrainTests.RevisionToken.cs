@@ -285,7 +285,7 @@ public partial class TxRegistryGrainTests
         var before = await grain.GetDecisionsRevisionAsync();
 
         state.ThrowOnWrite = new InvalidOperationException("persist failed");
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.MarkAbortedAsync(txid));
+        Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkAbortedAsync(txid));
 
         var after = await grain.GetDecisionsRevisionAsync();
 

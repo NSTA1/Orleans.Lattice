@@ -68,10 +68,11 @@ public static class BenchWorkloadDispatcher
 
             case BenchWorkloadMode.SetManyAtomic:
                 {
-                    // Slice the producer batch into atomicBatchSize-sized
-                    // sagas. Each saga is awaited under the same flush
-                    // gate the caller already holds, so concurrent sagas
-                    // are bounded by the outer FlushConcurrency cap.
+                    // Slice the batch into atomicBatchSize-sized sagas,
+                    // awaited in order. The ingest engine hands this method
+                    // one saga per call (SliceIntoFlushUnits), so saga
+                    // concurrency comes from its flush gate; the loop only
+                    // matters for a caller that passes a larger batch.
                     var sliceSize = Math.Max(1, atomicBatchSize);
                     var i = 0;
                     while (i < batch.Count)
@@ -153,6 +154,66 @@ public static class BenchWorkloadDispatcher
     }
 
     /// <summary>
+    /// Splits one producer batch into the units the ingest engine flushes,
+    /// retries and accounts independently. A non-atomic mode returns the batch
+    /// unchanged as a single unit. An atomic mode returns one unit per saga:
+    /// <see cref="BenchWorkloadMode.SetManyAtomic2"/> and
+    /// <see cref="BenchWorkloadMode.CrossTreeAtomic2"/> slice into 2-key units,
+    /// <see cref="BenchWorkloadMode.CrossTreeAtomic64"/> into 64-key units, and
+    /// <see cref="BenchWorkloadMode.SetManyAtomic"/> into
+    /// <paramref name="atomicBatchSize"/>-key units. The final unit carries any
+    /// remainder.
+    /// </summary>
+    /// <remarks>
+    /// Each unit is dispatched through <see cref="DispatchAsync"/> on its own
+    /// flush slot, so the unit dispatches exactly one saga. Handing a whole
+    /// producer batch of several thousand keys to one slot instead ran its
+    /// sagas as a sequential chain: ops only moved when the last saga of the
+    /// chain returned, a saturation retry re-committed every saga that had
+    /// already landed, and one rolled-back saga booked the whole batch as
+    /// failed (#3581).
+    /// </remarks>
+    /// <param name="mode">Workload selector.</param>
+    /// <param name="batch">One producer batch.</param>
+    /// <param name="atomicBatchSize">Saga size for
+    /// <see cref="BenchWorkloadMode.SetManyAtomic"/>; values below 1 are
+    /// treated as 1. Ignored by every other mode.</param>
+    /// <returns>The flush units, in batch order. Empty when
+    /// <paramref name="batch"/> is empty.</returns>
+    public static IReadOnlyList<List<KeyValuePair<string, byte[]>>> SliceIntoFlushUnits(
+        BenchWorkloadMode mode,
+        List<KeyValuePair<string, byte[]>> batch,
+        int atomicBatchSize)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        if (batch.Count == 0)
+        {
+            return Array.Empty<List<KeyValuePair<string, byte[]>>>();
+        }
+
+        var sagaSize = mode switch
+        {
+            BenchWorkloadMode.SetManyAtomic => Math.Max(1, atomicBatchSize),
+            BenchWorkloadMode.SetManyAtomic2 => 2,
+            BenchWorkloadMode.CrossTreeAtomic2 => 2,
+            BenchWorkloadMode.CrossTreeAtomic64 => 64,
+            _ => 0,
+        };
+        if (sagaSize == 0 || batch.Count <= sagaSize)
+        {
+            return new[] { batch };
+        }
+
+        var units = new List<List<KeyValuePair<string, byte[]>>>((batch.Count + sagaSize - 1) / sagaSize);
+        for (var i = 0; i < batch.Count; i += sagaSize)
+        {
+            units.Add(batch.GetRange(i, Math.Min(sagaSize, batch.Count - i)));
+        }
+
+        return units;
+    }
+
+    /// <summary>
     /// Bounded-parallelism fan-out over <paramref name="batch"/>: at
     /// most <paramref name="parallelism"/> calls to
     /// <paramref name="action"/> are in flight at any time. Used by the
@@ -206,7 +267,8 @@ public static class BenchWorkloadDispatcher
     /// 1 key per tree and a 64-key saga writes 32 keys per tree. Each saga mints
     /// a fresh operationId (a stable idempotency key is mandatory for a
     /// multi-registry cross-tree saga). Bounded by the outer FlushConcurrency
-    /// gate the caller already holds.
+    /// gate the caller already holds; the ingest engine passes one saga per
+    /// call (see <see cref="SliceIntoFlushUnits"/>).
     /// </summary>
     private static async Task DispatchCrossTreeAsync(
         IGrainFactory? grainFactory,

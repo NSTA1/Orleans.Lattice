@@ -413,6 +413,7 @@ internal sealed partial class ShardRootGrain
     {
         _routingTableCache.TryRemove(internalId, out _);
         Interlocked.Increment(ref _routingGeneration);
+        _unstampedLeafProbeRetryAfter.Clear();
     }
 
     /// <summary>
@@ -506,6 +507,27 @@ internal sealed partial class ShardRootGrain
 #endif
         var cache = ResolveLeafCacheGrain(leafId);
         RecordLeafAccess(leafId);
+        if (_cachedOptions?.OptimisticShardRootPointReads == true && !_leafRoutingStamps.ContainsKey(leafId)
+            && (!_unstampedLeafProbeRetryAfter.TryGetValue(leafId, out var retryAfter)
+                || Environment.TickCount64 >= retryAfter))
+        {
+            var epoch = _routingEpoch;
+            var generation = _routingGeneration;
+            var proof = await ResolveLeafGrain(leafId).GetWithVersionAsync(key);
+            if (_routingEpoch == epoch && _routingGeneration == generation && _routingMutationsInFlight == 0)
+            {
+                if (proof.LeafRoutingEpoch != Guid.Empty && proof.LeafRoutingGeneration > 0)
+                {
+                    _leafRoutingStamps[leafId] = (proof.LeafRoutingEpoch, proof.LeafRoutingGeneration);
+                    _unstampedLeafProbeRetryAfter.Remove(leafId);
+                }
+                else
+                {
+                    _unstampedLeafProbeRetryAfter[leafId] =
+                        Environment.TickCount64 + LeafOwnershipProbeRetryMilliseconds;
+                }
+            }
+        }
         return await cache.GetAsync(key);
     }
 
@@ -802,6 +824,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<SplitResult?> LinkSplitAsync(SplitResult splitResult, int height)
     {
+        using var routingMutation = EnterRoutingMutation();
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {

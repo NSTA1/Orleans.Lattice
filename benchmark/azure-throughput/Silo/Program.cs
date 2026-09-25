@@ -338,6 +338,15 @@ var walAdmissionCallBudgetSec = ReadIntAllowZero("BENCH_WAL_ADMISSION_CALL_BUDGE
 var walAdmissionCallBudget = walAdmissionCallBudgetSec <= 0
     ? Timeout.InfiniteTimeSpan
     : TimeSpan.FromSeconds(walAdmissionCallBudgetSec);
+// BENCH_TX_REGISTRY_SHARDS (#3501): saga decision registry shards per tree.
+// The library default of 1 keeps the unsharded, rolling-upgrade-safe layout;
+// the rig sets it from run-cohort-aca.ps1 -TxRegistryShards (default 8) so the
+// sharded ceiling is what an atomic cohort measures. Read from the global
+// options, so it is applied in the unnamed ConfigureLattice block below.
+var txRegistryShards = Math.Clamp(
+    ReadInt("BENCH_TX_REGISTRY_SHARDS", LatticeOptions.DefaultTxRegistryShardCount),
+    1,
+    LatticeOptions.MaxTxRegistryShardCount);
 // Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
 // a ';'-delimited list of additional storage-account table endpoints wired in
 // by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
@@ -558,7 +567,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends} txRegistryShards={txRegistryShards}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -747,6 +756,7 @@ builder.UseOrleans(silo =>
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
         o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
         o.WalSaturationAcuteOnly = saturationAcuteOnly;
+        o.TxRegistryShardCount = txRegistryShards;
     });
 
     silo.ConfigureLattice(treeId, o =>

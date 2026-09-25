@@ -306,6 +306,9 @@ internal static class TypeAliases
     internal const string AtomicPreValue = "ol.apv";
     internal const string AtomicWriteOutcome = "ol.awo";
     internal const string TxRegistryState = "ol.txr";
+    internal const string TxRegistryHighWaterState = "ol.txh";
+    internal const string TxRegistryWriteFailed = "ol.txf";
+    internal const string LatticeStateWriteFailed = "ol.swf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";
     internal const string SnapshotPin = "ol.sp";
@@ -319,6 +322,7 @@ internal static class TypeAliases
     internal const string CrossTreeTxPhase = "ol.ctp";
     internal const string CrossTreeParticipant = "ol.ctc";
     internal const string CrossTreePrepareVote = "ol.ctv";
+    internal const string CrossTreeParkRetry = "ol.ctr";
     internal const string ILatticeCrossTreeTxGrain = "ol.gct";
     // Receiver-side cross-tree visibility barrier.
     internal const string ILatticeCrossTreeReceiverGrain = "ol.gcr";
@@ -481,6 +485,7 @@ internal static class TypeAliases
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
+    internal const string ITxRegistryHighWaterGrain = "ol.gxh";
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
     internal const string ILeafSnapshotSegmentGrain = "ol.gsg";
     internal const string ISnapshotBaselineStorageGrain = "ol.sbs";

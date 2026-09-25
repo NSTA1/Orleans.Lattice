@@ -145,6 +145,12 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys (the silo reads the producer's variable; 0, its default there, skips the pre-seed). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same pre-seeded keyspace. |
 
+In the four atomic modes each saga is its own flush unit: it takes its own
+`BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
+`failed` on its own, so up to `BENCH_FLUSH_CONCURRENCY` sagas are in flight and
+`inFlight` on the progress line counts sagas. A producer batch used to be one unit
+whose sagas ran in sequence, which reported `ops=0` for minutes at N=4 (#3581).
+
 ## Parallel Layer 3 producer
 
 The Orleans-client producer uses `BENCH_GENERATOR_PARALLELISM` workers (default
@@ -271,6 +277,7 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-WalShardGrain pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
 | `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `LatticeGrain.SetManyAsync` may spend awaiting its per-shard fan-out before refusing the call with `LatticeSaturatedException` (`SetManyFanOut`). **One of two knobs here that deliberately do not inherit the library default**, which is `Timeout.InfiniteTimeSpan` so that the bound is opt-in on the released line ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). An unbounded fan-out is the [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) collapse itself, so the rig opts in to the recommended finite budget and measures the corrected configuration. Set `0` for infinite to reproduce the pre-fix shape. |
 | `BENCH_WAL_ADMISSION_CALL_BUDGET_SEC` | `15` | Seconds **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append and every retry layer (`LatticeOptions.WalAdmissionSaturationCallBudget`). The second knob that deliberately does not inherit the library default, which is `Timeout.InfiniteTimeSpan` ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)). Left infinite, only the per-append `WalAdmissionSaturationWaitBudget` applies and the three nested retry layers each open a fresh one - the multiplication [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) names as remedy 3, recorded in its cohort logs as `10488ms of that was saturation back-off` against a 5 s per-append budget. Set `0` for infinite. |
+| `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (via `-TxRegistryShards`) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, [#3501](https://github.com/NSTA1/Orleans.Lattice/issues/3501)). The library default of `1` is the unsharded layout; `run-cohort-aca.ps1` opts in to `8` so atomic cohorts measure the sharded ceiling of about 100 sagas/s per shard. Clamped to `1..256`. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
 
 All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to
@@ -379,6 +386,7 @@ marker or no window was productive.
 | `-ResponseTimeoutSec`, `-WarmUpBudgetSec`, `-InFlightTailBudgetSec` | `420`, `400`, `120` | Grain-call deadline, wall-clock ceiling on the producer's warm-up retries, and the drain allowed before `FINAL`. |
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
+| `-TxRegistryShards` | `8` | Saga decision registry shards per tree, passed as `BENCH_TX_REGISTRY_SHARDS`. Pass `1` for the unsharded library default. |
 | `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default; any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. |
 | `-ResetStorage` | `$true` | Empty the rig's storage before the cohort (above). |
 | `-WalTable`, `-GrainStateTable` | `OrleansLatticeWal`, `OrleansLatticeGrainState` | Table names. Under `-ResetStorage` they are replaced by fresh `Wal<stamp>` / `Gs<stamp>` names unless passed explicitly. |

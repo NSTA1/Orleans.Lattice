@@ -215,7 +215,7 @@ public partial class TxRegistryGrainTests
         var (grain, _) = CreateGrain(state);
         var before = await grain.GetDecisionsRevisionAsync();
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.MarkCommittedAsync(Guid.NewGuid()));
+        Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkCommittedAsync(Guid.NewGuid()));
         var afterFailure = await grain.GetDecisionsRevisionAsync();
 
         Assert.That(afterFailure, Is.EqualTo(before),
