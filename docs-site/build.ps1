@@ -113,6 +113,11 @@ try {
     $notesFile = Join-Path $PSScriptRoot 'obj/page-notes.json'
     if (-not (Test-Path $notesFile)) { throw "No page notes at $notesFile; stage.ps1 writes them, so it did not run to completion." }
     $notes = [System.IO.File]::ReadAllText($notesFile) | ConvertFrom-Json
+    # The note cannot be seen, so nothing in it may take keyboard focus.
+    $focusable = @($notes.PSObject.Properties | Where-Object { [regex]::IsMatch([string]$_.Value, '<a\b(?![^>]*\btabindex="-1")') } | ForEach-Object { $_.Name })
+    if ($focusable.Count -gt 0) {
+        throw "$($focusable.Count) page note(s) have a link in the tab order: $(($focusable | Select-Object -First 5) -join ', '). The note is visually hidden, so Get-PageNote in stage.ps1 gives its links tabindex=`"-1`"."
+    }
     foreach ($html in Get-ChildItem $site -Recurse -Filter *.html) {
         $relative = $html.FullName.Substring($site.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
         if ($html.Name -eq 'toc.html' -or $relative.StartsWith('public/')) { continue }
