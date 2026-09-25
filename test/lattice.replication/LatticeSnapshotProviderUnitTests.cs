@@ -97,6 +97,49 @@ public class LatticeSnapshotProviderUnitTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
+    private static async Task<List<string>> ExportAndCaptureRegistryKeysAsync(int shardHighWater)
+    {
+        var (_, factory, cursors, _, _) = Create();
+        var requested = new List<string>();
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ITxRegistryGrain>(Arg.Any<string>())
+            .Returns(ci =>
+            {
+                requested.Add((string)ci[0]);
+                return Substitute.For<Orleans.Lattice.BPlusTree.ITxRegistryGrain>();
+            });
+        var highWater = Substitute.For<Orleans.Lattice.BPlusTree.ITxRegistryHighWaterGrain>();
+        highWater.GetShardHighWaterAsync().Returns(Task.FromResult(shardHighWater));
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ITxRegistryHighWaterGrain>(Tree).Returns(highWater);
+        cursors.GetCausalStableAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<VersionVector?>(new VersionVector()));
+
+        var provider = new LatticeSnapshotProvider(factory, cursors, TestOptions());
+        var snapshot = await provider.ExportAsync(Tree, HybridLogicalClock.Zero);
+        await foreach (var _ in snapshot.Entries)
+        {
+        }
+
+        return requested;
+    }
+
+    [Test]
+    public async Task Entries_freeze_the_saga_decision_view_across_every_registry_shard_up_to_the_high_water()
+    {
+        var requested = await ExportAndCaptureRegistryKeysAsync(shardHighWater: 3);
+
+        Assert.That(requested.Distinct().OrderBy(k => k, StringComparer.Ordinal),
+            Is.EqualTo(new[] { $"_lattice_txshard_0_{Tree}", $"_lattice_txshard_1_{Tree}", $"_lattice_txshard_2_{Tree}", Tree }),
+            "The export must union the decision view of every shard below the durable high-water plus the legacy registry, and nothing beyond it.");
+    }
+
+    [Test]
+    public async Task Entries_read_only_the_legacy_registry_when_no_shard_has_written()
+    {
+        var requested = await ExportAndCaptureRegistryKeysAsync(shardHighWater: 0);
+
+        Assert.That(requested.Distinct(), Is.EqualTo(new[] { Tree }));
+    }
+
     [Test]
     public void Constructor_throws_when_grain_factory_is_null()
     {

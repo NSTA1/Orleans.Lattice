@@ -85,7 +85,7 @@ public partial class TxRegistryGrainTests
 
         var (grain, state) = CreateGrain(treeId: treeId);
         state.ThrowOnWrite = new InvalidOperationException("storage down");
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.MarkCommittedAsync(Guid.NewGuid()));
+        Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkCommittedAsync(Guid.NewGuid()));
         await grain.MarkCommittedAsync(Guid.NewGuid());
 
         Assert.That(outcomes, Is.EqualTo(new[] { "fault", "ok" }));

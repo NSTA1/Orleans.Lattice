@@ -194,6 +194,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
 | [`TxRegistryAdmissionBudgetBytes`](#txregistryadmissionbudgetbytes) | `long?` | 768 KiB | Yes |
+| [`TxRegistryShardCount`](#txregistryshardcount) | `int` | 1 | No (global; read from the default options) |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalAppendDispatchTimeout`](#walappenddispatchtimeout) | `TimeSpan` | 30 seconds | Yes |
 | [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
@@ -1369,13 +1370,13 @@ This option can be changed freely at any time.
 
 ### `TxRegistryAdmissionBudgetBytes`
 
-Fail-safe admission bound on the per-tree `ITxRegistryGrain` row (default: 768 KiB, `null` disables it). The registry persists its whole state as one grain-state row, and every `ForgetAsync` leaves a tombstone in that row for [`TxDecisionRetention`](#txdecisionretention). Group commit (issue #3475) lets one tree run far more sagas per second than before. So the tombstone count, which is roughly throughput multiplied by retention, can now grow the row past what a storage provider accepts in a single row: about 1 MB for Azure Table grain state. Once the row is that large, every registry write fails, and with it every saga on the tree.
+Fail-safe admission bound on each saga decision registry shard's row (default: 768 KiB, `null` disables it). A tree's registry is split into [`TxRegistryShardCount`](#txregistryshardcount) shards, and each shard persists its whole state as one grain-state row, and every `ForgetAsync` leaves a tombstone in that row for [`TxDecisionRetention`](#txdecisionretention). Group commit (issue #3475) lets one tree run far more sagas per second than before. So the tombstone count, which is roughly throughput multiplied by retention, can now grow the row past what a storage provider accepts in a single row: about 1 MB for Azure Table grain state. Once the row is that large, every registry write fails, and with it every saga on the tree.
 
 The bound refuses **new** sagas before they do any work, and never refuses work already under way. Before each new saga registers, the registry computes an O(1) estimate of its row size from dictionary counts. The estimate is deliberately weighted to over-count against the real JSON row. If the estimate exceeds the budget, the registry first purges any tombstones that have aged out of the retention window. If the estimate is still over budget, the saga fails with a `LatticeSaturatedException` whose `SaturationSource` is `LatticeSaturationSource.TxRegistryCapacity`.
 
 The refusal is retryable, but only after a back-off: capacity returns as tombstones age out, which takes seconds. The library never retries this refusal itself. `MarkCommittedAsync`, `MarkAbortedAsync`, `ForgetAsync`, recovery, and every status read are never refused, so in-flight sagas always complete, and completing them is what frees room.
 
-Ceiling maths. One tombstone costs about 116 bytes of JSON, so a 1 MB row holds about 8,600 tombstones. At the default 60 s retention, that is about 143 sagas/s sustained per tree. The estimate weights a tombstone at 128 bytes, so the 768 KiB default admits about 6,100 tombstones, or about 100 sagas/s per tree at 60 s retention, and leaves headroom for concurrent admissions to overshoot, since each check is a probe and not a reservation. To raise the ceiling, shorten `TxDecisionRetention`, subject to its own safety guidance, or spread atomic writes across trees. Issue #3501 tracks moving tombstones out of the single row.
+Ceiling maths. One tombstone costs about 116 bytes of JSON, so a 1 MB row holds about 8,600 tombstones. At the default 60 s retention, that is about 143 sagas/s sustained per tree. The estimate weights a tombstone at 128 bytes, so the 768 KiB default admits about 6,100 tombstones, or about 100 sagas/s per tree at 60 s retention, and leaves headroom for concurrent admissions to overshoot, since each check is a probe and not a reservation. These figures are **per registry shard**: each shard admits against its own row and its own budget, so a tree with eight shards sustains about 800 sagas/s at 60 s retention. To raise the ceiling further, raise [`TxRegistryShardCount`](#txregistryshardcount), which is the preferred lever because it changes no correctness window. Shortening `TxDecisionRetention` also raises it, subject to that option's own safety guidance.
 
 ```csharp verify
 siloBuilder.ConfigureLattice("orders", o =>
@@ -1385,6 +1386,27 @@ siloBuilder.ConfigureLattice("orders", o =>
 ```
 
 Set `null` only on a storage provider with no practical per-row limit. The value must be at least 1 when set. This option can be changed freely at any time.
+
+### `TxRegistryShardCount`
+
+Number of saga decision registry shards that new sagas are minted across, per tree (default: 1, range 1 to 256). Each shard is a separate `ITxRegistryGrain` activation keyed `_lattice_txshard_{n}_{treeId}`, with its own persisted row, its own [`TxRegistryAdmissionBudgetBytes`](#txregistryadmissionbudgetbytes) budget, and its own decisions revision. The sustained atomic-saga rate a tree can retain within [`TxDecisionRetention`](#txdecisionretention) therefore scales linearly with the shard count: about 100 sagas/s per shard at the default budget and retention.
+
+A saga's shard is chosen when its transaction id is minted, and the shard index is stamped into the id itself (a version-8 UUID). Every later registry call for that saga - from the saga coordinator, a leaf resolving a pending intent, a shard root, a split, a backup, or a replication receiver - routes to the owning shard from the stamped index alone, never from this setting. Tree-wide reads (multi-key reads, scans, cursors, backups, and replication snapshots) fan out over every shard up to the tree's durable shard high-water mark, which a shard raises before its first write, plus the legacy registry, and sum the per-shard revisions; a per-silo coalescer shares one fan-out across the concurrent reads of the same tree.
+
+**Opt-in.** The default of `1` keeps the pre-sharding layout: one registry per tree, keyed by the bare tree id, and ordinary version-4 transaction ids that route to it. A silo running an older version resolves every txid against that legacy registry, so raise the value only once every silo, and every replication peer that applies this cluster's sagas, runs a version that understands sharded ids. Transaction ids minted before the change keep routing to the legacy registry, which tree-wide reads always include, so enabling sharding needs no migration and the legacy row drains within one retention window.
+
+**Changing the value.** Because routing never reads the setting and tree-wide reads cover the durable high-water mark, silos configured with different values still agree on every read, and changing the value on a live cluster is safe in either direction. Raising it spreads new sagas across more shards; lowering it, to `1` included, reroutes nothing and still reads every shard already written to.
+
+Eight shards lift the per-tree ceiling from about 100 to about 800 sagas/s while keeping a tree-wide read at nine registry calls (eight shards plus the legacy registry) and one high-water read.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o =>
+{
+    o.TxRegistryShardCount = 16;
+});
+```
+
+This option is read from the global (unnamed) options, so a per-tree override has no effect.
 
 ### `VersionVectorRetention`
 

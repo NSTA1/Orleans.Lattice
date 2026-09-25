@@ -27,7 +27,7 @@ public partial class TxRegistryGrainTests
         var txid = Guid.NewGuid();
 
         Assert.That(async () => await grain.MarkCommittedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.Decisions.ContainsKey(txid), Is.False,
             "in-memory Decisions must not retain the entry when the persist failed");
@@ -44,7 +44,7 @@ public partial class TxRegistryGrainTests
         var txid = Guid.NewGuid();
 
         Assert.That(async () => await grain.MarkAbortedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.Decisions.ContainsKey(txid), Is.False,
             "in-memory Decisions must not retain the entry when the persist failed");
@@ -66,7 +66,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.ForgetAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         // After the failing write, the in-memory view must still observe
         // the saga - otherwise a subsequent GetStatusAsync from the same
@@ -86,7 +86,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterParticipantAsync(txid, shardIndex: 7),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         // After the failing write, in-memory Participants must not retain
         // the shard - otherwise a retry from the same activation finds
@@ -113,7 +113,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterParticipantAsync(txid, shardIndex: 7),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         // ThrowOnWrite is one-shot; the retry must succeed and persist.
         await grain.RegisterParticipantAsync(txid, shardIndex: 7);

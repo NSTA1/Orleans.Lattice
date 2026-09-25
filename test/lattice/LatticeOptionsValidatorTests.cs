@@ -217,6 +217,39 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void TxRegistryShardCount_defaults_to_1()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeOptions.DefaultTxRegistryShardCount, Is.EqualTo(1));
+            Assert.That(LatticeOptions.MaxTxRegistryShardCount, Is.EqualTo(256));
+            Assert.That(new LatticeOptions().TxRegistryShardCount, Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount));
+        });
+    }
+
+    [TestCase(1)]
+    [TestCase(8)]
+    [TestCase(256)]
+    public void TxRegistryShardCount_in_range_succeeds(int count)
+    {
+        var result = Validate(o => o.TxRegistryShardCount = count);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(257)]
+    public void TxRegistryShardCount_out_of_range_fails(int count)
+    {
+        var result = Validate(o => o.TxRegistryShardCount = count);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.TxRegistryShardCount)));
+        });
+    }
+
+    [Test]
     public void TxRegistryAdmissionBudgetBytes_defaults_to_768_KiB()
     {
         Assert.Multiple(() =>

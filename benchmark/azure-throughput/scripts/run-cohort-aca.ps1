@@ -242,6 +242,10 @@ param(
 	# 0 means infinite (inherit the library default).
 	[int] $SetManyFanOutBudgetSec = 30,
 	[int] $WalAdmissionCallBudgetSec = 15,
+	# (#3501) Saga decision registry shards per tree (1..256). The library
+	# default is 1 (unsharded, rolling-upgrade safe); the rig opts in to 8 so
+	# atomic cohorts measure the sharded ceiling. Pass 1 for the legacy layout.
+	[ValidateRange(1, 256)] [int] $TxRegistryShards = 8,
 	# (#3396) WAL append coalescing threshold. Unlike the two budgets above,
 	# 0 here is a MEANINGFUL value (coalescing disabled, the historical
 	# unconditional final-entry flush kick) rather than "infinite", so it
@@ -365,6 +369,7 @@ $siloEnv = @(
 	# env rather than implicit in the silo binary's defaults. 0 = infinite.
 	"BENCH_SET_MANY_FANOUT_BUDGET_SEC=$SetManyFanOutBudgetSec",
 	"BENCH_WAL_ADMISSION_CALL_BUDGET_SEC=$WalAdmissionCallBudgetSec",
+	"BENCH_TX_REGISTRY_SHARDS=$TxRegistryShards",
 	"BENCH_CLUSTER_ID=$ClusterId",
 	# (#3348) Every silo holds its warm-up until its cluster manifest lists
 	# all $SiloCount silos. Ungated, the first silo to warm up did so while

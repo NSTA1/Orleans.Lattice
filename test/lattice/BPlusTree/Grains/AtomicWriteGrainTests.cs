@@ -78,7 +78,10 @@ public partial class AtomicWriteGrainTests
                 return results;
             });
 
-        var opts = options ?? new LatticeOptions();
+        // These unit tests mock the saga decision registry as one grain keyed by
+        // the bare tree id, so they pin the unsharded layout (issue #3501).
+        // Sharded routing has its own coverage in TxRegistryRoutingTests.
+        var opts = options ?? new LatticeOptions { TxRegistryShardCount = 1 };
         var routing = new RoutingInfo(
             effectiveTreeId,
             ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));

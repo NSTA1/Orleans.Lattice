@@ -647,7 +647,11 @@ internal sealed partial class LatticeGrain
         // receiver's transitive split-forward closure runs per
         // observed source-shard so per-saga keys that have been
         // resharded locally still reach every destination.
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        // Route by the replicated txid: the shard is stamped in the id, so the
+        // receiver's registry shard is derived from it exactly as the local
+        // leaves derive it when they resolve the saga (issue #3501).
+        var registry = TxRegistryRouting.GetRegistry(
+            grainFactory, TreeId, transactionId);
         var tally = await registry.RecordTerminalArrivalAsync(
             transactionId, shardIndex, committed, atomicShardCount);
 
@@ -672,14 +676,7 @@ internal sealed partial class LatticeGrain
             // Legacy single-tree path: the per-shard gate is the only
             // barrier, so mark the per-tree linearization point and fan
             // the terminal out as soon as the gate completes.
-            if (committed)
-            {
-                await registry.MarkCommittedAsync(transactionId);
-            }
-            else
-            {
-                await registry.MarkAbortedAsync(transactionId);
-            }
+            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
 
             await ApplyTerminalPostGateAsync(
                 transactionId, committed, tally.ObservedSourceShards,
@@ -787,15 +784,9 @@ internal sealed partial class LatticeGrain
         string originClusterId,
         CancellationToken cancellationToken)
     {
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
-        if (committed)
-        {
-            await registry.MarkCommittedAsync(transactionId);
-        }
-        else
-        {
-            await registry.MarkAbortedAsync(transactionId);
-        }
+        var registry = TxRegistryRouting.GetRegistry(
+            grainFactory, TreeId, transactionId);
+        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
 
         await ApplyTerminalPostGateAsync(
             transactionId, committed, observedSourceShards,
