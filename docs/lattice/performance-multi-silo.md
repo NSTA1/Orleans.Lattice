@@ -118,19 +118,32 @@ means extra hosts absorbed nothing, not that the load ran out.
 parked at zero replicas, the harness deletes every table in the storage
 account except the clustering table and points the silos at a freshly named
 WAL table and grain-state table. No cohort inherits trees, tree-registry
-rows, or WAL backlog from an earlier one. An earlier sweep reused one WAL
-table for every cell, so later cells started behind a growing backlog of
-earlier trees; that is no longer possible.
+rows, or WAL backlog from an earlier one.
+
+**Every figure is true throughput, not offered load.** A cell whose first
+cohort completes at least 90% of what was offered has not found the
+cluster's limit, so the harness discards that cohort as a probe, doubles
+the per-silo rung and runs it again, up to three times. The rung a workload
+settles on carries forward to the larger silo counts, so demand never falls
+as the cluster grows. A cell still keeping up with its offered load after
+the last escalation is published as a lower bound, marked `>=`. Each cell
+is the median of two cohorts at the settled rung; `GetAsync` takes three,
+because its cohorts do not always land at the same level. Between cells the
+silo app is parked at zero replicas.
+
+**The client's concurrency is sized per workload.** The client runs a fixed
+number of flush slots per silo. Batched workloads need few: one call carries
+4,096 keys. Point and saga workloads carry one key or one saga per call, so
+at the batched default the client, not the cluster, would be the limit;
+those rows run with more slots per silo (16 for `GetAsync`, 64 for
+`SetAsync` and the atomic workloads), recorded as `flushConcurrency` in the
+table's metadata.
 
 **Two identical rigs, one per workload family.** To halve the wall-clock,
 the sweep ran on two identically deployed rigs in the same region, each with
 its own storage account: one ran the reads, the point writes and
 `SetManyAsync`, the other ran the four atomic workloads. Every curve comes
-from a single rig, so no line mixes the two. Each cell is the median of two
-cohorts; where the two disagreed by more than 2x a third cohort was run as a
-tie-break, which happened once (`SetManyAsync` at 6 silos, topped up with
-`-Resume` and a larger `-N`; see below).
-Between cells the silo app is parked at zero replicas.
+from a single rig, so no line mixes the two.
 
 <!-- perf-table:layer3:start
   schema=v1
@@ -214,13 +227,14 @@ speedup = N and efficiency = 100%. The **knee** is the silo count after
 which efficiency falls away sharply - past it you are paying for hosts that
 contend rather than contribute.
 
-**`Offered` is the target, and the client is closed-loop.** The harness
-bounds how much work it has in flight (a fixed number of flush slots per
-silo), so when the cluster cannot keep up the producer is held back rather
-than queueing without limit. A cell well below its `Offered` figure is
-therefore the cluster's limit under that harness, not load that was lost.
-Where the client was pinned at its in-flight cap, that is stated below,
-because it changes what a flat line means.
+**`Offered` is the load the cell was driven at, and it is above the
+result by design.** The harness raises the offered load until the cluster
+stops keeping up, so a cell well below its `Offered` figure is the
+cluster's limit, not load that was lost: the client is closed-loop and
+bounds how much work it has in flight, so when the cluster cannot keep up
+the producer is held back rather than queueing without limit. A `>=` cell
+is the exception - the cluster was still keeping up at the highest load
+the harness offered, so the true ceiling is higher.
 
 **Throughput is cluster-wide; the latency quantiles are not.** The
 throughput column counts every key the whole cluster retired. The p50/p99
@@ -378,23 +392,6 @@ terminal broadcast, whose p50 in the table stays far below the end-to-end
 times above. The failed keys in some 64-key cohorts at four or more silos
 are, in every cohort checked, Azure Tables server timeouts.
 
-## What happened to the write collapse
-
-An earlier version of this document, measured at eb78c703c, reported a
-`SetManyAsync` curve that peaked at 4 silos and then **collapsed** - 2.3 k
-keys/s at six silos and 840 keys/s at eight, less than one silo delivered.
-Instrumentation localised that to scatter-gather tail amplification in
-`LatticeGrain`'s shard fan-out, filed as #3348 and fixed by #3455 (with the
-back-pressure retry of #3339 and the acute-only saturation classification of
-#3443, both of which this rig runs with).
-
-On the fixed engine the same cells deliver **23.7 k keys/s at six silos and
-25.6 k at eight** - a 10x and 30x improvement respectively - and the median
-`SetManyAsync` call at one silo fell from ~3.5 s to ~206 ms. The collapse is
-gone. What remains at six or more silos is the plateau and the residual
-stall described above, which are separate questions from the defect that was
-fixed.
-
 ## Caveats that bound these numbers
 
 **The N=1 cell is the control, and it reproduces Layer 2.** A scaling curve
@@ -441,11 +438,12 @@ limit; if your deployment runs a different shard count, scale your
 expectations for `GetAsync` and `SetAsync` with it.
 
 **The harness's concurrency is bounded and scales with the silo count.** The
-client runs a fixed number of flush slots per silo, and the atomic modes
-commit each slot's sagas serially. That keeps per-silo demand constant, but
-it means a cell where the client was pinned at its cap measures the
-cluster's response time under that concurrency, not an open-loop ceiling.
-Each section above says where that applies.
+client runs a fixed number of flush slots per silo, sized per workload, and
+the atomic modes commit each slot's sagas serially. The rung escalation
+raises the offered rate, not the slot count, so a cell where the client was
+pinned at its slot cap measures the cluster's response time under that
+concurrency, not an open-loop ceiling. Each section above says where that
+applies.
 
 **Silo sizing matches Layer 2 on CPU, not on memory.** The Layer 2 host is a
 `Standard_D4as_v5` (4 vCPU / 16 GiB). ACA Consumption caps a replica at 4
@@ -492,8 +490,12 @@ The switches that matter for a partial or resumed run:
   array argument as a single string, so to pass a list use `pwsh -Command "&
   ./benchmark/performance-report.ps1 -Layer3 -SiloCounts 6,8"`.
 - `-Resume` skips cells the newest run state already holds; combined with a
-  larger `-N` it tops an existing cell up with extra cohorts (this is how
-  the six-silo `SetManyAsync` tie-break was run) rather than re-running it.
+  larger `-N` it tops an existing cell up with extra cohorts rather than
+  re-running it.
+- `-SaturationRatio` (default 0.9) is the completed-to-offered ratio at or
+  above which a cell counts as still keeping up and is re-run at double the
+  load; `-MaxRungEscalations` (default 3) bounds how many times that
+  happens before the cell is published as a `>=` lower bound.
 - `-DryRun` re-renders this document from the newest run state without
   touching Azure.
 
