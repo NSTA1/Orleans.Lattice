@@ -24,7 +24,7 @@ Memory can be **ephemeral**. A per-entry TTL turns an entry into working memory 
 
 ## Per-repository TTL policy
 
-`RepoContextTtlOptions` sets the default policy, bound per repository through the named-options convention (`IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)`), mirroring how the core resolves `LatticeOptions` per tree. The default (unnamed) instance is the fallback.
+`RepoContextTtlOptions` sets the default policy, bound per repository through the named-options convention (`IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)`), mirroring how the core resolves `LatticeOptions` per tree. A memory write resolves the instance named for its own repository, and a repository with no named configuration resolves the type's defaults - the unnamed instance is never consulted - so apply a policy to every repository with `ConfigureAll` and override individual repositories by name.
 
 ```csharp verify
 using Orleans.Lattice.Api.Mcp.RepoContext;
@@ -34,7 +34,7 @@ var services = new ServiceCollection();
 services.AddRepoContextTools(enableWrites: true);
 
 // Default for every repository: 30-day working memory unless a write overrides it.
-services.Configure<RepoContextTtlOptions>(options =>
+services.ConfigureAll<RepoContextTtlOptions>(options =>
 {
     options.DefaultMemoryTtl = TimeSpan.FromDays(30);
     options.StructuralRecordsNeverExpire = true;
@@ -50,10 +50,10 @@ services.Configure<RepoContextTtlOptions>("durable-repo", options =>
 | Option | Default | Meaning |
 |---|---|---|
 | `DefaultMemoryTtl` | `null` | The TTL applied to a memory entry when the writer supplies none. `null` leaves memory durable unless a TTL is given explicitly. When set it must be a positive, finite duration - the core write path and the paired validator reject a non-positive TTL. |
-| `StructuralRecordsNeverExpire` | `true` | Guarantees structural records (repo, package, file, symbol) never carry an expiry, so the durable model of the codebase is not silently reaped alongside ephemeral notes. |
+| `StructuralRecordsNeverExpire` | `true` | A declarative policy flag for code that writes structural records (repo, package, file, symbol): while it is set, such a writer must omit any TTL. No code in the package reads it today, so it enforces nothing - the indexing path simply never writes a structural record with an expiry, so the durable model of the codebase is not reaped alongside ephemeral notes, whatever the flag says. It does not stop `repocontext_forget` with `lapse` from lapsing a structural record deliberately. |
 
-The validator runs at first resolve, so an invalid TTL policy fails at startup rather than on the first write.
+The validator runs when a repository's policy is first resolved - the first memory write that creates an entry for that repository without an explicit `ttlSeconds` - and an invalid policy refuses that write rather than being applied. It is not checked at host startup.
 
 ## Multi-cluster convergence
 
-In a single cluster, memory entries are stored as whole last-writer-wins values, so a later write to a key replaces the earlier one. Across clusters that is unsafe: two clusters writing the same memory key concurrently would let one write win outright and silently discard the other whole record - and any CRDT sub-state it carried. The opt-in [`Orleans.Lattice.Api.Mcp.RepoContext.Replication`](../lattice.api.mcp.repocontext.replication/README.md) add-on therefore pins the agent-memory tree to the multi-value `MvRegister` merge mode: each cluster mints its own dot, so concurrent writes both survive and are folded back through the record model's own CRDT merge on read. TTL is preserved through this path - a replicated memory entry keeps the absolute expiry resolved on the writing cluster. Enabling multi-cluster replication changes only how concurrent cross-cluster writes converge; a single-cluster deployment is unaffected and takes no replication dependency.
+Every memory entry is stored as a multi-value register keyed by the writing replica, in a single cluster exactly as in several, and each write is a read-merge-write of the record's own CRDT fields. A single cluster has one replica id, so its register only ever carries one value. Across clusters a whole-record last-writer-wins store would be unsafe: two clusters writing the same memory key concurrently would let one write win outright and silently discard the other whole record - and any CRDT sub-state it carried. The opt-in [`Orleans.Lattice.Api.Mcp.RepoContext.Replication`](../lattice.api.mcp.repocontext.replication/README.md) add-on therefore pins the agent-memory tree's replication merge mode to `MvRegister` and authors each cluster's writes under its own replication id: each cluster mints its own dot, so concurrent writes both survive and are folded back through the record model's own CRDT merge on read. Because the stored shape is the same either way, turning replication on needs no data migration. TTL is preserved through this path - a replicated memory entry keeps the absolute expiry resolved on the writing cluster. Enabling multi-cluster replication changes only how concurrent cross-cluster writes converge; a single-cluster deployment is unaffected and takes no replication dependency.

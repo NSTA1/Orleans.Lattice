@@ -20,7 +20,7 @@ Bristol FAI).
 Every operator action emits a fact carrying `PartSerialNumber`,
 `FactId`, `HybridLogicalClock`, origin `ProcessSite`, `OperatorId`,
 and a human description. Fact kinds: `ProcessStepCompleted`,
-`InspectionRecorded`, `NonConformanceRaised`, `MRBDisposition`,
+`InspectionRecorded`, `NonConformanceRaised`, `MrbDisposition`,
 `ReworkCompleted`, `FinalAcceptance`.
 
 ## 2. Severity lattice and fold
@@ -31,10 +31,11 @@ stateDiagram-v2
     [*] --> Nominal
     Nominal --> UnderInspection: (not reachable<br/>from facts)
     Nominal --> FlaggedForReview: Inspection(Fail)<br/>NC(Minor)<br/>Rework retest fail
+    Nominal --> Rework: NC(Major)<br/>MRB(Rework)
     FlaggedForReview --> Rework: NC(Major)<br/>MRB(Rework)
     FlaggedForReview --> Nominal: MRB(UseAsIs)
     Rework --> Nominal: MRB(UseAsIs)<br/>[retestArmed]
-    Rework --> FlaggedForReview: Rework retest fail
+    Rework --> Rework: Rework retest fail<br/>(disarms retest)
     Nominal --> Scrap: NC(Critical)<br/>MRB(Scrap|RTV)
     FlaggedForReview --> Scrap: NC(Critical)<br/>MRB(Scrap|RTV)
     Rework --> Scrap: NC(Critical)<br/>MRB(Scrap|RTV)
@@ -44,7 +45,7 @@ stateDiagram-v2
 The lattice is totally ordered. `ComplianceFold.Fold` sorts facts by
 `(WallClockTicks, Counter, FactId)` before applying
 `StateTransitions.Apply` as a running `Max`, with a `retestArmed` flag
-threaded through to gate `MRBDisposition(UseAsIs)` demotion of
+threaded through to gate `MrbDisposition(UseAsIs)` demotion of
 `Rework` → `Nominal`. The arrival-order baseline (`NaiveFold.Step`)
 delegates to the same `StateTransitions.Apply` - the **only**
 difference between the two folds is the order in which facts are
@@ -52,8 +53,9 @@ applied. Divergence in the dashboard is therefore purely an ordering
 artefact, which is the property the sample exists to demonstrate.
 
 `Scrap` is terminal: any fact applied to a part already in `Scrap` is
-a no-op. `ReworkCompleted(retestPassed=false)` escalates to
-`FlaggedForReview` and clears `retestArmed` - a failed retest is
+a no-op. `ReworkCompleted(retestPassed=false)` raises the part to at least
+`FlaggedForReview` (a part already in `Rework` stays there) and clears
+`retestArmed` - a failed retest is
 defect evidence and must remain observable, even when a prior
 `UseAsIs` had demoted the part.
 
@@ -71,8 +73,10 @@ fan-out `FederationRouter`:
   still vulnerable to divergence under concurrent writes because
   the peer applies replicated batches in HLC order while the
   originating cluster applied its local writes in arrival order.
-- **Lattice** - persists facts to the `mfg-facts` tree and computes
-  `ComplianceState` by scanning and folding in HLC order. Converges
+- **Lattice** - persists facts to the `mfg-facts` tree and reads each
+  part's `ComplianceState` from the library-maintained folded view
+  `mfg-compliance` (folded in HLC order), falling back to a scan and an
+  inline HLC-ordered fold when the view is not yet populated. Converges
   under reorder.
 
 Chaos applies via a `ChaosFactBackend` decorator that wraps each
@@ -93,13 +97,15 @@ exercised independently from the UI and from tests:
 | 1 | `IProcessSiteGrain.AdmitAsync` (origin) | Site unavailable / WAN latency | `IsPaused`, `DelayMs` |
 | 2 | `ChaosFactBackend` decorator (per backend) | Storage jitter, transient failure, write amplification | `IBackendChaosGrain` |
 | 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a pause lifts | `ReorderEnabled` |
-| 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated intra-cluster silo partition | `IPartitionChaosGrain.IsPartitioned` |
-| 4b | `ChaosReplicationTransport` decorator on `IReplicationTransport` | App-level cross-cluster replication pause | `IReplicationDisconnectGrain.IsDisconnected` |
+| 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated intra-cluster silo partition | `IPartitionChaosGrain.SetPartitionedAsync` |
+| 4b | `ChaosReplicationTransport` decorator on `IReplicationTransport` (outbound) + `ChaosReplicationApplier` decorator on `IReplicationApplier` (inbound) | App-level cross-cluster replication pause | `IReplicationDisconnectGrain.SetDisconnectedAsync` |
 | 5 | `docker network disconnect` against the peer Traefik | Genuine cross-cluster transport partition | Manual `docker network` commands |
 
-Tier 4b is a pure application-level shortcut: the decorator returns
-`Accepted=false` so the package shipper holds its per-peer cursor
-steady and the local WAL keeps growing. Once the flag clears,
+Tier 4b is a pure application-level shortcut: the transport decorator
+returns `Accepted=false` so the package shipper holds its per-peer
+cursor steady and the local WAL keeps growing, and the applier
+decorator rejects every inbound apply so the peer's shipper holds its
+cursor too. Once the flag clears,
 replication resumes from the stationary cursor and catches the peer
 up with the accumulated backlog.
 Tier 5 achieves the same effect at the transport layer without
@@ -115,12 +121,15 @@ This matches how a real MES would persist site availability flags.
 
 ## 5. Bulk-load strategy
 
-`InventorySeeder` is an `IHostedService` that runs on every silo. A
-singleton `IInventorySeedStateGrain` with a persisted `HasSeeded` flag
-gates the work, so only the first silo to win the race actually
-seeds. Five parts (one representative per reachable
-`ComplianceState` - `Nominal`, `Nominal` + FAI signed off,
-`FlaggedForReview`, `Rework`, `Scrap`) are emitted through
+`InventorySeeder` is an `IHostedService` registered on exactly one
+silo - the one with `Seeder:Enabled` set to `true`, or by default the
+primary (`a`) silo of the `us` cluster - so the two clusters never
+race to seed. A singleton `IInventorySeedStateGrain` with a persisted
+`HasSeeded` flag lets a restart skip the seed while the lattice fact
+tree still holds parts (a flagged but empty tree is re-seeded). Five
+parts covering every reachable `ComplianceState` (`Nominal`,
+`Nominal` + FAI signed off, `FlaggedForReview`, `Rework`, `Scrap`) are
+emitted through
 `FederationRouter` - the same path operators use - so both backends
 agree before chaos is applied.
 
@@ -138,10 +147,11 @@ always shows "recent" activity.
 ## 6. Cross-cluster replication
 
 Cross-cluster replication is provided by
-`Orleans.Lattice.Replication` (WAL + shipper + applier) wired with
-the `Orleans.Lattice.Replication.Grpc` push transport. The package
-covers everything the sample used to roll by hand: WAL append on
-every replicated write, per-peer cursor management, batched gRPC
+`Orleans.Lattice.Replication` (shipper + applier, shipping from the
+core write-ahead log) wired with the `Orleans.Lattice.Replication.Grpc`
+push transport. Together with the core WAL, which appends every
+committed write, the package covers everything the sample used to
+roll by hand: per-peer cursor management, batched gRPC
 push to the peer cluster, idempotent receiver-side apply with CRDT
 semantics chosen per tree, and dead-letter handling for entries that
 fail to apply. See
@@ -159,7 +169,7 @@ The sample's contribution is the per-tree opt-in:
 | `mfg-part-labels` | Yes | `OrSet` | One OrSet per serial; the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. |
 | `mfg-part-operator` | No (cluster-local) | n/a | Per-serial LWW register. LWW across clusters with disjoint HLCs is meaningless - concurrent cross-cluster writes would pick different winners on each side. |
 
-Three sample-specific seams sit alongside the package:
+Four sample-specific seams sit alongside the package:
 
 - `BaselineReplicationApplier` decorates the package's
   `IReplicationApplier` singleton; on every cross-cluster apply it
@@ -172,6 +182,11 @@ Three sample-specific seams sit alongside the package:
   transport (Tier 4b chaos): when the operator toggles the disconnect
   flag, `SendAsync` returns `Accepted=false` so the shipper holds
   its cursor and the local WAL grows until the flag clears.
+- `ChaosReplicationApplier` is the inbound half of the same chaos
+  tier: registered outermost on the package's `IReplicationApplier`,
+  it rejects every inbound apply while the disconnect flag is set, so
+  the peer's push fails, its shipper holds its cursor, and nothing
+  reaches the baseline mirror until the flag clears.
 - `ReplicationActivityTracker` + `ClusterReplicationActivityGrain`
   bridge the package's `orleans.lattice.replication` meter into a
   cluster-wide aggregate that drives the in-page per-peer ship/recv
@@ -217,8 +232,15 @@ reconnects, subscription metadata is persisted in the Azure Table
 publish and subscribe plus a top-level catch in the receive handler
 so a single poison fact can't stall the queue.
 
-No polling. No `Timer`. No `setInterval`. gRPC server-streaming RPCs
-are thin adapters over the same channels.
+A second namespace on the same provider,
+`msmfg.dashboard.part-changes`, fans out CRDT part changes (label and
+operator edits, cross-cluster OR-Set applies) the same way, so every
+circuit's part-detail card refreshes wherever the change landed.
+
+The domain views never poll - no `Timer`, no `setInterval`; gRPC
+server-streaming RPCs are thin adapters over the same channels. The
+one exception is the layout's per-peer replication strip, which polls
+the cluster-wide replication-activity grain every 500 ms (see section 6).
 
 Operator actions funnel through a single **"Next: …"** button driven
 by `NextActionResolver`, which picks the deterministic next step from
@@ -227,12 +249,13 @@ state genuinely requires operator choice (MRB disposition, NDT
 outcome, rework retest). A separate always-available form raises
 non-conformances at any lifecycle stage.
 
-The chaos fly-out is a single persistent side panel - clearly
-labelled ("Simulate 4-second latency at Toulouse NDT Lab", not
-`delay=4000`) - with per-site rows, per-backend sliders, and canned
-presets (*Transoceanic backhaul outage*, *Customs hold*, *MRB
-weekend*, *Lattice storage flakes*, *Cluster split*, *Replication
-disconnect*, *Clear all*). An active-chaos banner outside the
+The chaos fly-out is a single persistent side panel with per-site
+rows (pause, delay in ms, reorder buffer), per-backend numeric knobs
+(jitter, transient-failure rate, write amplification, reorder window),
+and canned presets whose tooltips describe them in plain language
+(*Clear all*, *Transoceanic backhaul outage*, *Customs hold*, *MRB
+weekend*, *Lattice storage flakes*, *Baseline reorder storm*, *Cluster
+split*, *Replication disconnect*). An active-chaos banner outside the
 fly-out ensures operators cannot close the panel and forget about
 active injections.
 
@@ -243,22 +266,26 @@ storage - no Azurite dependency in the test suite, keeping CI fast
 and hermetic. The cross-cluster replication path itself is covered by
 the `Orleans.Lattice.Replication` and
 `Orleans.Lattice.Replication.Grpc` packages' own test suites; the
-sample's tests focus on the sample-specific seams (the chaos transport
-decorator, the baseline-replay tap, the activity-meter aggregator,
-and the typed-CRDT accessors over `mfg-part-labels` /
-`mfg-part-operator`). Two-cluster end-to-end replication is
+sample's tests focus on the sample's own code: the inbound chaos
+applier decorator, the baseline-replay tap, the typed-CRDT accessors
+over `mfg-part-labels` / `mfg-part-operator`, and the domain,
+federation, dashboard, gRPC-contract, seeding, and coordinated-restore
+layers. Two-cluster end-to-end replication is
 exercised manually via Docker Compose because the `TestingHost`
 fixture materialises a single cluster.
 
-Long-running stress tests are tagged `[Category("Chaos")]` and
-excluded from the iterative development filter:
+No test in the suite is tagged `[Category("Chaos")]` today. The
+iterative development filter still excludes that category, as the CI
+samples lane does, so a long-running stress test added under it stays
+out of the fast loop:
 
 ```powershell
 dotnet test --filter "TestCategory!=Chaos"
 ```
 
-The cross-cluster replication path itself - WAL, shipper, applier,
-gRPC push transport, dead-letter handling, bootstrap - is covered by
-the test suites of `Orleans.Lattice.Replication` and
-`Orleans.Lattice.Replication.Grpc`. The sample's tests stay focused on
-the sample-specific seams listed in §6.
+The cross-cluster replication path itself - shipper, applier, gRPC
+push transport, dead-letter handling, bootstrap - is covered by the
+test suites of `Orleans.Lattice.Replication` and
+`Orleans.Lattice.Replication.Grpc`, and the write-ahead log it ships
+from by the core `Orleans.Lattice` suite. The sample's tests stay on
+the sample's own code, listed above.

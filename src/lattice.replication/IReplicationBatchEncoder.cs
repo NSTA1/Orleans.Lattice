@@ -32,9 +32,9 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// <b>Allocation contract.</b> The encode path is deliberately
 /// expressed in terms of <see cref="IBufferWriter{T}"/> rather than a
-/// freshly-allocated <c>byte[]</c>: the canonical streaming push
-/// transport hands the gRPC stream's writer in directly so the
-/// envelope's bytes never round-trip through a per-batch heap
+/// freshly-allocated <c>byte[]</c>: the unary gRPC push
+/// transport hands the call writer in directly so the envelope's bytes
+/// never round-trip through a per-batch heap
 /// allocation. Callers that need a materialised buffer (tests,
 /// debug-tooling, in-process loopback transports) supply an
 /// <see cref="ArrayBufferWriter{T}"/> and read

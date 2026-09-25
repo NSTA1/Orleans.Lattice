@@ -22,14 +22,16 @@ costs nothing until it is registered.
   every peer follows.
 - **Mode fixed at enable time.** A tree's merge mode is chosen when it is first
   enabled and cannot be changed in place; the sanctioned path to change a mode is
-  disable then re-enable, which re-bootstraps.
+  disable, then re-enable under the new mode (naming a bootstrap source cluster
+  re-seeds a tree that already holds data).
 
 ## Security
 
 Every operation authorizes fail-closed through the same Lattice access gate the
 data plane uses, before touching engine state, requiring the dedicated
-`LatticeOperation.Replication` capability on the target tree. Anonymous callers
-are denied by default.
+`LatticeOperation.Replication` capability on the target tree. Once an
+authorization add-on supplies the access gate, anonymous callers are denied by
+default; with only the core no-op gate registered, every call is allowed.
 
 - **Permission-scoped discovery.** `GetReplicationConfigAsync` reports only the
   trees the caller is authorized to manage, so it never reveals a tree outside

@@ -6,8 +6,8 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 `Orleans.Lattice.Explorer.Web` is the embeddable hosting library for the Explorer console. It talks to a cluster only through the read-only state API and the auth, backup, schema, tenant-administration, and telemetry gRPC bindings, so it never joins the cluster's Orleans membership and never holds a mutation path into the data plane beyond what those control facades already expose. It adds:
 
-- **A read-only tree browser** - the catalog of trees and materialised views, each tree's shard-root structure, key-ordered snapshot-isolated entry scans and single-key record inspection, live change observation, and per-tree metrics, all over the [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) gRPC surface.
-- **Capability-gated admin areas** - a Backups area over the backup control API, an Access (membership and access-control) area over the auth control API, Tenants (platform-operator tenant management) and My Tenant (tenant self-service) areas over the tenant-administration API, and a Telemetry area over the telemetry API, each surfaced only after a capability probe confirms the connected endpoint offers it and the signed-in principal is allowed to use it.
+- **A read-only tree browser** - the catalog of trees, materialised views, and tag indexes, each tree's shard-root structure, key-ordered snapshot-isolated entry scans and single-key record inspection, live change observation, per-key revision history, the strict-mode dead-letter queue, tag-index membership browsing, and per-tree metrics, all over the [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) gRPC surface.
+- **Capability-gated admin areas** - a Backups area over the backup control API, an Access (membership and access-control) area over the auth control API, Tenant administration (platform-operator tenant management) and My tenant (tenant self-service) areas over the tenant-administration API, and a Telemetry area over the telemetry API. Each area opens only when its access gate confirms the connected endpoint offers it and the signed-in principal may use it; an area the caller may not use stays visible but demoted, and one the cluster does not serve renders no entry.
 - **A Schema plugin** - management over the schema control API. It ships as its own package but is withheld by default because its versioning UI cannot yet express what differs between schema versions: a head surfaces it by calling `AddExplorerSchemaPlugin()`, and renders no Schema tab by not calling it.
 - **Auth-aware sign-in** - a pluggable `IExplorerAuthMethod` model (Basic, [Entra](connecting-to-an-auth-enabled-state-api.md) via the optional companion package, or a custom method) that acquires and attaches a bearer token to an auth-enabled State API.
 - **Two hosting shapes from one code path** - run the bundled standalone `Orleans.Lattice.Explorer.WebHost` process, or embed the console in your own ASP.NET application; both are built on the same `AddLatticeExplorerWeb` / `MapLatticeExplorer` pair, so they cannot drift.
@@ -16,26 +16,29 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 ## Core properties
 
-- **Read-only over the data plane.** The console observes cluster state and drives only the backup, access, and schema *control* facades. There is no direct write, delete, split, or reconfigure path into a tree's data.
+- **Read-only over the data plane.** The console observes cluster state and drives only the backup, access, schema, and tenant-administration *control* facades; the telemetry facade is only queried. There is no direct write, delete, split, or reconfigure path into a tree's data.
 - **Out-of-cluster by construction.** The Explorer reaches a cluster purely over its gRPC endpoints, so it can be deployed and scaled independently and never taxes Orleans membership or the silo's activation budget.
-- **Fail-closed and capability-gated.** Each plugin declares an access gate resolving one of four states. `Allowed` renders normally; `AuthenticationRequired` stays prominent and clickable, inviting sign-in; `Denied` renders **visible but demoted**, grouped below a divider and stating the permission it needs and who to ask; `Unavailable` renders no entry, with the absence explained in a capabilities affordance. The gating is advisory and the server remains the sole enforcement point, which is exactly why a denied area is shown rather than hidden - see [Navigation visibility policy](navigation-visibility-policy.md). A plugin is absent from the rail entirely only when the head did not register it - registration is the whole of the opt-in, and there is no per-area option flag.
-- **Head-agnostic core.** The connection, configuration, session, capability, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour.
+- **Fail-closed and capability-gated.** Each plugin declares an access gate resolving one of four states. `Allowed` renders normally; `AuthenticationRequired` stays prominent and clickable, inviting sign-in; `Denied` renders **visible but demoted**, grouped below a divider and stating the permission it needs and who to ask; `Unavailable` renders no entry, with the absence explained in a capabilities affordance. The gating is advisory and the server remains the sole enforcement point, which is exactly why a denied area is shown rather than hidden - see [Navigation visibility policy](navigation-visibility-policy.md). A plugin leaves no trace at all - neither a rail entry nor a mention in the capabilities affordance - only when the head did not register it: registration is the whole of the opt-in, and there is no per-area option flag.
+- **Head-agnostic core.** The connection, configuration, session, authentication, tenant-scoping, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour. The four-state access model the areas are gated by lives in `Orleans.Lattice.Explorer.Plugins.Abstractions`.
 - **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically; a host mounts the whole console with two extension calls under a configurable base path.
 
 ## Features
 
 | Feature | Surface | Summary |
 |---|---|---|
-| Tree browser | State-API gRPC surface | Catalog, shard structure, snapshot-isolated entry scans, single-key inspection, change feed, and per-tree metrics. |
-| Backups area | Backup control API | Capability-gated capture, restore, catalog listing, chain describe, and retention over the [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) binding. |
+| Tree browser | State-API gRPC surface | Catalog (trees, views, and tag indexes), shard structure, snapshot-isolated entry scans, single-key inspection, change feed, per-key revision history, strict-mode dead letters, tag-index browsing, and per-tree metrics. |
+| Backups area | Backup control API | Capability-gated capture (single-tree or multi-tree set, full or incremental), recurring schedules, restore (non-destructive repair or point-in-time replace), catalog listing with incremental chains collapsed to one row, deletion, and backup health monitoring over the [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) binding. See [Managing backups](managing-backups.md). |
 | Access area | Auth control API | Capability-gated membership and policy administration and decision explanation over the [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) binding. |
 | Schema plugin | Schema control API | Schema policy, dead letters, versioning, and remediation. Ships withheld; surface it with `AddExplorerSchemaPlugin()`. |
+| Tenant administration area | Tenant-administration API | Platform-operator management of every tenant - lifecycle, quotas, allowed regions, admin subjects, and cross-tenant grants - over the [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) binding. Unavailable on a cluster without the tenancy add-on. |
+| My tenant area | Tenant-administration API | Tenant-administrator self-service: the tenant's overview, members, quota, regions, sharing, and a metrics section. See [Tenant scope](tenant-scope.md). |
+| Telemetry area | Telemetry API | Time-series panels built from the queries the cluster's [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) facade offers the caller. Unavailable when the cluster serves no telemetry facade or offers the caller no queries. |
 | Auth-aware sign-in | `IExplorerAuthMethod` | Pluggable login (Basic, Entra, or custom) that attaches a bearer token to an auth-enabled State API. |
 | Standalone or embedded hosting | `AddLatticeExplorerWeb` / `MapLatticeExplorer` | One code path for the bundled `WebHost` process and for embedding in an existing ASP.NET app, under a configurable base path. |
 
 ## Quick Start
 
-Run the bundled standalone head - the `Orleans.Lattice.Explorer.WebHost` process is just the two extension calls below:
+Run the bundled standalone head - the `Orleans.Lattice.Explorer.WebHost` process is built on the two extension calls below (its `Program` adds only the standard exception-handler, HSTS, HTTPS-redirection, and antiforgery middleware):
 
 ```csharp
 using Orleans.Lattice.Explorer.Web;
@@ -51,6 +54,7 @@ app.Run();
 Embed the console in an existing ASP.NET application, mounted under a subpath and seeded with a target endpoint so there is no interactive first-run step:
 
 ```csharp
+using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 
 builder.Services.AddLatticeExplorerWeb(options =>
@@ -84,7 +88,7 @@ See [Running and hosting the Explorer](running-the-explorer.md) for the full hos
 
 - [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, and deployment without taxing cluster scaling.
 - [Multi-replica and failover hosting](multi-replica-hosting.md) - opt-in durable auth state (shared Data Protection key ring, estate-global token cache) and graceful re-authentication for a multi-replica deployment.
-- [Configuration](configuration.md) - the primary hosting and configuration options properties, their types, and their defaults.
+- [Configuration](configuration.md) - every public options property, its type, and its default, plus the launcher environment variables and the persisted configuration document.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a login method and attaching a bearer token.
 - [Adding a custom auth method](adding-a-custom-auth-method.md) - implementing `IExplorerAuthMethod` for a bespoke sign-in.
 - [Managing backups from the Explorer](managing-backups.md) - the Backups area and its capability gating.
@@ -94,6 +98,8 @@ See [Running and hosting the Explorer](running-the-explorer.md) for the full hos
 
 ## See also
 
-- [`Orleans.Lattice.Explorer.Entra`](connecting-to-an-auth-enabled-state-api.md) - the optional Microsoft Entra ID interactive login provider for the console.
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) - the optional Microsoft Entra ID interactive (desktop or device-code) login provider for the console.
+- [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md) - the optional hosted-web (OpenID Connect) Entra sign-in provider for a Blazor Server head.
 - [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) - the read-only state API the tree browser reads from.
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) and [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the control facades the Backups and Access areas drive.
+- [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) and [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) - the facades the Tenant administration, My tenant, and Telemetry areas drive.

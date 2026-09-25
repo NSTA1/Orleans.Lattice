@@ -14,17 +14,17 @@ For shard-count growth (`ILattice.ReshardAsync`), see
 
 > **Structural sizing is registry-pinned, not option-configured.**
 > `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` live on the
-> `TreeRegistryEntry`, not on `LatticeOptions`. Canonical defaults come
-> from `LatticeConstants` (128 / 128 / 64) and are seeded into the
-> registry on first tree use. After seeding, the pin is the sole source
-> of structural truth - all grains read it via
-> `LatticeOptionsResolver`. The only supported mutation paths are
-> `ResizeAsync` (leaf / internal capacity) and `ReshardAsync` (shard
-> count); both run online and update the pin atomically. To start a
-> tree with non-default sizing, call `ResizeAsync` / `ReshardAsync` on
-> the freshly-created empty tree (empty-tree fast-path - no coordinator
-> machinery) or pre-register the pin via
-> `ILatticeRegistry.RegisterAsync`.
+> tree's registry entry, not on `LatticeOptions`. The canonical
+> defaults (128 / 128 / 64) are seeded into the registry the first time
+> the tree's options are resolved. After seeding, the pin is the sole
+> source of structural truth - every grain reads it from the registry.
+> The only supported mutation paths are `ResizeAsync` (leaf / internal
+> capacity) and `ReshardAsync` (shard count); both run online and
+> update the pin atomically. To start a tree with non-default sizing,
+> call `ResizeAsync` / `ReshardAsync` on the freshly-created empty tree
+> (empty-tree fast-path - no coordinator machinery) or pre-register the
+> pin via [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md),
+> which honours the sizing only when it first creates the tree.
 
 ## Resizing an Existing Tree
 
@@ -41,7 +41,7 @@ await tree.ResizeAsync(newMaxLeafKeys: 256, newMaxInternalChildren: 64);
 Resize runs **online**: reads and writes remain available throughout. A whole-tree shape change cannot be done in place - every leaf and every internal node has to be re-paginated at the new fan-out - so `ResizeAsync` drains the source into a freshly-provisioned destination physical tree and then atomically swaps the registry alias.
 
 1. **Provision destination** - `TreeResizeGrain` creates a destination physical tree ID (e.g. `my-tree/resized/{operationId}`) registered with the new `MaxLeafKeys` / `MaxInternalChildren`. The destination inherits the source's `ShardCount` and a copy of its `ShardMap`, so slot *x* on the source routes to the same physical shard index on the destination.
-2. **Snapshot with shadow forwarding** - the source tree runs under `SnapshotMode.Online`. Before drain begins, every source `ShardRootGrain` is placed in `ShadowForwardPhase.Draining` via `BeginShadowForwardAsync`, and every mutation path (`SetAsync`, `GetOrSetAsync`, `SetIfVersionAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `DeleteAsync`, `DeleteRangeAsync`, `BulkLoadAsync`, and saga compensation) runs the local write and a parallel forward to the corresponding destination shard.
+2. **Snapshot with shadow forwarding** - the source tree runs under `SnapshotMode.Online`. Before drain begins, every source shard root enters its draining shadow-forward phase, and each of its mutation paths - `SetAsync` (with or without a TTL), `GetOrSetAsync`, `SetIfVersionAsync`, `SetManyAsync` and its predicated form, `DeleteAsync`, `DeleteRangeAsync`, the batched merge path, and the terminal (commit or abort) of an atomic-write saga such as `SetManyAtomicAsync` - runs the local write and a parallel forward to the corresponding destination shard.
 3. **Drain** - `TreeSnapshotGrain` reads each source shard's current entries and merges them into the destination via `IShardRootGrain.MergeManyAsync` (bounded by `LatticeOptions.MaxConcurrentDrains`, default 4). Raw `LwwEntry` payloads flow through verbatim: HLC timestamps, tombstone flags, and TTL (`ExpiresAtTicks`) are preserved. When every shard has finished draining, its shadow state transitions to `Drained`; live forwards continue until swap.
 4. **Swap** - the registry entry is updated with the new sizing and `SetAliasAsync` atomically points the logical tree ID at the destination. Once complete, each source shard transitions to `ShadowForwardPhase.Rejecting` and subsequent writes against the old physical tree throw `StaleTreeRoutingException`. The stateless-worker `LatticeGrain` catches this exception, re-resolves via the registry, and retries transparently against the destination - callers never observe the transition.
 5. **Cleanup** - the old physical tree is soft-deleted. It will be purged automatically after the configured `SoftDeleteDuration` (default 72 hours), leaving `UndoResizeAsync` viable until then.
@@ -83,9 +83,10 @@ Once the soft-delete window expires and the old tree is purged, the resize can n
 - **Hot-path cost during drain:** every write between `BeginShadowForwardAsync` and swap pays one extra grain hop for the parallel forward. For same-cluster destinations this is in the millisecond range. Prefer off-peak windows for large resizes even though they are online.
 - **Concurrency cap:** `LatticeOptions.MaxConcurrentDrains` (default 4) bounds the number of concurrent per-shard drains `TreeSnapshotGrain` dispatches. Mirrors `MaxConcurrentMigrations` for reshard.
 - **Idempotency:** calling `ResizeAsync` again with the same parameters while a resize is in progress is a no-op. Calling with different parameters throws `InvalidOperationException`.
-- **Registry is the source of truth:** the new sizing values are persisted on the `TreeRegistryEntry` and read through `LatticeOptionsResolver` by every structural grain. You do not need to update `LatticeOptions` in silo configuration separately - `LatticeOptions` no longer exposes `MaxLeafKeys` / `MaxInternalChildren` / `ShardCount`.
+- **Registry is the source of truth:** the new sizing is persisted in the tree registry - on the new physical tree's entry when the resize creates it, and on the logical tree's entry at the swap - and every structural grain reads its sizing from the registry. You do not need to update `LatticeOptions` in silo configuration separately - `LatticeOptions` no longer exposes `MaxLeafKeys` / `MaxInternalChildren` / `ShardCount`.
 - **Empty-tree fast-path:** if the tree has no live entries yet, `ResizeAsync` and `ReshardAsync` update the registry pin in-place and return immediately without activating the coordinator machinery. This is the recommended way to start a tree with non-default sizing.
-- **Interlocks:** while a resize is in flight, `HotShardMonitorGrain` suppresses autonomic splits on the tree and `ReshardAsync` throws `InvalidOperationException`. Run reshard first if you need both, then resize.
+- **Validation:** `newMaxLeafKeys` must be at least 2 and `newMaxInternalChildren` at least 3; smaller values throw `ArgumentOutOfRangeException` before anything is persisted.
+- **Interlocks:** while a resize is in flight, the autonomic split monitor suppresses splits on the tree and `ReshardAsync` throws `InvalidOperationException`; likewise, `ResizeAsync` throws `InvalidOperationException` while a reshard is in flight. If you need both, let the reshard complete first, then resize.
 - **`ShardCount` cannot be resized via `ResizeAsync`.** Changing shard count requires re-hashing all keys, which `ResizeAsync` does not support. Use `ReshardAsync` for that; it runs online via its own shadow-write + swap primitive. See [Online Reshard](online-reshard.md).
 
 ### Manual trigger (testing)

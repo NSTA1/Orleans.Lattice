@@ -49,6 +49,6 @@ The transform, target policy, and report semantics are owned by [`Orleans.Lattic
 
 ## Compliance audit
 
-`ScanComplianceAsync` is a read-only audit. It scans the tree's entries against the cached compiled policy and returns a `LatticeSchemaComplianceReport` with compliant and non-compliant counts plus a reason breakdown. When no policy is set, the report state is `Ungoverned`.
+`ScanComplianceAsync` is a read-only audit. It scans the tree's entries against the cached compiled policy and returns a `LatticeSchemaComplianceReport` with compliant and non-compliant counts plus a reason breakdown. When no policy is set, it returns the ungoverned report: `HasPolicy` is `false` and every count is zero.
 
 The scan never mutates values, policy, dead-letter entries, or version config. It is a Read operation, so an operator can audit a tree without holding SchemaAdmin authority.

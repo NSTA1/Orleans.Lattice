@@ -28,7 +28,7 @@ All are immutable, serializable value types.
 
 | Member | Type | Meaning |
 |---|---|---|
-| `ScaleValue` | `double` | Smoothed, scale-in-gated replica-demand scalar an autoscaler should act on. `0.0` means no additional demand. |
+| `ScaleValue` | `double` | Smoothed, scale-in-gated replica-demand scalar an autoscaler should act on, in replica-units and never below `MinReplicas` once the first sample lands. It reads `0.0` while the signal is still warming up, and otherwise only when there is no pressure and `MinReplicas` is `0`. |
 | `RecommendedReplicas` | `int` | Concrete recommended replica count derived from `ScaleValue` and the configured floor. |
 | `Compute` | `ComputePressure` | The compute-axis component. |
 | `Storage` | `StoragePressure` | The storage-axis component. |
@@ -43,7 +43,7 @@ All are immutable, serializable value types.
 | `Activation` | `double` | Normalised grain-activation pressure (0..1). |
 | `Resource` | `double` | Normalised host-resource pressure (0..1), worst-case CPU and memory. |
 | `WalDispatch` | `double` | Normalised WAL-dispatch pressure (0..1). |
-| `WalSaturation` | `WalSaturationState` | Worst-case WAL saturation across every tree and partition. |
+| `WalSaturation` | `WalSaturationState` | Worst-case WAL saturation across every tree the answering silo has observed (the silo-local WAL saturation signal). |
 
 ### `StoragePressure`
 
@@ -60,7 +60,7 @@ All are immutable, serializable value types.
 |---|---|---|
 | `ProviderKey` | `string` | The catalogue key (the "account"). |
 | `WalRetainedBytes` | `long` | Retained WAL bytes against this key. |
-| `Saturation` | `WalSaturationState` | Worst-case saturation on partitions backed by this key. |
+| `Saturation` | `WalSaturationState` | Worst-case saturation of the trees with partitions backed by this key, as the answering silo's WAL saturation signal reports them (tree-level, not per partition). |
 | `Classification` | `WalPressureClassification` | Throughput-bound, capacity-bound, or none. |
 | `OverThreshold` | `bool` | Retained bytes crossed the advisory fraction (the capacity-bound trigger). |
 
@@ -99,10 +99,14 @@ IEndpointConventionBuilder MapLatticeScalingSignal(this IEndpointRouteBuilder en
 
 Declared on `LatticeScalingEndpointRouteBuilderExtensions`. Maps the scrape endpoint on the co-hosted web host. Serves the `ScalingSignal` as
 JSON with a stable, camelCase top-level `scaleValue` property (plus
-`rawScaleValue`, the compute and storage breakdown, and the reason). `path`
-overrides `LatticeScalingSignalOptions.EndpointPath` for this mapping. The
-endpoint is unauthenticated by design: it discloses only aggregate pressure,
-never data.
+`rawScaleValue`, the compute and storage breakdown, and the reason; enums are
+serialized as strings). `path` overrides `LatticeScalingSignalOptions.EndpointPath`
+for this mapping. The endpoint is unauthenticated by default because it is a
+scrape target: it serves no tree data, though the storage breakdown does name WAL
+provider keys and, in a recommendation, a tree id. The returned
+`IEndpointConventionBuilder` composes with the host pipeline like any other
+mapped endpoint, so chain `RequireAuthorization()` (or rate limiting) to restrict
+it.
 
 ### `AddLatticeScalingHealthCheck`
 

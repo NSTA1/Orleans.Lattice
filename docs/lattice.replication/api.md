@@ -46,7 +46,7 @@ On the receiving HTTP pipeline, map the gRPC endpoints with `MapLatticeReplicati
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `LatticeReplicationServiceCollectionExtensions` | static class | Registers replication services on an Orleans silo. | `AddLatticeReplication`, `ConfigureLatticeReplication`, `AddLatticeAutoSharedDictionary`, `AddLatticeReplicationHealthCheck`, `AddWalSaturationReceiverFlowControl`, `AddLatticeSagaParticipant` |
+| `LatticeReplicationServiceCollectionExtensions` | static class | Registers replication services on an Orleans silo. | `AddLatticeReplication`, `ConfigureLatticeReplication`, `ReplicateLatticeSystemTrees`, `AddLatticeAutoSharedDictionary`, `AddLatticeReplicationHealthCheck`, `AddWalSaturationReceiverFlowControl`, `AddLatticeSagaParticipant` |
 | `LatticeReplicationSecurityServiceCollectionExtensions` | static class | Registers shared-secret sources and security options. | `AddLatticeReplicationSecrets`, `AddLatticeReplicationSecretsFromConfiguration`, `ConfigureLatticeReplicationSecurity` |
 
 `AddLatticeReplication` wires the replication pipeline and default no-op transport. A production deployment replaces the transport by adding the gRPC binding or a custom `IReplicationTransport`. `ConfigureLatticeReplication` follows .NET named options: the overload without a tree name sets global defaults; the `treeName` overload overrides a single tree.
@@ -60,8 +60,8 @@ See [Replication Modes](replication-modes.md) and [Replication Drivers](replicat
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeReplicationOptions` | class | Main replication options. | Identity, tree opt-in, WAL, apply, ship, bootstrap, compression, wire-version, and remediation properties. See [Configuration](configuration.md). |
-| `FallOffLogDecision` | readonly record struct | Result of checking whether a peer cursor is older than the sender's retained WAL. | Decision status slots exposed by the record. |
-| `OperatorReseedDecision` | readonly record struct | Result of an operator snapshot request. | `Triggered`, retry timing slots exposed by the record. |
+| `FallOffLogDecision` | readonly record struct | Result of a receiver-side fall-off check: whether the receiver's per-origin high-water mark is older than the sender's oldest retained WAL entry, and whether a bootstrap was triggered or absorbed. | `FellOffLog`, `LocalHighWaterMark`, `BootstrapTriggered`, `Suppressed` |
+| `OperatorReseedDecision` | readonly record struct | Result of an operator snapshot request. | `Triggered`, `LastRequestedAt`, `RetryAfter` |
 
 `ReplicatedTrees` is the public opt-in map from tree id to `LatticeMergeMode`. Trees not in the map do not ship. `KeyFilter` and `KeyPrefixes` narrow which keys are emitted from opted-in trees.
 
@@ -98,9 +98,9 @@ See [Replication Apply](replication-apply.md) and [Deltas](deltas.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReplicationApplier` | interface | Applies inbound WAL records to the local tree. | `ApplyAsync`, `ApplyBatchAsync` |
-| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark` |
-| `IReplicationLocalVcSeeder` | interface | Seeds local version-vector state before live apply. | Public seeding method returning `LocalVcSeedReport` |
-| `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | Record slots for seeded state and counts. |
+| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried) |
+| `IReplicationLocalVcSeeder` | interface | Rebuilds a tree's local vector clock from the vector-clock slots on its values after an intra-cluster snapshot restore, so inbound dependency checks do not run against a zeroed vector. A no-op for a non-replicated tree. | `SeedFromTreeAsync(string, CancellationToken)` returning `LocalVcSeedReport` |
+| `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | `TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` |
 
 `ApplyAsync` preserves the source cluster HLC and origin id. `ApplyBatchAsync` is the preferred batch seam because implementations can collapse high-water-mark updates and drain causal buffers once per batch.
 
@@ -114,7 +114,7 @@ See [Snapshot Bootstrap](snapshot-bootstrap.md), [Auto-Bootstrap](auto-bootstrap
 | `IBootstrapSnapshotSource` | interface | Marker and specialization for bootstrap snapshot sources. | Inherits `ISnapshotProvider` |
 | `ILatticeBootstrapCoordinator` | interface | Drives receiver-side snapshot bootstrap. | `GetStateAsync`, `GetStatusAsync`, `BootstrapAsync` |
 | `LatticeBootstrapState` | enum | Bootstrap state-machine state. | `Idle`, request, apply, handoff, live, and failed states |
-| `BootstrapCoordinatorStatus` | readonly record struct | Observable bootstrap phase and source cluster. | State and source-cluster slots |
+| `BootstrapCoordinatorStatus` | readonly record struct | Observable bootstrap phase and source cluster. | `Phase`, `SourceClusterId` |
 | `SnapshotEntry` | readonly record struct | One row in a snapshot stream. | Key, value, timestamp, prepared/tombstone flags, transaction id, source-shard index, atomic-batch size/index, TTL expiry, delta, and merge-mode slots |
 | `SnapshotStream` | sealed class | Async snapshot stream wrapper. | As-of HLC, causal-stable frontier, and entry stream |
 | `IRemoteSnapshotTransport` | interface | Fetches snapshot metadata and stream items from a remote cluster. | Metadata and streaming fetch methods |
@@ -122,7 +122,8 @@ See [Snapshot Bootstrap](snapshot-bootstrap.md), [Auto-Bootstrap](auto-bootstrap
 | `RemoteSnapshotProvider` | sealed class | Snapshot provider backed by a remote transport. | Implements `IBootstrapSnapshotSource` |
 | `RemoteSnapshotMetadata` | readonly record struct | Remote snapshot metadata response. | As-of HLC and causal frontier slots |
 | `RemoteSnapshotMetadataRequest` | readonly record struct | Remote metadata request. | Tree, source, and upper-bound slots |
-| `RemoteSnapshotStreamItem` | readonly record struct | One item returned by remote snapshot streaming. | Entry and stream-control slots |
+| `RemoteSnapshotStreamItem` | readonly record struct | One item returned by remote snapshot streaming. | `Entry` (one `SnapshotEntry` per streamed message) |
+| `LatticeBootstrapTransientFaultClassifier` | static class | Default transient-fault classifier for the receiver-side bootstrap drain: timeouts, HTTP / socket / IO faults, retryable gRPC statuses (`Unavailable`, `DeadlineExceeded`, `Aborted`), and an expired Orleans enumeration session retry with bounded backoff; anything else pivots the bootstrap to `Failed`. | `IsTransient(Exception)` |
 
 Bootstrap applies snapshot entries through the same public apply seam as incremental replication, then hands off to live shipping at the snapshot frontier.
 
@@ -145,7 +146,7 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 |---|---|---|---|
 | `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync` |
 | `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync`, `GetOldestAvailableHlcByOriginAsync` |
-| `ILatticeFallOffLogDetector` | interface | Detects whether a peer cursor has fallen behind retained WAL. | Public check method returning `FallOffLogDecision` |
+| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against a sender's oldest retained WAL entry; on fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.
 
@@ -164,7 +165,7 @@ See [Wire Format](wire-format.md).
 | `WireVersionNegotiation` | static class | Computes an effective wire version from local and peer capabilities. | Public negotiation helpers |
 | `WireVersionNegotiationResult` | readonly record struct | Negotiation result. | Effective version and status slots |
 | `WireVersionDownEncoder` | static class | Down-stamps frames for older receivers. | Public down-encoding helpers |
-| ReplicationTypeAliases | static class | Stable Orleans serialization alias constants for public replication wire types. | Public alias constants |
+| `ReplicationTypeAliases` | static class | Stable Orleans serialization alias constants for public replication wire types. | Public alias constants |
 
 Use this surface when writing a transport or compatibility shim. Most application hosts only configure the related options in [Configuration](configuration.md#wire-version-and-adaptive-batch-sizing).
 
@@ -179,8 +180,8 @@ See [Observability](observability.md) and [Health Check](health-check.md).
 | `ReplicationPeerSnapshot` | readonly record struct | Point-in-time per-peer telemetry. | Backlog, lag, contact, error, and direction slots |
 | `ReplicationContactDirection` | enum | Direction tag for peer contact. | Outbound and inbound values |
 | `WireVersionNegotiationState` | class | Runtime wire-version telemetry state. | Public record/update methods and `Snapshot` |
-| `WireVersionNegotiationSnapshot` | readonly record struct | Wire-version telemetry snapshot. | Local, peer, effective version, and status slots |
-| `LatticeReplicationHealthCheckOptions` | sealed class | Health-check thresholds. | Entries-behind, age, consecutive-error, and grace-window properties |
+| `WireVersionNegotiationSnapshot` | readonly record struct | Wire-version telemetry snapshot. | `Tree`, `Peer`, `NegotiatedVersion`, `DowngradeActive`, `PeerCapabilityKnown` |
+| `LatticeReplicationHealthCheckOptions` | sealed class | Health-check thresholds. | `EntriesBehind`, `LastContactSeconds`, `ConsecutiveErrors`, `UnhealthyAfter`, `InboundDegradedAfter`, `InboundCriticalAfter`; the nested `LongTier` / `DoubleTier` threshold records; `DefaultName` |
 
 ## Flow control
 
@@ -189,10 +190,10 @@ See [Receiver Flow Control](receiver-flow-control.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReceiverFlowControlPolicy` | interface | Maps receiver state to ack hints. | `EvaluateAsync` |
-| `ReceiverFlowControlContext` | readonly record struct | Input to a flow-control policy. | Tree, origin, batch size, duration, and receiver-state slots |
+| `ReceiverFlowControlContext` | readonly record struct | Input to a flow-control policy. | `TreeName`, `OriginClusterId`, `EntryCount`, `ApplyDurationMs` |
 | `ReceiverFlowControlHint` | readonly record struct | Suggested sender limits. | `SuggestedBatchSize`, `PauseForMs`, `None` |
 | `NoOpReceiverFlowControlPolicy` | sealed class | Policy that returns no hints. | `EvaluateAsync` |
-| `WalSaturationReceiverFlowControlOptions` | sealed class | Maps WAL saturation states to hints. | Healthy, throttled, and saturated hint properties |
+| `WalSaturationReceiverFlowControlOptions` | sealed class | Tunes how the throttled and saturated WAL states map to hints (a healthy WAL returns no hint). | `ThrottledBatchRatio`, `ThrottledPauseMs`, `SaturatedBatchSize`, `SaturatedPauseMs` |
 | `WalSaturationReceiverFlowControlPolicy` | sealed class | Built-in WAL-saturation-aware policy. | `EvaluateAsync` |
 
 Flow-control hints are advisory. The sender clamps its next batch size and pause to the ack it receives, but a receiver must still tolerate redelivery and retries.
@@ -203,11 +204,11 @@ See [Automatic Drift Remediation](automatic-drift-remediation.md), [digest probe
 
 | Type | Kind | Purpose |
 |---|---|---|
-| `IReplicationDigestProbeTransport` | interface | Transport seam for digest, manifest, Merkle, high-water-mark, replay, and fallback probes. |
+| `IReplicationDigestProbeTransport` | interface | Transport seam for the read-only peer RPCs: `ProbeDigestAsync`, `ProbeMerkleWalkAsync`, `GetPeerHighWaterMarkAsync`, plus the shipping-side `ExchangeContentManifestAsync` (payload elision) and `PullCompressionDictionaryAsync`. Every member except `ProbeDigestAsync` has a default implementation (an unavailable or not-supported response, or `HybridLogicalClock.Zero` for the watermark read), so a custom transport implements only what it can answer. |
 | `DigestProbeComparer` | static class | Compares digest probe responses. |
 | `DigestProbeOutcome` | enum | Digest comparison outcome. |
 | `DigestProbeRequest`, `DigestProbeResponse` | readonly record structs | Digest probe request and response. |
-| `ContentManifestRequest`, `ContentManifestResponse`, `ContentManifestEntry` | readonly record structs | Content-manifest probe shapes. |
+| `ContentManifestRequest`, `ContentManifestResponse`, `ContentManifestEntry` | readonly record structs | Content-hash manifest exchange shapes used by payload elision. |
 | `MerkleWalkProbeRequest`, `MerkleWalkProbeResponse`, `MerkleWalkOutcome` | readonly record structs | Merkle walk request, response, and outcome. |
 | `MerkleWalkAbortReason` | enum | Reason a Merkle walk stopped before repair. |
 | `PeerHighWaterMarkRequest`, `PeerHighWaterMarkResponse` | readonly record structs | High-water-mark probe shapes. |
@@ -231,9 +232,9 @@ See [Compression](../lattice/compression.md) and [Wire Format](wire-format.md).
 | `SharedDictionaryNegotiationState` | sealed class | Tracks peer dictionary state. |
 | `SharedDictionaryNegotiationSnapshot` | readonly record struct | Observable dictionary negotiation state. |
 | `AdvertisedCompressionDictionary` | readonly record struct | Dictionary advertised by a peer. |
-| `CompressionDictionaryAdvertisement` | static class | Encodes dictionary advertisements. |
+| `CompressionDictionaryAdvertisement` | static class | Builds the `(id, fingerprint)` set a receiver advertises on its acks. |
 | `CompressionDictionaryFingerprint` | static class | Computes dictionary fingerprints. |
-| `CompressionDictionaryConvergence` | static class | Checks convergence of shared dictionary state. |
+| `CompressionDictionaryConvergence` | static class | Pulls and installs the peer-advertised dictionaries the local provider does not hold (`ConvergeAsync`). |
 | `CompressionDictionaryPullRequest`, `CompressionDictionaryPullResponse` | readonly record structs | Pull protocol for missing dictionaries. |
 
 Dictionary negotiation is opt-in and separate from the default dict-less Zstandard framing compression.
@@ -256,12 +257,12 @@ See [Transport Security](transport-security.md).
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `ILatticeReplicationSecretSource` | interface | Supplies shared secrets for peer authentication. | Public secret lookup method |
+| `ILatticeReplicationSecretSource` | interface | Supplies shared secrets for peer authentication. | `GetOutboundSecretAsync`, `GetAcceptedSecretsAsync` |
 | `ConfigurationBindingSecretSource` | sealed class | Secret source backed by configuration. | Constructor and secret lookup method |
-| `LatticeReplicationAcceptedSecrets` | sealed class | Accepted shared-secret set. | Secret collection properties |
-| `LatticeReplicationSecurityOptions` | sealed class | Shared-secret authentication options. | Required-secret and accepted-secret settings |
-| `LatticeReplicationEnvironmentVariables` | static class | Environment-variable names for replication secrets. | Public constant names |
-| `LatticeReplicationSharedSecret` | static class | Shared-secret header and validation helpers. | Public helper methods and constants |
+| `LatticeReplicationAcceptedSecrets` | sealed class | Accepted shared-secret set. | `Secrets`, `Version`, `Empty` |
+| `LatticeReplicationSecurityOptions` | sealed class | Shared-secret authentication options. | `RequireAuthentication`, `SecretRefreshInterval`, `ScanConfigurationForSecrets` |
+| `LatticeReplicationEnvironmentVariables` | static class | Environment-variable names for replication secrets. | `Prefix`, `Secret`, `AcceptedSecrets`, `PeerSecretPrefix`, `AllowSourceTreeSecrets` |
+| `LatticeReplicationSharedSecret` | static class | Shared-secret generation and validation helpers. | `MinimumLength`, `Generate`, `IsWellFormed`, `FixedTimeEquals` |
 
 The gRPC binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication is configured through the security extension methods above.
 
@@ -278,19 +279,26 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 | `NoParticipantSagaControlHandler` | class | The shipped safe default handler, registered with `TryAddSingleton` so a durable participant implementation replaces it without ceremony. Holds no participant state: it reports `SagaPhase.None` for every saga and votes `SagaVote.Abort` on prepare, because a participant that cannot durably prepare must not let the coordinator commit. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` |
 | `SagaPhase` | enum | The durable phase a participant reports for a saga. | `None = 0`, `Prepared = 1`, `Committed = 2`, `Aborted = 3` |
 | `SagaVote` | enum | A participant's prepare-phase vote. | `None = 0`, `Commit = 1`, `Abort = 2` |
+| `SagaControlRequest` | readonly record struct | The request every saga control call carries. | `SagaId`, `TargetTree`, `ManifestId`, `CoordinatorClusterId`, `SetId` |
+| `SagaControlResponse` | readonly record struct | A participant cluster's answer to a saga control call. | `SagaId`, `Phase`, `Vote`, `Detail` |
+| `SagaParticipantPrepareResult` | readonly record struct | An `ISagaParticipant` prepare vote. | `Vote`, `Detail` |
 | `LatticeSystemTreeNames` | static class | The reserved system-tree names the replication package owns. | Public constant tree-name members |
 
 ## Tenant isolation and runtime configuration authority
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for its tenant and region, so a peer can never widen tenant or region scope. | `EvaluateAsync(...)` returning `ReplicationTenantIsolationDecision` |
-| `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2` |
-| `ILatticeReplicationConfigAuthority` | interface | Supplies the authoritative runtime replication configuration a silo applies. See [Runtime configuration](runtime-config.md). | Public configuration-resolution members |
-| `LatticeReplicationConfigEntry` | sealed class | One authoritative runtime replication configuration entry. | Public configuration properties |
-| `ILatticeReplicationPreconditionValidator` | interface | Validates that a requested replication mode change is admissible before it is applied. | Public validation member |
-| `LatticeReplicationModeChangeRejectedException` | exception | Thrown when a replication mode change is rejected. | Standard exception members |
-| `LatticeReplicationPreconditionFailedException` | exception | Thrown when a replication precondition fails. | Standard exception members |
+| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for the tenant its tree id names - the tenant must exist, be resident in this region, and be active - so a peer can never widen tenant or region scope. The core default is inactive; the tenancy add-on supplies a real gate. | `IsActive`, `EvaluateAsync(string, CancellationToken)` returning `ReplicationTenantIsolationDecision` |
+| `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2`, `RejectSuspendedTenant = 3` |
+| `ILatticeReplicationConfigAuthority` | interface | The engine-level authoring seam for runtime per-tree replication config: authors enable / disable onto the `sys-replication-config` tree and reports the reconciled per-tree status (the runtime tree unioned with the static `ReplicatedTrees` map). It performs no authorization - the control facade authorizes first. Registered by `AddLatticeReplication(..., enableRuntimeConfig: true)`. See [Runtime configuration](runtime-config.md). | `EnableReplicationAsync`, `DisableReplicationAsync`, `GetTreeStatusAsync`, `GetAllTreeStatusesAsync` |
+| `LatticeReplicationEnableResult`, `LatticeReplicationDisableResult` | readonly record structs | Authority outcomes. | `TreeId`, `Mode`, `AlreadyEnabled`, `BootstrapRequested` / `TreeId`, `AlreadyDisabled` |
+| `LatticeReplicationTreeStatus` | readonly record struct | One tree's reconciled replication status. | `TreeId`, `Enabled`, `Mode`, `Ambiguous`, `Source` |
+| `LatticeReplicationEnrollmentSource` | enum | Which enrollment source puts a tree's status in force. | `Runtime = 0`, `Static = 1`, `RuntimeAndStatic = 2` |
+| `LatticeReplicationConfigEntry` | sealed class | One tree's CRDT config entry in the `sys-replication-config` OR-Map: a disable-wins enablement flag plus a multi-value merge-mode register, so concurrent divergent modes stay detectable. | `Enabled` (`RwFlag`), `Mode` (`MvRegister`), `IsEnabled`, `HasAmbiguousMode`, `Modes`, `TryGetMode`, `Enable`, `Disable`, `SetMode`, `MergeFrom`, `Clone` |
+| `ILatticeReplicationPreconditionValidator` | interface | Validates the runtime preconditions a tree must meet to replicate under a merge mode (today: a flag mode requires a configured local replica id). Shared by the boot-time validation of statically declared trees and the runtime enable path. | `Validate(string, LatticeMergeMode)` returning `LatticeReplicationPreconditionResult` |
+| `LatticeReplicationPreconditionResult` | readonly record struct | A precondition verdict. | `IsSatisfied`, `FailureReason`, `Satisfied`, `Rejected(string)` |
+| `LatticeReplicationModeChangeRejectedException` | exception | Thrown when an enable would change the merge mode of an already-enabled tree, or the tree's mode is currently ambiguous. | `TreeId`, `RequestedMode`, `CurrentMode`, `CurrentModeAmbiguous` |
+| `LatticeReplicationPreconditionFailedException` | exception | Thrown when a replication precondition fails. | `TreeId`, `RequestedMode` |
 
 ## Azure Table WAL durability
 

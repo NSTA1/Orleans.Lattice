@@ -13,9 +13,13 @@ For rationale, semantics, and implementation gotchas see
 
 ## 1. Physical and network topology
 
-Docker Compose runs two Azurite containers, four silos (two per
-cluster), and a Traefik proxy per cluster. The only cross-cluster
-link is the peer Traefik, multi-homed onto both cluster networks.
+Docker Compose runs three Azurite containers (one per cluster plus
+the shared `azurite-backup` account), four silos (two per cluster), a
+Traefik proxy per cluster, and a Prometheus + Grafana pair. Silos never
+reach a peer cluster's silos directly: the only route between them is
+the peer Traefik, multi-homed onto both cluster networks. The shared
+`azurite-backup` account and Prometheus are also attached to both
+cluster networks.
 
 ```mermaid
 flowchart TB
@@ -89,15 +93,17 @@ Three host ports are published:
 | 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5002>. |
 | 3000 | `grafana:3000` | Cross-cluster Grafana - Prometheus-backed, multi-homed onto both cluster networks. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
 
-Silo HTTP (`:8080`), Orleans silo (`:11111`), gateway (`:30000`),
-and Prometheus (`:9090`) ports are internal-only.
+Silo HTTP (`:8080`), silo h2c gRPC (`:8081`), Orleans silo
+(`:11111`), gateway (`:30000`), and Prometheus (`:9090`) ports are
+internal-only.
 
-Each Traefik runs three routers over the same backend pool:
+Each Traefik runs four routers over the same backend pool:
 
 | Router | Rule | LB |
 |---|---|---|
 | `{cluster}-replicate` | `PathPrefix(/orleans.lattice.replication.)`, priority 200 | round-robin, no health check |
 | `{cluster}-state` | `PathPrefix(/orleans.lattice.api.state/)`, priority 200 | round-robin + active health check (probes `:8080`) |
+| `{cluster}-backup` | `PathPrefix(/orleans.lattice.api.backup/)`, priority 200 | round-robin + active health check (probes `:8080`); serves the backup control API, wired only with `run.ps1 -Backup` |
 | `{cluster}-web` | `PathPrefix(/)` | sticky cookie `msmfg_{cluster}_affinity` |
 
 ### Tier-5 partition commands
@@ -119,8 +125,9 @@ docker network connect    msmfg_eu-net msmfg-traefik-us
 ## 2. In-silo component graph
 
 Each silo is a single ASP.NET Core process hosting Blazor Server,
-gRPC, Orleans, and the package's replication WAL + gRPC push
-transport. Both UI and gRPC call paths share the same
+gRPC, Orleans (with the Lattice write-ahead log), and the replication
+package's shipper, applier, and gRPC push transport. Both UI and gRPC
+call paths share the same
 `FederationRouter` and backend instances via DI.
 
 ```mermaid
@@ -156,10 +163,10 @@ flowchart LR
             siteIdx["mfg-site-activity<br/>+ tag-mfg-site (tag index)"]
             labels["mfg-part-labels (OrSet)"]
             opReg["mfg-part-operator (LWW)"]
+            wal["write-ahead log - per tree"]
         end
 
-        subgraph repl["Orleans.Lattice.Replication<br/>(WAL + gRPC push)"]
-            wal["WAL · per replicated tree"]
+        subgraph repl["Orleans.Lattice.Replication<br/>(shipper + applier + gRPC push)"]
             ship["Shipper grain · per (tree × peer)"]
             apply["Applier · receiver-side"]
             grpc2["gRPC service /<br/>push transport"]
@@ -169,7 +176,7 @@ flowchart LR
         dashStream[/"Azure Storage Queue stream<br/>DashboardStreams · msmfg.dashboard.facts<br/>queue msmfgdashboard-0<br/>(durable cluster-wide fan-out)"/]
     end
 
-    tables[("Azure Table Storage<br/>msmfgGrainState<br/>msmfgLatticeFacts")]
+    tables[("Azure Table Storage<br/>OrleansGrainState (grain state)<br/>OrleansLatticeWal (write-ahead log)")]
 
     ui <--> razor
     razor --> router
@@ -249,16 +256,21 @@ flowchart TB
 
 Key invariants:
 
-- `FederationRouter` only **reads** chaos grains; it never writes
-  them. Writes come from the UI / gRPC control surface via
-  `ISiteRegistryGrain` and direct grain calls.
+- On the fact path `FederationRouter` only **reads** chaos grains
+  (site admission, the partition filter, backend config). Chaos writes
+  come from the UI / gRPC control surface through the router's
+  `Configure*` / `ApplyPresetAsync` methods, which update the chaos
+  grains (sites through `ISiteRegistryGrain`) and raise
+  `ChaosConfigChanged`.
 - Cross-cluster replication is opaque to the application: the
-  package's WAL + shipper + applier sit below the lattice, and the
+  core write-ahead log and the replication package's shipper +
+  applier sit below the lattice, and the
   sample observes the receiver-side stream by decorating the
   package's `IReplicationApplier` with `BaselineReplicationApplier`,
   so each cross-cluster apply also mirrors `mfg-facts` writes into
-  `BaselineFactBackend` and raises `FactReplicated`. WAL compaction
-  is a package concern; the sample does not configure it.
+  `BaselineFactBackend` and raises `FactReplicated`. WAL garbage
+  collection and compaction are library concerns; the sample does not
+  configure them.
 - `PartitionHealHostedService` only runs shadow promotion when
   `IPartitionChaosGrain.IsPartitioned` has flipped back to `false`.
 
@@ -266,10 +278,16 @@ Key invariants:
 
 ## 4. Lattice trees
 
-All five trees persist to `msmfgLatticeFacts` in Azure Table Storage.
-Orleans grain state (chaos toggles, seed flag, baseline part grains,
-inventory) persists to `msmfgGrainState`. The replication WAL is a
-package-managed table separate from the lattice trees themselves.
+All five trees persist through the Lattice grain-storage provider
+(`lattice`, Azure Table grain storage) and their write-ahead log
+through `Orleans.Lattice.Storage.AzureTable` (table
+`OrleansLatticeWal`). The sample's own grain state (chaos toggles,
+seed flag, baseline part grains) persists through the
+`msmfgGrainState` provider. Neither provider name is a table name:
+every Azure Table grain-storage provider in the sample writes Orleans'
+default `OrleansGrainState` table. Replication has no WAL of its own -
+the shipper reads the trees' write-ahead log and keeps its cursors in
+grain storage.
 
 ```mermaid
 flowchart LR
@@ -286,8 +304,8 @@ flowchart LR
 
     facts -->|"value + site tag written together"| siteIdx
     siteIdx -->|"site tag posting"| siteTag
-    facts -->|"labels written on raise / disposition"| labels
-    facts -->|"operator stamped on each fact"| opReg
+    ops["Operator actions<br/>(part-detail page)"] -->|"add / remove label"| labels
+    ops -->|"assign operator"| opReg
 ```
 
 | Tree | Key shape | Role | Replicated |
@@ -295,7 +313,7 @@ flowchart LR
 | `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | Immutable per-part fact log. Forward range scan = HLC-ascending history. | Yes |
 | `mfg-site-activity` | `{serial}/{site}` → HLC + activity label | Part-major activity rows; the per-site view reads them through the tag index. | Yes |
 | `tag-mfg-site` | tag-index membership (`tag \0 treeId \0 key`) | Posting list mapping each `ProcessSite` to its `{serial}/{site}` keys; powers `ListAtSiteAsync` via `WithAnyTags(site)`. | Yes |
-| `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part label set (`damaged`, `awaiting-mrb`, `awaiting-rework`, `accepted`, `scrapped`, …). | Yes - `ReplicationMode.OrSet` (typed CRDT delta shipping) |
+| `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part free-form label set, edited by operators on the part-detail page (the seeder writes `priority`, `expedite`, `rework-watch`, and `qa-hold` into one showcase part). | Yes - `LatticeMergeMode.OrSet` (typed CRDT delta shipping) |
 | `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
 
 The dashboard's per-part summary is no longer a sample-owned tree. It is the
@@ -329,21 +347,22 @@ Access patterns:
   no fact-stream event - are still fanned out live to the attached dashboard
   within a few cadences.
 
-Cross-cluster shipping and WAL compaction are package concerns - see
+Cross-cluster shipping is a replication-package concern and WAL
+compaction a core-library one - see
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for
-the WAL key shape, the gRPC push protocol, and the receiver-side
-apply pipeline.
+the gRPC push protocol and the receiver-side apply pipeline.
 
 ---
 
 ## 5. Cross-cluster replication flow
 
 Cross-cluster replication is provided by
-`Orleans.Lattice.Replication` (WAL + shipper + applier) wired with
-the `Orleans.Lattice.Replication.Grpc` push transport. From the
-sample's perspective the flow is opaque: a write on the US cluster
-lands in the local lattice, the package's WAL captures it, the
-shipper streams it to the EU cluster's gRPC service, and the EU
+`Orleans.Lattice.Replication` (shipper + applier, shipping from the
+core write-ahead log) wired with the `Orleans.Lattice.Replication.Grpc`
+push transport. From the sample's perspective the flow is opaque: a
+write on the US cluster lands in the local lattice, the core WAL
+captures it, the shipper pushes it to the EU cluster's gRPC service
+(a unary `LatticeReplication.Push` call), and the EU
 applier merges it back into the local lattice using the appropriate
 CRDT semantics (LWW for `mfg-facts` and `mfg-site-activity`, OrFlag
 enable-wins membership for its `tag-mfg-site` membership tree,
@@ -356,7 +375,7 @@ sequenceDiagram
     participant Router as FederationRouter
     participant Lat as Lattice backend
     participant Tree as mfg-facts (us)
-    participant WAL as Replication WAL (us)
+    participant WAL as Core WAL (us)
     participant Ship as Shipper (us)
     participant Traefik as traefik-eu
     participant Apply as Applier (eu)
@@ -364,8 +383,8 @@ sequenceDiagram
     participant Mirror as BaselineReplicationApplier (eu)
     participant PeerBase as Baseline backend (eu)
 
-    UI->>Router: EmitFact(env)
-    Router->>Lat: AppendAsync(env)
+    UI->>Router: EmitAsync(fact)
+    Router->>Lat: EmitAsync(fact)
     Lat->>Tree: SetAsync(key, bytes)
     Tree-->>WAL: append (origin=us, hlc, payload)
 
@@ -389,10 +408,10 @@ Failure modes and their recovery:
 | Scenario | Effect | Recovery |
 |---|---|---|
 | Peer unreachable | Push transport's RPC fails | Package-internal exponential backoff; shipper retries from the same cursor. |
-| Silo-B of peer restarts | Traefik health check evicts it within ~2 s | Next push lands on silo-A; transparent to the shipper. |
+| Silo-B of peer restarts | The replication router has no health check, so a push routed to the stopped silo fails | The shipper retries with backoff, and round-robin lands the retry on silo-A. |
 | Duplicate delivery | Same entry merged twice | CRDT-idempotent: LWW collapses to identity, OrSet add/remove dots are deduped by replica id, write-once `mfg-facts` keys are stable. |
-| A → B → A cycle | Receiver re-emits a remote-origin entry | Broken by the package's per-origin high-water-mark - replicated applies are short-circuited before they hit the WAL again. |
-| Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
+| A -> B -> A cycle | Receiver re-emits a remote-origin entry | Broken by origin stamping: the receiver appends a replicated apply to its own WAL under the source cluster's origin, and its shipper ships only locally-authored entries, so the entry never travels back. |
+| Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set, and `ChaosReplicationApplier` rejects inbound applies so the peer's shipper holds its cursor too; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
 | Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
 | Baseline applier decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
 | Receiver fallen out of WAL retention window | Receiver's per-peer cursor is older than the sender's oldest WAL entry | Auto-bootstrap drains a point-in-time snapshot from the sender cluster over the gRPC remote-snapshot transport (`IRemoteSnapshotTransport` / `RemoteSnapshotProvider`); the receiver catches up automatically. See [`docs/lattice.replication/snapshot-bootstrap.md`](../../docs/lattice.replication/snapshot-bootstrap.md). |
@@ -412,11 +431,15 @@ Compose overrides only what has to change in containers:
 |---|---|
 | `ConnectionStrings__AzureTableStorage` | Per-cluster Azurite URL (`http://azurite-{cluster}:10002/...`). |
 | `ConnectionStrings__BackupBlobStorage` | Shared backup Azurite blob URL (`http://azurite-backup:10000/...`) - identical on every silo so all clusters resolve one backup sink. |
-| `PackageReplication__PeerClusterId` | Peer cluster short name (used as the WAL origin tag). |
+| `PackageReplication__PeerClusterId` | Peer cluster short name - the replication peer the shipper targets and the key of its push endpoint. The origin tag on locally-authored WAL records is this silo's own cluster name. |
 | `PackageReplication__PeerGrpcEndpoint` | Peer Traefik URL for the gRPC push transport. |
-| `Cluster__SiloPortA` / `SiloPortB` | Both `11111` under Compose - each container has its own IP. |
+| `Cluster__SiloPortA` / `SiloPortB`, `Cluster__GatewayPortA` / `GatewayPortB` | `11111` and `30000` under Compose - each container has its own IP. |
+| `CLUSTER_NAME` / `SILO_ID` | This silo's cluster (`us` / `eu`) and silo letter (`a` / `b`). The compose `command` also passes them as `--cluster` / `--silo-id`, which win. The cluster name is the replication `ClusterId`. |
+| `LATTICE_REPLICATION_SECRET` | Shared replication secret, identical on every silo so each peer accepts inbound pushes. Sample-only value. |
+| `ASPNETCORE_ENVIRONMENT` | `Production` in Compose. |
 | `ASPNETCORE_URLS` | `http://+:8080` in Compose; `Program.cs` skips its own `UseUrls` when this is set. |
 | `Seeder__Enabled` | Explicit boolean - `true` on `silo-us-a`, `false` elsewhere. |
+| `EXPLORER_STATE_AUTH`, `LATTICE_STATE_USER_<username>`, `LATTICE_BACKUP_ENABLED` | Injected from the git-ignored `.env` that `run.ps1` writes: the state-API auth switch and its salted credential (`-Username` / `-Password`), and the backup control API switch (`-Backup`). |
 
 The package's gRPC push transport accepts a single peer endpoint per
 peer. Multi-zone failover is delegated to the load balancer in front

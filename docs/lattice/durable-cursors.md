@@ -109,13 +109,13 @@ step.
 | Field | Type | Purpose |
 |-------|------|---------|
 | `TreeId` | `string` | Target tree grain key |
-| `Spec` | `LatticeCursorSpec` | Kind, start/end bounds, direction, `PointInTime` - frozen at `OpenAsync` |
+| `Spec` | `LatticeCursorSpec` | Kind, start/end bounds, direction, `PointInTime`, `ZeroObservableWrites` (snapshot cursors), and the optional server-side `Predicate` of a `*WherePredicateAsync` cursor - frozen when the cursor opens |
 | `Phase` | `LatticeCursorPhase` | `NotStarted` / `Open` / `Exhausted` / `Closed` |
 | `LastYieldedKey` | `string?` | Last key returned or tombstoned. `null` before the first step. |
 | `DeletedTotal` | `int` | Cumulative tombstone count (delete-range cursors only) |
 | `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The per-tree transaction-registry snapshot captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
-| `SnapshotPinId` | `Guid` | The registry-side pin handle returned by `PinSnapshotAsync`. Empty for live-mode cursors and for point-in-time cursors whose captured snapshot was empty (no in-flight sagas at open). |
-| `SnapshotCoordinate` | `LatticeSnapshotCoordinate?` | Tree-wide WAL coordinate captured at `OpenAsync` for zero-observable-writes snapshot cursors. Pairs with `PointInTimeSnapshot` to fix the projection as of one tree-wide moment (WAL offsets fix the foreground-write view, the registry snapshot fixes saga decisions), so a reactivated cursor keeps serving the view it opened with. `null` for non-snapshot cursors. |
+| `SnapshotPinId` | `Guid` | The pin id the cursor mints at open and registers with the tree's transaction registry so the decisions it captured are retained. Empty for live-mode cursors and for point-in-time cursors whose snapshot captured no decided saga (in-flight entries are never pinned). A snapshot cursor carries a minted id that is never registered, because it pins no registry decisions. |
+| `SnapshotCoordinate` | `LatticeSnapshotCoordinate?` | Tree-wide coordinate captured when a zero-observable-writes snapshot cursor opens: the pinned shard-map version (and, for a multi-shard tree, the map itself), the per-shard, per-partition WAL heads the frozen baselines were captured at, and the per-open baseline token that keys those baselines, so a reactivated cursor keeps serving the view it opened with. A snapshot cursor persists no `PointInTimeSnapshot`: its frozen baselines already fix saga visibility at the captured heads. `null` for non-snapshot cursors. |
 | `SnapshotBaselinePersisted` | `bool` | `true` once a snapshot cursor has durably flushed its per-shard frozen baselines. The baselines seed the transient snapshot leaves in memory at open and are flushed lazily only the first time a page reports more results (the cursor must now survive past page 1 across failover or eviction); a cursor that drains in a single page never sets it and can skip the durable baseline delete on close. `false` for non-snapshot cursors. |
 
 ### Step sequence
@@ -261,28 +261,28 @@ stalled point-in-time cursor can occupy:
 |-----|---------|--------|
 | `LatticeOptions.CursorIdleTtl` | 48 h | Cursor-grain idle reminder releases the pin on inactivity. |
 | `LatticeOptions.MaxCursorSnapshotPinTtl` | 7 d | Registry-side hard cap on a single pin's lifetime. A live cursor slides this on every `Next*Async`; a stalled cursor that misses the slide surfaces `LatticeCursorSnapshotExpiredException` on its next call and the cursor must be reopened. |
-| `LatticeOptions.MaxPinnedSagaDecisions` | 100 000 | Registry-wide footprint cap across all live pins. `OpenAsync(pointInTime: true)` throws `LatticeCursorRegistryPinExhaustedException` when accepting the new snapshot would breach the cap; existing pinned cursors continue paging. |
+| `LatticeOptions.MaxPinnedSagaDecisions` | 100 000 | Per-tree cap on the union of saga decisions pinned by every live point-in-time cursor on that tree. Opening a point-in-time cursor (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` with `pointInTime: true`) throws `LatticeCursorRegistryPinExhaustedException` when accepting the new snapshot would breach the cap; existing pinned cursors continue paging. |
 
 | Condition | Exception |
 |-----------|-----------|
-| `OpenAsync(pointInTime: true)` would push the registry pinned-decision count past `MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
+| Opening a point-in-time cursor would push the tree's pinned-decision count past `MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
 | `NextKeysAsync` / `NextEntriesAsync` on a point-in-time cursor whose pin has been evicted (TTL elapsed or registry reaper ran) | `LatticeCursorSnapshotExpiredException` |
 
 A delete-range cursor cannot be opened in point-in-time mode:
 `OpenDeleteRangeCursorAsync` exposes no `pointInTime` option at all, because
 range deletes are mutations rather than snapshot reads. Point-in-time pinning
-applies only to the read cursors opened via `OpenAsync`.
+applies only to key and entry cursors (`OpenKeyCursorAsync` /
+`OpenEntryCursorAsync` and their `WherePredicate` variants).
 
 ### Cost vs. live mode
 
 Live-mode and point-in-time cursors share the same per-step
 checkpoint and shard fan-out cost. Point-in-time mode adds:
 
-- One `PinSnapshotAsync` call at open (skipped when the captured
-  snapshot is empty).
-- One `RefreshPinAsync` call per step (interleaved with the existing
-  checkpoint write).
-- One `UnpinSnapshotAsync` call at close or TTL expiry.
+- One transaction-registry snapshot read and one pin registration at open
+  (the registration is skipped when the snapshot captured no decided saga).
+- One pin refresh per step, issued before the step's scan.
+- One pin release at close or idle-TTL expiry.
 
 The persisted `PointInTimeSnapshot` adds one dictionary entry per
 in-flight or recently-completed saga at open time to the cursor's

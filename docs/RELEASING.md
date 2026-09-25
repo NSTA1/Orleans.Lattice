@@ -180,7 +180,7 @@ A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGE
 
 > **Every shipped package must have a live release line branch containing the tree it shipped from.**
 
-Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.6.0`, both `release/9.4` and `release/9.6` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
+Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.7.x`, both `release/9.4` and `release/9.7` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
 
 Retire a release line branch only once no shipped package still points at it.
 
@@ -190,11 +190,11 @@ The documentation site is deployed by the `Docs` workflow, and it is **not** man
 
 - A **pull request** builds the corpus but never deploys. The build is the link-integrity gate (`-MaxWarnings 0`), so it fails closed on any broken relative link or in-page anchor.
 - A **push of the core `lattice-v<X.Y.Z>` tag** builds and deploys automatically. It is the only tag that does: the glob is `lattice-v*`, which matches the core tag alone and not the dotted per-package tags such as `lattice.storage.file-v9.6.0`, so one wave deploys the site once rather than once per package.
-- A **manual `workflow_dispatch`** builds and deploys from whatever ref it is dispatched on.
+- A **manual `workflow_dispatch`** builds from whatever ref it is dispatched on, but deploys only when that ref is a `release/<X.Y>` line branch, and only the newest one (see [Only the newest release line publishes the site](#only-the-newest-release-line-publishes-the-site)).
 
 Because the deploy hangs off the core tag, the published site reflects the wave's **pinned ship commit**, not `main`. That is the intended contract: the site documents what a user can actually install.
 
-That contract is what makes `main` the wrong ref for an out-of-band docs fix. Dispatching `Docs` on `main` publishes documentation for unreleased work, silently putting the site ahead of every package on NuGet. So a docs fix reaches the site the same way a code fix reaches NuGet - through the release line:
+That contract is what makes `main` the wrong ref for an out-of-band docs fix. Publishing from `main` would document unreleased work, silently putting the site ahead of every package on NuGet. So a docs fix reaches the site the same way a code fix reaches NuGet - through the release line:
 
 1. Merge the fix to `main` as an ordinary PR, so trunk carries it into the next wave.
 2. `git switch release/<X.Y>` and `git cherry-pick <fix-commit-from-main>`.
@@ -202,7 +202,7 @@ That contract is what makes `main` the wrong ref for an out-of-band docs fix. Di
 
 No tag is involved: the site is a whole-repository artifact with no version of its own, so republishing it does not constitute a release and needs no `<Version>` bump or changelog entry.
 
-This is enforced rather than merely documented. The `github-pages` environment's deployment branch policy admits the tag pattern `lattice-v*` and the branch pattern `release/*`, and deliberately does **not** admit `main` - a dispatch on trunk is refused by the environment. `docs.yml` has no push trigger for `main`, so nothing legitimate needs it. A refusal presents as the zero-step `deploy` failure described in step 7 below.
+This is enforced twice rather than merely documented. First, the guard in `docs.yml` publishes a dispatch only from a `release/<X.Y>` branch: dispatched on any other ref, `main` included, it logs `SKIP: refusing to publish the site from '<ref>'`, and the run is green with a skipped `deploy` job. Behind it, the `github-pages` environment's deployment branch policy admits the tag pattern `lattice-v*` and the branch pattern `release/*`, and deliberately does **not** admit `main`; a deploy the policy refuses presents as the zero-step `deploy` failure described in step 7 below. `docs.yml` has no push trigger for `main`, so nothing legitimate needs it.
 
 ### Only the newest release line publishes the site
 
@@ -220,7 +220,7 @@ The practical consequences are worth stating plainly:
 - A documentation fix that must appear on the site has to reach the **newest** line. Cherry-picking it only onto an older line updates that line's sources but will never publish.
 - Once a line stops being the newest, its documentation is frozen as far as the site is concerned. There is no per-version docs archive; see the limitation below.
 
-One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.6.0`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
+One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.7.x`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
 
 ## Release protocol
 
@@ -253,9 +253,9 @@ One known limitation: the site is a single artifact built from one commit, so wh
 
    This step is enforced, not merely documented: the publish workflow refuses to build a tag whose commit is not contained in some `release/*` branch, and fails before anything is pushed to NuGet. If you see that error, you skipped this step.
 
-4. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content src/<package>/<package>.csproj | Select-String "<Version>"` must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
+4. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content <csproj> | Select-String "<Version>"`, with `<csproj>` the path the [Packages](#packages) table gives (for example `src/lattice.replication/Orleans.Lattice.Replication.csproj`), must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
 
-5. **Confirm CI was green on the PR before it merged.** CI (the `build-and-test` job) runs only on `pull_request` events, **not** on `push` to `main`. So there is no CI run on the squash-merge commit itself, and that commit's combined status reads `pending` with zero checks - this is expected, not a failure, so do not go hunting for a push-to-main run, check-suites, or check-runs on the merge commit. The green gate is the merged PR's final CI run: `gh pr checks <pr-number>` (or `gh run list --branch <feature-branch> --limit 5`) must show the `build-and-test` run `completed/success`. Because a squash merge replays the already-reviewed tree onto `main`, that PR run is the authoritative signal that the commit you are tagging is green.
+5. **Confirm CI was green on the PR before it merged.** CI (the `build-and-test` job) runs on `pull_request` events (and on pushes to epic integration branches), **not** on `push` to `main`. So there is no CI run on the squash-merge commit itself, and that commit's combined status reads `pending` with zero checks - this is expected, not a failure, so do not go hunting for a push-to-main run, check-suites, or check-runs on the merge commit. The green gate is the merged PR's final CI run: `gh pr checks <pr-number>` (or `gh run list --branch <feature-branch> --limit 5`) must show the `build-and-test` run `completed/success`. Because a squash merge replays the already-reviewed tree onto `main`, that PR run is the authoritative signal that the commit you are tagging is green.
 
 6. **Tag each package independently.** The publish workflow's per-tag trigger globs fire on `push` events to a **single tag ref**. A bulk push (`git push origin tag1 tag2 tag3`) sends all the refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Cut every tag from the release line branch (step 3), and push them **one at a time**:
 

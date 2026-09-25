@@ -5,11 +5,14 @@ Optional, opt-in **gRPC transport binding** for
 transport-agnostic tree-administration control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
-a strongly-typed `LatticeTreeAdminApiGrpcClient`. It binds the fail-closed
-**capability probe** and the unauthenticated auth-scheme discovery RPC; the
-whole-tree lifecycle operations (bulk-load, delete, resize, reshard, and the rest)
-are added as RPCs here as they become available. Every wire message rides the
-Orleans serializer, so the contract stays versioned and additive-only.
+a strongly-typed `LatticeTreeAdminApiGrpcClient` with one method per facade
+operation - the fail-closed **capability probe**, diagnostics, tree lifecycle and
+configuration, bulk load, restore, reshard, resize, snapshot, WAL placement and
+moves, orphaned-leaf audit / survey / repair, view and tag-index administration,
+compaction, and history retention - plus the unauthenticated auth-scheme discovery
+RPC: 51 unary RPCs in all, with the orphaned-leaf survey riding the audit RPC.
+Every wire message rides the Orleans serializer, so the contract stays versioned
+and additive-only.
 
 Wiring is two calls on the co-hosting silo:
 

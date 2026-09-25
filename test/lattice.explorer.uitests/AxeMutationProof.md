@@ -53,7 +53,11 @@ This is the assertion that catches #1793.
 
 ### Mutation-test output (buggy source)
 
-With the `bool` binding restored to `AppShell.razor` line 51, the test fails:
+Recorded when the tab was still bound in `AppShell.razor`. The binding has since
+moved into the design system's single tab primitive, and the test now runs once
+per breakpoint band and reports a per-band count, so a present-day run prints a
+different message. With the `bool` binding restored to `AppShell.razor` line 51,
+the test failed:
 
 ```
 role=tab element at index 0 has aria-selected="", which is not a valid enumerated value.
@@ -70,8 +74,13 @@ With the correct string binding, both the axe sweep and the enumerated-value ass
 
 ## How to reproduce
 
-1. In `src/lattice.explorer/UI/Navigation/AppShell.razor`, change line 51 back to the buggy
-   form `aria-selected="@(_activePlugin is null)"`.
+Every tab strip in the shell - the area rail included - now renders through
+`LatticeAdaptiveTabs`, so the enumerated binding lives there once.
+
+1. In `src/lattice.explorer/DesignSystem/Components/LatticeAdaptiveTabs.razor`, change the
+   binding `aria-selected="@(isActive ? "true" : "false")"` back to the buggy `bool` form
+   `aria-selected="@isActive"`.
 2. `dotnet build test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release`
 3. `dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release --no-build --filter "FullyQualifiedName~Every_tab_reports_a_valid_enumerated_aria_selected_value"`
-4. Observe the failure above, then restore line 51 and confirm `git diff src/` is clean.
+4. Observe a failure at every breakpoint band, reporting the tabs whose `aria-selected` reads as
+   an empty string, then restore the binding and confirm `git diff src/` is clean.

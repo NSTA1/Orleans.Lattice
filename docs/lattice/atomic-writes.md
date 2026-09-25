@@ -2,9 +2,12 @@
 
 `ILattice.SetManyAtomicAsync(entries)` commits a batch of key-value pairs with
 all-or-nothing semantics: either every entry in the batch is durably written,
-or - on any failure - every already-committed entry in that batch is rolled
-back to its pre-saga value. The feature is implemented as a saga coordinator
-grain that wraps the existing per-key `SetAsync` path.
+or - on any failure - none of them is, and every key keeps its pre-saga value.
+The feature is implemented as a saga coordinator that stages the whole batch
+through the tree's batched write path as prepared writes readers cannot see,
+then makes it visible - or discards it - with a single commit or abort
+decision recorded in the tree's transaction registry. An abort issues no
+per-key rollback writes.
 
 The non-atomic `SetManyAsync` remains available for throughput-oriented use
 cases where partial application on failure is acceptable.
@@ -203,47 +206,57 @@ sagas: every write has been staged into the leaf pending buckets (hidden from
 readers) and the per-tree registry has delegated this saga's txid to the
 cross-tree coordinator, and the saga waits there until the coordinator
 finalizes it into commit (execute-tail) or abort (compensate). The
-`registry.Mark*` and `fan-out` steps run synchronously inside `RunSagaAsync`
-between the execute / compensate phase exit and the final completed-phase
-write. **The registry write is the single tree-wide visibility flip**
-(see [Consistency: Atomic
-visibility](consistency.md#atomic-visibility));
-the terminal fan-out is best-effort lazy GC of each touched leaf's
-pending-tx bucket.
+registry decision and the terminal fan-out run synchronously in the saga's
+drive loop, between the execute / compensate phase exit and the final
+completed-phase write. **The registry write is the single tree-wide
+visibility flip** (see [Consistency: Atomic
+visibility](consistency.md#atomic-visibility)); the terminal fan-out that
+follows drains each touched leaf's pending-tx bucket - it is not the
+visibility primitive, but it is re-driven until it completes (see
+[Tree-wide visibility flip](#tree-wide-visibility-flip)).
 
 ### Phase 1 - Prepare
 
 The coordinator registers a **keepalive reminder** (1-minute period) so that a
 silo crash during any subsequent phase triggers reactivation and resumption
-on the next reminder tick. It then issues `GetAsync(key)` for every key in
-the batch and records each pre-saga value (including absence) in
-`AtomicWriteState.PreValues`, alongside the sorted set of touched shards
-that later drives the terminal broadcast. A guarded batch evaluates its
-predicate against this persisted snapshot once, so a reminder-driven replay
-re-derives the identical verdict. The phase ends
-with a `WriteStateAsync` that flips the persisted phase to `Execute`.
+on the next reminder tick. It then resolves the tree's routing once (forcing
+a refresh), groups the batch's keys by the shard that owns them, and reads
+every key's pre-saga value with one batched raw-entry read per touched shard,
+issued in parallel. It records each pre-saga value (including absence - a
+tombstoned or already-expired entry counts as absent) in the saga's persisted
+state, alongside the sorted set of touched shards that later drives the
+terminal broadcast. The captured pre-saga values feed guard evaluation only -
+no compensation path reads them, because an abort never writes: a guarded
+batch evaluates its predicate against this snapshot once, a key with no live
+pre-saga value fails the guard, and the verdict is persisted with the phase,
+so a resumed saga never re-evaluates it against data that has moved on. The
+phase ends with a single state write that flips the persisted phase to
+execute (or to the terminal precondition-failed state when the guard
+rejected the batch), followed by a best-effort bulk registration of the
+touched shards as the transaction's participants in the tree's transaction
+registry.
 
 ### Phase 2 - Execute
 
 The coordinator dispatches the saga's unwritten remainder in a single
-`ILattice.SetManyAsync` call under an ambient
-`LatticePreparedContext.BeginScope()`. The shard-bucketing fan-out
-inside `LatticeGrain.SetManyAsync` runs cross-leaf calls in parallel
-via `Task.WhenAll`, giving the saga concurrent per-shard dispatch.
-The leaf grain's commit pipeline observes the prepared-context flag
-and routes each per-key write into its in-memory `_pendingTx[txid]`
-bucket rather than into the visible `Entries` projection - so prepared
-writes are **invisible to concurrent readers** for the duration of
-the prepare window. `NextIndex` is incremented and persisted after
-each successful batch, so crash-resume can pick up exactly where it
-left off without replaying committed prepares. Retry semantics are
-**per-batch**: `MaxRetriesPerStep = 1` is the per-batch retry budget;
-on any task's failure the whole unwritten remainder is re-attempted,
-and on budget exhaustion the saga pivots to `Compensate` without
-re-throwing. The shutdown-refused fast-path (writer-side drain refusal
-or post-deactivation leaf rejection) bypasses the retry budget
-entirely - see [Shutdown back-pressure](#shutdown-back-pressure)
-below.
+`ILattice.SetManyAsync` call inside an ambient prepared-write scope. The
+tree's shard-bucketing fan-out runs the per-shard calls in parallel,
+giving the saga concurrent per-shard dispatch, and each leaf's commit
+pipeline sees the prepared flag and stages every per-key write into an
+in-memory per-transaction pending bucket instead of its visible entries -
+so prepared writes are **invisible to concurrent readers** for the
+duration of the prepare window. The saga checkpoints once, after the
+whole batch has been staged; a crash mid-batch leaves that checkpoint
+unwritten, and the resumed saga re-dispatches the whole remainder. That
+is safe because re-staging a write the leaf already holds for the same
+transaction merges into the existing pending entry rather than
+duplicating it, and nothing is visible until the commit decision. Retry
+semantics are **per-batch**: a failed dispatch is retried once, the whole
+unwritten remainder being re-attempted, and on budget exhaustion the saga
+pivots to compensate without re-throwing. Two refusal shapes bypass the
+retry budget entirely: the shutdown-refused fast-path (writer-side drain
+refusal or post-deactivation leaf rejection) and the saturation
+fast-path - see [Shutdown back-pressure](#shutdown-back-pressure) below.
 
 ### Phase 3 - Compensate (failure path only)
 
@@ -257,9 +270,10 @@ terminal marks (see [Tree-wide visibility flip](#tree-wide-visibility-flip)),
 which discard each leaf's pending bucket. Readers resolve against the
 recorded abort in between, so they never observe a partial rollback.
 
-On reminder-driven re-entry, the per-step retry counter is reset so a
-transient fault that outlived the previous activation can be retried
-freshly.
+The compensate path consults no retry counter: the per-batch retry count
+is zeroed when the saga pivots to compensate, and recording the abort and
+broadcasting the abort terminals are both idempotent, so a reminder-driven
+re-entry simply re-drives them until they complete.
 
 ### Tree-wide visibility flip
 
@@ -278,13 +292,18 @@ point.
 
 After the registry write the saga broadcasts `MutationKind.TxCommit`
 (success) or `MutationKind.TxAbort` (failure) terminal marks to every
-shard root the saga touched, which fans each mark out to the affected
-leaves. The terminals drain
-each leaf's pending-tx bucket into visible entries (commit) or drop
-the prepared values (abort) - this is **best-effort lazy GC of the
-pending bucket**, not the visibility primitive. Readers that race the
-fan-out continue to observe the registry-recorded outcome via
-dial-back until their pending entries are drained.
+shard root the saga touched - widened to any shard a concurrent split
+forwarded its prepared writes to, and to any late participant the
+registry reports after the first pass - which fans each mark out to the
+affected leaves. The terminals drain each leaf's pending-tx bucket into
+visible entries (commit) or drop the prepared values (abort). This is
+**not the visibility primitive**, but it is not optional either: a
+broadcast that fails leaves the saga short of completion, and the
+keepalive reminder - or, for a cross-tree participant, the cross-tree
+coordinator - re-drives it (the registry write and every terminal are
+idempotent) until every touched shard has received its terminal.
+Readers that race the fan-out continue to observe the registry-recorded
+outcome via dial-back until their pending entries are drained.
 
 ### Sharded decision registry
 
@@ -341,17 +360,19 @@ that re-invokes the same grain key receives the original failure via
 The terminal write also **releases the staged batch payload** from the
 persisted state. A completed saga is retained only so an idempotent
 re-entry (or a reminder-driven reactivation) can re-derive its
-lightweight outcome - `Phase`, `FailureMessage`, `KeyFingerprint`,
-`TransactionId` - none of which need the value-bearing staged batch. The
-byte-array fields (`Entries`, `PreValues`, and the per-entry delta/delete
-carries) are emptied in the same checkpoint that flips `Phase` to
-`Completed`, so a completed saga's persisted row is bounded to its outcome
-fields rather than pinning the full batch value payload for the whole
-retention window. The small scalar/metadata fields (`TouchedShards`,
-`Guard`, `VectorClock`) carry no value bytes and are kept. The release is
-crash-safe: if the terminal persist fails, the released fields are restored
-verbatim so the same activation can retry and a reactivation re-reads the
-intact pre-terminal record from disk.
+lightweight outcome - its phase, any preserved failure message, the
+key-set fingerprint, and the transaction id - none of which need the
+value-bearing staged batch. The byte-bearing fields - the staged entries,
+the captured pre-saga values, the saga-wide author delta, and the
+per-entry delta and delete carries - are emptied in the same checkpoint
+that marks the saga completed, so a completed saga's persisted row is
+bounded to its outcome fields rather than pinning the full batch value
+payload for the whole retention window. The small scalar and metadata
+fields (the touched-shard set, the guard, the captured vector clock, and
+any cross-tree participant list) carry no value bytes and are kept. The
+release is crash-safe: if the terminal persist fails, the released fields
+are restored verbatim so the same activation can retry and a reactivation
+re-reads the intact pre-terminal record from disk.
 
 `ForgetAsync` does **not** evict the decision record immediately - it
 stamps a tombstone in the saga's `ITxRegistryGrain` shard with a `ForgottenAt`
@@ -424,10 +445,12 @@ same conservative branch it already took for `InFlight`.
 
 | Crash point | State on reactivation | Recovery path |
 |---|---|---|
-| Before `Prepare` persists | `Phase = NotStarted` | Reminder tick unregisters itself and deactivates. Client's pending call returns a transport error; client retries with a fresh `operationId`. |
-| During `Execute`, after *k* writes committed | `Phase = Execute`, `NextIndex = k` | Reminder tick calls `RunSagaAsync`; the saga resumes at entry *k* and drives to completion. |
-| During `Compensate` | `Phase = Compensate` | Reminder tick resets `RetriesOnCurrentStep`, re-drives the abort decision and the abort-terminal broadcast, then completes. |
-| After `Completed` persists | `Phase = Completed` | Reminder tick unregisters itself and deactivates. |
+| Before the prepare checkpoint persists | Not started - nothing persisted | Reminder tick unregisters itself and deactivates. Client's pending call returns a transport error; the client retries (the same caller-supplied `operationId` starts the saga afresh; the auto-generated overload mints a new one). |
+| During execute, before the whole batch is staged | Execute phase, staging checkpoint not yet written | Reminder tick resumes the saga, which re-dispatches the whole unwritten remainder (re-staging a write already staged for the transaction is idempotent) and drives to completion. |
+| After the whole batch is staged, before completion persists | Execute phase, every entry staged | Reminder tick re-records the commit decision (a same-outcome repeat is a no-op), re-broadcasts the commit terminals (idempotent at the leaf), then completes. |
+| During compensate | Compensate phase | Reminder tick re-drives the abort decision and the abort-terminal broadcast (both idempotent), then completes. |
+| Parked as a cross-tree participant | Prepared (paused) | The keepalive tick is a deliberate no-op; the cross-tree coordinator's own reminder re-drives its finalize call, which records this tree's decision, broadcasts the terminals, and completes. |
+| After completion persists | Completed (or precondition-failed) | Reminder tick unregisters itself and deactivates. |
 
 ## Performance Notes
 
@@ -436,21 +459,30 @@ same conservative branch it already took for `InFlight`.
   with one batched read per touched shard (issued in parallel), and the
   execute phase dispatches the whole unwritten remainder as one
   `SetManyAsync` fan-out whose per-leaf slices collapse into batched WAL
-  dispatches. Around that sit the saga's own `WriteStateAsync` persists,
-  one registry write (`MarkCommittedAsync` / `MarkAbortedAsync`), one
-  per-shard terminal fan-out RPC, and one registry `ForgetAsync` cleanup.
-  For large batches where atomicity is not required, prefer the parallel
-  `SetManyAsync`.
+  dispatches. Around that sit the saga's own state writes, a handful of
+  registry calls (a best-effort bulk participant registration after
+  prepare, the single decision write, a post-broadcast participant
+  re-fetch that catches a shard a concurrent split added, and one cleanup
+  call that tombstones the decision), a routing refresh, a split-forward
+  probe per touched shard, and one terminal RPC per touched shard, whose
+  terminal WAL records are then appended as one batched write per WAL
+  partition. For large batches where atomicity is not required, prefer the
+  parallel `SetManyAsync`.
 - The saga's persisted state is stored under the Lattice storage provider
   (`LatticeOptions.StorageProviderName`, `"lattice"`) with the
   `atomic-write` state name. The saga grain deactivates on completion, so the
   storage row is typically read exactly once (on activation) and written
-  four times (Prepare -> Execute -> ... -> Completed). The final
-  (`Completed`) write also releases the staged batch payload, so a
-  completed saga's persisted footprint is bounded to its lightweight
-  outcome fields for the retention window rather than the full batch value
-  payload - which matters most for high-cardinality bulk workloads that
-  produce one saga per touched key.
+  three times on the happy path: the prepare checkpoint (which records the
+  pre-saga snapshot and flips the phase to execute), the post-staging
+  checkpoint, and the terminal completed write. A retried dispatch and a
+  pivot to compensate each add one write, and the terminal broadcast adds
+  one only when it has to grow the persisted touched-shard set (a routing
+  change, a concurrent split, or a late participant). The final (completed)
+  write also releases the staged batch payload, so a completed saga's
+  persisted footprint is bounded to its lightweight outcome fields for the
+  retention window rather than the full batch value payload - which matters
+  most for high-cardinality bulk workloads that produce one saga per
+  touched key.
 - Readers observing a saga in flight pay one extra registry RPC per
   pending key: a per-leaf pending-status resolve for direct
   single-key reads, a single batched pending-status resolve per leaf for
@@ -477,39 +509,51 @@ this regime (and the related Orleans grain-rejection shape that fires
 when a leaf grain has been deactivated as part of the same shutdown)
 and **fast-fails without consuming retry budget**: the next retry
 would route through the same drained writer and fail identically, so
-the saga short-circuits both the per-batch retry loop and the per-
-shard compensate-broadcast pass and surfaces the failure to the
-caller as `LatticeShuttingDownException`.
+the saga skips the retry loop and the whole compensate pivot - it
+records no abort, broadcasts no terminals, persists nothing, and
+leaves its keepalive reminder registered - and surfaces the failure
+to the caller as `LatticeShuttingDownException`.
 
-The terminal outcome is recorded on the
-`orleans.lattice.atomic_write.completed` counter as
-`outcome=shutdown_refused` so operators can distinguish saga failures
-caused by shutdown coincidence from saga failures caused by genuine
-commit conflicts on the same operator dashboard.
+Because nothing is persisted on this path the saga is not terminal,
+so it records no outcome on the `orleans.lattice.atomic_write.completed`
+counter: the operational signal is the `LatticeShuttingDownException`
+at the caller's catch site. (The counter's `outcome=shutdown_refused`
+arm is never produced, because the fast path never reaches the
+terminal write that records an outcome.)
 
 Caller contract: treat the `LatticeShuttingDownException` as back-
-pressure. The entries the saga carried were never durably committed,
-but the silo refused to accept them because the host is going away
-rather than because the storage layer rejected them. Long-lived
-clients should either fail over to a peer silo (if the cluster is
-multi-node) or surface the back-pressure to upstream callers (drop
-the request, queue it to a side outbox, or rate-limit). Re-issuing
-the same `operationId` after the host restarts is the normal recovery
-path: the saga's persisted state was never committed past the
-prepare phase, so the re-issued saga runs against a fresh silo
-activation as a brand-new saga. See [API Reference - Shutdown back-
+pressure. The entries the saga carried were never made visible - at
+most they were staged as prepared writes that readers cannot see - and
+the silo refused them because the host is going away rather than
+because the storage layer rejected them. Long-lived clients should
+either fail over to a peer silo (if the cluster is multi-node) or
+surface the back-pressure to upstream callers (drop the request, queue
+it to a side outbox, or rate-limit). Recovery does not start from
+scratch: the saga's persisted state still sits in the execute phase
+with its staging progress, so the keepalive reminder resumes it on the
+next silo activation, and re-issuing the same `operationId` re-attaches
+to that in-flight saga rather than starting a new one. See [API
+Reference - Shutdown back-
 pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception)
 for the cross-feature contract.
 
-The saga also opportunistically quiesces on the per-tree
-`IWalSaturationSignal` before each batched dispatch when the signal
-reports `Saturated`. The wait is capped at a small saga-local budget
-so the saga's own per-attempt deadline always wins on a tree that
-never recovers, and is silently skipped when no
-`IWalSaturationSignal` is registered in DI. The gate prevents the
-saga from burning retry budget against a writer-side admission
-semaphore that is provably parked, in addition to the terminal
-shutdown-refused fast-fail above.
+The saga also quiesces on the per-tree `IWalSaturationSignal` before
+each batched dispatch when the signal reports `Saturated`. The wait is
+capped at the smaller of a 30-second saga ceiling and the tree's
+`LatticeOptions.WalAppendDispatchTimeout`, so the saga's quiesce always
+wins over the writer-side admission deadline; it returns early once
+the host starts stopping, and is silently skipped when no
+`IWalSaturationSignal` is registered in DI. If the budget elapses with
+the tree still `Saturated` - or the writer-side admission gate itself
+refuses the dispatch as saturated - the saga takes a saturation
+fast-path that mirrors the shutdown one: it skips the retry and the
+compensate pivot (either would re-enter the same throttled storage
+account), keeps its persisted progress in the execute phase, and throws
+`LatticeSaturatedException` with source
+`LatticeSaturationSource.AtomicWriteSaga`. Back off and retry with the
+same `operationId` once the signal returns to healthy (the keepalive
+reminder also resumes it); the saga continues from its persisted
+progress, and re-staging a write it already staged is idempotent.
 
 ## Caller-supplied idempotency keys
 
@@ -588,18 +632,20 @@ cost of unbounded growth in the number of retained outcome rows).
 ## Ambient context capture-once
 
 A caller that wraps `SetManyAtomicAsync` in
-`LatticeVectorClockContext.With(...)` (or `LatticeOriginContext.With(...)`)
-has the ambient frontier captured **once** on the saga's first `Prepare`
-and re-stamped onto every per-key write the saga issues during `Execute`.
-The saga guarantees that every emit in the batch carries the **identical**
-`VectorClock` (and identical `OriginClusterId`), closing per-key drift a
-remote replication consumer would otherwise see as a partial-set state
-where the writer's frontier said all N keys should be visible together.
+`LatticeVectorClockContext.With(...)` has the ambient frontier captured
+**once**, on the saga's first prepare, and re-established before every
+dispatch the saga issues, so every prepared write in the batch carries the
+**identical** `VectorClock` - closing per-key drift a remote replication
+consumer would otherwise see as a partial-set state where the writer's
+frontier said all N keys should be visible together.
 
 The captured frontier is durable: a silo crash mid-saga resumes from
-persisted state and re-stamps the persisted ambient on every remaining
-emit, so observers see the same VC across the original commits and the
-post-recovery emits.
+persisted state and re-stamps the persisted frontier on the resumed
+dispatch, so observers see the same VC across the original emits and the
+post-recovery emits. The origin-cluster stamp is not captured the same
+way: a `LatticeOriginContext.With(...)` scope around the call rides only
+the originating request, so it reaches the writes the first attempt
+dispatches but is absent from a reminder-driven resume.
 
 ```csharp verify
 var vc = new Orleans.Lattice.VersionVector();
@@ -620,28 +666,33 @@ using (LatticeVectorClockContext.With(vc))
 
 ## Atomic-batch metadata on emitted mutations
 
-In addition to the saga-wide `VectorClock` and `OriginClusterId`, every
-per-key `LatticeMutation` the saga emits also carries
-`AtomicBatchSize` (the total entry count of the enclosing transaction)
-and `AtomicBatchIndex` (the zero-based per-key position within the
-batch). The size is captured once on the first `Prepare` from
-`Entries.Count`, persisted on the saga grain's state alongside the
-existing capture-once slots, and re-stamped onto Orleans
-`RequestContext` via the ambient `LatticeAtomicBatchContext` helper at
-the head of every per-key call the saga issues. Single-key writes outside
-a saga emit `0` / `0` (the "not-in-a-saga" sentinel).
+In addition to the saga-wide `VectorClock`, every per-key
+`LatticeMutation` the saga emits also carries `AtomicBatchSize` (the total
+entry count of the enclosing transaction) and `AtomicBatchIndex` (the
+zero-based position of the key within the batch). The size is captured
+once, on the first prepare, from the submitted entry count and persisted
+with the saga; the saga then re-stamps it onto the ambient
+`LatticeAtomicBatchContext` around its batched dispatch, together with a
+key-to-index map, so every staged write carries its batch-global index no
+matter which shard or leaf it routes to. Single-key writes outside a saga
+emit `0` / `0` (the "not-in-a-saga" sentinel).
 
-These two slots are **observability metadata about the saga's shape**
-- they let a downstream observer (a change-feed consumer, a
-mutation-observer pipeline, an audit log) recognise that several
-mutations belong to the same enclosing batch and reason about
-batch-level invariants without coordinating with the producer. They
-are *not* the atomicity primitive: tree-wide atomic visibility is
-delivered by the per-tree `ITxRegistryGrain` + per-leaf pending-tx
-mechanism described above. The `AtomicBatchSize` and
-`AtomicBatchIndex` slots remain reserved for future receiver-side
-batch optimisations but are not consumed by the current apply path.
-See [Consistency: Atomic visibility](consistency.md#atomic-visibility).
+These two slots are **metadata about the saga's shape** - they let a
+downstream observer (a change-feed consumer, a mutation-observer
+pipeline, an audit log) recognise that several mutations belong to the
+same enclosing batch and reason about batch-level invariants without
+coordinating with the producer. They are *not* the atomicity primitive:
+tree-wide atomic visibility is delivered by the per-tree transaction
+registry plus the per-leaf pending-tx mechanism described above. They are
+consumed, though: a replication receiver lets a prepared write with a
+non-zero batch size bypass its snapshot-floor dedup (the pending-bucket
+merge and the terminal mark deduplicate it instead) and its
+causal-dependency park (which could otherwise deadlock sibling prepares
+behind one another), and rejects a range delete that carries batch
+metadata; the replication anti-entropy leaf re-replay ships an atomic
+batch as one whole unit; and the materialised-view maintainer flushes a
+staged batch only once its prepares satisfy the declared size. See
+[Consistency: Atomic visibility](consistency.md#atomic-visibility).
 
 ## Cross-cluster atomic visibility
 
@@ -682,18 +733,18 @@ terminals stamps the post-growth count on the later terminals and the
 receiver adopts the larger value (`max(seen, incoming)`) without ever
 under-counting.
 
-The receiver-side `TxRegistryGrain.RecordTerminalArrivalAsync(txid,
-sourceShardIndex, committed, atomicShardCount)` deduplicates arrivals
-per `(txid, sourceShardIndex)` into a persistent
-`TerminalArrivals: Dictionary<Guid, HashSet<int>>` slot and tracks
-the expected total in `ExpectedTerminals: Dictionary<Guid, int>`. The
-call returns a `TerminalTallyResult` carrying:
+On the receiver, the tree's transaction registry records each terminal
+arrival, deduplicated per (transaction, source shard), in a persistent
+per-transaction set of source-shard indices, and tracks each
+transaction's expected total alongside it. The expected total only ever
+grows: each arrival raises it to the larger of the recorded and the
+incoming count. Each arrival returns a verdict carrying:
 
-| Field | Meaning |
+| Part of the verdict | Meaning |
 |---|---|
-| `IsFinal` | `true` once `arrivals.Count >= max(expected, atomicShardCount)` for the txid. |
-| `Committed` | The saga's outcome (commit or abort), latched on the first arrival. A mismatched-outcome arrival preserves the earlier abort. |
-| `ObservedSourceShards` | The full union of per-source-shard indices seen so far. Populated only on the final arrival; empty otherwise so the non-final path allocates no array. |
+| Final | `true` once the distinct source-shard arrivals for the transaction reach the expected total - or at once, with no tally kept, when the record carries no count (a legacy producer). |
+| Outcome | The commit-or-abort outcome of the arrival being recorded; every per-source-shard terminal of a saga carries the same outcome. An arrival whose outcome conflicts with a decision the registry has already recorded is rejected with `InvalidOperationException` rather than absorbed. |
+| Observed source shards | The sorted set of source-shard indices seen, returned only on the final arrival (a legacy arrival returns just its own index); empty otherwise, so the non-final path allocates no array. |
 
 `LatticeGrain.ApplyTxTerminalAsync` consults the tally first. A
 non-final tally leaves the per-tree linearization mark unset and the
@@ -716,32 +767,31 @@ splits or operator resize have produced a different shard count than
 the source still observes exactly `atomicShardCount` distinct source
 terminals (one per source shard the saga touched).
 
-The slots are forward- and backward-compatible across mixed-version
-deployments. A legacy persisted `TxRegistryState` with no
-`TerminalArrivals` / `ExpectedTerminals` decodes to empty
-dictionaries (the correct "no terminals tallied yet" default). A
-receiver consuming records from a legacy producer that never stamps
-`AtomicShardCount` sees `atomicShardCount == 0` on every arrival,
-which the gate treats as "no expected-total information" and falls
-back to first-terminal-wins semantics - equivalent to the
-pre-gate behaviour. `ForgetAsync` clears both slots alongside the
-decision entry, so the persisted footprint stays bounded by the
-in-flight + recently-completed saga set.
+The tally is forward- and backward-compatible across mixed-version
+deployments. A legacy persisted registry row that predates the tally
+decodes its arrival and expected-total maps as empty (the correct "no
+terminals tallied yet" default). A receiver consuming records from a
+legacy producer that never stamps `AtomicShardCount` sees a count of
+`0` on every arrival, which the gate treats as "no expected-total
+information" and falls back to first-terminal-wins semantics -
+equivalent to the pre-gate behaviour. The registry's cleanup call for a
+finished saga clears both maps alongside the decision entry, so the
+persisted footprint stays bounded by the in-flight + recently-completed
+saga set.
 
 ### Prepared writes never enter the receiver's batched merge path
 
-The receiver's `ReplicationApplier.ApplyBatchAsync` classifies
-inbound `WalRecord` entries into a fast-path batched LWW merge
-(`ApplyMergeManyAsync`) and a per-entry fallback (`ApplyPointAsync`).
-The classifier predicate explicitly excludes any entry with
+The receiver's batched apply path classifies inbound `WalRecord`
+entries into a fast-path batched last-writer-wins merge and a
+per-entry fallback. The classifier explicitly excludes any entry with
 `IsPrepared == true`: prepared `Set` / `Delete` records are forced
-onto the per-entry path, where they reach
-`ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` and land in the
-destination leaf's `_pendingTx` bucket. Unprepared writes continue to
-consume the batched merge path. Without this exclusion, prepared
-writes would commit directly into the receiver leaf's visible
-`Entries` and the saga's terminal mark would find no matching pending
-entries to flip - so the cross-cluster reader would observe the
+onto the per-entry path, where they are staged into the destination
+leaf's per-transaction pending bucket rather than merged into its
+visible entries. Unprepared writes continue to consume the batched
+merge path. Without this exclusion, prepared writes would commit
+directly into the receiver leaf's visible entries and the saga's
+terminal mark would find no matching pending entries to flip - so the
+cross-cluster reader would observe the
 prepared write as visible *before* the registry gate ever flipped,
 purely as a function of whether the inbound run happened to be
 batched (steady-state load) or single-entry (cold start). The
@@ -950,8 +1000,10 @@ decision authority. The flow is:
    its own persistent state. This single write is the cross-tree
    linearization point.
 3. **Finalize.** The coordinator fans out a `Finalize` call to every
-   tree's saga, which marks its per-tree registry and broadcasts the
-   per-shard terminals exactly as the single-tree saga does.
+   tree whose saga voted prepared (a tree whose guard missed or whose
+   staging failed has already terminated itself), which marks its
+   per-tree registry and broadcasts the per-shard terminals exactly as
+   the single-tree saga does.
 
 Between prepare and the coordinator's decision, every participating
 tree's registry *delegates* the status of its prepared txid to the

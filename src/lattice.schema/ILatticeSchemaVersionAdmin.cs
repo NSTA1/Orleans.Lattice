@@ -1,8 +1,7 @@
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
-/// The <see cref="LatticeOperation.SchemaAdmin"/>-gated control plane for schema
-/// versioning: opt a tree in to envelope versioning, read its current config,
+/// The schema-versioning control plane: opt a tree in to envelope versioning, read its current config,
 /// advance its monotonic target version, and opt it back out. Advancing the target
 /// takes effect immediately for new writes (they are stamped at the new version);
 /// existing values stamped at an older version are upcast lazily on read through
@@ -13,7 +12,7 @@ namespace Orleans.Lattice.Schema;
 /// <see cref="ILatticeSchemaVersionStore"/> and the cached
 /// <see cref="ILatticeSchemaVersionProvider"/>. Inspecting version state stays on
 /// read authority; changing it (set / advance / clear) is the schema-management
-/// control plane gated by <see cref="LatticeOperation.SchemaAdmin"/>.
+/// control plane that callers should expose behind <see cref="LatticeOperation.SchemaAdmin"/>.
 /// </remarks>
 public interface ILatticeSchemaVersionAdmin
 {

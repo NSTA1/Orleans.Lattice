@@ -32,6 +32,16 @@ The facades exposed are:
   tenant's namespace (create/check/delete/recover/purge trees and manage per-tree
   schema policy), so a delegated tenant admin drives tree lifecycle without reaching
   outside its tenant.
+- **`ILatticeTenantAccessAdmin`** - tenant access administration: list, add, and
+  remove a tenant's tenant-admin subjects, so membership can change after creation
+  rather than being frozen at the create-time seed.
+- **`ILatticeTenantGrantAdmin`** - cross-tenant grant administration: the two-step
+  agreement by which one tenant exposes a scope of its data to another (the granting
+  tenant offers, the grantee approves or rejects, either party may revoke), plus a
+  listing of a tenant's issued and received grants.
+- **`ILatticeTenantQuotaUsage`** - the read-only usage-against-quota report: per
+  dimension, a tenant's consumption next to its steady-state and burst-adjusted
+  ceilings.
 
 ## Core properties
 
@@ -44,13 +54,16 @@ The facades exposed are:
 - **Two-tier governance.** Tenant lifecycle and allowed-region authorization are
   **platform-operator** actions (cluster-wide `Admin` on the reserved auth policy
   tree, which the gate's control-plane isolation grants only to a platform operator).
-  Setting residency, reading status, and tenant-scoped tree administration are
-  **tenant-admin** actions, authorized when the caller is that operator or a live
-  admin subject on the tenant record. Both tiers are independent of the data-plane
+  Setting residency, reading status, tenant-scoped tree administration, tenant
+  access administration, cross-tenant grant administration, and the quota-usage
+  read are **tenant-admin** actions, authorized when the caller is that operator or
+  a live admin subject on the tenant record (for a grant step, the record of the
+  tenant whose side of the agreement the step belongs to). Both tiers are independent of the data-plane
   `DefaultEffect`, so an unmatched request always resolves to deny even under
   `DefaultEffect = Allow`.
 - **Reserved default tenant.** The well-known legacy-adoption `default` tenant can
-  never be suspended, deleted, or given quotas; each fails closed with a
+  never be suspended, deleted, or given quotas, have its admin-subject set changed,
+  or be named on either side of a cross-tenant grant offer; each fails closed with a
   `ReservedTenantOperationException`, because it names the cluster's own legacy
   state. Resuming it is allowed and is an active no-op, since it can never be
   suspended in the first place.
@@ -106,9 +119,11 @@ The facades exposed are:
 Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` package):
 
 - `AddLatticeTenantAdminApi(this ISiloBuilder builder, Action<LatticeApiTenantAdminOptions>? configure = null)` -
-  registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`, and the read-only
-  `ILatticeTenantSelfService`, together with the fail-closed authorizers they
-  consult and the system-driven region backfill/drain promotion driver.
+  registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`,
+  `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and the read-only
+  `ILatticeTenantSelfService` and `ILatticeTenantQuotaUsage`, together with the
+  fail-closed authorizers they consult and the system-driven region backfill/drain
+  promotion driver.
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.
 
@@ -258,6 +273,70 @@ call fails closed with a `TenantScopeRequiredException` (declared in this packag
 namespace `Orleans.Lattice.Api.TenantAdmin`) rather than silently operating on the
 cluster-global namespace.
 
+### `ILatticeTenantAccessAdmin`
+
+The tenant access-administration surface (published in
+`Orleans.Lattice.Api.Abstractions`, namespace `Orleans.Lattice.Api.TenantAdmin`).
+Every operation is a **tenant-admin** action - authorized for the platform operator
+or a live admin subject of the target tenant - and a caller holding neither is told
+*denied*, never *not found*, so the surface cannot be used to enumerate tenants.
+
+| Method | Signature |
+|---|---|
+| `ListAdminSubjectsAsync` | `Task<TenantAdminSubjectReport> ListAdminSubjectsAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `AddAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> AddAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
+| `RemoveAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> RemoveAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
+
+Add and remove are idempotent (`Changed` reports whether the set moved). An added
+subject id is validated against the upstream identity directory when one is
+configured and `ValidationRequired` is set, exactly as an explicit create-time seed
+is. Removing a tenant's last admin subject is refused with
+`TenantLastAdminSubjectException` - including when two concurrent removals of
+different subjects would together empty the set, which is detected on the merged
+record and repaired before the refusal - and the reserved `default` tenant's
+membership can never be changed.
+
+### `ILatticeTenantGrantAdmin`
+
+The cross-tenant grant surface. A grant is a two-step agreement: an offer creates it
+`Pending` and authorizes nothing; only the grantee's approval makes it `Active`.
+
+| Method | Signature |
+|---|---|
+| `ListGrantsAsync` | `Task<TenantGrantReport> ListGrantsAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `OfferGrantAsync` | `Task<TenantGrantChangeResult> OfferGrantAsync(string granterTenantId, string granteeTenantId, string scope, TenantGrantAccess operations, CancellationToken cancellationToken = default)` |
+| `ApproveGrantAsync` | `Task<TenantGrantChangeResult> ApproveGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
+| `RejectGrantAsync` | `Task<TenantGrantChangeResult> RejectGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
+| `RevokeGrantAsync` | `Task<TenantGrantChangeResult> RevokeGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
+
+Each step is authorized for the platform operator or a live admin subject of one
+specific tenant: the **granting** tenant offers, the **grantee** tenant approves or
+rejects, **either** party may revoke, and a listing is the listed tenant's own.
+`scope` names the granting tenant's data the grant covers (a tree name or tree-name
+prefix) and `operations` must not be `TenantGrantAccess.None`. An offer never
+requires the grantee to exist and may not name the reserved `default` tenant on
+either side. A grant that was never offered - or whose granting tenant is not
+registered - is reported identically as `TenantGrantNotFoundException`; asking for
+the state a grant is already in is an idempotent no-op, and a transition the
+lifecycle forbids (for example approving a rejected or revoked grant) raises
+`TenantGrantTransitionException` before any write.
+
+### `ILatticeTenantQuotaUsage`
+
+The read-only usage-against-quota surface.
+
+| Method | Signature |
+|---|---|
+| `GetQuotaUsageAsync` | `Task<TenantQuotaUsageReport> GetQuotaUsageAsync(string tenantId, CancellationToken cancellationToken = default)` |
+
+The report carries, per dimension (`Bytes`, `Keys`, `MemoryBytes`, `TreeCount`,
+`OpsPerSecond`), the consumption, the steady-state ceiling, the burst-adjusted
+ceiling, the live overage, and the accrued metered overage, together with the
+`EnforcementScope` the figures were read under. A platform operator may read any
+tenant and a live tenant admin only its own; an unauthorized tenant and an absent one
+are unified into a single `TenantNotFoundException`, so the call cannot probe for
+tenant existence. Authoring quotas remains the operator-only `SetTenantQuotasAsync`.
+
 ## Public model types
 
 Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
@@ -280,9 +359,22 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantRegionLifecycleStatus` | enum | `None` / `Provisioning` / `Backfilling` / `Online` / `Draining` / `Offline` / `Removed`. |
 | `TenantNotFoundException` | exception | No tenant with that id is registered. |
 | `TenantAlreadyExistsException` | exception | A tenant with the same id is already registered. |
-| `ReservedTenantOperationException` | exception | Attempted suspend, delete, or set-quotas on the reserved `default` tenant. |
+| `ReservedTenantOperationException` | exception | Attempted suspend, delete, set-quotas, an admin-subject add / remove, or a cross-tenant grant offer on the reserved `default` tenant. |
 | `TenantRegionNotAllowedException` | exception | A residency region is not in the allowed set (or a revoked region is still resident). |
 | `TenantLastRegionException` | exception | The change would remove the last resident region, as submitted or once merged with a concurrent removal. |
+| `TenantAdminSubjectReport` | result | A tenant's live admin-subject set, in ordinal order. |
+| `TenantAdminSubjectChangeResult` | result | An add / remove outcome: the subject, `Changed`, and the resulting admin-subject set. |
+| `TenantLastAdminSubjectException` | exception | The removal would leave the tenant with no admin subjects. |
+| `TenantGrantDescriptor` | model | One cross-tenant grant: granting and grantee tenant, `Scope`, `Operations`, lifecycle `State`, and `GrantId`. |
+| `TenantGrantReport` | result | A tenant's `Issued` and `Received` grants, in every lifecycle state. |
+| `TenantGrantChangeResult` | result | A grant step's outcome: the `Grant` as committed and `Changed`. |
+| `TenantGrantAccess` | enum | `None` / `Read` / `Write` / `ReadWrite` - what a grant authorizes once active. |
+| `TenantGrantLifecycleState` | enum | `Active` / `Pending` / `Rejected` / `Revoked`. |
+| `TenantGrantNotFoundException` | exception | No such grant has been offered (reported identically when the granting tenant is not registered). |
+| `TenantGrantTransitionException` | exception | The grant's lifecycle forbids the requested transition; carries the current and requested states. |
+| `TenantQuotaUsageReport` | result | A tenant's usage against its quotas: one `TenantQuotaDimensionUsage` per dimension, `BurstPercent`, the authored `Quotas`, `HasUsage`, and the `EnforcementScope`. |
+| `TenantQuotaDimensionUsage` | model | One dimension's `Usage` (`null` = not measured), `Limit` (`null` = unbounded), `BurstLimit`, live `Overage`, and accrued `MeteredOverage`. |
+| `TenantQuotaEnforcementScope` | enum | `GlobalConverged` (the converged cross-cluster total) / `PerCluster` (this cluster's local share only). |
 
 ## See also
 

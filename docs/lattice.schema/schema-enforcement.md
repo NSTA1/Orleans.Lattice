@@ -26,10 +26,24 @@ siloBuilder.AddLatticeSchemaEnforcement(options =>
 });
 ```
 
+### Enforcement options
+
+`LatticeSchemaEnforcementOptions` holds the silo-wide switches; per-tree behaviour
+(the rules and the per-tree strict flag) lives in each tree's policy.
+
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `StrictIngest` | `bool` | `false` | The global half of [strict-mode ingest](#strict-mode-ingest). While it is `false` the enforcement stage does not ask to see system-origin (replication apply / restore) writes, so trusted ingest pays nothing - but see the caveat there for a silo that also registers schema versioning. |
+| `ValidateCrdtMergeResults` | `bool` | `false` | Registers a post-merge observer that validates each merged value against the tree's policy. It never rejects or rewrites a merge: a violation becomes a non-mutating `LatticeMergeOutcome.AcceptWithEvent` annotation, which the core does not currently surface to any log, metric, or event sink. The flag is read only from the delegate passed to the first `AddLatticeSchemaEnforcement` call; setting it through `ConfigureLatticeSchemaEnforcement` or a repeat `AddLatticeSchemaEnforcement` call does not register the observer. |
+| `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the enforcement stage writes, and into a remediation (or eager version migration) abort's `OffendingValuePreview`. A value below `1` is treated as `1`. |
+
 ## Setting a policy on a tree
 
 A policy is an ordered set of [rules](#rule-kinds). Install one with the
-`SchemaAdmin`-gated `ILatticeSchemaAdmin` service:
+in-process `ILatticeSchemaAdmin` service. It performs no authorization of its own;
+remote callers reach it through the `SchemaAdmin`-gated
+[schema API facade](../lattice.api.schema/README.md) (see
+[Capability gate](README.md#capability-gate)):
 
 ```csharp verify
 using Orleans.Lattice.Schema;
@@ -46,7 +60,10 @@ await admin.ClearPolicyAsync("orders", cancellationToken);
 ```
 
 Once a policy is installed, a local write of a non-compliant value throws a
-`LatticeSchemaViolationException` and is never persisted.
+`LatticeSchemaViolationException` and is never persisted. A CRDT delta is checked
+at write time only when the delta itself parses as JSON; an opaque delta is
+accepted, and only the opt-in merge-result observer (`ValidateCrdtMergeResults`)
+sees the merged value.
 
 ## Rule kinds
 
@@ -102,6 +119,14 @@ leaving strict off, that tree's ingest is still trusted and its items are applie
 as-is. Only a tree whose policy sets the per-tree flag, on a silo whose options
 enable the global switch, dead-letters a non-compliant ingested item.
 
+One caveat applies when the silo also registers
+[schema versioning](schema-versioning.md): both add-ons then share one composed
+write interceptor, which is consulted for system-origin writes when *either*
+add-on's global `StrictIngest` is on, and each stage applies only its own per-tree
+check. Enabling versioning's global switch alone therefore also dead-letters a
+non-compliant ingested item for any tree whose enforcement policy sets the
+per-tree flag.
+
 ## Bringing existing data into compliance
 
 Installing a stricter policy does not retroactively rewrite the values already
@@ -132,22 +157,45 @@ if (report.DidAbort)
 Remediation runs a read-only **dry-run gate** first: if any value cannot be
 rewritten to satisfy the target policy, the build aborts with the first offending
 key and reason, and the original tree is left completely untouched - no alias
-change, no policy change. Only a fully successful build cuts the logical tree over
-to the remediated destination (via physical-tree aliasing and a retained-redirect
-that steers already-materialised readers to the new data) and installs the target
-policy. Remediation is idempotent and survives a silo failover: it persists its
-intent and resumes from the last phase on reactivation.
+change, no policy change. The build then rewrites every value into a fresh
+destination tree, re-validating each one; an offender found at that stage aborts
+the same way and the partial destination is discarded (soft-deleted). Only a fully
+successful build cuts the logical tree over to the remediated destination: it
+installs the target policy, then repoints the tree via physical-tree aliasing, then
+arms a retained redirect that steers already-materialised readers to the new data.
 
-Poll a running or last-known remediation with
-`ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`.
+The build copies at the logical level and does not shadow-forward writes that land
+on the source while it runs, so run a remediation while the tree is
+write-quiescent: a write accepted after the dry-run scan but before cutover is not
+carried into the destination and is superseded by the alias swap.
+
+Remediation is idempotent and resumable: it persists its intent and each phase
+transition before acting, so re-issuing the same `RemediateAsync` call (the same
+transform and target policy) after a silo failover resumes from the last persisted
+phase. Nothing resumes it on its own - an interrupted remediation stays in flight
+until it is requested again - and a call with different parameters while one is in
+flight throws `InvalidOperationException`.
+
+`RemediateAsync` drives the remediation to a terminal state before it returns its
+`LatticeSchemaRemediationReport`; poll a running or last-known remediation with
+`ILatticeSchemaRemediationAdmin.GetRemediationStatusAsync`. The report carries the
+`Phase` (`Idle`, `DryRun`, `Build`, `Cutover`, `Completed`, or `Aborted`, with
+`Succeeded` and `DidAbort` as shorthands), `InProgress`, `ScannedCount`,
+`DestinationTreeId`, and `OperationId`, and - on an abort - the first
+`OffendingKey`, the `Reason` (the policy violation, or the transform's failure
+message), and `OffendingValuePreview`: at most `DeadLetterPreviewMaxBytes` leading
+bytes of the transformed value, or of the original value when the transform itself
+threw.
 
 To measure compliance without rewriting anything, call
 `ILatticeSchemaComplianceAdmin.ScanComplianceAsync(treeId, cancellationToken)`. It is a
 pure read on ordinary read authority: it scans every current value against the tree's
 current compiled policy and returns a `LatticeSchemaComplianceReport` carrying
-`HasPolicy`, `CompliantCount`, `NonCompliantCount`, `ScannedCount`, and a
-`RuleBreakdown` of `LatticeSchemaComplianceRuleCount` (`Reason`, `Count`) rows. An
-ungoverned tree returns an ungoverned report.
+the audited `TreeId`, `HasPolicy`, `CompliantCount`, `NonCompliantCount`,
+`ScannedCount`, and a `RuleBreakdown` of `LatticeSchemaComplianceRuleCount`
+(`Reason`, `Count`) rows, grouped by the reason of the first rule each
+non-compliant value failed. An ungoverned tree returns an ungoverned report
+(`HasPolicy` is `false` and every count is zero).
 
 ## Composition with versioning
 

@@ -33,7 +33,7 @@ public sealed class GrainIndexOutboxOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// The pause between drain passes. Must be greater than zero.
+    /// The pause between drain passes. Non-positive values fall back to the default.
     /// <para>
     /// It bounds how long an index lags after a write that failed or was made
     /// in <see cref="GrainIndexProjectionMode.Eventual"/> mode, so it is a
@@ -45,7 +45,7 @@ public sealed class GrainIndexOutboxOptions
 
     /// <summary>
     /// The maximum number of outstanding writes one drain pass applies before
-    /// yielding until the next pass. Must be at least 1.
+    /// yielding until the next pass. Values below 1 are clamped to 1.
     /// </summary>
     public int MaxBatchSize { get; set; } = DefaultMaxBatchSize;
 }

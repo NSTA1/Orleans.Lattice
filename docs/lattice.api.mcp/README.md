@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server for [Orleans.Lattice](../../README.md) - i
 
 ## What is it?
 
-`Orleans.Lattice.Api.Mcp` is the **agent-facing control surface** of a lattice cluster. The core library is a data plane reached through grain interfaces; the `Orleans.Lattice.Api.*` packages add transport-agnostic facades over the read state, the read/write data path, the backup control plane, and the authorization admin plane. This package binds those same facades onto the official [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) C# SDK, so a language-model agent talks to the cluster the same way it talks to any other MCP server - no bespoke client, no hand-rolled schema.
+`Orleans.Lattice.Api.Mcp` is the **agent-facing control surface** of a lattice cluster. The core library is a data plane reached through grain interfaces; the `Orleans.Lattice.Api.*` packages add transport-agnostic facades over the read state, the read/write data path, the backup control plane, the authorization admin plane, runtime replication control, whole-tree administration, and tenant administration. This package binds those same facades onto the official [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) C# SDK, so a language-model agent talks to the cluster the same way it talks to any other MCP server - no bespoke client, no hand-rolled schema.
 
 It is built from four parts:
 
@@ -18,7 +18,7 @@ It is built from four parts:
 - **Fail-closed by construction.** The default `DenyAllMcpAuthorizer`, the fail-closed credential bridge, and `RequireAuthorization` (default `true`) mean an unauthenticated session is default-denied: it can enumerate nothing and call nothing until the host opts in with a real authorizer and authenticator.
 - **No re-modelled surface.** Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and the same Orleans-serialized records the gRPC bindings adapt, so the MCP surface stays in lock-step with the rest of the API family with zero re-modelling.
 - **Permission-scoped, not deny-after-list.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees a tool it cannot use.
-- **Opt-in and least-privilege.** The server ships no tools; each module is added explicitly, and within a module the destructive verbs stay hidden until the host enables them (`enableWrites`, `enableControl`, `enableAdministration`).
+- **Opt-in and least-privilege.** The server ships no tools; each module is added explicitly, and within a module the destructive verbs stay hidden until the host enables them (`enableWrites`, `enableControl`, `enableAdministration`, `enableSchemaControl`, `enableLifecycle`).
 - **Credential flow-through.** The credential bridge lifts the authenticated MCP session identity onto the ambient `LatticeCredentialContext`, so per-tree / per-key enforcement runs through the same access gate the gRPC bindings and the data path already use. The binding adds no authorization path of its own.
 - **OAuth discovery (opt-in).** Advertise OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself instead of needing a pre-pasted token. See [Setup](setup.md#oauth-discovery-rfc-9728).
 
@@ -68,3 +68,6 @@ For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) - the backup control facade the backup tools adapt.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the authorization admin facade the auth tools adapt.
 - [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md) - the replication control facade the replication tools adapt.
+- [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) - the whole-tree administration facade (composing the schema control facade) the tree-administration tools adapt.
+- [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) - the tenant-administration, region-residency, and self-service facades the tenant tools adapt.
+- [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md) - the opt-in telemetry tool module that serves cluster metrics over this server.

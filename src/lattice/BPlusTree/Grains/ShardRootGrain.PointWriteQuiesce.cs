@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using Orleans.Concurrency;
 using Orleans.Serialization.Invocation;
 
@@ -40,8 +41,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// holds back new point writes. It then waits for the point writes already in
 /// flight to drain before it runs.</description></item>
 /// <item><description>Every other always-interleave call (for example
-/// <see cref="IShardRootGrain.SetManyAsync"/> and the optimistic read) passes
-/// straight through, exactly as before.</description></item>
+/// <see cref="IShardRootGrain.SetManyAsync"/>,
+/// <see cref="IShardRootGrain.SetManyWherePredicateAsync"/> and the optimistic
+/// read) passes straight through. Both batch-write methods count themselves only
+/// for deactivation, never for serial-turn exclusion.</description></item>
 /// </list>
 /// <para>
 /// The steady-state cost to a point write is one counter check and one
@@ -70,15 +73,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// the non-reentrant point write it replaced held the turn, so deactivation could
 /// never be requested mid-write. Every deactivation this grain requests now goes
 /// through <see cref="RequestDeactivationFencingPointWrites"/>, which sets
-/// <see cref="_deactivationRequested"/> first. Point writes already in flight were
-/// drained by the serial turn that requested it; any point write admitted or
-/// released after it is refused with <see cref="ShardRootDeactivatingException"/>
-/// before touching a leaf, and the caller retries on the next activation.
+/// <see cref="_deactivationRequested"/> first, then defers the runtime request
+/// until both point and batch writes have drained. This also covers flush timer
+/// callbacks, which bypass the serial-turn guard. New writes are refused with
+/// <see cref="ShardRootDeactivatingException"/> before touching a leaf, and the
+/// caller retries on the next activation. If the runtime refuses the request,
+/// the admission fence is cleared so the activation remains usable.
 /// Deactivations the runtime starts on its own (silo shutdown, rebalancing) have
 /// no grain-side hook before the runtime stops serving calls. That exposure is the
 /// same one every always-interleave write path here, <see cref="IShardRootGrain.SetManyAsync"/>
 /// included, already carries.
-/// </para>/// </summary>
+/// </para>
+/// </summary>
 internal sealed partial class ShardRootGrain
 {
     /// <summary>
@@ -90,6 +96,9 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>Point writes currently admitted and not yet finished.</summary>
     private int _interleavedPointWritesInFlight;
+
+    /// <summary>Batch writes counted only for deactivation, not serial-turn exclusion.</summary>
+    private int _interleavedBatchWritesInFlight;
 
     /// <summary>
     /// Serial turns that are active, or waiting for in-flight point writes to
@@ -104,11 +113,12 @@ internal sealed partial class ShardRootGrain
     private TaskCompletionSource? _serialTurnsReleased;
 
     /// <summary>
-    /// Set once this activation has asked Orleans to deactivate it. Never cleared:
-    /// a requested deactivation is not cancelled, and the next activation starts
-    /// with a fresh field.
+    /// Fences new writes while deactivation is pending or issued. Cleared only
+    /// when the runtime refuses the request.
     /// </summary>
     private bool _deactivationRequested;
+
+    private bool _deactivationIssued;
 
     /// <summary>Point writes currently in flight. Exposed for unit tests.</summary>
     internal int InterleavedPointWritesInFlight => _interleavedPointWritesInFlight;
@@ -117,18 +127,73 @@ internal sealed partial class ShardRootGrain
     internal bool DeactivationRequested => _deactivationRequested;
 
     /// <summary>
-    /// Requests deactivation of this activation, first fencing out point writes
-    /// that have not yet been dispatched. Every <c>DeactivateOnIdle</c> this grain
-    /// issues goes through here; see the class remarks for why.
+    /// Fences new point and batch writes, then requests deactivation once every
+    /// admitted write has drained. Every <c>DeactivateOnIdle</c> this grain issues
+    /// goes through here; see the class remarks for why.
     /// </summary>
     private void RequestDeactivationFencingPointWrites()
     {
-        // Request first: if the runtime refuses (a unit harness with no grain
-        // runtime), the activation stays up and must keep serving point writes.
-        // Both statements run in one synchronous step of this turn, so no point
-        // write can be admitted between them.
-        this.DeactivateOnIdle();
         _deactivationRequested = true;
+        IssueDeactivationIfWritesDrained();
+    }
+
+    private void IssueDeactivationIfWritesDrained()
+    {
+        if (!_deactivationRequested || _deactivationIssued
+            || _interleavedPointWritesInFlight != 0
+            || Volatile.Read(ref _interleavedBatchWritesInFlight) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            this.DeactivateOnIdle();
+            _deactivationIssued = true;
+        }
+        catch
+        {
+            _deactivationRequested = false;
+            throw;
+        }
+    }
+
+    private void CompleteDeferredDeactivation()
+    {
+        // All release paths retain the activation scheduler: both batch methods and
+        // the point-write filter await without ConfigureAwait(false).
+        if (!_deactivationRequested) return;
+
+        try
+        {
+            IssueDeactivationIfWritesDrained();
+        }
+        catch (Exception ex)
+        {
+            // The write has finished: a failed runtime request must not replace
+            // its result. IssueDeactivationIfWritesDrained reopened admission.
+            logger.LogWarning(ex,
+                "Could not request deferred deactivation of shard {ShardKey}; the admission fence was cleared and the activation stays up.",
+                context.GrainId.Key.ToString());
+        }
+    }
+
+    private void BeginBatchWrite()
+    {
+        if (_deactivationRequested)
+        {
+            throw new ShardRootDeactivatingException(ShardKeyForFence());
+        }
+
+        Interlocked.Increment(ref _interleavedBatchWritesInFlight);
+    }
+
+    private void EndBatchWrite()
+    {
+        if (Interlocked.Decrement(ref _interleavedBatchWritesInFlight) == 0)
+        {
+            CompleteDeferredDeactivation();
+        }
     }
 
     /// <summary>
@@ -230,10 +295,14 @@ internal sealed partial class ShardRootGrain
 
     private void EndPointWrite()
     {
-        if (--_interleavedPointWritesInFlight == 0 && _pointWritesDrained is { } drained)
+        if (--_interleavedPointWritesInFlight == 0)
         {
-            _pointWritesDrained = null;
-            drained.TrySetResult();
+            if (_pointWritesDrained is { } drained)
+            {
+                _pointWritesDrained = null;
+                drained.TrySetResult();
+            }
+            CompleteDeferredDeactivation();
         }
     }
 

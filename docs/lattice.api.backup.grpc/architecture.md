@@ -16,9 +16,9 @@ Every protected call passes through two independent, fail-closed gates. The unau
 
 ### 1. Transport meta-authorizer
 
-An authorization interceptor runs first, before the facade is touched for protected calls. It decodes the inbound call into a `LatticeBackupApiAuthorizationContext` - the `LatticeBackupApiOperation`, an optional `TargetId` (the backup id, or the target / scope tree id for a capture or restore not yet keyed by a backup id), and the underlying `ServerCallContext` for header and peer inspection - and asks the registered `ILatticeBackupApiAuthorizer` whether the call may run at all. It defaults to `DenyAllBackupApiAuthorizer`, so every protected call is rejected with `PermissionDenied` until the host registers a permissive authorizer (or the opt-in `AllowAllBackupApiAuthorizer`) or sets `RequireAuthorization` to `false`. The interceptor is registered globally but scopes its enforcement to the backup control-API service by service-name prefix, so other gRPC services on the same host are unaffected.
+An authorization interceptor runs first, before the facade is touched for protected calls. It decodes the inbound call into a `LatticeBackupApiAuthorizationContext` - the `LatticeBackupApiOperation`, an optional `TargetId` (the backup id for a call keyed by one, the scope tree id for a single-scope capture, schedule, or scope-status call, and `null` for the whole-catalog, backup-set, capability-probe, and availability calls - see the [API reference](api.md#latticebackupapiauthorizationcontext)), and the underlying `ServerCallContext` for header and peer inspection - and asks the registered `ILatticeBackupApiAuthorizer` whether the call may run at all. It defaults to `DenyAllBackupApiAuthorizer`, so every protected call is rejected with `PermissionDenied` until the host registers a permissive authorizer (or the opt-in `AllowAllBackupApiAuthorizer`) or sets `RequireAuthorization` to `false`. The interceptor is registered globally but scopes its enforcement to the backup control-API service by service-name prefix, so other gRPC services on the same host are unaffected.
 
-An operation the interceptor does not recognise is presented to the authorizer as `Unknown` rather than being waved through, so a deny-by-default policy refuses a future or unmapped RPC instead of having it masquerade as a benign catalog read.
+An operation the interceptor does not recognise is presented to the authorizer as `Unknown` rather than being waved through, so a deny-by-default policy refuses a future or unmapped RPC instead of having it masquerade as a benign catalog read. The `ProbeCapabilities` RPC currently has no entry in the operation map, so it too reaches the authorizer as `Unknown`.
 
 ### 2. Facade scope authorization
 
@@ -30,7 +30,7 @@ The two gates are complementary, not redundant: the transport gate is a coarse e
 
 The credential bridge is the identity seam. The default implementation reads a single configurable header (`CredentialHeaderName`, default `authorization`), strips a case-insensitive scheme prefix (`CredentialScheme`, default `Bearer`), and lifts the remaining token onto the ambient `LatticeCredential` for the registered credential authenticator to resolve into a subject. A host with a bespoke identity source - a client TLS certificate, a signed edge header, a pre-resolved principal - registers its own bridge before the binding's registration runs, and the built-in default steps aside. Returning `null` leaves the caller anonymous; when auth-backed backup control is active an anonymous caller is denied, so a missing or malformed credential header can never drive a destructive operation.
 
-When the authorization add-on is not registered, no header is read and the backup control API behaves exactly as it does without a credential layer - the zero-cost path the engine already provides.
+When the authorization add-on is not registered, the default bridge still reads and bridges the header, but the core no-op access gate ignores the credential, so the backup control API behaves exactly as it does without a credential layer.
 
 ## Auth-scheme discovery
 
@@ -45,12 +45,13 @@ status codes, so a client can branch on the code rather than parse a message:
 
 | Facade outcome | gRPC `StatusCode` | Notes |
 | --- | --- | --- |
-| Authorization denied (transport gate or facade scope check) | `PermissionDenied` | The detail is safe to surface; never names a secret. |
+| Authorization denied (transport gate or facade scope check), a fail-closed tenant resolution (`LatticeTenantAccessDeniedException`), or the tenant-isolation boundary refusing a tree outside the caller's namespace (`LatticeBackupTenantIsolationException`) | `PermissionDenied` | The detail is safe to surface; never names a secret. |
 | Unknown backup / missing id (`KeyNotFoundException`) | `NotFound` | |
 | Restore pre-apply validation failure (`LatticeRestoreValidationException`) | `FailedPrecondition` | A missing manifest or artifact, a digest mismatch, an out-of-scope request, or a coordinated saga that aborted because a peer could not prepare. The detail is safe and actionable (it names backups / trees), so an operator UI can render it directly. |
 | Invalid argument (`ArgumentException`) | `InvalidArgument` | |
-| Request cancelled | `Cancelled` | |
-| Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. |
+| Transient reminder-registry or storage failure that outlived the scheduler's bounded retry | `Unavailable` | Retryable. The message carries a correlation id tied to the logged server exception, never the exception's own detail. |
+| Request cancelled | `Cancelled` | On the two server-streaming RPCs a cancelled call simply ends the stream instead. |
+| Any other fault | `Internal` | The detail is deliberately opaque (a correlation id at most); the real exception is logged server-side, not returned. |
 
 The `FailedPrecondition` shape is the one an operator most often needs to act
 on: a coordinated (replicated-tree) restore fails this way when the backup store

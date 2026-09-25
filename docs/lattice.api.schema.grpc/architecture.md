@@ -18,7 +18,7 @@ Every protected call passes through two independent, fail-closed gates.
 
 An authorization interceptor runs first, before the facade is touched. It treats `GetAuthScheme` as the only unauthenticated discovery call; every other schema-control RPC is protected when `RequireAuthorization` is true. The binding defaults to deny, so protected calls are rejected with `PermissionDenied` until the host configures authorization or sets `RequireAuthorization` to `false` behind a trusted boundary. The interceptor is registered globally but scopes its enforcement to the schema control-API service by service-name prefix, so other gRPC services on the same host are unaffected.
 
-An operation the interceptor does not recognise is not waved through. Unknown or unmapped failures are translated to safe gRPC status codes rather than leaking implementation details.
+The interceptor decodes each protected call into a `LatticeSchemaApiAuthorizationContext` - the `LatticeSchemaApiOperation`, the governed tree id as `TargetId`, and the underlying `ServerCallContext` - and asks the registered `ILatticeSchemaApiAuthorizer` whether the call may run. An operation the interceptor does not recognise is presented to the authorizer as `Unknown` rather than being waved through, so a deny-by-default policy refuses a future or unmapped RPC. Separately, server faults the binding does not map are returned with safe gRPC status codes rather than leaking implementation details (see [Status mapping](#status-mapping)).
 
 ### 2. Facade scope authorization
 
@@ -28,9 +28,9 @@ The two gates are complementary, not redundant: the transport gate is a coarse e
 
 ## Credential bridging
 
-The default credential path reads a single configurable header (`CredentialHeaderName`, default `authorization`), strips a case-insensitive scheme prefix (`CredentialScheme`, default `Bearer`), and lifts the remaining token onto the ambient Lattice credential for the registered credential authenticator to resolve into a subject. A host with a bespoke identity source - a client TLS certificate, a signed edge header, a pre-resolved principal - can provide that identity before the facade runs. Returning no credential leaves the caller anonymous; the schema facade then denies protected operations when auth-backed schema control is active.
+The default credential path reads a single configurable header (`CredentialHeaderName`, default `authorization`), strips a case-insensitive scheme prefix (`CredentialScheme`, default `Bearer`), and lifts the remaining token onto the ambient Lattice credential for the registered credential authenticator to resolve into a subject. A host with a bespoke identity source - a client TLS certificate, a signed edge header, a pre-resolved principal - registers its own `ILatticeSchemaApiCredentialBridge`, and the built-in default steps aside. Returning no credential leaves the caller anonymous; the schema facade then denies protected operations when auth-backed schema control is active.
 
-When the authorization add-on is not registered, no header is read and the schema control API behaves exactly as it does without a credential layer - the zero-cost path the engine already provides.
+When the authorization add-on is not registered, the default bridge still reads and bridges the header, but the core no-op access gate ignores the credential, so the schema control API behaves exactly as it does without a credential layer.
 
 ## Auth-scheme discovery
 
@@ -38,18 +38,18 @@ When the authorization add-on is not registered, no header is read and the schem
 
 ## Status mapping
 
-A denial from either gate reaches the client as a transport auth failure, either `PermissionDenied` or `Unauthenticated`, so a caller handles authorization failure uniformly regardless of which layer refused the call.
+A denial from either gate reaches the client as a `PermissionDenied` `RpcException`, so a caller handles authorization failure uniformly regardless of which layer refused the call.
 
 The binding also translates the facade's other failure shapes into stable gRPC status codes, so a client can branch on the code rather than parse a message:
 
 | Facade outcome | gRPC `StatusCode` | Notes |
 | --- | --- | --- |
-| Authorization denied (transport gate or facade scope check) | `PermissionDenied` or `Unauthenticated` | The detail is safe to surface; never names a secret. |
+| Authorization denied (transport gate or facade scope check), or a fail-closed tenant resolution (`LatticeTenantAccessDeniedException`) | `PermissionDenied` | The detail is safe to surface; never names a secret. |
 | Entry not found (`KeyNotFoundException`) | `NotFound` | |
 | Admission cap reached (`LatticeQuotaExceededException`) | `ResourceExhausted` | A remediation or version migration rebuilds the tree into a fresh destination one entry at a time, so it runs under the same per-tree admission caps (`LatticeOptions.MaxLiveKeys` / `MaxEstimatedBytes`) as any other write. Mapped ahead of the `InvalidOperationException` row below, which would otherwise shadow it. See [Quota refusals](#quota-refusals). |
-| Versioning operation when versioning is not registered (`InvalidOperationException`) | `FailedPrecondition` | The host has not registered `AddLatticeSchemaVersioning(...)`; non-versioning schema operations may still be available. |
+| Precondition failure (`InvalidOperationException`) | `FailedPrecondition` | Most often a versioning operation when the host has not registered `AddLatticeSchemaVersioning(...)` (non-versioning schema operations may still be available); also an unversioned tree, a target version that does not advance, or a conflicting remediation already in flight. |
 | Invalid argument (`ArgumentException`) | `InvalidArgument` | |
-| Request cancelled | `Cancelled` | |
+| Request cancelled | `Cancelled` | On the server-streaming `StreamDeadLetters` RPC a cancelled call simply ends the stream instead. |
 | Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. |
 
 The `FailedPrecondition` shape is the one an operator most often needs to act on for versioning: the endpoint is reachable, but the silo intentionally did not register the optional versioning add-on. The detail should be clear enough for an operator UI to explain which registration is missing.

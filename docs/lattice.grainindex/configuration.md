@@ -98,7 +98,10 @@ declaration with no annotated grain only ever populates through
 
 `ConfigureGrainIndex` overrides the options of an already-declared index by
 name, which is how configuration binding and per-environment overrides reach an
-index:
+index. The overload without an index name, `ConfigureGrainIndex(Action<GrainIndexOptions>)`,
+applies to every declared index instead. Option delegates run in registration
+order, so a later registration wins; the declaration seeds `TreeName` and
+`AllowReplication` always, and the backfill knobs only when it set them:
 
 ```csharp verify
 using Orleans.Lattice.GrainIndex;
@@ -131,21 +134,38 @@ Resolved per index through `IOptionsMonitor<GrainIndexOptions>.Get(indexName)`.
 
 `ProjectionMode` is read once, when the index's enrolment path is built, because
 it changes the *shape* of a grain's write path rather than tuning it. Changing
-it at run time would leave already-activated grains on the old path.
+it at run time would leave already-activated grains on the old path. It takes
+one of two `GrainIndexProjectionMode` values:
+
+| Mode | Behaviour |
+|---|---|
+| `Synchronous` (default) | The entries are written as part of the grain's write path. The grain's own state is committed first, and a failed index write on `WriteStateAsync` or `ClearStateAsync` is thrown to the caller (on activation or a state re-read it is logged instead); the outbox entry recorded beforehand is retried until it lands either way. |
+| `Eventual` | The index write is recorded durably in the outbox during the write path but applied afterwards by the outbox drain, so the caller neither waits for it nor sees its failures. A query issued straight after the write may not see the new entries until the next drain pass. |
 
 ### `GrainIndexOutboxOptions`
 
-The outbox is the durable retry path for an index write that failed. It is
-configured for the whole silo with `ConfigureGrainIndexOutbox`:
+The outbox is the durable retry path for an index write that failed, or that was
+deferred in `Eventual` mode. It is configured for the whole silo with
+`ConfigureGrainIndexOutbox`:
 
 | Option | Default | What it controls |
 |---|---|---|
-| `Enabled` | `true` | Whether the outbox drains pending projections in the background. |
-| `RetryInterval` | 5 seconds | The pause between drain passes. |
-| `MaxBatchSize` | `256` | The number of pending markers one drain pass claims. |
+| `Enabled` | `true` | Whether this silo drains pending projections in the background. Switching it off still records them; it only stops this silo retrying them. |
+| `RetryInterval` | 5 seconds | The pause between drain passes, which bounds how long an index lags a failed or deferred write. A non-positive value falls back to the 5-second default. |
+| `MaxBatchSize` | `256` | The most pending entries one drain pass visits before yielding to the next pass. A value below 1 is treated as 1. |
 
 See [The outbox](architecture.md#the-outbox) for what writes a marker and what
 clears it.
+
+### `GrainIndexDeclarationOptions`
+
+Every `AddGrainIndex` call appends its definition to
+`GrainIndexDeclarationOptions.Definitions` (`IList<IGrainIndexDefinition>`, in
+registration order), so the silo's whole declaration set is resolvable as
+`IOptions<GrainIndexDeclarationOptions>`. It is populated by `AddGrainIndex`
+rather than configured by hand, and it is validated as a set when the host starts:
+an index name declared twice, or an index that `Include`s no property, fails
+start-up with a message naming the index.
 
 ## Grain indexes are cluster-local
 
@@ -192,7 +212,9 @@ whether a tree belongs to the index subsystem.
 The prefix exists so that index storage is identifiable at a glance in the
 explorer, in backups, and in replication configuration, and so an index can
 never collide with an application tree. `WithTreeName` may rename a tree within
-the namespace; the validator rejects a name outside it.
+the namespace; the validator rejects a name outside it. Silo start also rejects
+an index whose tree resolves to the package's own registry tree,
+`__grainindex/.registry` - which an index named `.registry` does by default.
 
 ## Drift detection
 

@@ -1,6 +1,6 @@
 # Managing schema from the Explorer
 
-> **Hidden by default.** The Schema area is withheld from the Explorer's switcher
+> **Hidden by default.** The Schema area is withheld from the Explorer's rail
 > for the initial release because its versioning UI cannot yet express what
 > differs between schema versions. Surface it by calling
 > `AddExplorerSchemaPlugin()` on the head's service collection - registration is
@@ -11,18 +11,18 @@
 > rendered. Tracking
 > issue: re-surface the area once version-shape differences are expressible.
 
-The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
-detail tabs. **Schema** is the schema-management admin area. It lets an operator
+The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
+left of the shell. **Schema** is the schema-management admin area. It lets an operator
 inspect and edit a tree's write-validation policy and its value-versioning
 config, run a read-only compliance audit, and inspect the strict-mode dead-letter
 queue - over the schema control gRPC binding, with no new server surface.
 
 ## Where it sits
 
-Schema is one of the switcher's areas, alongside **Explore** (the tree browser),
-**Backups**, and **Access**. Selecting it swaps the working surface to the schema
-admin tabs. Like every area, it is registered in one place and carries an
-advisory availability rule.
+Schema is one of the rail's areas, alongside **Explore** (the tree browser),
+**Backups**, **Access**, **Tenant administration**, **My tenant**, and
+**Telemetry**. Selecting it swaps the working surface to the schema admin tabs.
+Like every area, it is a plugin that carries its own advisory access gate.
 
 The area drives the schema control API
 ([`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md)) over
@@ -61,8 +61,8 @@ showing an error.
 
 ## Capability-aware, demote not hide
 
-The area is gated in two layers. The coarse **SchemaAllowed** gate is the
-capability probe's own answer: the probe reports each capability as a flag
+The area is gated in two layers. The coarse gate, which is the plugin's own
+access gate, is the capability probe's own answer: the probe reports each capability as a flag
 rather than throwing on an authorization denial, and it is the flags it reports,
 not the fact that it completed, that constitute the grant - a probe that comes
 back with nothing set withholds rather than admits. The resulting state follows

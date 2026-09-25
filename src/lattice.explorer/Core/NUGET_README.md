@@ -10,12 +10,21 @@ every explorer head (web, desktop) composes over.
 - The read-only **state-API connection seam** - the explorer's only cluster
   dependency is the public read-only state-API gRPC client; it never references
   the cluster core or any grain interface.
-- The **configuration store**, **session**, and **capability model**.
+- The **configuration store** (`AddExplorerConfiguration`, which also registers
+  the state-API connection and the configuration session) and the
+  **authentication session** (`AddExplorerAuth`): the credential store, the
+  built-in Basic sign-in method, the auth-scheme discovery probe, and the
+  re-authentication and federated sign-out seams a sign-in provider configures.
 - The **catalog**, **metrics**, **topology**, **data**, **dead-letter**,
-  **history**, and **navigation** services, each registered by its own
-  `AddExplorer*` extension.
-- A launcher-friendly **environment bootstrap** that seeds the first-run endpoint
-  from process environment variables.
+  **history**, **session** (UI preferences), **navigation** (the shell's route
+  model), and **tenant view** (tenant scoping) services, each registered by its
+  own `AddExplorer*` extension.
+- A launcher-friendly **environment bootstrap** (`AddExplorerEnvironmentBootstrap`)
+  that seeds the first-run endpoint, and optionally a sign-in credential, from
+  process environment variables.
+
+The four-state access model the Explorer's areas and surfaces are gated by lives
+in `Orleans.Lattice.Explorer.Plugins.Abstractions`, not here.
 
 ## Usage
 

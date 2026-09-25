@@ -33,9 +33,12 @@ primitive types directly.
 
 ## CRDT types (via the `ILattice` extension surface)
 
+The sample tours the first eight accessors below; the last five complete the
+typed CRDT extension surface and are not exercised here.
+
 | Accessor | Semantics | Use case |
 |---|---|---|
-| `tree.PnCounter(key)` | Increment/decrement counter; merges by summing per-replica components. | Distributed counters: likes, view counts, inventory reservations. |
+| `tree.PnCounter(key)` | Increment/decrement counter; merges pointwise-max per replica on its increment and decrement components, and its value is the summed increments minus the summed decrements. | Distributed counters: likes, view counts, inventory reservations. |
 | `tree.OrSet(key)` | Observed-remove set; a concurrent add beats a concurrent remove (add-wins). | Membership sets: tags, followers, a shopping cart's contents. |
 | `tree.OrFlag(key)` | Enable-wins boolean flag. | A toggle where turning something **on** should win a tie (e.g. activating a feature). |
 | `tree.RwFlag(key)` | Disable-wins boolean flag. | A toggle where a **removal** must win a tie: revocation lists, blocklists, opt-outs. |
@@ -43,6 +46,11 @@ primitive types directly.
 | `tree.MvRegister<T>(key)` | Multi-value register; concurrent writes survive as a conflict set instead of last-writer-wins. | Conflicting single-value edits the app (or a user) should resolve, e.g. a profile field edited in two places. |
 | `tree.OrMap<TKey,TValue>(key)` | Add-wins map whose cells are themselves CRDTs, merged recursively. | Per-entity sub-state: per-user counters, per-city tallies, nested documents. |
 | `tree.Sequence<T>(key)` | Replicated growable array; concurrent inserts converge on a deterministic order. | Ordered collaborative data: text buffers, ordered lists, activity feeds. |
+| `tree.GCounter(key)` | Grow-only counter; increments only, merges pointwise-max per replica. | Monotone tallies: page views, event counters, quota consumption. |
+| `tree.GSet(key)` | Grow-only set; elements can only be added, merges by union. | Append-only sets: seen ids, accumulating tags or audiences. |
+| `tree.RwSet(key)` | Remove-wins observed-remove set; a concurrent remove beats a concurrent add. | Membership where a removal must win a tie: revocation lists, blocklists. |
+| `tree.MaxRegister<T>(key, orderKeySelector)` | Monotone register that keeps the greatest value under a caller-supplied order key. | High-water marks: a version ceiling, a max-seen reading. |
+| `tree.MinRegister<T>(key, orderKeySelector)` | Monotone register that keeps the smallest value under a caller-supplied order key. | Low-water marks: a min-seen latency floor, a first-seen timestamp. |
 
 ## Run it
 

@@ -48,7 +48,7 @@ and link the plugin stylesheet from the head's document head:
 <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Tenants/lattice-tenants.css" />
 ```
 
-Withholding `AddExplorerTenantsPlugin()` ships no Tenants area at all;
+Withholding `AddExplorerTenantsPlugin()` ships no Tenant administration area at all;
 withholding the package reference removes the feature entirely.
 
 See the

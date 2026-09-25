@@ -39,9 +39,9 @@ public static class LatticeExplorerWebServiceCollectionExtensions
     /// interactive server components, the shared explorer UI, the state-API
     /// connection seam, the configuration backing store plus environment
     /// bootstrap, the catalog / metrics / topology / data / dead-letter / history
-    /// / session services, the browser-backed UI preference store, the capability
-    /// store, the Backups and Access areas, and the cookie / data-protection auth
-    /// plumbing. Map the endpoints with
+    /// / session services, the browser-backed UI preference store, the Backups,
+    /// Access, Tenant administration, My tenant, and Telemetry areas, and the
+    /// cookie / data-protection auth plumbing. Map the endpoints with
     /// <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>.
     /// </summary>
     /// <remarks>

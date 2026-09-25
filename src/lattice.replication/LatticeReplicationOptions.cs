@@ -92,10 +92,12 @@ public class LatticeReplicationOptions
     /// <c>IWalShardGrain</c> activation keyed by
     /// <c>{treeId}/{partition}</c>, where <c>partition</c> is a stable hash
     /// of the entry's key modulo this value. Defaults to <see cref="DefaultReplogPartitions"/>
-    /// (a single per-tree WAL, sufficient for low-fan-in workloads); raise
-    /// to fan WAL writes across multiple grain activations on hot trees.
-    /// Must be at least <c>1</c>; the registered options validator rejects
-    /// non-positive values at first-resolve time.
+    /// (8), matching the core WAL partition default. This value must equal the
+    /// tree's <see cref="LatticeOptions.WalPartitions"/> value: writes route by the
+    /// core partition count, while the shipper reads <c>[0, ReplogPartitions)</c>,
+    /// so a lower replication count leaves routed writes unread. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive values at
+    /// first-resolve time.
     /// </summary>
     public int ReplogPartitions { get; set; } = DefaultReplogPartitions;
 
@@ -532,8 +534,9 @@ public class LatticeReplicationOptions
     /// transient faults consume one retry budget slot and re-open the
     /// snapshot from the persisted
     /// <c>BootstrapCoordinatorState.LastAppliedHlc</c> cursor (so
-    /// replay is bounded by the cursor-persist interval and the
-    /// per-origin HWM dedupe makes the overlap a no-op). Non-transient
+    /// replay is bounded by the cursor-persist interval; entries that fall below
+    /// the receiver's snapshot-pinned floor or recent exact-identity cache are
+    /// dropped, and other repeats re-apply idempotently under LWW). Non-transient
     /// faults pivot the bootstrap to
     /// <c>LatticeBootstrapState.Failed</c> on the first failure, as
     /// they did before the retry seam landed; budget exhaustion
@@ -579,8 +582,8 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Maximum number of <see cref="WalRecord"/> records the
-    /// per-<c>(tree, peer)</c> shipper grain drains from
-    /// <see cref="IChangeFeed.Subscribe"/> and submits to
+    /// per-<c>(tree, peer)</c> shipper grain drains from the tree's WAL
+    /// partitions and submits to
     /// <see cref="IReplicationTransport.SendAsync"/> in a single
     /// batch. Larger values amortise the per-batch RPC overhead;
     /// smaller values bound memory and reduce the cursor advance
@@ -625,17 +628,17 @@ public class LatticeReplicationOptions
     /// storage round-trip across multiple shipped batches at the cost
     /// of a bounded re-ship window after a silo crash.
     /// <para>
-    /// <strong>Crash safety.</strong> Receiver-side apply is
-    /// HLC-monotonic and dedupes on <c>(originClusterId, originHlc)</c>,
-    /// so a crash inside the deferred-persist window replays at most
-    /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
-    /// entries on recovery - the receiver no-ops the duplicates. No
-    /// data is lost.
+    /// <strong>Crash safety.</strong> Receiver-side apply maintains a
+    /// per-origin high-water mark for status and pinned-snapshot
+    /// floors, drops entries at or below that pinned floor, and suppresses recent
+    /// exact duplicates by <c>(originClusterId, timestamp, key, op)</c>. Other
+    /// replays inside the window are applied again and converge idempotently under
+    /// the tree's merge semantics. No data is lost.
     /// </para>
     /// <para>
     /// <strong>GC interaction.</strong> The WAL GC consumes the cursor
     /// reported via
-    /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>;
+    /// <see cref="IWalCursorRegistry.ReportCursorAsync(string, string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/>;
     /// the shipper calls that strictly <em>after</em> the durable
     /// <c>WriteStateAsync</c> completes, so the trim frontier never
     /// exceeds the durably-recoverable cursor regardless of this
@@ -674,9 +677,10 @@ public class LatticeReplicationOptions
     /// crash-replay window beyond the
     /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
     /// bound the batch-count rule already guarantees. Receiver-side apply
-    /// is HLC-monotonic and dedupes on <c>(originClusterId, originHlc)</c>,
-    /// so any entries re-shipped inside the window are no-op'd at the
-    /// receiver and no data is lost.
+    /// drops entries at or below the receiver's snapshot-pinned floor and
+    /// suppresses recent exact duplicates by <c>(originClusterId, timestamp, key,
+    /// op)</c>. Other entries re-shipped inside the window re-apply idempotently
+    /// under the tree's merge semantics, so no data is lost.
     /// </para>
     /// <para>
     /// Defaults to <see cref="DefaultShipCursorWriteMaxDelay"/>. Set to
@@ -754,8 +758,8 @@ public class LatticeReplicationOptions
     /// scheduler when the WAL is empty. The setting only matters when
     /// the doorbell signal (<see cref="ShipDoorbellEnabled"/>) is
     /// disabled or fails to ring (e.g. shipper grain not yet active);
-    /// in normal operation the doorbell drives the next pump tick
-    /// immediately on append. Defaults to
+    /// in normal operation the doorbell wakes or activates the shipper grain, and
+    /// the next timer tick performs the drain. Defaults to
     /// <see cref="DefaultShipPhaseTimerPeriod"/>. Must be strictly
     /// greater than <see cref="TimeSpan.Zero"/>.
     /// </summary>
@@ -1043,8 +1047,8 @@ public class LatticeReplicationOptions
     /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
     /// shipper grain after a successful WAL append, signalling that
     /// new entries are available. Disabling the doorbell falls back
-    /// to the shipper's <see cref="DefaultShipDoorbellEnabled"/>
-    /// timer-driven cadence (~200 ms). Defaults to
+    /// to the shipper's <see cref="ShipPhaseTimerPeriod"/>
+    /// timer-driven cadence (100 ms by default). Defaults to
     /// <see langword="true"/>.
     /// <para>
     /// The doorbell is best-effort: a failure to reach a shipper
@@ -1312,10 +1316,9 @@ public class LatticeReplicationOptions
     /// <see cref="ShipBatchSize"/> ceiling using a sender-side
     /// additive-increase / multiplicative-decrease (AIMD) controller
     /// driven by measured ack latency and error rate. Defaults to
-    /// <see langword="false"/>: with the flag off the shipper sizes
-    /// every batch exactly as it does today (at <see cref="ShipBatchSize"/>,
-    /// modulated only downward by an active receiver flow-control hint),
-    /// so steady-state behaviour is byte-identical to the static path.
+    /// <see langword="true"/>. When disabled, the shipper sizes every batch
+    /// at <see cref="ShipBatchSize"/>, modulated only downward by an active
+    /// receiver flow-control hint - the static path.
     /// <para>
     /// When enabled, the shipper grows the effective batch size additively
     /// toward <see cref="ShipBatchSize"/> while acks stay below

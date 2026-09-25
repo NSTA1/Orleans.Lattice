@@ -176,9 +176,15 @@ and reports zero invariant or temporal-property violations and no deadlock.
 ### Confirming the model is non-vacuous
 
 The invariants are load-bearing, not trivially true. To convince yourself,
-temporarily weaken `BroadcastStep` so a leaf may apply its terminal while the
-saga is still in `phase = "prepared"` (i.e. before `DecideTx` records the
-decision). TLC then reports `Invariant AllOrNothing is violated` with a
+temporarily weaken `BroadcastStep` so a leaf may apply a commit terminal while
+the saga is still in `phase = "prepared"` (i.e. before `DecideTx` records the
+decision): admit `"prepared"` to its phase guard and make the terminal kind
+commit for every phase but `"aborting"`, which is what
+[`mutations/LinearizedTerminalsBroadcastBeforeDecision.mutation`](mutations/LinearizedTerminalsBroadcastBeforeDecision.mutation)
+does. Widening the guard alone is not enough: the unchanged kind rule then
+applies an abort terminal, which TLC reports as
+`Invariant LinearizedTerminals is violated` rather than as a split view. With
+both changes, TLC reports `Invariant AllOrNothing is violated` with a
 counterexample trace: a reader observes one key at its post-saga value while a
 sibling key still shows pre-saga - exactly the split view the linearization
 point exists to prevent. Revert the weakening to restore the clean run.

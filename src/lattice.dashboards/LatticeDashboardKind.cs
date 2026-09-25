@@ -26,7 +26,7 @@ public enum LatticeDashboardKind
     /// <summary>
     /// Targets the WAL-first commit pipeline:
     /// <c>leaf.commit.duration</c> broken out by step
-    /// (<c>wal</c> / <c>apply</c> / <c>observer</c>),
+    /// (<c>wal</c> / <c>apply</c> / <c>digest</c> / <c>observer</c>),
     /// <c>leaf.write.duration</c> for storage-provider write latency,
     /// <c>leaf.compaction.duration</c> for tombstone-compaction latency.
     /// Sources the <c>orleans.lattice</c> meter only.

@@ -272,7 +272,7 @@ internal sealed class SnapshotPinCensus
                 LatticeMetrics.SnapshotPinsGaugeName,
                 static () => _current?.ObservePins() ?? Array.Empty<Measurement<long>>(),
                 unit: "{pin}",
-                description: "Live WAL retention pins held by zero-observable-writes snapshot cursors.");
+                description: "Snapshot cursors registered in the WAL cursor registry; these registrations do not hold back WAL trimming.");
             _gaugeRegistered = true;
         }
     }

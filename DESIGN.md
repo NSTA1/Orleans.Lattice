@@ -186,7 +186,7 @@ text pair is checked to WCAG 2.2 AA or better in both materials.
 
 ### Tertiary
 
-- **Callout roles**: warning (`warning`, 6.1:1), danger (`danger`, 6.3:1),
+- **Callout roles**: warning (`warning`, 6.3:1), danger (`danger`, 6.6:1),
   success (`success`, 5.8:1), and information in link blue. They colour only a
   callout's title, never its frame or its body.
 
@@ -245,10 +245,12 @@ else, such as an emoji, falls back to the reader's system fonts.
   **h4** (1rem, 720): article headings, balanced, with more space above than
   below.
 - **Body** (1rem, 400, line height 1.65): prose, held to a 42rem measure.
-- **Label** (0.8125rem, 560): table headers, breadcrumbs, the rail, and
-  metadata.
-- **Code** (0.8125rem, Cascadia Mono, line height 1.6): blocks and inline code,
-  with ligatures off.
+- **Label** (0.8125rem): table headers (at 650), breadcrumbs, the rail, and
+  metadata. The label weight, 560, sets status labels, the sidebar's package
+  names, and figure edge labels.
+- **Code** (0.8125rem, Cascadia Mono, line height 1.6): code blocks, with
+  ligatures off. Inline code is sized relative to the text around it (0.86em
+  in prose).
 
 ## Layout
 
@@ -321,8 +323,8 @@ and 8px downward, because they sit above the page rather than on it.
   keeps an 8px inset so that node's ring is never clipped.
 - **Breadcrumb**: short hairlines between crumbs. Section and package crumbs are
   labels, not links.
-- **Previous and next**: at the article's foot, the destination title in ink
-  above its direction label.
+- **Previous and next**: at the article's foot, the direction label in
+  tertiary ink above the destination title in ink.
 
 ### Buttons
 
@@ -410,8 +412,9 @@ the join.
 - **Motion**: plays once when the figure is half in view. Phase one (1300ms)
   draws the lower edges as the writes rise; phase two (1300ms) draws the upper
   edges as the merges lift both to the join, on cubic-bezier(0.45, 0, 0.2, 1).
-  The join then pulses once (900ms). "Deliver again" sends one delta a second
-  time (1400ms) to show that merging it changes nothing. A live caption narrates
+  The join then pulses once (900ms). The redelivery button, named for the
+  delta it resends ("Deliver B again"), sends that delta a second time
+  (1400ms) to show that merging it changes nothing. A live caption narrates
   each phase.
 - **Accessibility**: each SVG carries a title and a full prose description; the
   caption is a polite live region. With reduced motion, the figure shows the

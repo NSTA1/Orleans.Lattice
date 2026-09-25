@@ -88,11 +88,11 @@ An **all-trees grant** is a rule whose scope is the cluster-wide sentinel `Tree:
   2. **Specific-tree verdict** - the target tree's own most-specific-wins verdict (a specific deny overrides a global allow, and a specific allow stands).
   3. **All-trees allow** - a matched `Tree:*` allow grants access when the target tree has no matching rule of its own.
   4. **Default effect** - otherwise the cluster's `DefaultEffect` applies.
-- **System-tree exclusion (fail-closed).** The all-trees tier is **never** consulted for the reserved authorization namespace (`sys-auth-*`, `LatticeAuthReservedTrees.IsReserved`) or for a literal request targeting the sentinel id `*` itself. A `Tree:*` allow therefore can never satisfy a control-plane admin check or leak into access administration.
+- **System-tree exclusion (fail-closed).** The all-trees tier is **never** consulted for a control-plane namespace - the reserved authorization namespace (`sys-auth-*`, `LatticeAuthReservedTrees.IsReserved`), the tenant-registry namespace (`sys-tenant-*`), or the delegated tenant-administration capability namespace (`_lattice_tenant_admin_*`, `LatticeTenantAdminScope.TenantScopePrefix`) - or for a literal request targeting the sentinel id `*` itself. A `Tree:*` allow therefore can never satisfy a control-plane admin check or leak into access or tenant administration.
 - **Operation-bit separation is preserved.** A widened data-plane `Tree:*` grant never confers `Telemetry`, and a telemetry `Tree:*` grant never confers a data-plane operation; the operation mask semantics are unchanged.
 - A real tree literally named `*` is never creatable: the core lattice grain rejects user-origin creation or mutation of a tree whose id is exactly `*`, so the sentinel can only ever be an authorization scope.
 
-From the Explorer Access tab, the rule form has an **All trees (cluster-wide)** option: pick the target user or group, tick the option, choose the operations and effect, and save. The form supplies the `Tree:*` scope automatically. The help text notes that a data-plane all-trees rule can only be *authored* once an operator has enabled all-trees grants on the silo - the save is rejected otherwise - and that it takes effect immediately while the tier is on; all-trees rules are labelled `all trees` in the ranked rule table so they are easy to tell apart from an ordinary whole-tree rule.
+From the Explorer Access tab, the rule form has an **All trees (cluster-wide)** option: pick the target user or group, tick the option, choose the operations and effect, and save. The form supplies the `Tree:*` scope automatically. The form's help text notes that the reserved authorization and system trees are always excluded and that a `Telemetry` grant is honoured whether or not the tier is on. A data-plane all-trees rule can only be *authored* once an operator has enabled all-trees grants on the silo - the save is rejected otherwise - and it takes effect immediately while the tier is on; all-trees rules are labelled `all trees` in the ranked rule table so they are easy to tell apart from an ordinary whole-tree rule.
 
 **Security caveat.** An all-trees grant is broad by design - it applies to every application tree, including trees created after the rule was authored. Grant it sparingly, and prefer a specific-tree deny to carve out an exception. Turning `AllTreesGrantsEnabled` back off stops **new** all-trees evaluation but does **not** delete existing `Tree:*` rules - remove the rule to retire it.
 
@@ -136,9 +136,9 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `AuthenticationMode` | `AccessAuthenticationMode` | Best-effort in-silo authentication posture (see the enum below). |
 | `RulesEnforced` | `bool` | Whether the access gate actually enforces authorization rules. |
 | `DirectoryAvailable` | `bool` | Whether an identity directory is configured for validating candidate ids. |
-| `DirectoryProviderId` | `string` | The directory provider id (empty when none is configured). |
+| `DirectoryProviderId` | `string` | The configured directory provider's stable id (for example `"entra"` or `"static"`); the no-op provider's `"null"` when no directory is configured. |
 | `DirectoryExplanation` | `string` | Operator-facing explanation of the directory availability, for create-form guidance. |
-| `LocalMembershipEffective` | `bool` | Whether the local membership store is the effective directory. |
+| `LocalMembershipEffective` | `bool` | Whether locally-administered group membership (the groups and member edges this facade manages) contributes to a subject's effective groups at authorization time; `false` under the token-only group-merge mode, where groups come solely from the identity-provider token and local membership administration is inert. |
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
 
@@ -163,7 +163,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 |---|---|---|
 | `SubjectId` | `string` | The subject the permissions were resolved for. |
 | `GroupIds` | `IReadOnlyList<string>` | The subject's transitive group closure, ascending. |
-| `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | The rules currently in effect for the subject (matched directly or through a group), ordered by rule id. |
+| `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | The rules currently in effect for the subject (matched directly or through a group), ordered by `(governed tree id, rule id)`. |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags). |
 
 ### `AuthPolicyPosture`

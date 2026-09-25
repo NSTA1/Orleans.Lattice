@@ -14,6 +14,7 @@ Backups are laid out under two deterministic prefixes in the container - manifes
 - **Flexible authentication.** Exactly one of a connection string, a service URI with an Azure AD token credential, a service URI with a shared-key credential, or a pre-built `BlobServiceClient` is configured. The authentication mode is read once at construction and a long-lived container client is built from it.
 - **Idempotent writes.** Each artifact is stored under its artifact id; a blob-metadata commit marker distinguishes a fully-written artifact from a partially-written one, so a retried write of the same id overwrites an incomplete blob rather than treating it as a done no-op, and a retry against a committed blob is a genuine no-op.
 - **Provisionless.** The container is created on first use (idempotent), so a host does not have to provision it out of band.
+- **Durable.** The sink reports `ILatticeBackupSink.IsDurable` as `true`, so the backup engine's durable-sink-gated features - the periodic backup-health monitor and the Explorer health column - are active against it.
 
 ## Setup
 

@@ -12,7 +12,7 @@ The package has a single public options type, `LatticeAzureBlobCacheOptions`, bo
 | `SharedKeyCredential` | `Azure.Storage.StorageSharedKeyCredential?` | `null` | Shared-key credential used with `ServiceUri`. Mutually exclusive with `TokenCredential`. |
 | `ServiceClient` | `Azure.Storage.Blobs.BlobServiceClient?` | `null` | A pre-built service client used verbatim. When set, `ConfigureClientOptions` is ignored and the host owns the client's lifetime and options. Mutually exclusive with the connection-string and service-URI modes. |
 | `ContainerName` | `string` | `DefaultContainerName` (`orleans-lattice-cache`) | The blob container that backs the cache. Created on first use (idempotent). Specify a non-default name to share an account across multiple caches without collisions. |
-| `KeyPrefix` | `string` | `""` (empty) | Optional virtual-directory prefix prepended to every entry's blob name (for example `tokens/`). Lets several logical caches share one container. Empty stores entries at the container root; a trailing slash is optional. |
+| `KeyPrefix` | `string` | `""` (empty) | Optional virtual-directory prefix prepended to every entry's blob name (for example `tokens/`). Lets several logical caches share one container. Empty stores entries at the container root. The prefix is prepended verbatim - no separator is inserted - so end it with `/` to place entries in a virtual directory. |
 | `ConfigureClientOptions` | `Action<Azure.Storage.Blobs.BlobClientOptions>?` | `null` | Optional callback invoked when the cache builds the client options, to attach custom retry policies, diagnostics, or transport. Ignored when `ServiceClient` is supplied. |
 
 ### Constant

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication.Grpc API reference
 
-The package exposes a public typed client, two registration entry points, public authorization, credential-bridge, and auth-scheme seams, the binding's serialization-alias constants, and a public options type. The service, marshallers, method definitions, and interceptor are internal.
+The package exposes a public typed client, two registration entry points, public authorization, credential-bridge, and auth-scheme seams, the public wire message records, the binding's serialization-alias constants, and a public options type. The service, marshallers, method definitions, and interceptor are internal.
 
 ## Registration
 
@@ -40,11 +40,30 @@ The result and report types (`ReplicationEnableResult`, `ReplicationDisableResul
 
 `LatticeReplicationApiGrpcOptions` - see [Configuration](configuration.md).
 
+## Wire messages
+
+The request and response records the RPCs carry are public, `[GenerateSerializer]` / `[Immutable]` Orleans-serializable records aliased by `GrpcReplicationTypeAliases`. Fields are additive-only: a new `[Id(n)]` never renumbers an existing one.
+
+| Record | RPC | Members |
+|---|---|---|
+| `ReplicationEnableRequestMessage` | `EnableReplication` request | `TreeId` (required), `Mode`, `BootstrapSourceClusterId` (optional; an empty value is treated as none) |
+| `ReplicationEnableResponse` | `EnableReplication` response | `TreeId` (required), `Mode`, `AlreadyEnabled`, `BootstrapRequested` |
+| `ReplicationDisableRequestMessage` | `DisableReplication` request | `TreeId` (required) |
+| `ReplicationDisableResponse` | `DisableReplication` response | `TreeId` (required), `AlreadyDisabled` |
+| `ReplicationGetConfigRequest` | `GetReplicationConfig` request | none |
+| `ReplicationConfigResponse` | `GetReplicationConfig` response | `Trees` (`IReadOnlyList<ReplicationTreeConfigMessage>`) |
+| `ReplicationTreeConfigMessage` | one entry of `ReplicationConfigResponse.Trees` | `TreeId` (required), `Enabled`, `HasMode`, `Mode` (meaningful only when `HasMode` is `true`), `Ambiguous`, `Source` (`ReplicationEnrollmentSource`) |
+| `AuthSchemeAdvertisementRequest` | `GetAuthScheme` request | none |
+| `AuthSchemeAdvertisement` | `GetAuthScheme` response | `Schemes` (`IReadOnlyList<AuthSchemeDescriptor>`) |
+| `AuthSchemeDescriptor` | one advertised scheme | `SchemeId` (required), `DisplayName`, `Parameters` (`IReadOnlyDictionary<string, string>` of public configuration only) |
+
+The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, and `ReplicationConfigReport` rather than the wire records.
+
 ## Status mapping
 
 | Failure | gRPC status |
 |---|---|
-| Caller not authorized (interceptor or facade gate) | `PermissionDenied` |
+| Caller not authorized (interceptor or facade gate), or a fail-closed tenant resolution | `PermissionDenied` |
 | In-place mode change on an enabled tree; unmet enable precondition | `FailedPrecondition` |
 | Malformed request (for example null or empty tree id, unrecognized mode) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |

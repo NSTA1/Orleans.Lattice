@@ -6,11 +6,11 @@ All three guards ship **dark**: with defaults unchanged, an un-opted host detect
 
 ## 1. Operator opt-in master gate
 
-`AutoRemediateOnDigestMismatch` (default `false`) is the master switch for *all* automatic remediation - both leaf re-replay and the bootstrap-snapshot fallback. While it is off, a localised drift records a single skip with reason `opt_out` and the `digest_remediation.disabled` gauge reports the affected `(tree, peer)`; no repair traffic is sent. It is an additional AND-gate in front of the existing per-feature flags (`MerkleWalkEnabled`, `LeafReReplayEnabled`, `BootstrapFallbackEnabled`), which still apply on top of it.
+`AutoRemediateOnDigestMismatch` (default `false`) is the master switch for *all* automatic remediation - both leaf re-replay and the bootstrap-snapshot fallback. While it is off, a localised drift records a single skip with reason `opt_out` and the `digest_remediation.disabled` gauge reports the affected `(tree, peer)`; no repair traffic is sent. It is an additional AND-gate in front of the per-stage repair flags (`LeafReReplayEnabled`, `BootstrapFallbackEnabled`), which still apply on top of it; the read-only localisation stage (`MerkleWalkEnabled`) runs before it and is never gated by it.
 
 ## 2. Per-(tree, peer) rate cap
 
-When remediation is enabled, repair re-ship volume is rate-limited per `(tree, peer)` to a small fraction of the ordinary ship-batch budget. The effective per-window entry budget is `max(1, ceil(RemediationTrafficBudgetFraction * ShipBatchSize))` - about 3 entries with the defaults (`0.01 * 256`). The first pass in a fresh window always runs (so one repair burst is permitted); once a pair has spent its window budget, further passes are skipped with reason `budget_exhausted` until the `RemediationTrafficWindow` rolls over. The window is a deterministic elapsed-time accounting interval, kept in-process on the per-shard/tree digest-probe grain.
+When remediation is enabled, repair re-ship volume is rate-limited per `(tree, peer)` to a small fraction of the ordinary ship-batch budget. The effective per-window entry budget is `max(1, ceil(RemediationTrafficBudgetFraction * ShipBatchSize))` - about 3 entries with the defaults (`0.01 * 256`). The first pass in a fresh window always runs (so one repair burst is permitted); once a pair has spent its window budget, further passes are skipped with reason `budget_exhausted` until the `RemediationTrafficWindow` rolls over. The window is a deterministic elapsed-time accounting interval, kept in memory by the per-tree digest-probe scheduler, so it is not persisted and restarts from zero when that scheduler reactivates.
 
 ## 3. Per-(tree, peer) circuit breaker
 
@@ -58,8 +58,8 @@ siloBuilder.AddLatticeReplication(o =>
 
 | Metric | Tags | Emitted |
 |---|---|---|
-| `orleans.lattice.replication.digest_remediation.disabled` | `tree`, `peer`, `reason` | Observable gauge, value `1` for each `(tree, peer)` whose remediation is currently disabled. No series means remediation is permitted. |
-| `orleans.lattice.replication.digest_remediation.skipped` | `tree`, `peer`, `reason` | Counter, once per remediation pass skipped before sending repair traffic. |
+| `orleans.lattice.replication.digest_remediation.disabled` | `tree`, `peer`, `reason`, `tenant` | Observable gauge, value `1` for each `(tree, peer)` whose remediation is currently disabled. No series means remediation is permitted. |
+| `orleans.lattice.replication.digest_remediation.skipped` | `tree`, `peer`, `reason`, `tenant` | Counter, once per remediation pass skipped before sending repair traffic. |
 
 Reasons: `opt_out` (the host has not set `AutoRemediateOnDigestMismatch`), `budget_exhausted` (the per-window rate cap is spent), and `circuit_open` (the breaker tripped on consecutive failures).
 

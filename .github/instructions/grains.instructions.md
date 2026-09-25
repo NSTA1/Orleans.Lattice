@@ -41,12 +41,11 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
 | `TxRegistryGrain` | `{treeId}~s{n}` via `TxRegistryRouting.ShardKey` (sharded), or `{treeId}` for the legacy registry that version-4 txids route to | `"my-tree~s3"` |
-| `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1"` |
+| `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1op-42"` |
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
 | `WalMaterialiserPinGrain` | `{treeId}` (single shard) or `{treeId}~s{shard}` via `ShardKey` | `"my-tree~s3"` |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
-| `WalMaterialiserPinGrain` | `{treeId}` | `"my-tree"` |
 | `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |
 | `AtomicActionGrain` | `{operationId}` (caller-supplied idempotency key, any non-empty string) | `"order-4711"` |
 

@@ -23,11 +23,15 @@ The relevant constants are `LatticeSchemaEnvelope.Magic`,
 
 ## Default omission
 
-The envelope is **default-omitted**. A value written to an opted-out tree, or a
-value whose tree is versioned but is being stored unstamped (target version 0),
+The envelope is **default-omitted**. A value written to an opted-out tree (one
+with no version config), or a legacy value written before its tree opted in,
 carries **zero** extra bytes - its byte shape is byte-for-byte identical to a plain
-lattice value. This is what keeps versioning zero-overhead when unused and keeps a
-migration incremental: stamped and un-stamped values coexist in the same tree.
+lattice value. Version `0` is the reserved "unversioned" sentinel, represented by
+the absence of a config: `LatticeSchemaVersionConfig` rejects a target version of
+`0`, and a local whole-value write to an opted-in tree is always stamped at its
+target version (an already-stamped value is kept as-is). This is what keeps
+versioning zero-overhead when unused and keeps a migration incremental: stamped and
+un-stamped values coexist in the same tree.
 
 ## Why `0xFE`
 

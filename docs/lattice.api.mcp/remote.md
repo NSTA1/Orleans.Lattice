@@ -42,10 +42,10 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `ActiveTenantHeaderName` | Header the caller's ambient active tenant is forwarded on for the outbound call, so the remote cluster's per-tenant write admission and quota enforcement reach the caller's tenant. Defaults to `lattice-active-tenant`; empty disables forwarding. See [Credential flow over the wire](#credential-flow-over-the-wire). |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
-| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` / `EnableSchemaControl` / `EnableLifecycleControl` / `EnableTenantControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. `EnableSchemaControl` gates the mutating `lattice_treeadmin_schema_*` tools and `EnableLifecycleControl` gates the tree-administration lifecycle/control mutation tools; both are ignored when `TreeAdmin` is unset. `EnableTenantControl` gates the mutating `lattice_tenant_*` admin tools and is ignored when `TenantAdmin` is unset; the read-only tenant self-awareness tools are served whenever `TenantAdmin` is set, with no flag. |
+| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` / `EnableSchemaControl` / `EnableLifecycleControl` / `EnableTenantControl` | Forward the destructive-verb opt-in to the corresponding tool module; each defaults to `false`. Ignored when that group's endpoint is unset. `EnableSchemaControl` gates the mutating `lattice_treeadmin_schema_*` tools and `EnableLifecycleControl` gates the tree-administration lifecycle/control mutation tools; both are ignored when `TreeAdmin` is unset. `EnableTenantControl` gates the mutating `lattice_tenant_*` admin tools and is ignored when `TenantAdmin` is unset; the read-only tenant self-awareness tools are served whenever `TenantAdmin` is set, with no flag. |
 | `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
-| `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata. |
-| `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument. Each is a `LatticeApiMcpRemoteRegionOptions` with its own `RegionId`, optional `ClusterId`, and per-group endpoints. |
+| `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata; when unset, the discovery tool resolves it from the state facade at read time. |
+| `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument; empty by default. Each is a `LatticeApiMcpRemoteRegionOptions` with its own required `RegionId`, optional `ClusterId`, and the same eight optional per-group endpoints as the top level (`State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` / `TenantAdmin` / `Telemetry`). Keep each `RegionId` unique: the binding does not reject a duplicate. |
 | `VerifyRegionIdentity` | When `true`, each peer region's endpoint is probed once and its reported cluster id checked against the region's advertised `ClusterId` before any call is routed there; a region that reaches the wrong cluster is omitted from `lattice_list_regions` and rejected fail-closed. Defaults to `false`. See [Region targeting behind a global load balancer](#region-targeting-behind-a-global-load-balancer). |
 
 ## Multi-region routing
@@ -111,7 +111,7 @@ The same interceptor also forwards the caller's ambient active tenant. When the 
 
 ## Discovery requires the auth endpoint
 
-The in-silo permission-scoped discovery relies on a **system-origin bypass** to introspect a caller's effective permissions. That bypass does not cross the wire. Remotely, the discovery core must authenticate as an administrator to introspect a non-administrator caller, so serving any group's tools to non-administrator callers requires both the `Auth` endpoint and an `AdministratorCredential` to be configured. Without them, only an administrator caller can enumerate tools remotely.
+The in-silo permission-scoped discovery relies on a **system-origin bypass** to introspect a caller's effective permissions. That bypass does not cross the wire. Remotely, the discovery core must authenticate as an administrator to introspect a non-administrator caller, so serving any group's tools to non-administrator callers requires both the `Auth` endpoint and an administrator credential to be configured - the static `AdministratorCredential`, or the self-refreshing managed-identity source described [below](#refreshing-the-administrator-token). Without them, only an administrator caller can enumerate tools remotely.
 
 ## Refreshing the administrator token
 
@@ -137,6 +137,16 @@ builder.Services.AddLatticeMcpManagedIdentityAdministrator(o =>
 ```
 
 The managed-identity source takes precedence over `AdministratorCredential` regardless of registration order. It is **fail-closed**: if token acquisition fails it forwards no administrator credential (the introspection call is anonymous and the remote cluster denies it), self-healing on the next successful acquisition rather than forwarding a stale token.
+
+`LatticeApiMcpManagedIdentityAdministratorOptions` (populated through the `AddLatticeMcpManagedIdentityAdministrator` delegate):
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `Credential` | `TokenCredential?` | none (required) | The `Azure.Core` credential the administrator token is acquired from, for example `new ManagedIdentityCredential()` or `new DefaultAzureCredential()`. Only the bearer token it produces is forwarded to the remote cluster. |
+| `Scope` | `string` | `""` (required) | The scope the token is requested for - the remote silo's audience, for example `api://<silo-app-id>/.default`. Must be non-empty and non-whitespace. |
+| `RefreshSkew` | `TimeSpan` | 5 minutes | How long before a cached token's expiry the source proactively acquires a fresh one. Must not be negative. |
+
+A missing `Credential`, a blank `Scope`, or a negative `RefreshSkew` fails options validation.
 
 ## OAuth discovery (RFC 9728)
 

@@ -67,6 +67,7 @@ The admission rules, in order:
 | Never claimed | any, or none | **Accepted.** Every pre-existing caller is unchanged. |
 | Claim live | none | **Refused** - a live claim excludes unfenced writes. |
 | Claim live or released | below the record's high-water mark | **Refused** - a superseded holder can never write. |
+| Claim live or released | above the high-water mark, but not the token the lock currently holds | **Refused** - a token ahead of the record's stamp is honoured only when the lock confirms it issued it. |
 | Claim released | at or above the high-water mark | **Refused** - re-claim first. |
 | Claim live, token current, different region | current token | **Refused** - claims are region-scoped. |
 | Claim live, token current, same region | current token | **Accepted.** |

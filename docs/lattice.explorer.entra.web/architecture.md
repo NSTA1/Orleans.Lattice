@@ -19,7 +19,7 @@ flowchart TD
 1. **Browser session (middleware layer).** `AddLatticeExplorerEntraWebAuth` wires `AddMicrosoftIdentityWebApp` - the standard auth-code + PKCE OpenID Connect flow with a cookie session. When `RequireAuthenticatedUser` is set (the default), a fallback authorization policy challenges any unauthenticated request into the Entra redirect. This all happens in ASP.NET middleware, *outside* the SignalR circuit.
 2. **State API credential (circuit layer).** Once the browser has a cookie session, the Explorer still needs a bearer token for the cluster's State API. `EntraWebExplorerAuthMethod` handles the `entra` scheme the core Explorer already advertises a button for, and delegates token acquisition to `IExplorerWebTokenAcquirer`.
 
-Because the core `LoginDialog` already renders a generic "Sign in with Entra ID" button for the `entra` scheme, no released Explorer type changes. This package only *adds* the provider behind that scheme for the hosted-web host.
+Because the core `LoginDialog` already renders a generic "Sign in with ..." button for the `entra` scheme - labelled with the display name the State API advertises for it - no released Explorer type changes. This package only *adds* the provider behind that scheme for the hosted-web host.
 
 ## Token acquisition without an HttpContext
 
@@ -54,7 +54,7 @@ Every step is wrapped in a `try`/`catch` that logs a warning (with the exception
 
 ## Token cache and multi-replica hosting
 
-Microsoft.Identity.Web caches acquired tokens. `TokenCache = InMemory` (the default) is per-process and correct for a single replica. On a multi-replica host, select `TokenCache = Distributed` and register a shared `IDistributedCache` - for example [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md) - so a user whose circuit lands on a cold replica does not silently re-authenticate. Data Protection keys (which protect the auth cookie) should likewise be shared across replicas via the official Azure Blob Data Protection key ring; that is host wiring, not part of this package.
+Microsoft.Identity.Web caches acquired tokens. `TokenCache = InMemory` (the default) is per-process and correct for a single replica: on a multi-replica host, a user whose new circuit lands on a replica that did not redeem their authorization code holds a valid session cookie but has no cached token there, so acquisition on that replica fails (Microsoft.Identity.Web signals that the user must be challenged) until a fresh code is redeemed there - which is what the forced-interactive re-authentication endpoint does. Select `TokenCache = Distributed` and register a shared `IDistributedCache` - for example [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md) - so that replica finds the cached token instead. Data Protection keys (which protect the auth cookie) should likewise be shared across replicas via the official Azure Blob Data Protection key ring; that is host wiring rather than part of this package, and the Explorer web head exposes it as `LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri` (see [multi-replica and failover hosting](../lattice.explorer/multi-replica-hosting.md)).
 
 ## See also
 

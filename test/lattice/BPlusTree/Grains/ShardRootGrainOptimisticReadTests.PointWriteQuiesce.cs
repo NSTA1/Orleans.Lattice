@@ -314,6 +314,6 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             return Task.CompletedTask;
         }));
 
-        Assert.That(serialInvoked, Is.True, "Only point writes are fenced; split and fold work must still complete.");
+        Assert.That(serialInvoked, Is.True, "Only point and batch writes are fenced; split and fold work must still complete.");
     }
 }

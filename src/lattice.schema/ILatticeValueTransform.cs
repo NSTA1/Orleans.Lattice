@@ -12,8 +12,8 @@ namespace Orleans.Lattice.Schema;
 /// it is applied to: the same input bytes must always yield the same output bytes,
 /// and it must throw a clear exception (rather than corrupt or truncate) on input
 /// it cannot handle, so the driving consumer can abort a shadow build. The
-/// schema-versioning registry delivered by a later release specialises this seam
-/// to an upcaster keyed on <c>(fromVersion, toVersion)</c>.
+/// schema-versioning registry specialises this seam to an upcaster keyed on
+/// <c>(fromVersion, toVersion)</c>.
 /// </para>
 /// </summary>
 public interface ILatticeValueTransform

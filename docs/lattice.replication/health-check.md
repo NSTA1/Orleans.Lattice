@@ -35,7 +35,7 @@ The check classifies every `(tree, peer)` pair captured in telemetry against thr
 
 | Signal | Source | Default soft | Default hard |
 |---|---|---|---|
-| `EntriesBehind` | `ReplicationPeerSnapshot.EntriesBehind` (WAL entries the sender has yet to ship) | 1 000 | 10 000 |
+| `EntriesBehind` | `ReplicationPeerSnapshot.EntriesBehind` (a per-tick lower bound on the unshipped backlog: the size of the just-shipped batch when the drain filled the batch cap, otherwise `0`) | 1 000 | 10 000 |
 | `LastContactSeconds` | `ReplicationPeerSnapshot.LastContactSeconds` (age of last successful contact) | 30 s | 300 s |
 | `ConsecutiveErrors` | `ReplicationPeerSnapshot.ConsecutiveErrors` (failure streak since last success) | 5 | 50 |
 
@@ -48,10 +48,12 @@ The `EntriesBehind`, `LastContactSeconds`, and `ConsecutiveErrors` tiers above c
 
 The inbound signal is opt-in - a host that wants readiness gating on inbound liveness configures finite thresholds. A peer that this silo only ships to (and never receives from) produces no inbound rows and is excluded from this signal regardless of the configured thresholds. Inbound rows appear in the `degradedPeers` / `unhealthyPeers` arrays with the label suffix `" (inbound)"` so dashboards can distinguish them from outbound rows.
 
-Defaults are exposed as `public static readonly` fields on `LatticeReplicationHealthCheckOptions` (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`). A host overrides any subset:
+Because the shipper records `EntriesBehind` from a single drain, the reading never exceeds the effective ship batch size (at most `ShipBatchSize`, default 256). With the default `ShipBatchSize` the default 1 000 / 10 000 bounds therefore cannot trip; a host that relies on this signal sets bounds below its ship batch size.
+
+Defaults are exposed as `public static readonly` fields on `LatticeReplicationHealthCheckOptions` (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`, `DefaultUnhealthyAfter`, `DefaultInboundDegradedAfter`, `DefaultInboundCriticalAfter`). The check reads the **named** options instance that matches its registered name (`LatticeReplicationHealthCheckOptions.DefaultName` unless overridden), so bind overrides under that name - an unnamed `Configure<LatticeReplicationHealthCheckOptions>(...)` targets the default options instance, which the check never reads. A host overrides any subset:
 
 ```csharp verify
-siloBuilder.Services.Configure<LatticeReplicationHealthCheckOptions>(o =>
+siloBuilder.Services.Configure<LatticeReplicationHealthCheckOptions>(LatticeReplicationHealthCheckOptions.DefaultName, o =>
 {
     // Tighter back-pressure bound for an interactive workload.
     o.EntriesBehind = new LatticeReplicationHealthCheckOptions.LongTier(200, 2_000);

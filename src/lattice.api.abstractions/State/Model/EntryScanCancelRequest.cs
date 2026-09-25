@@ -3,9 +3,10 @@ namespace Orleans.Lattice.Api.State;
 /// <summary>
 /// Request for the entry-scan cancel endpoint
 /// (<see cref="ILatticeStateQuery.CancelScanAsync"/>). Releases the
-/// server-side snapshot cursor named by a continuation token so its
-/// WAL-retention pin and per-shard baseline are freed promptly instead of
-/// lingering until the cursor's idle TTL. Cancelling an unknown, already-drained,
+/// server-side snapshot cursor named by a continuation token so its frozen
+/// per-shard baselines and cursor state are freed promptly instead of
+/// lingering until the cursor's idle TTL. The cursor holds back no WAL
+/// trimming, so there is no WAL to release. Cancelling an unknown, already-drained,
 /// or already-closed cursor is a no-op.
 /// </summary>
 [GenerateSerializer]

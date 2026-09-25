@@ -209,7 +209,7 @@ affect tree availability.
 | `GetWithVersionAsync` | `Task<VersionedValue> GetWithVersionAsync(string key)` | Returns the value paired with its `HybridLogicalClock` version; returns a default `VersionedValue` with `null` value and zero version when absent or tombstoned. Use the returned version with `SetIfVersionAsync` for optimistic concurrency. Bypasses the read cache. |
 | `ExistsAsync` | `Task<bool> ExistsAsync(string key)` | Returns `true` when `key` is live (not absent and not tombstoned). |
 | `SetAsync` | `Task SetAsync(string key, byte[] value)` | Inserts or updates the value for `key`. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode; author values through the matching accessor instead (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
-| `SetAsync` (TTL) | `Task SetAsync(string key, byte[] value, TimeSpan ttl)` | Inserts or updates `key` with a time-to-live. The entry is treated as tombstoned on every read once `ttl` has elapsed from the server-side write instant; physical reclamation follows `LatticeOptions.TombstoneGracePeriod`. Throws `ArgumentOutOfRangeException` when `ttl` is zero or negative. A typed `SetAsync<T>(this ILattice, string, T, TimeSpan, ILatticeSerializer<T>)` overload exists in [`TypedLatticeExtensions`](#typedlatticeextensions). Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
+| `SetAsync` (TTL) | `Task SetAsync(string key, byte[] value, TimeSpan ttl)` | Inserts or updates `key` with a time-to-live. The entry is treated as tombstoned on every read once `ttl` has elapsed from the server-side write instant; physical reclamation follows `LatticeOptions.TombstoneGracePeriod`. Throws `ArgumentOutOfRangeException` when `ttl` is zero or negative, or so large that the absolute expiry would overflow. A typed `SetAsync<T>(this ILattice, string, T, TimeSpan, ILatticeSerializer<T>)` overload exists in [`TypedLatticeExtensions`](#typedlatticeextensions). Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `SetIfVersionAsync` | `Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)` | Atomic compare-and-set: writes only when the entry's current version equals `expectedVersion`. Returns `true` on success, `false` on version mismatch. Pass `HybridLogicalClock.Zero` for a key that must not exist. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `GetOrSetAsync` | `Task<byte[]?> GetOrSetAsync(string key, byte[] value)` | Inserts `value` only when `key` is absent or tombstoned. Returns the existing value when live, or `null` when the new value was written. No read-then-write race. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if the key was live. See [Tombstone Compaction](tombstone-compaction.md) for retention. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
@@ -245,9 +245,9 @@ no duplicates, no gaps, original ordering preserved.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`) and, capped at `LatticeExtensions.DefaultScanStallResumeAttempts = 2`, its budget for resuming a `ScanPageStalledException`; `maxAttempts: 0` disables both. A stalled scan resumes from its last yielded key and refuses to resume when it has not advanced since the previous stall, so it either yields the full range or rethrows the stall - it never returns a short prefix as though the range were complete. A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`) and, capped at `LatticeExtensions.DefaultScanStallResumeAttempts = 2`, its budget for resuming a `ScanPageStalledException`; `maxAttempts: 0` disables both. The stall budget counts consecutive stalls and is replenished whenever the walk yields a record, and a single enumeration takes at most `LatticeExtensions.DefaultScanStallResumeCeiling = 64` stall resumptions in total. A stalled scan resumes from its last yielded key after a backoff derived from the stall's reported ceiling, and rethrows the stall once either bound is spent, so it either yields the full range or rethrows the stall - it never returns a short prefix as though the range were complete. A concurrent `SetManyAtomicAsync` is observed atomically across every page of each uninterrupted underlying enumeration; a transparent reconnect or stall resume reopens the scan under a freshly captured saga-decision view, so a saga that commits in between can be visible in only the part of the range yielded after the resume. Use a [point-in-time cursor](#point-in-time-cursors) when one view must cover the whole range. |
 | `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility, reconnect, and stall-resume guarantees as `ScanKeysAsync`. |
-| `DeleteRangeAsync` | `Task<long> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize = 256, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
+| `DeleteRangeAsync` | `Task<int> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` (required, and it must be positive - a call without it binds to the single-call `ILattice.DeleteRangeAsync` instead) and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). A `ScanPageStalledException` is not retried: it propagates to the caller. Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
 
 Prefer the resilient `DeleteRangeAsync` drain helper over an
 `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you
@@ -256,7 +256,7 @@ transient enumerator loss so a large purge completes rather than
 aborting part-way.
 
 ```csharp verify
-long removed = await tree.DeleteRangeAsync("repo/r1/", "repo/r1/\uffff");
+int removed = await tree.DeleteRangeAsync("repo/r1/", "repo/r1/\uffff", stepSize: 256);
 Console.WriteLine($"tombstoned {removed} keys");
 ```
 
@@ -296,7 +296,7 @@ model.
 |--------|-----------|-------------|
 | `OpenKeyCursorAsync` | `Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false)` | Opens a key-enumeration cursor and returns a server-assigned opaque cursor ID. `null` bounds are unbounded; `reverse=true` walks descending. `pointInTime=true` freezes the saga-decision view at open time so every page sees the same in-flight-saga view (see [Point-in-time cursors](#point-in-time-cursors)). |
 | `OpenEntryCursorAsync` | `Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false)` | Opens an entry-enumeration cursor (key + value pairs). Same bounds, direction, and point-in-time semantics as `OpenKeyCursorAsync`. |
-| `OpenSnapshotKeyCursorAsync` | `Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false)` | Opens a **zero-observable-writes snapshot** key-enumeration cursor. Captures a tree-wide `LatticeSnapshotCoordinate` (per-shard WAL heads + tree map version + registry HLC) at open time and materialises pages by replaying WAL slices through transient per-shard snapshot-replay activations. Subsequent foreground writes, saga commits, range deletes, and replication applies are invisible to this cursor. Open-time replay cost is gated by `LatticeOptions.MaxSnapshotReplayEntries`; failure throws `LatticeSnapshotReplayBudgetExceededException`. WAL retention is pinned through `IWalCursorRegistry` for the cursor's lifetime. See [Snapshot cursors](snapshot-cursors.md). |
+| `OpenSnapshotKeyCursorAsync` | `Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false)` | Opens a **zero-observable-writes snapshot** key-enumeration cursor. At open time it captures a frozen baseline of every shard's projection, plus a tree-wide `LatticeSnapshotCoordinate` (tree map version, per-shard WAL heads, registry HLC, and the per-open baseline token), and serves every page from those frozen baselines rather than replaying the WAL, so a later WAL trim cannot perturb the view. Subsequent foreground writes, saga commits, range deletes, and replication applies are invisible to this cursor. Open-time cost is gated by `LatticeOptions.MaxSnapshotReplayEntries`, compared against the deepest shard's baseline row count; failure throws `LatticeSnapshotReplayBudgetExceededException`. A tree whose saturation signal reads `Saturated` sheds the open with `LatticeSaturatedException` (see [Saturation back-pressure](#saturation-back-pressure---latticesaturatedexception)). The cursor registers with `IWalCursorRegistry` for its lifetime, but that registration does not hold back WAL trimming (see [WAL retention](snapshot-cursors.md#wal-retention)). See [Snapshot cursors](snapshot-cursors.md). |
 | `OpenSnapshotEntryCursorAsync` | `Task<string> OpenSnapshotEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false)` | Opens a zero-observable-writes snapshot entry cursor. Same isolation guarantees and open-time cost gate as `OpenSnapshotKeyCursorAsync`. |
 | `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)` | Opens a resumable range-delete cursor. Both bounds are **required** (non-null). Reverse mode is not supported. Throws `ArgumentException` on null bounds or a reverse spec. |
 | `NextKeysAsync` | `Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize)` | Returns up to `pageSize` keys and advances the cursor. `HasMore=false` signals exhaustion. Throws `ArgumentOutOfRangeException` for non-positive `pageSize`; throws `InvalidOperationException` if the cursor was opened for a different kind or has been closed. |
@@ -312,8 +312,8 @@ model.
 | `LatticeCursorEntriesPage` | `IReadOnlyList<KeyValuePair<string, byte[]>> Entries`, `bool HasMore` | A page returned by `NextEntriesAsync`. |
 | `LatticeCursorDeleteProgress` | `int DeletedThisStep`, `int DeletedTotal`, `bool IsComplete` | Returned by `DeleteRangeStepAsync`. `DeletedTotal` accumulates across every step. |
 | `LatticeCursorKind` | `Keys`, `Entries`, `DeleteRange` | The kind of scan a cursor performs. |
-| `LatticeCursorSpec` | `Kind`, `StartInclusive`, `EndExclusive`, `Reverse`, `PointInTime`, `ZeroObservableWrites` | Immutable cursor specification, frozen at open time. `ZeroObservableWrites=true` selects the WAL-replay snapshot path; `PointInTime=true` selects the registry-snapshot path; both `false` is the live path. |
-| `LatticeSnapshotCoordinate` | `long TreeMapVersion`, `IReadOnlyDictionary<int, long> PerShardWalOffsets`, `HybridLogicalClock RegistrySnapshotHlc` | Tree-wide snapshot coordinate captured at `OpenSnapshot*CursorAsync` time. Pins the routing decision and every shard's WAL head so paging is deterministic across silo failovers. |
+| `LatticeCursorSpec` | `Kind`, `StartInclusive`, `EndExclusive`, `Reverse`, `PointInTime`, `ZeroObservableWrites`, `Predicate` | Immutable cursor specification, frozen at open time. `ZeroObservableWrites=true` selects the frozen-baseline snapshot path; `PointInTime=true` selects the registry-snapshot path; both `false` is the live path. `Predicate` is the optional server-side predicate IR a predicate cursor applies to every page it yields (or, for a `DeleteRange` cursor, to every key it tombstones); `null` means unfiltered. |
+| `LatticeSnapshotCoordinate` | `long TreeMapVersion`, `IReadOnlyDictionary<int, long> PerShardWalOffsets`, `HybridLogicalClock RegistrySnapshotHlc`, `IReadOnlyDictionary<int, IReadOnlyList<long>>? PerShardPerPartitionWalOffsets`, `ShardMap? PinnedShardMap`, `Guid SnapshotBaselineToken`, `string? PhysicalTreeId` | Tree-wide snapshot coordinate captured at `OpenSnapshot*CursorAsync` time. Pins the routing map (`PinnedShardMap`, at `TreeMapVersion`), every shard's WAL head (as a per-shard scalar and per WAL partition), the registry HLC, the per-open token that identifies the frozen baselines the cursor reads, and the physical tree id they were captured against, so paging is deterministic across silo failovers. |
 | `LatticeScopedCursor` | `string Id`, `ValueTask DisposeAsync()`, implicit conversion to `string` | `IAsyncDisposable` wrapper returned by the `LatticeExtensions.Open*CursorScopeAsync` family. Disposing the scope calls `CloseCursorAsync` exactly once; idempotent. The implicit `string` conversion lets a scope be passed directly to `NextKeysAsync` / `NextEntriesAsync` / `DeleteRangeStepAsync`. Does **not** change the durability contract of the underlying cursor; for cursors whose ID must survive a process boundary, keep using the raw `Open*CursorAsync` / `CloseCursorAsync` shape. |
 
 #### Scoped cursor extensions
@@ -413,9 +413,11 @@ Console.WriteLine($"Deleted {total} keys.");
 | `OpenDeleteRangeCursorAsync` | `reverse=true` passed through the internal spec | `ArgumentException` |
 | `Open*` (point-in-time) | `pointInTime=true` passed for a `DeleteRange` cursor | `ArgumentException` |
 | `Open*` (point-in-time) | Registry would exceed `LatticeOptions.MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
-| `OpenSnapshot*CursorAsync` | Replay budget exceeded (any shard's `head - 0 > MaxSnapshotReplayEntries`) | `LatticeSnapshotReplayBudgetExceededException` |
-| `Next*` (snapshot) | Snapshot leaf cannot be rebuilt because the WAL prefix was trimmed past the pinned offset | `LatticeSnapshotExpiredException` |
-| `DeleteRangeAsync` (extension) | `startInclusive` or `endExclusive` is `null` | `ArgumentException` |
+| `OpenSnapshot*CursorAsync` | The deepest shard's frozen baseline would exceed `LatticeOptions.MaxSnapshotReplayEntries` rows | `LatticeSnapshotReplayBudgetExceededException` |
+| `OpenSnapshot*CursorAsync` | The tree's saturation signal reads `Saturated` and `LatticeOptions.ShedSnapshotOpensWhenSaturated` is on (the default) | `LatticeSaturatedException` (`SaturationSource` = `SnapshotCursorOpen`) |
+| `Next*` (snapshot) | A shard's frozen baseline can no longer be loaded - it was lost before it became durable, or reclaimed after `LatticeOptions.SnapshotBaselineTtl` of inactivity; open a fresh snapshot cursor | `LatticeSnapshotExpiredException` |
+| `DeleteRangeAsync` (extension) | `startInclusive` or `endExclusive` is `null` | `ArgumentNullException` |
+| `DeleteRangeAsync` (extension) | `stepSize` <= 0 | `ArgumentOutOfRangeException` |
 | `DeleteRangeAsync` (extension) | Enumerator lost more than `maxAttempts` times | `EnumerationAbortedException` (rethrown after the budget is exhausted) |
 | Any `Open*` | Re-open with a different spec on the same cursor ID | `InvalidOperationException` |
 | `Next*` / `DeleteRangeStep*` | Cursor kind mismatch | `InvalidOperationException` |
@@ -435,8 +437,11 @@ The all-or-nothing guarantee that single-call reads
 is extended to a multi-page enumeration.
 
 Streaming `ScanKeysAsync` / `ScanEntriesAsync` enumerations (no
-cursor) provide the same all-or-nothing view automatically for the
-lifetime of the `IAsyncEnumerable` - no opt-in required.
+cursor) provide the same all-or-nothing view automatically - no opt-in
+required - but only for each uninterrupted underlying enumeration: a
+transparent reconnect or stall resume reopens the scan under a freshly
+captured saga-decision view, so the guarantee does not span it. A
+point-in-time cursor holds its one view across every page.
 
 `DeleteRange` cursors cannot be opened in point-in-time mode (range
 deletes are mutations, not snapshot reads).
@@ -550,12 +555,12 @@ foreach (var shard in report.Shards)
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `GetStorageUsageAsync` | `Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)` | Returns a byte-accurate breakdown of the tree's on-disk footprint: retained WAL bytes, captured leaf-snapshot bytes, and live leaf-state bytes, plus their sum (`TotalBytes`). The aggregator fans out to every physical shard and WAL partition - bounded by `LatticeOptions.MaxConcurrentStorageUsageSurfaces` (default 16) so a wide tree queries its shard roots in waves - then caches the assembled report for `LatticeOptions.StorageUsageCacheTtl` (default 10 s). `Partial` is `true` when a surface could not be accounted: either the configured `IWalStorageProvider` does not support byte accounting (the in-memory and Azure Table providers both do), or a shard root / WAL partition failed or timed out. A surface that did not answer contributes nothing rather than a zero, so the total is a flagged lower bound rather than a silently understated figure. Diagnostic / capacity-planning use only - not a hot-path API. |
+| `GetStorageUsageAsync` | `Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)` | Returns a byte-accurate breakdown of the tree's on-disk footprint: retained WAL bytes, physical WAL bytes (what the WAL backend actually occupies, including framing and trimmed-but-unreclaimed space), captured leaf-snapshot bytes, and live leaf-state bytes, plus the storage total (`TotalBytes` - the physical WAL, snapshot, and leaf-state figures summed). The aggregator fans out to every physical shard and WAL partition - bounded by `LatticeOptions.MaxConcurrentStorageUsageSurfaces` (default 16) so a wide tree queries its shard roots in waves - then caches the assembled report for `LatticeOptions.StorageUsageCacheTtl` (default 10 s). `Partial` is `true` when a surface could not be accounted: either the configured `IWalStorageProvider` does not support byte accounting (the in-memory and Azure Table providers both do), or a shard root / WAL partition failed or timed out. A surface that did not answer contributes nothing rather than a zero, so the total is a flagged lower bound rather than a silently understated figure. Diagnostic / capacity-planning use only - not a hot-path API. |
 
 ```csharp verify
 var usage = await tree.GetStorageUsageAsync(cancellationToken);
 Console.WriteLine($"Tree {usage.TreeId}: {usage.TotalBytes} bytes total " +
-    $"(WAL={usage.WalRetainedBytes}, snapshots={usage.SnapshotBytes}, leaf-state={usage.LeafStateBytes})");
+    $"(WAL={usage.WalPhysicalBytes}, snapshots={usage.SnapshotBytes}, leaf-state={usage.LeafStateBytes})");
 ```
 
 The `TreeStorageUsageReport` fields are:
@@ -564,9 +569,10 @@ The `TreeStorageUsageReport` fields are:
 |-------|------|---------|
 | `TreeId` | `string` | The tree the report covers. |
 | `WalRetainedBytes` | `long` | Retained (un-trimmed) WAL payload bytes summed across every partition. |
+| `WalPhysicalBytes` | `long` | Physical WAL bytes summed across every partition: every byte the backend occupies for the tree, including per-record framing and dead (trimmed but not yet reclaimed) payload, so it can exceed `WalRetainedBytes`. Falls back to the retained figure for a provider without physical accounting. |
 | `SnapshotBytes` | `long` | Captured leaf-snapshot key + value bytes summed across every leaf. |
 | `LeafStateBytes` | `long` | Live leaf-state key + value bytes summed across every leaf in every shard. |
-| `TotalBytes` | `long` | `WalRetainedBytes + SnapshotBytes + LeafStateBytes`. |
+| `TotalBytes` | `long` | `WalPhysicalBytes + SnapshotBytes + LeafStateBytes` - the WAL term is the physical figure, not `WalRetainedBytes`. |
 | `Partial` | `bool` | `true` when a storage surface could not be accounted - a WAL provider without byte accounting, or a shard root / WAL partition that failed or timed out. The unaccounted surface contributes nothing rather than a zero, so the report is a flagged lower bound. |
 | `SampledAt` | `DateTimeOffset` | When the underlying fan-out was sampled. |
 | `LiveKeys` | `long` | Summed live (non-tombstone) key count across every shard - the figure per-tree admission control compares against `LatticeOptions.MaxLiveKeys`. Best-effort / eventually-consistent (see [Metrics - admission control](metrics.md#per-tree-admission-control)). A lower bound when `Partial` is `true` due to a shard that did not answer; a WAL-only cause of `Partial` leaves it exact. |
@@ -593,9 +599,10 @@ await tree.WarmUpAsync(cancellationToken);
 Warm-up pre-activates shard roots and root nodes unconditionally. It can
 *additionally* prime the read-through leaf caches that were hottest before the
 silo went down, which is what removes the cold-start read-latency spike rather
-than just the first-write spike. This is opt-in and off by default: set
-[`LeafCachePreWarmCount`](configuration.md#leafcacheprewarmcount) to a positive
-number of leaves per shard.
+than just the first-write spike. It is on by default:
+[`LeafCachePreWarmCount`](configuration.md#leafcacheprewarmcount) defaults to `8`
+leaves per shard, and `0` switches the whole feature off (no access tracking,
+nothing persisted, nothing primed).
 
 When enabled, each shard root maintains a bounded histogram of the leaves its
 reads route to, persists a compact snapshot of it alongside its own durable
@@ -766,8 +773,10 @@ when several payloads belong to the same enclosing user call or saga:
 - **Single-key writes** (`SetAsync`, `SetIfVersionAsync`,
   `GetOrSetAsync`, `DeleteAsync`) get a fresh `Guid` per public call.
 - **Atomic batches** (`SetManyAtomicAsync`) share a single `Guid`
-  across every per-key emit - including compensation rolls and
-  crash-recovery replays.
+  across every per-key emit - including crash-recovery replays. An
+  aborted batch issues no per-key rollback writes (its prepared writes
+  never became visible; the abort is recorded once and broadcast to the
+  affected shards), so it produces no compensating emits.
 - **Per-shard fan-out** (`DeleteRangeAsync`) shares a single `Guid`
   across every per-shard emit.
 - **Multi-key writes** (`SetManyAsync`) share a single `Guid` across
@@ -805,9 +814,9 @@ automatically.
 
 ### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
 
-Every emit produced by an in-flight `SetManyAtomicAsync` saga
-(including compensation rolls) carries `int AtomicBatchSize` (total
-entry count) and `int AtomicBatchIndex` (zero-based position).
+Every emit produced by an in-flight `SetManyAtomicAsync` saga carries
+`int AtomicBatchSize` (total entry count) and `int AtomicBatchIndex`
+(zero-based position).
 Single-key writes outside a saga emit `0` / `0`.
 
 ```csharp verify
@@ -932,8 +941,9 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 
 ### Reading an empty range read under a gate
 
-A denied **point** read throws. A denied **range** read does not: it resolves to a
-reject-all key filter and returns a clean, successful, **empty** result. So
+A denied read does not throw. A denied **point** read reports the key as absent,
+and a denied **range** read resolves to a reject-all key filter and returns a
+clean, successful, **empty** result. So
 `KeysAsync`, `EntriesAsync`, their predicate overloads, both `CountAsync`
 overloads, and the snapshot cursors all report "you may not look here" and "there
 is nothing here" identically - no exception, no log, every instrument healthy.
@@ -1003,18 +1013,22 @@ Lattice publishes a per-tree, three-state saturation signal so callers driving o
 
 | Type | Shape | Description |
 |------|-------|-------------|
-| `WalSaturationState` | `enum` (`Healthy`, `Throttled`, `Saturated`) | The classification a tree is in. `Healthy` = admit without waiting; `Throttled` = admission depth near cap, callers should slow down; `Saturated` = semaphore at cap with parked callers, callers should pause new appends. |
+| `WalSaturationState` | `enum` (`Healthy`, `Throttled`, `Saturated`) | The classification a tree is in. `Healthy` = admit without waiting; `Throttled` = a back-pressure input is up (admission depth near cap, or a sustained materialiser drain-lag or pin-latency run), callers should slow down; `Saturated` = an acute input is up (dispatch timeouts, provider failures, or sustained flush latency - plus, only when `WalSaturationAcuteOnly = false`, an admission semaphore at its cap with parked callers), callers should pause new appends. |
 | `IWalSaturationSignal` | DI singleton (polling + await) | `GetCurrentState(treeId)` returns the cached per-tree state in one concurrent-dictionary lookup; `GetAggregateState()` returns the worst case across every observed tree; `WaitForHealthyAsync(treeId, ct)` returns a task that completes when the tree returns to `Healthy` (synchronous fast-path when already `Healthy`). |
 | `IWalSaturationObserver` | DI hook (push) | `OnStateChangedAsync(change, ct)` is invoked once per transition with a `WalSaturationStateChange` payload. Registered via `services.AddSingleton<IWalSaturationObserver, MyObserver>()`. Exceptions are caught and logged; the dispatcher continues to the next observer. |
-| `WalSaturationStateChange` | `readonly record struct` | `TreeId`, `PreviousState`, `NewState`, `AttributedPartition?`, `AttributedShard?`, `ObservedAt`. The attribution slots are populated when a single partition (admission-depth-driven) or shard (dispatch-timeout-driven) dominated the transition. |
+| `WalSaturationStateChange` | `readonly record struct` | `TreeId`, `PreviousState`, `NewState`, `AttributedPartition?`, `AttributedShard?`, `ObservedAt`, `Cause`. The attribution slots carry the partition (admission-depth input) or shard (dispatch-timeout, provider-failure, flush-latency, or pin-latency input) the transition was attributed to, or `null` when the driving input carries no such attribution. `Cause` is the `WalSaturationCause` the transition was attributed to. |
+| `WalSaturationCause` | `enum` (`None`, `DispatchTimeouts`, `ProviderFailures`, `FlushLatency`, `AdmissionDepth`, `MaterialiserDrainLag`, `MaterialiserPinLatency`) | Which sampler input drove a transition, so an observer can route an alert at the subsystem actually under pressure. Best-effort and single-valued: when several inputs cross in the same window the first evaluated is reported. `None` on every transition back to `Healthy`, and on a `Throttled` reached only through the recovery-window hold. |
 
-The signal is driven by three underlying sources:
+The signal is driven by six sampler inputs:
 
-- **Admission-semaphore depth.** Per-partition `in_flight / WalMaxPendingBatches` ratio. `>= WalSaturationThrottledRatio` (default 0.75) raises a tree to `Throttled`; depth at cap with parked callers raises it to `Saturated`.
+- **Admission-semaphore depth.** Per-partition `in_flight / WalMaxPendingBatches` ratio. `>= WalSaturationThrottledRatio` (default 0.75) raises a tree to `Throttled`. A semaphore at its cap with parked callers raises it to `Saturated` only when `WalSaturationAcuteOnly` is `false`; under the default (`true`) an at-cap partition reads `Throttled`, because the semaphore already applies that back-pressure itself.
 - **Dispatch-timeout rate.** Trips of `WalAppendDispatchTimeout` observed within a single sample window. `>= WalSaturationDispatchTimeoutThreshold` (default 1) raises a tree to `Saturated` regardless of admission depth.
 - **Provider-failure rate.** Non-cancellation exceptions surfaced from a downstream WAL shard append (single or batched) dispatch within a single sample window. `>= WalSaturationProviderFailureRateThreshold` (default 1; set to `0` to disable) raises a tree to `Saturated` regardless of admission depth and dispatch-timeout trips. Captures the regime where the provider's commit calls return quickly but terminally fail (e.g. the Azure Tables single-account 409-Conflict burst), so the silo surfaces the saturation regime instead of silently leaking entries.
+- **Flush latency.** Opt-in through `WalSaturationFlushLatencyThreshold` (default `null`, disabled): provider flushes at or above the threshold in `WalSaturationFlushLatencySampleWindows` consecutive windows raise a tree to `Saturated`.
+- **Materialiser drain lag.** A tree whose leaf-materialiser drain frontier stays more than `WalSaturationMaterialiserLagThreshold` (default 30 s) behind the WAL head for `WalSaturationMaterialiserLagSampleWindows` consecutive windows is held at `Throttled` - never `Saturated`.
+- **Materialiser pin latency.** Opt-in through `WalSaturationMaterialiserPinLatencyThreshold` (default `null`, disabled): durable leaf-materialiser pin writes that are slow or fault in `WalSaturationMaterialiserPinLatencySampleWindows` consecutive windows hold a tree at `Throttled` - never `Saturated`.
 
-The tree's state is the worst case across these signals across every partition / shard.
+The tree's state is the worst case across these inputs across every partition / shard, and `WalSaturationRecoveryWindow` holds a tree at `Throttled` for a short window after its last `Saturated` observation.
 
 ### Polling (canonical TCP-read-loop pattern)
 
@@ -1062,7 +1076,7 @@ var signal = client.ServiceProvider.GetRequiredService<IWalSaturationSignal>();
 await signal.WaitForHealthyAsync("my-tree", cancellationToken);
 ```
 
-`WaitForHealthyAsync` returns `Task.CompletedTask` synchronously when the tree is already `Healthy`, so the fast-path is allocation-free. When the tree is not `Healthy`, the awaiter completes on the next sample tick that observes the tree at `Healthy` - the worst-case wake-up is one `WalSaturationSampleInterval` beyond the underlying recovery.
+`WaitForHealthyAsync` returns `Task.CompletedTask` synchronously when the tree is already `Healthy`, so the fast-path is allocation-free. When the tree is not `Healthy`, the awaiter completes on a sample tick that observes the tree at `Healthy` - at worst one `WalSaturationSampleInterval` beyond the underlying recovery, unless more than `WalSaturationRecoveryReleaseBatch` callers are parked on the tree, in which case the backlog is released oldest-first across consecutive ticks.
 
 ### Push (subscription model)
 
@@ -1092,8 +1106,10 @@ Multiple observers may coexist; they are invoked in registration order. Exceptio
 
 | Instrument | Type | Tags | Description |
 |------------|------|------|-------------|
-| `orleans.lattice.wal.saturation.state` | observable gauge (long) | `tree`, `state` | Current per-tree state as a step function. Values: `0` = Healthy, `1` = Throttled, `2` = Saturated. |
-| `orleans.lattice.wal.saturation.transitions` | counter (long) | `tree`, `state`, `previous_state`, optional `partition`, optional `shard` | Incremented once per per-tree transition. The state tag values are lowercased enum names (`healthy`, `throttled`, `saturated`). |
+| `orleans.lattice.wal.saturation.state` | observable gauge (long) | `tree` | Current per-tree state as a step function, unit `{state}`. Values: `0` = Healthy, `1` = Throttled, `2` = Saturated. The regime is deliberately not also carried as a label: the value already encodes it, and a state label fragmented the per-tree series on every transition. A tree appears only once the sampler has observed a signal for it. |
+| `orleans.lattice.wal.saturation.transitions` | counter (long) | `tree`, `state`, `previous_state`, `cause`, optional `partition`, optional `shard` | Incremented once per per-tree transition, unit `{transition}`. The state tag values are lowercased enum names (`healthy`, `throttled`, `saturated`); `cause` is the attributed `WalSaturationCause` in lowercase snake case (`none`, `dispatch_timeouts`, `provider_failures`, `flush_latency`, `admission_depth`, `materialiser_drain_lag`, `materialiser_pin_latency`). |
+
+Both instruments also carry the derived `tenant` dimension that every Lattice instrument carries.
 
 A flat-zero series on `transitions` is the healthy steady state. A rising rate of `state=throttled` transitions on a tree is the leading edge of the saturation regime; `state=saturated` is the regime itself. Pair with the `state` observable gauge for "what is the current regime" and with the `transitions` counter for "how often is the regime changing" - flapping between `Throttled` and `Saturated` is a different operational signal from a sustained `Saturated`.
 
@@ -1107,11 +1123,17 @@ A flat-zero series on `transitions` is the healthy steady state. A rising rate o
 | `WalSaturationProviderFailureRateThreshold` | `1` | Minimum provider-side commit failures per sample window that raise a tree to `Saturated` regardless of admission depth and dispatch-timeout trips. Captures the regime where provider commit calls return quickly but terminally fail (e.g. Azure Tables 409-Conflict bursts) so the silo surfaces the saturation regime instead of silently leaking entries. Set to `0` to disable the trigger entirely. |
 | `WalSaturationFlushLatencyThreshold` | `null` (disabled) | Per-provider-flush wall-clock latency at or above which the WAL writer increments a per-(tree, shard) flush-latency trip counter that feeds the saturation classifier. Closes the small-batch blind spot the other three inputs cannot see (slow-but-successful flushes against a saturating storage account never fill the admission semaphore, trip the dispatch deadline, or tally a provider-failure). Must be positive when set; leaving it `null` is a zero-cost no-op. Pair with `WalSaturationFlushLatencySampleWindows`. |
 | `WalSaturationFlushLatencySampleWindows` | `3` | Number of consecutive sample windows that must each observe a non-zero flush-latency-threshold trip-counter delta before the classifier upgrades the tree to `Saturated`. Noise floor for the flush-latency input. Minimum 1; has no effect when `WalSaturationFlushLatencyThreshold` is left at its default `null`. |
+| `WalSaturationMaterialiserLagThreshold` | `30 s` | Materialiser drain-lag input: a tree whose leaf-materialiser drain frontier stays more than this far behind the WAL head for `WalSaturationMaterialiserLagSampleWindows` consecutive windows is held at `Throttled` (never `Saturated`), so a write burst that outruns the materialiser slows producers instead of faulting them. Set to `null` to disable the input; must be positive when set. |
+| `WalSaturationMaterialiserLagSampleWindows` | `3` | Consecutive sample windows the drain lag must stay over `WalSaturationMaterialiserLagThreshold` before the tree is held at `Throttled`. Minimum 1; has no effect when the threshold is `null`. |
+| `WalDrainLagConsumerFreshness` | `5 min` | Freshness window for the drain-lag input. A WAL consumer whose last cursor report is older than this, or a leaf materialiser whose cursor has not advanced within it and whose cursor itself predates it, is left out of the lag measurement, so an idle leaf cannot hold a live tree at `Throttled`. Such consumers still pin the WAL GC trim floor. `TimeSpan.Zero` disables the exclusion; negative values are rejected. |
+| `WalSaturationMaterialiserPinLatencyThreshold` | `null` (disabled) | Materialiser pin-latency input: durable leaf-materialiser pin writes that take at least this long, or fault, in `WalSaturationMaterialiserPinLatencySampleWindows` consecutive windows hold the tree at `Throttled` (never `Saturated`). The only input measured against durable storage rather than in-memory progress. Must be positive when set. |
+| `WalSaturationMaterialiserPinLatencySampleWindows` | `3` | Consecutive sample windows that must each record a slow or faulted pin write before the pin-latency input holds the tree at `Throttled`. Minimum 1; has no effect when the threshold is `null`. |
 | `WalSaturationRecoveryWindow` | `1 s` | Window after the most-recently observed `Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's depth observation classifies it as `Healthy`. Defends against bursty per-partition WAL drain where the per-tick `max(depth_ratio)` oscillates `~1.0 <-> ~0.0` and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. Set to `TimeSpan.Zero` to disable the upgrade (per-tick depth observation drives the regime directly); set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation. |
 | `WalSaturationAcuteOnly` | `true` | When `true`, only acute causes (dispatch timeouts, provider failures, sustained flush latency) classify a partition `Saturated`; an admission semaphore merely at its cap reads `Throttled`, and a caller parked at the writer admission gate resumes once its partition leaves `Saturated` rather than waiting for `Healthy`. Set `false` to restore the historical at-cap `Saturated` classification. |
 | `WalSaturationRecoveryReleaseBatch` | `16` | Maximum number of parked WAL-admission waiters a recovered partition admits per sampler tick. Bounds the burst a recovery hands back to the admission pipeline so the released population cannot immediately re-saturate the partition it was waiting on, which would leave the gate flapping with no net progress. Waiters are released oldest-first, and the release is level-triggered (every `Healthy` tick drains a further batch) so a paced release never strands its residue. Set to `0` to release every parked waiter at once. |
-| `WalAdmissionSaturationWaitBudget` | `5 s` | Wall-clock budget the WAL writer admission gate (`PartitionTracker.AcquireAsync`) spends parked on `IWalSaturationSignal.WaitForHealthyAsync` before refusing a dispatch with [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception) when the per-tree saturation signal stays `Saturated` past the budget. Sized shorter than `WalAppendDispatchTimeout` (so the saturation refusal wins over the dispatch timeout) and longer than one `WalSaturationSampleInterval` (so a transient classifier flap does not surface as a refusal). Set to `TimeSpan.Zero` to disable the gate entirely (the historical pre-admission-gate behaviour). Set to `Timeout.InfiniteTimeSpan` to wait forever on recovery. |
+| `WalAdmissionSaturationWaitBudget` | `5 s` | Wall-clock budget the WAL writer's admission gate spends waiting, when the target partition reads `Saturated`, for that partition to leave `Saturated` (to return to `Healthy` when `WalSaturationAcuteOnly = false`) before refusing the dispatch with [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception). Sized shorter than `WalAppendDispatchTimeout` (so the saturation refusal wins over the dispatch timeout) and longer than one `WalSaturationSampleInterval` (so a transient classifier flap does not surface as a refusal). Set to `TimeSpan.Zero` to disable the gate entirely (the historical pre-admission-gate behaviour). Set to `Timeout.InfiniteTimeSpan` to wait forever on recovery. |
 | `WalAdmissionSaturationCallBudget` | `Timeout.InfiniteTimeSpan` | Wall-clock budget **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append and every retry layer. `WalAdmissionSaturationWaitBudget` bounds one *wait*, not one *call*: the write path holds three nested retry layers and each re-dispatch opened a fresh budget, so a call could accumulate a multiple of it while every individual wait stayed correctly bounded ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) remedy 3). The call is identified by a start instant `LatticeTransactionContext.EnsureCurrent()` stamps into `RequestContext`; nested entry points inherit it rather than re-stamping. The gate takes the smaller of the remaining allowance and the per-append budget, and refuses immediately once the allowance is spent. Writes with no ambient call (convergence-only, background) keep the per-append bound unchanged. `TimeSpan.Zero` means "never wait within a call"; it **defaults to `Timeout.InfiniteTimeSpan`**, so the bound is opt-in and upgrading changes no behaviour. 15 s (3x the per-append default) is the recommended finite value; making that the default is deferred to the next major ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)). |
+| `WalThrottledAdmissionPace` | `25 ms` | Per-append pacing delay the WAL writer applies before admission while the target partition reads `Throttled`. It gives the `Throttled`-only inputs (such as drain lag) teeth on the local write path, where the `Saturated`-only admission gate never engages. A pure back-off: it never throws, and it is skipped on `Saturated` (the admission gate governs that case). `TimeSpan.Zero` disables it; negative values are rejected. |
 | `SetManyFanOutBudget` | `Timeout.InfiniteTimeSpan` | Wall-clock budget `SetManyAsync` spends awaiting its shard fan-out before refusing the call with [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception) (`SaturationSource` = `SetManyFanOut`). Bounds the *slowest branch*, which is what a batch actually pays: without it the call tracks the branch p99 and degrades as the shard count rises ([#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348)). Refusal sheds the caller and rolls nothing back - already-committed branches stay committed. Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **rejected** rather than treated as a disable sentinel (it would refuse every batch); it **defaults to `Timeout.InfiniteTimeSpan`** (unbounded), so the bound is opt-in and upgrading an existing deployment changes no behaviour. 30 s is the recommended finite value; making that the default is deferred to the next major ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). |
 
 See [WAL Saturation Signal](wal-saturation-signal.md) for the full design including the per-tree resolution contract, the multi-tree aggregate view, and the bench-side adoption pattern.
@@ -1119,6 +1141,52 @@ See [WAL Saturation Signal](wal-saturation-signal.md) for the full design includ
 ### Consumers
 
 In addition to application callers, the `Orleans.Lattice.Replication` package consumes this signal automatically: a receiver's `WalSaturationReceiverFlowControlPolicy` (registered by `AddLatticeReplication` by default) reads `IWalSaturationSignal.GetCurrentState(treeId)` after each applied push and translates the regime into the backoff hints carried on the `ReplicationAck`, so a saturated receiver asks the sender to ship smaller batches and pause before its local admission gate faults the apply. See [Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
+
+## WAL consumer cursors - `IWalCursorRegistry`
+
+Every consumer of a tree's write-ahead log - a leaf materialiser, a
+materialised-view maintainer, a WAL subscriber, the replication shipper, or a
+custom bridge - reports the highest `HybridLogicalClock` it has fully consumed
+to the silo's `IWalCursorRegistry`. The WAL garbage collector
+(`ILatticeWalGc.RunOnceAsync`) never trims past the minimum cursor across the
+registered consumers, so a consumer that stops reporting holds the log rather
+than losing entries. `AddLattice` registers the default
+`InMemoryWalCursorRegistry`, which is process-local and lost on silo restart:
+each consumer re-reports its cursor after a restart. `AddWalCursorRegistry(Func<IServiceProvider, IWalCursorRegistry>? factory = null)`
+replaces that default with a host-supplied registry when a factory is given,
+and in every case opts in to durable leaf-materialiser cursor reporting (so the
+collector also respects each leaf's durable checkpoint across a restart) and
+the shared WAL tailing subscriber. The durable WAL storage providers
+(`AddAzureTableWalStorage`, `AddFileWalStorage`), `AddLatticeViews`, and
+`AddLatticeReplication` call it for you; the storage providers and the
+replication package also register the collector itself
+(`AddLatticeWalGc(Func<IServiceProvider, ILatticeWalGc>? factory = null)`) and
+the per-silo scheduler that runs it every `LatticeOptions.WalGcInterval`. See
+[WAL](wal.md) for the full trim predicate.
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `ReportCursorAsync` | `Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, CancellationToken cancellationToken = default)` | Reports the highest HLC the consumer has fully consumed. Monotonic per `(treeName, consumerId)`: a lower report is coalesced into the existing entry rather than moving the cursor back. The cursor must be greater than `HybridLogicalClock.Zero`. |
+| `ReportCursorAsync` (blocked floor) | `Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, HybridLogicalClock? blockedAtHlc, CancellationToken cancellationToken = default)` | Also reports the lowest HLC of any partially-buffered atomic batch the consumer holds; the collector never trims an entry at or above the lowest such pin. Accepts `HybridLogicalClock.Zero` as the cursor for a pin-only registration, which the cursor minimum ignores. Each report replaces the previous pin; `null` clears it. |
+| `ReportCursorAsync` (vector) | `Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, VersionVector vector, CancellationToken cancellationToken = default)` | Also reports the per-origin `VersionVector` frontier the consumer has fully applied, coalesced by pointwise maximum. |
+| `ReportCursorAsync` (vector + blocked floor) | `Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, VersionVector vector, HybridLogicalClock? blockedAtHlc, CancellationToken cancellationToken = default)` | Both of the above. |
+| `UnregisterAsync` | `Task UnregisterAsync(string treeName, string consumerId, CancellationToken cancellationToken = default)` | Removes a consumer so it no longer pins the log. Idempotent. |
+| `GetMinCursorAsync` | `Task<HybridLogicalClock?> GetMinCursorAsync(string treeName, CancellationToken cancellationToken = default)` | Minimum cursor across every registered consumer (pin-only registrations excluded), or `null` when none has reported. Includes cold consumers, because it feeds the trim floor. |
+| `GetMinCursorForDrainLagAsync` | `Task<HybridLogicalClock?> GetMinCursorForDrainLagAsync(string treeName, long reportedAtOrAfterTicks, CancellationToken cancellationToken = default)` | Minimum cursor across consumers that reported at or after the UTC tick floor, also excluding leaf materialisers whose position is stale (see `WalDrainLagConsumerFreshness`). Feeds only the saturation drain-lag input, never the trim floor. |
+| `GetCausalStableAsync` | `Task<VersionVector?> GetCausalStableAsync(string treeName, CancellationToken cancellationToken = default)` | Pointwise-minimum `VersionVector` across the consumers that reported one (an origin is kept only when every reporter names it), or `null` when none has. |
+| `GetBlockedFloorAsync` | `Task<HybridLogicalClock?> GetBlockedFloorAsync(string treeName, CancellationToken cancellationToken = default)` | Minimum blocked-floor pin across the consumers currently reporting one, or `null`. |
+| `SnapshotAsync` | `Task<IReadOnlyList<WalCursorSnapshot>> SnapshotAsync(string treeName, CancellationToken cancellationToken = default)` | Point-in-time copy of every registered consumer's entry, for diagnostics. |
+
+`WalCursorSnapshot` is the `readonly record struct` `SnapshotAsync` returns:
+
+| Member | Type | Meaning |
+|--------|------|---------|
+| `ConsumerId` | `string` | The reporting consumer. |
+| `Cursor` | `HybridLogicalClock` | Highest HLC fully consumed; `HybridLogicalClock.Zero` for a pin-only registration. |
+| `LastReportedAtTicks` | `long` | UTC ticks of the most recent report, including a re-report of an unchanged position. |
+| `Vector` | `VersionVector?` | The reported per-origin frontier, or `null` for a consumer that reports HLC only. |
+| `BlockedAtHlc` | `HybridLogicalClock?` | The consumer's current blocked-floor pin, or `null`. |
+| `CursorAdvancedAtTicks` | `long?` (`init`) | UTC ticks of the most recent report that strictly advanced `Cursor`: `0` until the position has moved since the consumer registered, and `null` when the producing registry does not track position age. Read only by the drain-lag input, for leaf materialisers, so a leaf whose key range has seen no writes is not counted as lag; the trim floor ignores it. |
 
 ## Domain faults - `ILatticeDomainFault`
 
@@ -1153,12 +1221,12 @@ A reflection gate in the core test suite enumerates the assembly at run time and
 
 Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. The typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure). It derives from `InvalidOperationException` for backwards compatibility, but that inheritance is a hazard rather than a convenience: a broad `catch (InvalidOperationException)` absorbs the refusal and typically retries, which cannot succeed because the writer drain is a one-way transition. The type implements [`ILatticeDomainFault`](#domain-faults---ilatticedomainfault), so a broad handler declines it with `catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)`; catching it by name remains correct.
 
-Surfaces from three distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
+Surfaces from four distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
 
-- **Lifetime-aware pre-dispatch fast-fail.** Every public write entry point on `ILattice` - `SetAsync` (both overloads), `SetIfVersionAsync`, `ApplyCrdtDeltaAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`, `SetManyAtomicAsync`, `SetManyAtomicWhereAsync`, `DeleteAsync`, `DeleteRangeAsync`, and `DeleteRangeWherePredicateAsync` - checks `IHostApplicationLifetime.ApplicationStopping` first and throws this exception *before* it touches the activation directory or dispatches to the WAL writer once the host has begun shutting down. The same pre-check guards the internal shard-root write path and the operator-driven tombstone-compaction pass, so a single `catch`/`is` check covers every write path rather than only the atomic-write saga. The check is null-tolerant: non-hosted test activations (which do not register `IHostApplicationLifetime`) are unaffected.
+- **Lifetime-aware pre-dispatch fast-fail.** The public write entry points on `ILattice` - `SetAsync` (both overloads), `SetIfVersionAsync`, `ApplyCrdtDeltaAsync` (both overloads), `ApplyCrdtDeltaManyAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`, `SetManyAtomicAsync`, `SetManyAtomicWhereAsync`, `DeleteAsync`, `DeleteRangeAsync`, and `DeleteRangeWherePredicateAsync` (the bulk-load entry points do not take this pre-check) - check `IHostApplicationLifetime.ApplicationStopping` first and throws this exception *before* it touches the activation directory or dispatches to the WAL writer once the host has begun shutting down. The same pre-check guards the internal shard-root write path and the operator-driven tombstone-compaction pass, so a single `catch`/`is` check covers every write path rather than only the atomic-write saga. The check is null-tolerant: non-hosted test activations (which do not register `IHostApplicationLifetime`) are unaffected.
 - **Writer-side drain refusal.** The WAL commit-log writer's drain path flips the per-instance drain flag; any new append (single or batched) dispatch after the flip throws this exception inline.
 - **Admission-semaphore drain release.** A caller already parked on the per-partition admission semaphore when the drain fired sees the release-by-drain surface as this exception (rather than the legacy `TimeoutException(WalDrainBudget)` shape).
-- **Saga-coordinator short-circuit.** When the atomic-write saga coordinator detects either of the above (or the Orleans `OrleansMessageRejectionException("Unable to create local activation")` shape that fires when a leaf grain has been deactivated as part of the same shutdown), the saga short-circuits the retry loop and the per-shard compensate-broadcast pass and wraps the cause in this exception so consumers can detect the regime via a single `is` check.
+- **Saga-coordinator short-circuit.** When the atomic-write saga coordinator detects any of the above (or the Orleans `OrleansMessageRejectionException` "Unable to create local activation" / "invalid activation" shape that fires when a leaf grain has been deactivated as part of the same shutdown), the saga skips its retry loop and its whole compensation path - no abort is recorded or broadcast, and no further saga state is written - and wraps the cause in this exception so consumers can detect the regime via a single `is` check.
 
 Caller contract: treat as back-pressure, not as a real failure. The entries the operation carried were never durably committed, but the silo refused to accept them because the host is going away rather than because the storage layer rejected them. A caller observing this exception should abandon the operation rather than retry it - every subsequent attempt against the same silo activation in this lifetime will fail with the same exception, because the writer drain is a one-way transition. Long-lived clients should either fail over to a peer silo (if the cluster is multi-node) or surface the back-pressure to upstream callers (drop the request, queue it to a side outbox, or rate-limit). Re-issuing the same operation after the host restarts is the normal recovery path; the previously failed entries are not durable, so the re-issue is a fresh attempt against a fresh silo activation.
 
@@ -1182,7 +1250,7 @@ catch (LatticeShuttingDownException)
 }
 ```
 
-On the `SetManyAtomicAsync` path, the saga's outcome is recorded on the `orleans.lattice.atomic_write.completed` counter as `outcome=shutdown_refused` so operators can distinguish saga failures caused by shutdown coincidence from saga failures caused by genuine commit conflicts on the same dashboard.
+On the `SetManyAtomicAsync` path, a shutdown refusal records no terminal outcome. The saga does not complete: it persists nothing further, records no abort, and leaves its persisted state at the execute phase with its keepalive reminder still registered, and it throws this exception to the caller. A later reminder-driven resume on a live activation re-runs the saga from its persisted position and drives it to a terminal outcome, and only then does the `orleans.lattice.atomic_write.completed` counter record it - as `committed`, `failed`, or `compensated`. The counter's `shutdown_refused` outcome value is not produced by any code path, so a dashboard cannot use it to count shutdown refusals; count this exception at the caller instead.
 
 ### Quieter shutdown logs
 
@@ -1194,9 +1262,9 @@ Public typed exception thrown by the WAL writer admission gate and the atomic-wr
 
 Surfaces from six distinct saturation failure shapes that share the same operational meaning ("this tree's storage layer is back-pressured; the operation was refused"):
 
-- **Writer-side admission refusal.** The WAL commit-log writer consults the per-tree saturation signal before each per-partition admission acquire. On `Saturated`, the writer awaits `IWalSaturationSignal.WaitForHealthyAsync` up to `LatticeOptions.WalAdmissionSaturationWaitBudget` (default 5 seconds) and, if the regime persists, throws this exception so callers observe the back-pressure in budget time instead of parking on the admission semaphore for up to `WalAppendDispatchTimeout` (default 30 seconds). Reported as `LatticeSaturationSource.WalAdmission`.
+- **Writer-side admission refusal.** The WAL commit-log writer consults the saturation verdict for the target partition before each per-partition admission acquire. On `Saturated`, the writer waits up to `LatticeOptions.WalAdmissionSaturationWaitBudget` (default 5 seconds) for that partition to leave `Saturated` (to return to `Healthy` when `WalSaturationAcuteOnly = false`) and, if the regime persists, throws this exception so callers observe the back-pressure in budget time instead of parking on the admission semaphore for up to `WalAppendDispatchTimeout` (default 30 seconds). Reported as `LatticeSaturationSource.WalAdmission`.
 
-  The gate is additionally bounded **per top-level call** by `LatticeOptions.WalAdmissionSaturationCallBudget`. The per-append budget bounds one *wait*; it does not bound a *call*, because the write path holds three nested retry layers (`RetryOnStaleRoutingAsync`, `ShardActivationRetry.RunAsync`, `DispatchLeafBatchWithRetryAsync`) and each re-dispatch opened a fresh one, so a single call could accumulate a multiple of the configured budget while every individual wait stayed correctly bounded. The gate now takes the smaller of the call's remaining allowance and the per-append budget, and refuses without waiting once the allowance is spent. It defaults to `Timeout.InfiniteTimeSpan`, so the per-call bound is opt-in on the 9.x line ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)); left at the default, only the per-append budget applies and the multiplication measured in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) is unmitigated.
+  The gate is additionally bounded **per top-level call** by `LatticeOptions.WalAdmissionSaturationCallBudget`. The per-append budget bounds one *wait*; it does not bound a *call*, because the write path holds three nested retry layers (the stale-routing retry, the shard-activation retry, and the per-leaf batch-dispatch retry) and each re-dispatch opened a fresh one, so a single call could accumulate a multiple of the configured budget while every individual wait stayed correctly bounded. The gate now takes the smaller of the call's remaining allowance and the per-append budget, and refuses without waiting once the allowance is spent. It defaults to `Timeout.InfiniteTimeSpan`, so the per-call bound is opt-in on the 9.x line ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)); left at the default, only the per-append budget applies and the multiplication measured in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) is unmitigated.
 - **Saga-coordinator quiesce refusal.** The atomic-write saga's quiesce-on-saturated preflight runs before each batched dispatch and parks the saga on `WaitForHealthyAsync` up to `min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)`. On budget expiry with the tree still `Saturated`, the saga's fast-path refuses with this exception rather than re-dispatching the same RowKeys into a still-throttled storage account (the canonical 409-Conflict amplification regime); the saga's persisted state stays at `Execute` with the current `NextIndex` so the caller's next retry on the same `operationId` resumes from where the refusal stopped. Reported as `LatticeSaturationSource.AtomicWriteSaga`.
 - **Snapshot-cursor open shed.** Opening a snapshot cursor is expensive, so a tree whose signal already reads `Saturated` sheds the open immediately - before routing resolution and the capture fan-out - rather than amplifying its own collapse. Unlike the two gates above there is no wait budget: the shed is immediate. Only `Saturated` sheds, so a `Throttled` tree stays browsable. Gated by the default-on `ShedSnapshotOpensWhenSaturated` option. Reported as `LatticeSaturationSource.SnapshotCursorOpen`.
 - **Replay-permit admission refusal.** The per-silo WAL replay-permit gate refuses an activation when the permit queue is at or above its admitted bound *and* the smoothed queue wait exceeds `LatticeOptions.WalReplayPermitMaxQueueWait`. This seam does **not** consult `IWalSaturationSignal`: it is driven by replay-permit queue depth, so it can fire on a tree whose signal reads `Healthy`. Reported as `LatticeSaturationSource.ReplayPermitAdmission`.
@@ -1298,7 +1366,7 @@ are safe to call against a live shard under load.
 
 | Method | Description |
 |--------|-------------|
-| `RebuildLeafProjectionAsync(int shardIndex, CancellationToken)` | Clears the projection state of every leaf in the specified physical shard - `Entries`, `ProjectionHash`, the persisted `ProjectionCheckpointOffset`, and the in-memory pending-saga and recently-terminal dedup buffers - then deactivates each leaf so its next activation re-materialises the projection from the WAL via the standard activation-time replay path (including snapshot-then-WAL recovery when `ProjectionRebuildPolicy.SnapshotThenWal` is in effect). Topology-bearing state (`TreeId`, `ShardIndex`, key-range bounds, sibling pointers) is preserved. Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for system-tree activations, and `OperationCanceledException` if the token is cancelled. |
+| `RebuildLeafProjectionAsync(int shardIndex, CancellationToken)` | Clears the projection state of every leaf in the specified physical shard - the per-activation in-memory entry cache (per-key data is not persisted on the leaf row; it is rehydrated from the WAL on activation), the persisted projection-digest fold, the persisted projection checkpoint (reset to "nothing scanned"), and the in-memory pending-saga and recently-terminal dedup buffers - then deactivates each leaf so its next activation re-materialises the projection from the WAL via the standard activation-time replay path (including snapshot-then-WAL recovery when `ProjectionRebuildPolicy.SnapshotThenWal` is in effect). Topology-bearing state (tree id, shard index, key-range bounds, sibling pointers, parent pointer, split state) is preserved. Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for system-tree activations, and `OperationCanceledException` if the token is cancelled. |
 | `GetMaterialiserLagAsync(CancellationToken)` | Returns the maximum lag, in WAL entries, between the shard's WAL head offset and the minimum leaf-projection checkpoint offset across all leaves in the tree. A return value of `0` indicates the materialiser is fully caught up across every shard; a steadily growing value indicates the materialiser is falling behind WAL ingestion. The result is clamped at zero. Throws `InvalidOperationException` for system-tree activations and `OperationCanceledException` if the token is cancelled. |
 
 ```csharp verify
@@ -1551,9 +1619,17 @@ Controls source-tree availability during a snapshot operation.
 
 ## `LatticeExtensions`
 
+The resilient scans (`ScanKeysAsync`, `ScanEntriesAsync`) and the resilient
+`DeleteRangeAsync` drain are documented under [Enumeration](#enumeration), the
+`Open*CursorScopeAsync` family under
+[Scoped cursor extensions](#scoped-cursor-extensions), and the
+`DefaultScanReconnectAttempts` / `DefaultScanStallResumeAttempts` /
+`DefaultScanStallResumeCeiling` budget constants with the scans that use them.
+The remaining members are:
+
 | Method | Description |
 |--------|-------------|
-| `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted ascending by key. See [Bulk Loading](bulk-loading.md). |
+| `BulkLoadAsync(this ILattice, IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries, IGrainFactory grainFactory, int chunkSize = 10_000, CancellationToken cancellationToken = default)` | Streaming bulk load for large datasets. Input **must** be pre-sorted ascending by key. See [Bulk Loading](bulk-loading.md). |
 | `SubscribeToEventsAsync(this ILattice, IClusterClient, Func<LatticeTreeEvent, Task>, string providerName = "Default", CancellationToken)` | Subscribes to the per-tree `LatticeTreeEvent` stream on the cluster client. Returns a `StreamSubscriptionHandle<LatticeTreeEvent>`; call `UnsubscribeAsync()` to stop. Throws `InvalidOperationException` when `providerName` is not registered on the client. See [Events](events.md). |
 
 ## `TypedLatticeExtensions`
@@ -1579,8 +1655,14 @@ var updated = versioned.Value! with { Age = 31 };
 bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version);
 ```
 
-Every method also has a parameterless overload that defaults to
-`JsonLatticeSerializer<T>.Default`.
+The serializer-less overload of every method uses
+`JsonLatticeSerializer<T>.Default`. The members are `GetAsync<T>`,
+`GetWithVersionAsync<T>`, `GetOrSetAsync<T>`, `SetAsync<T>` (plus a
+`TimeSpan ttl` overload), `SetIfVersionAsync<T>`, `GetManyAsync<T>`,
+`SetManyAsync<T>`, `SetManyAtomicAsync<T>` (plus an `operationId` overload),
+`BulkLoadAsync<T>`, and the resilient `ScanEntriesAsync<T>`; the predicate
+overloads are listed under [Predicate operations](#predicate-operations), and
+the raw typed streams under [Public but not usable](#public-but-not-usable).
 
 ## Predicate operations
 
@@ -1643,13 +1725,14 @@ commits them as one cross-tree saga:
 | `Set<T>` | `LatticeAtomicWriteBuilder Set<T>(string key, T value, ILatticeSerializer<T> serializer)` |
 | `Set<T>` (default serializer) | `LatticeAtomicWriteBuilder Set<T>(string key, T value)` |
 | `Set` (staged CRDT) | `LatticeAtomicWriteBuilder Set(LatticeStagedCrdtWrite staged)` |
+| `SetMany` (staged CRDT batch) | `LatticeAtomicWriteBuilder SetMany(IEnumerable<LatticeStagedCrdtWrite> staged)` |
 | `SetWhere<T>` | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer)` |
 | `SetWhere<T>` (default serializer) | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate)` |
 | `Delete` | `LatticeAtomicWriteBuilder Delete(string key)` |
 | `CommitAsync` | `Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken = default)` |
 
 `CommitAsync` (and `SetManyAtomicAsync`) returns
-`CrossTreeAtomicWriteOutcome.Committed` when every tree''s optional guard passed
+`CrossTreeAtomicWriteOutcome.Committed` when every tree's optional guard passed
 and all writes committed, or `CrossTreeAtomicWriteOutcome.PreconditionFailed`
 when a guard failed and nothing committed on any tree. It throws
 `InvalidOperationException` if a write fails (after the saga compensates), or
@@ -1777,6 +1860,34 @@ await tree.RwFlag("access/order:42").EnableAsync(replicaId: "siloA");
 bool granted = await tree.RwFlag("access/order:42").IsEnabledAsync();
 await tree.RwFlag("access/order:42").DisableAsync(replicaId: "siloB");
 ```
+
+Each accessor is obtained from a `CrdtLatticeExtensions` entry point on
+`ILattice`; every entry point rejects a null or empty key:
+
+| Entry point | Returns |
+|-------------|---------|
+| `OrSet(string key)` | `OrSetAccessor` |
+| `PnCounter(string key)` | `PnCounterAccessor` |
+| `GCounter(string key)` | `GCounterAccessor` |
+| `GSet(string key)` | `GSetAccessor` |
+| `VersionVector(string key)` | `VersionVectorAccessor` |
+| `MvRegister<T>(string key, ILatticeSerializer<T>? serializer = null)` | `MvRegisterAccessor<T>` |
+| `OrMap<TKey, TValue>(string key)` (`TValue : ICrdt<TValue>, new()`) | `OrMapAccessor<TKey, TValue>` |
+| `Sequence<T>(string key, ILatticeSerializer<T>? serializer = null)` | `RgaAccessor<T>` |
+| `OrFlag(string key)` | `OrFlagAccessor` |
+| `RwFlag(string key)` | `RwFlagAccessor` |
+| `RwSet(string key)` | `RwSetAccessor` |
+| `MaxRegister<T>(string key, Func<T, byte[]> orderKeySelector, ILatticeSerializer<T>? serializer = null)` | `MaxRegisterAccessor<T>` |
+| `MinRegister<T>(string key, Func<T, byte[]> orderKeySelector, ILatticeSerializer<T>? serializer = null)` | `MinRegisterAccessor<T>` |
+
+`CrdtLatticeExtensions` also carries two batched OR-Flag helpers.
+`EnableManyAsync(IReadOnlyCollection<string> keys, string replicaId, CancellationToken cancellationToken = default)`
+enables many flags with one batched read plus one `ApplyCrdtDeltaManyAsync`
+call instead of two round trips per key; like the underlying batch it is not
+atomic, and a retry converges. `StageEnableManyAsync` (same parameters) stages
+the same enables as `LatticeStagedCrdtWrite` tokens for
+`LatticeAtomicWriteBuilder.SetMany`, minting every delta from one batched read.
+See [OR-Flag - Marking many flags at once](../crdt/orflag.md#marking-many-flags-at-once).
 
 | Accessor | Method | Description |
 |----------|--------|-------------|
@@ -1907,19 +2018,27 @@ constraints, and per-tree overrides via the
 
 > **Structural sizing is pinned per-tree in the registry, not in
 > `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and
-> `ShardCount` are seeded into the `TreeRegistryEntry` on first tree
-> use from `LatticeConstants` (128 / 128 / 64). After seeding they
+> `ShardCount` are seeded into the tree's registry entry on first tree
+> use from the built-in defaults (128 / 128 / 64). After seeding they
 > are mutable only through `ILattice.ResizeAsync` and
 > `ILattice.ReshardAsync`. Callers who want non-default sizing should
 > either call `ResizeAsync` / `ReshardAsync` on a freshly-created
-> tree (empty-tree fast-path) or register per-tree overrides at silo
-> startup with `ConfigureLattice("tree-name", ...)`, which the
-> registry consults when it seeds the tree on first use (see
-> [tree registry](tree-registry.md) for the resolution order).
+> tree (empty-tree fast-path) or create the tree with explicit sizing
+> through the tree-administration facade's
+> `ILatticeTreeAdmin.CreateTreeAsync` (see
+> [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md)). `LatticeOptions`
+> carries no sizing properties, so `ConfigureLattice("tree-name", ...)`
+> cannot seed them; see [tree registry](tree-registry.md) for how the
+> pin is resolved.
 
 > **The virtual shard space is not a runtime option.** It is a
 > compile-time constant, `LatticeConstants.DefaultVirtualShardCount = 4096`.
 > The pinned `ShardCount` must divide this constant evenly.
+
+The table below covers commonly tuned options; several option families
+are documented next to the feature they tune (for example the
+`WalSaturation*` knobs under [WAL saturation back-pressure](#options)), and
+[Configuration](configuration.md) is the complete reference.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -1951,7 +2070,7 @@ constraints, and per-tree overrides via the
 | `TxDecisionRetention` | `TimeSpan` | 60 s | Retention window for a completed saga's commit/abort decision in the per-tree registry after `ForgetAsync`. `TimeSpan.Zero` restores legacy immediate-evict semantics. See [Configuration](configuration.md#txdecisionretention). |
 | `TxRegistryAdmissionBudgetBytes` | `long?` | 768 KiB | Row-size budget, per registry shard, above which the transaction registry refuses new atomic-write sagas with a retryable `LatticeSaturatedException` (`TxRegistryCapacity`). `null` disables the bound. See [Configuration](configuration.md#txregistryadmissionbudgetbytes). |
 | `TxRegistryShardCount` | `int` | 8 | Saga decision registry shards per tree (1 to 256). Each shard has its own row and admission budget, so the per-tree saga ceiling scales with it. Global (unnamed options) only; must be identical on every silo; safe to raise live, lower only with atomic writes quiesced for one retention window. See [Configuration](configuration.md#txregistryshardcount). |
-| `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` | Retention window for version vectors of deleted keys in the read cache. `InfiniteTimeSpan` disables eviction. |
+| `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` | Declared but currently has no effect: no code reads this option, so setting it prunes nothing. The pruning primitive it describes, `VersionVector.PruneOlderThan(long minRetainedUtcTicks)`, has no production caller but can be called directly. See [Configuration](configuration.md#versionvectorretention). |
 | `DiagnosticsCacheTtl` | `TimeSpan` | 5 s | Cache lifetime for `DiagnoseAsync` reports. `TimeSpan.Zero` disables caching. |
 | `MaterialiserCheckpointInterval` | `TimeSpan` | 5 s | Time-based threshold for flushing a leaf-projection checkpoint. |
 | `MaterialiserCheckpointEntries` | `int` | 5 000 | Entry-count threshold for flushing a leaf-projection checkpoint. |
@@ -1961,12 +2080,12 @@ constraints, and per-tree overrides via the
 | `MaintainProjectionDigest` | `bool` | `true` | When `false`, `GetLeafProjectionDigestAsync` fast-fails with `InvalidOperationException`. Disabling is a **one-way operation per tree** - the first mutation under the disabled setting stamps an irreversible registry latch. System trees (`_lattice_*`) always resolve as `false`. |
 | `PublishEvents` | `bool` | `false` | Opt-in publication of `LatticeTreeEvent` notifications onto an Orleans stream. See [Events](events.md). |
 | `EventStreamProviderName` | `string` | `"Default"` | Stream provider Lattice publishes events onto. |
-| `WalPartitions` | `int` | 8 | Number of independent WAL partitions per tree. Pinned per-tree on first WAL write. |
+| `WalPartitions` | `int` | 8 | Number of independent WAL partitions per tree. Pinned per-tree in the tree registry when the tree is first registered (on first use, before any data is written), from the value this option resolves to for that tree at that moment; changing the option later does not affect an existing tree. |
 | `WalMaxBatchEntries` | `int` | 100 | Maximum WAL entries coalesced into a single flush. |
 | `WalMaxBatchBytes` | `long` | 4 MiB | Maximum byte budget coalesced into a single flush. |
 | `WalFlushTimeout` | `TimeSpan` | 15 s | Hard ceiling on a single per-shard WAL flush (the provider append plus the post-failure tail resync). A flush that exceeds it is cancelled and surfaced as a `TimeoutException` routed through the normal failure handler, preventing a hung provider call from pinning its in-flight slot and wedging the in-flight chain. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalFlushPreflightTimeout` | `TimeSpan` | 5 s | Hard ceiling on the per-shard WAL `FlushAsync` preflight region (the synchronous setup and initial scheduler yield that precede the bounded provider call). If the activation's grain scheduler never resumes the post-yield continuation within the deadline, the slot would sit in `_inFlight` with no provider-call deadline armed (`WalFlushTimeout` only covers the provider call, which has not been issued yet). The faulted preflight surfaces as a `TimeoutException` routed through the normal failure handler, the slot drains, and the `orleans.lattice.wal.flush.preflight.timeouts` counter attributes the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded await. |
-| `WalAppendDispatchTimeout` | `TimeSpan` | 30 s | Hard ceiling on a single writer-side outbound WAL shard append-batch / append dispatch. A dispatch that exceeds it is abandoned and surfaced as a `TimeoutException` so the request pipeline releases its slot rather than back-filling behind a wedged shard until the Orleans response deadline (default 3 minutes). Does **not** fix any wedge mechanism - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge attributable to a specific `(tree, shard)` via the `orleans.lattice.wal.append_dispatch.timeouts` counter in O(timeout) instead of O(response timeout) time. `InfiniteTimeSpan` restores the historical unbounded await. |
+| `WalAppendDispatchTimeout` | `TimeSpan` | 30 s | Hard ceiling on a single writer-side outbound WAL shard append-batch / append dispatch. A dispatch that exceeds it is abandoned and surfaced as a `TimeoutException` so the request pipeline releases its slot rather than back-filling behind a wedged shard until the Orleans response timeout expires (`MessagingOptions.ResponseTimeout`, 30 s by default in Orleans - the same as this option's default - so the dispatch deadline shortens the wait only on hosts that raise the response timeout). Does **not** fix any wedge mechanism - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge it catches attributable to a specific `(tree, shard)` via the `orleans.lattice.wal.append_dispatch.timeouts` counter, which counts only this deadline's trips. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalDrainBudget` | `TimeSpan` | 75 s | Hard ceiling on how long a per-shard WAL grain's `OnDeactivateAsync` drain may run before the remaining in-flight slots are force-faulted and the chain is released so the activation can finish tearing down. Bounds the host-level SIGTERM drain so the silo's shutdown accounting always settles within bounded time of the SIGTERM, regardless of whether the storage provider is healthy. The drain signals every in-flight flush's linked cancellation token at drain entry (so a co-operative provider gives up promptly), waits for the chain to settle naturally for up to this budget, and then force-faults any slot that has not unlinked with a typed `TimeoutException` so callers parked on `AppendAsync` / `AppendBatchAsync` are released. The matching `orleans.lattice.wal.shard.drain.budget.expirations` counter and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram attribute the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded-drain behaviour. |
 | `StarvationDriveBudget` | `TimeSpan` | 5 min | Hard ceiling on how long a single WAL GC starved-leaf checkpoint drive may run while holding a permit on the per-silo WAL replay concurrency gate, before it abandons its replay and releases that permit (issue #3065). Before this budget existed every await inside the permit-guarded region was passed `CancellationToken.None`, so a drive whose commit-log read never returned held one of a small number of per-silo permits indefinitely and could not be cancelled; the gate drained and the silo presented as an activation outage. A caller-side timeout does not address this - the sweep's grain call already times out at the Orleans response-timeout default while the grain-side method keeps running and keeps holding its permit - so the budget is enforced inside the region, with a real `CancellationTokenSource` for work that honours cancellation and a bound on the drive's own wait for host-supplied storage that does not. The permit is acquired and released in the outer frame so abandonment cannot skip the release. Default is `4 * WalDrainBudget`, comfortably above a legitimately slow full replay. Unlike most timeout options here, **`InfiniteTimeSpan` is rejected** rather than honoured, because an infinite budget restores exactly the outage this option bounds; zero and negative values are rejected too. An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` and returns the `LeafStarvationDriveOutcome.TimedOut` verdict. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. Trimmed by a WAL GC driver: the built-in `WalGcInterval` scheduler (on by default), or the replication maintenance grain for replicated trees. |
@@ -1978,7 +2097,7 @@ constraints, and per-tree overrides via the
 | `MaxConcurrentStorageUsageSurfaces` | `int` | 16 | Maximum per-tree storage surfaces - shard roots plus WAL partitions, bounded jointly - that one tree's `ILattice.GetStorageUsageAsync` fan-out queries at once. The inner level of the two-level roll-up fan-out, and per-tree overridable like `MaxConcurrentSnapshotCaptures`. The report is byte-for-byte identical under any bound; only the dispatch schedule changes. Values below 1 are clamped to 1. |
 | `StorageUsagePollInterval` | `TimeSpan` | 15 s | Cadence at which every silo's background poller calls `ILatticeAdmin.PollWalUsageAsync` so the `storage.wal_bytes` and `storage.policy.over_threshold` gauges populate without any caller invoking the public API. The poll path is leaf-free: it activates only WAL partition grains, so idle trees stay cold. Snapshot / leaf-state / total-bytes gauges populate on demand via `ILattice.GetStorageUsageAsync` and `ILatticeAdmin.RefreshStorageUsageAsync`, or on the optional `StorageUsageDeepPollInterval` cadence. Global knob read from the default (unnamed) options; per-tree overrides do not apply. `TimeSpan.Zero` or a negative value disables the poller. |
 | `StorageUsageDeepPollInterval` | `TimeSpan` | `TimeSpan.Zero` (disabled) | Optional cadence at which the same poller also drives the deep `storage.snapshot_bytes` / `storage.leaf_state_bytes` / `storage.total_bytes` gauges by calling the non-force `ILatticeAdmin.GetTotalStorageUsageAsync`. The deep read is O(1) per shard root (it never walks the leaf chain or activates per-leaf snapshot grains), so it activates only shard roots and never pins idle leaves resident; it never invokes the force-refresh path. Defaults to `TimeSpan.Zero` (disabled), preserving the activation-light WAL-only poll. Global knob read from the default (unnamed) options; per-tree overrides do not apply. |
-| `RetryPolicy` | `ILatticeRetryPolicy?` | `null` | Optional opt-in retry policy applied at the boundary of every public `ILattice` mutating method. Only consulted under an active `LatticeIdempotencyContext` scope. `null` preserves the throw-and-revert default. See [Retry Policy](retry-policy.md). |
+| `RetryPolicy` | `ILatticeRetryPolicy?` | `null` | Optional opt-in retry policy applied at the boundary of the single-key `ILattice` mutators (`SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `ApplyCrdtDeltaAsync`, `DeleteAsync`) and the range deletes (`DeleteRangeAsync`, `DeleteRangeWherePredicateAsync`); the batch, atomic, and bulk-load entry points do not route through it. Only consulted under an active `LatticeIdempotencyContext` scope. `null` preserves the throw-and-revert default. See [Retry Policy](retry-policy.md). |
 
 ## Idempotency keys and retry policy
 
@@ -1992,6 +2111,7 @@ guidance, and code examples.
 |------|--------|-------------|
 | `LatticeIdempotencyKey` | `HybridLogicalClock Timestamp { get; init; }` | Pins the logical write time. Re-stamped verbatim on every retry under the same key so LWW resolution treats retries as ties. |
 | `LatticeIdempotencyKey` | `static LatticeIdempotencyKey Fresh()` | Convenience factory minting a fresh HLC tick. Consecutive calls produce distinct keys. |
+| `LatticeIdempotencyContext` | `static bool IsActive { get; }` | `true` when an ambient idempotency key is set on the current logical execution context. |
 | `LatticeIdempotencyContext` | `static LatticeIdempotencyKey? Current { get; set; }` | Reads or sets the ambient key on the current logical execution context. Flows across `await` points. |
 | `LatticeIdempotencyContext` | `static IDisposable With(LatticeIdempotencyKey? key)` | Opens a scope that restores the previous ambient value on dispose. Idempotent on repeated dispose. |
 | `LatticeIdempotencyContext` | `static IDisposable NewScope()` | Shorthand for `With(LatticeIdempotencyKey.Fresh())`. |
@@ -2084,24 +2204,30 @@ intended as direct caller dependencies**. Their shape, members, and
 return values can change in any release without notice; treat them
 as wire-only.
 
-To make this contract visible in tooling, every such type carries
-`[EditorBrowsable(EditorBrowsableState.Never)]`. IDE IntelliSense
+To make this contract visible in tooling, the wire-only types
+`HybridLogicalClock`, `VersionedValue`, `RoutingInfo`,
+`LatticeIdempotencyKey`, and `GatedMultiReadResult` carry
+`[EditorBrowsable(EditorBrowsableState.Never)]`, so IDE IntelliSense
 hides them from completion lists by default (the standard
-IntelliSense behaviour for `EditorBrowsable(Never)`), so callers do
+IntelliSense behaviour for `EditorBrowsable(Never)`) and callers do
 not surface them by accident when typing against `ILattice` or its
-extensions.
+extensions. The other entries below - `RangeDeleteResult`,
+`LeafKeyRange`, and the raw `ILattice` / `TypedLatticeExtensions`
+members - carry no such attribute and stay visible in completion
+lists; their row here is the only signal that they are not caller
+surface.
 
 The types and members in this category are:
 
 | Symbol | Why public |
 |--------|------------|
 | `HybridLogicalClock` | Embedded in the wire types below; appears as the `Version` slot of `Versioned<T>` / `VersionedValue`. |
-| `Versioned<T>` | Return shape of `TypedLatticeExtensions.GetWithVersionAsync<T>`. |
 | `VersionedValue` | Return shape of `ILattice.GetWithVersionAsync` (the raw `byte[]` overload). |
 | `RoutingInfo` | Return shape of `ILattice.GetRoutingAsync`, consumed by infrastructure helpers such as the streaming bulk loader. |
 | `LatticeIdempotencyKey` | Token stamped via `LatticeIdempotencyContext.With(...)` to deduplicate retries; callers usually let the ambient retry policy mint and propagate it. |
-| `RangeDeleteResult` | Return shape of an internal range-delete primitive that surfaces through DI plumbing. |
+| `RangeDeleteResult` | Result of the internal leaf-level range-delete call (tombstoned count, past-range flag, matched keys); public only so Orleans can serialize it. |
 | `ILattice.KeysAsync` / `EntriesAsync` | Raw streaming overloads that omit the resume/reconnect handshake. Use `LatticeExtensions.ScanKeysAsync` / `ScanEntriesAsync` instead. |
+| `TypedLatticeExtensions.KeysAsync<T>` / `EntriesAsync<T>` / `ValuesAsync<T>` | The typed raw streams, likewise without reconnect handling. Use `ScanKeysAsync<T>` / `ScanEntriesAsync<T>` / `ScanValuesAsync<T>` instead. |
 | `ILattice.GetRoutingAsync` (both overloads) | Direct shard-addressing primitive used by infrastructure helpers. |
 | `ILattice.KeysWherePredicateAsync` / `EntriesWherePredicateAsync`, the `Open*CursorWherePredicateAsync` family, `SetManyWherePredicateAsync`, `SetManyAtomicWhereAsync`, `DeleteRangeWherePredicateAsync`, and the ranged `CountAsync` | Raw primitives behind the typed predicate and aggregation surfaces; call the typed [predicate operations](#predicate-operations) instead. |
 | `GatedMultiReadResult` | Return shape of `ILattice.GetManyWithGateAccountingAsync`. |
@@ -2112,13 +2238,16 @@ but is not marked hidden because it has no useful caller-facing
 members beyond what `RoutingInfo` already exposes; treat it as
 wire-only as well.
 
-Every other grain interface in the assembly (shard root, leaf,
-internal, registry, cursor, atomic-write saga, compaction, snapshot,
-resize, reshard, replication apply, WAL shard, hot-shard monitor,
-tree deletion / merge / split, leaf-cache, leaf-replay coordinator,
-stats, and tx-registry grains) is declared `internal` and is not
-visible from consumer assemblies at all. The C# type system enforces
-that boundary at compile time.
+Apart from `ILattice`, `ILatticeAdmin`, `ILatticeLockGrain` (see
+[Distributed lock](distributed-lock.md)), and `IAtomicActionGrain`
+(see [Atomic actions](atomic-action.md)), every grain interface in the
+assembly (shard root, leaf, internal, registry, cursor, atomic-write
+saga, cross-tree transaction, compaction, snapshot, resize, reshard,
+replication apply, WAL shard, hot-shard monitor, tree deletion / merge /
+split, leaf-cache, leaf-replay coordinator, queue, view, stats, and
+tx-registry grains) is declared `internal` and is not visible from
+consumer assemblies at all. The C# type system enforces that boundary
+at compile time.
 
 ## Tag indexes
 
@@ -2189,11 +2318,11 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 | Type | Role |
 |------|------|
 | `ILatticeTagIndexFactory` | The injected entry point for opening a tag index (`Create(tree, indexName)` / `CreateMultiTree(indexName, allowedTrees?)`). Pre-wires the index to the host's replication configuration, so the same call runs single-cluster (last-writer-wins) and active-active (flag-CRDT). Registered as a singleton by `AddLattice`. |
-| `ILatticeTagIndex` | Single-tree surface: `Key`, `WithAllTags`, `WithAnyTags`, `SetValueWithTags`, `TagsAsync`, `ReconcileAsync`, `MultiTree`. |
+| `ILatticeTagIndex` | Single-tree surface: `IndexName`, `TreeId`, `Key`, `WithAllTags`, `WithAnyTags`, `SetValueWithTags`, `TagsAsync`, `ReconcileAsync`, `MultiTree`. |
 | `ILatticeKeyTags` | Per-key tag surface: `GetAsync`, `SetAsync` (replace), `AddAsync`, `RemoveAsync`. |
 | `ILatticeTagQuery` | Lazy `IAsyncEnumerable<string>` of matching keys with `CountAsync`. |
 | `ILatticeValueTagWrite` | Staged value+tags write: `Atomic()` / `Eventual()` / `CommitAsync()`. |
-| `ILatticeMultiTreeTagIndex` | Multi-tree view: `Tree(treeId)`, `WithAllTags`, `WithAnyTags`, `TagsAsync`, `CoveredTreesAsync`, `ReconcileAsync`. |
+| `ILatticeMultiTreeTagIndex` | Multi-tree view: `IndexName`, `Tree(treeId)`, `WithAllTags`, `WithAnyTags`, `TagsAsync`, `CoveredTreesAsync`, `ReconcileAsync`. |
 | `ILatticeMultiTreeTagQuery` | Lazy `IAsyncEnumerable<TaggedKey>` with `InTree(treeId)` narrowing and `CountAsync`. |
 | `TaggedKey` | `(TreeId, Key)` pair yielded by multi-tree queries. |
 | `TagReconcileReport` | Counts from a reconcile pass: trees covered, keys scanned, rows scanned, orphan rows removed. |
@@ -2205,7 +2334,8 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 - **Producer-side acceptance.** In the default open mode a subject tree
   must already be registered (have at least one write) before its keys
   can be tagged; supplying a closed `allowedTrees` allowlist to
-  `MultiTreeTagIndex` restricts membership writes to the listed trees. A
+  `ILatticeTagIndexFactory.CreateMultiTree` restricts membership writes to
+  the listed trees. A
   single-tree index only ever writes to its bound subject tree, so it has
   no allowlist. Acceptance is validated on the write path only - never as
   an apply-time gate.

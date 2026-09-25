@@ -16,7 +16,9 @@ and every edit is durably auditable through the store's history. A background
 maintainer compiles the rule set into an immutable, monotonically-versioned
 in-memory snapshot, rebuilding on every policy change observed through the
 change feed, and an `ILatticeDecisionEngine` evaluates a request against that
-snapshot with **Deny-wins precedence and prefix specificity**.
+snapshot with **most-specific-scope-wins precedence** (exact key, then longest
+prefix, then whole tree) and **deny-overrides** within a scope tier (a user rule
+outranks a group rule at equal scope by default).
 
 Enforcement wires the gate into **every** user-originated mutation and read:
 
@@ -42,7 +44,8 @@ Cross-cluster policy convergence ships in two modes (per the epic's design):
 revoke window at the cost of availability - off by default and zero-cost when
 off. Every decision is observable through the `orleans.lattice.auth` OpenTelemetry
 meter and an optional value-free `ILatticeAuthAuditSink`, both emitted strictly
-after the decision so they can never change or delay it.
+after the decision is computed so they can never change it (a sink's synchronous
+work runs inline on the request path, so a sink must return promptly).
 
 ## Registration
 

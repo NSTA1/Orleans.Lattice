@@ -8,7 +8,7 @@ Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per
 
 A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of sequenced WAL-entry records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
 
-Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo `LatticeReplicationOptions.ReplogPartitions` (default `8`, kept in lockstep with `LatticeOptions.WalPartitions` so the shipper reads every partition the commit-log writer fanned across). A `null` key hashes as the empty string.
+Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo the tree's WAL partition count (saga terminal marks route by shard index modulo the same count instead). A `null` key hashes as the empty string. That count is pinned in the tree's registry entry when the tree is first registered, from its `LatticeOptions.WalPartitions` (default `8`), and is not changed afterwards. The shipper reads a separate setting, `LatticeReplicationOptions.ReplogPartitions` (default `8`), so the two agree only by configuration - see [Configuration](#configuration) below.
 
 ```text
         commit (leaf / shard-root grains)
@@ -38,7 +38,7 @@ Routing of a mutation to a partition is deterministic and process-independent: a
 
 The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard WAL grain exactly once through it. The commit-time doorbell sink does **not** write the WAL and maintains no producer-side vector clock state - it is reduced to a low-latency tree-id doorbell nudge that rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers. The causal frontier the shipper sends is read from the leaf WAL itself, not from any in-memory commit-time mirror.
 
-For the per-shard WAL grain API surface (append, read, next-sequence, and live-entry-count operations) and the turn-safe batching
+For the per-shard WAL grain API surface (append, read, next-sequence, and live-entry-count operations) and the turn-safe batching protocol, see [`../lattice/wal.md`](../lattice/wal.md).
 
 ## Configuration
 
@@ -52,7 +52,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 `ClusterId` is also the value the producer-side `ILatticeOriginClusterIdResolver` returns when the replication package is registered - every WAL record stamped on this silo carries `OriginClusterId = "site-a"` unless the originating mutation already carried a non-null `OriginClusterId` from upstream. See [`../lattice/wal.md`](../lattice/wal.md) for the resolver contract.
 
-`ReplogPartitions` must be `>= 1`; the validator rejects lower values. The current implementation reads the partition count from `IOptionsMonitor<LatticeReplicationOptions>.CurrentValue`, so per-tree partition-count overrides are not honoured today.
+`ReplogPartitions` must be `>= 1`; the validator rejects lower values, and nothing checks it against the WAL partition count. The value is resolved per tree (`IOptionsMonitor<LatticeReplicationOptions>.Get(treeId)`), and the shipper, the change feed, fall-off detection, and anti-entropy leaf re-replay all read only partitions `[0, ReplogPartitions)` of the tree's WAL, so it must equal the tree's pinned WAL partition count. The two match only when both options stay at their default of `8`, or when the count is set here: a non-default `ReplogPartitions` is mirrored onto the same tree's `LatticeOptions.WalPartitions` unless that value is already non-default, and the tree pins it at first registration. Nothing copies a core-only `LatticeOptions.WalPartitions` override back. When they differ, a `ReplogPartitions` below the pinned count leaves every WAL record routed to a higher partition unread, so it is never shipped to peers - with no error, and nothing in the shipper's lag gauges to show it; only the anti-entropy digest probe, when enabled, detects the resulting divergence. A `ReplogPartitions` above the pinned count only adds reads of partitions that never receive writes. Because the pin is fixed at first registration, changing either option later does not re-partition an existing tree: keep each replicated tree's `ReplogPartitions` equal to the count it was first registered with. See [`ReplogPartitions`](configuration.md#replogpartitions).
 
 ## Producer-side filters
 
@@ -60,11 +60,11 @@ Three options on `LatticeReplicationOptions` decide whether a committed mutation
 
 | Option | Default | Semantics |
 |---|---|---|
-| `ReplicatedTrees` | `null` | `null` = every tree is replicated; an empty collection = no trees are replicated; a non-empty collection restricts replication to the listed tree ids. |
+| `ReplicatedTrees` | `null` | Per-tree opt-in map from tree id to `LatticeMergeMode`. `null` and an empty map both mean no tree is replicated - there is no implicit "all trees" wildcard; only the listed tree ids replicate, under their declared mode. |
 | `KeyFilter` | `null` | Optional `Func<string, bool>` evaluated against the mutation's key. `null` = accept every key. |
 | `KeyPrefixes` | `null` | Optional declarative prefix allowlist. `null` or empty = no prefix restriction; otherwise the key must start with at least one listed prefix (ordinal, case-sensitive). |
 
-The three filters combine with logical AND - a mutation must satisfy every configured filter to be shipped. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key.
+The three filters combine with logical AND - a mutation must satisfy every configured filter to be shipped. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key. Saga terminal records (`TxCommit` / `TxAbort`) bypass `KeyFilter` and `KeyPrefixes` on the shipper, because their key is an internal shard-routing token and cross-cluster atomic visibility needs every terminal delivered.
 
 Per-tree overrides are honoured: the observer resolves options via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeId)`, so `siloBuilder.ConfigureLatticeReplication("my-tree", o => o.KeyFilter = ...)` overrides the global default for that tree only.
 
@@ -72,11 +72,11 @@ Filters are precompiled per tree id and cached on the observer so the commit-tim
 
 ## Maintenance writes are skipped from replication
 
-Beyond the per-tree / per-key filters above, the observer skips a second class of mutation from replication: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites - resize, rebalance, compaction, internal node splits / merges - that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
+Beyond the per-tree / per-key filters above, the observer skips a second class of mutation from replication: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot - library-internal clean-up of state the user never authored directly, which every converged peer runs independently against its own copy of the data. Replicating such writes would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning. Today the only producer of that category is tombstone compaction: the reap envelopes it appends (`MutationKind.Tombstone`) are stamped `Maintenance`. Structural rewrites that move entries between leaves or shards - leaf splits, cross-shard migration during online reshard and shard splits, and tree merges - are not maintenance-classified: they re-append each moved entry as a last-writer-wins merge envelope that keeps the `User` category together with the entry's original origin and HLC, so on a peer that already applied the original it is a no-op - suppressed by the receiver's exact-identity dedup of repeated `(origin, hlc, key, op)` records, or re-applied idempotently if it has aged out of that bounded cache.
 
-User-driven writes - `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and saga compensation rolls - emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
+User-driven writes - `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and the compensating atomic write an `IAtomicActionGrain` saga issues to restore a completed tree-write step's pre-images - emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. An aborted `SetManyAtomicAsync` writes no per-key rollback at all: its prepared writes were never visible, so the abort is recorded in the tree's transaction registry and broadcast as a `TxAbort` terminal mark that drops them on every shard the batch touched, and that terminal ships to peers like a commit terminal. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
 
-The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` - a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and is still excluded from replication. (The entry is appended to the WAL like any other commit; the shipper re-applies the same maintenance exclusion as it tails the log, so a maintenance entry is never shipped to a peer.)
+The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` - a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and is still excluded from replication. (The WAL record does carry the category, but the shipper does not consult it as it tails the log; its tail-side filter excludes the tombstone-reap envelopes compaction appends by their `MutationKind.Tombstone` operation.)
 
 ## Durability and commit-time nudge failure semantics
 
@@ -98,7 +98,7 @@ Capturing each mutation into a WAL grain at commit time, rather than reading val
 
 ## Reading from the WAL
 
-Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order - the seam the outbound shipper and the future local materialiser plug into.
+Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree from a per-partition offset cursor, filters by origin, and merges the result in HLC ascending order. The outbound shipper does not use it: it tails the WAL partitions directly from its own durable per-partition cursors.
 
 ## Pluggable durability (replication-only override)
 
@@ -118,9 +118,9 @@ siloBuilder.AddLatticeReplication(opts =>
 });
 ```
 
-When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the WAL grain falls back to the DI-registered `IWalStorageProvider` singleton. `AddLatticeReplication` registers `InMemoryWalStorageProvider` as the default fallback; replace it by registering your own implementation before calling `AddLatticeReplication` (the registration uses `TryAddSingleton`, so a pre-registered singleton wins).
+When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the WAL grain falls back to the DI-registered `IWalStorageProvider` singleton. `AddLattice` installs `InMemoryWalStorageProvider` as that fallback (a first-wins registration); replace it with `AddWalStorage(factory)` or a storage package such as `AddAzureTableWalStorage`, which replace the baseline whether they are called before or after `AddLattice`.
 
-The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. The replication-only metadata that `WalRecord` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `WalShardGrain.ReadAsync` via `ILatticeMergeModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts.
+The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. When the WAL is read back, the authored merge mode comes from the durable record itself (the record persists it since wire id 26), falling back to `ILatticeMergeModeResolver` only when it holds the default `LwwRegister` (a plain LWW write or a legacy record); `DependencySummary` is rebuilt from the mutation's `VectorClock`. The on-disk WAL therefore stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
 ## Testing
 

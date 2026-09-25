@@ -22,8 +22,11 @@ endpoint is exactly that: a GET endpoint returning a JSON body with a top-level
         desiredReplicas = ceil(scaleValue / targetValue)
 ```
 
-Because the signal is a cluster-aggregate, KEDA can poll any replica and read a
-coherent whole-cluster demand.
+Because the activation and resource dimensions are cluster aggregates, KEDA can
+poll any replica and read a whole-cluster demand. The WAL-dispatch dimension and
+the smoothing state are the answering replica's own, so two replicas can answer
+slightly differently - see
+[cluster-aggregate answering](architecture.md#cluster-aggregate-answering).
 
 ## Host wiring
 
@@ -103,8 +106,13 @@ cadence) so KEDA never reads a stale sample.
 
 ## Health probes
 
-Point the ACA health probes at the scaling health check so a silo whose compute
-axis is saturated is reported unhealthy:
+The scaling health check reports the cached snapshot's verdict, and its
+activation and resource inputs are the cluster's worst-silo values, so every
+replica reports the same verdict for them (only the WAL inputs are the replica's
+own). A readiness probe on it therefore takes every replica out of rotation
+together when the hottest silo crosses the `Unhealthy` bound - see
+[readiness on AKS](aks.md#readiness). Register it with a tag so you can choose
+which probe endpoint includes it:
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
@@ -114,8 +122,9 @@ var services = new ServiceCollection();
 services.AddHealthChecks().AddLatticeScalingHealthCheck(tags: new[] { "ready" });
 ```
 
-Map a readiness endpoint filtered to the `ready` tag and set it as the ACA
-readiness probe path.
+Map an endpoint filtered to the `ready` tag and set it as the ACA readiness probe
+path only if that cluster-wide drain is what you want; otherwise expose it on a
+separate endpoint for alerting.
 
 ## See also
 

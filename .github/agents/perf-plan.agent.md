@@ -51,10 +51,10 @@ Open a workload's parent + phases **only when you start investigating it**. The 
 
 ### Labels
 
-- `perf` (colour `0e8a16`) - parent label on every issue in the tree.
+- `perf` (colour `c2e0c6`) - parent label on every issue in the tree.
 - `perf.<workload>` (colour `c2e0c6`) - one per workload, applied to that workload's parent + phase issues.
 
-The workloads (and therefore the sub-labels) mirror `BenchWorkloadMode` in `benchmark/azure-throughput/Silo/Program.cs`:
+The workloads (and therefore the sub-labels) mirror `BenchWorkloadMode` in `benchmark/azure-throughput/Engine/BenchWorkloadMode.cs`:
 
 | Sub-label | `BENCH_WORKLOAD_MODE` | Shape |
 |-----------|-----------------------|-------|

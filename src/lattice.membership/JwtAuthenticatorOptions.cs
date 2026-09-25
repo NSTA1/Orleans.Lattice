@@ -121,9 +121,9 @@ public sealed class JwtAuthenticatorOptions
     /// set and no family could be derived - refuses every algorithm. The derived
     /// allow-list is family-complete, so it can never reject a token that
     /// legitimately verifies against one of those keys; it only removes the
-    /// cross-family key-confusion path. Set <see cref="Algorithms"/>, or an
-    /// explicit <c>ValidAlgorithms</c> / <c>AlgorithmValidator</c> here, to keep
-    /// full control of the pin.
+    /// cross-family key-confusion path. Set an explicit <c>ValidAlgorithms</c>
+    /// or <c>AlgorithmValidator</c> here to keep full control of the pin;
+    /// <see cref="Algorithms"/> is ignored while this override is supplied.
     /// </para>
     /// </summary>
     public TokenValidationParameters? ValidationParameters { get; set; }

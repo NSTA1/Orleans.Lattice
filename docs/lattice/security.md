@@ -54,9 +54,10 @@ nothing until the authorization package is also registered.
 store, the decision engine, and the enforcing access gate. Rules grant or deny a
 set of operations to a subject selector (a user or a group) at a scope (a whole
 tree, a key prefix, or a single key). When several rules match, the engine
-resolves them deterministically: most-specific scope wins, deny overrides allow
-within a tier, a user rule outranks a group rule at equal scope, and with no
-matching rule the configured default effect applies. The recommended and default
+resolves them deterministically: the most-specific scope wins; within a scope
+tier a user rule outranks a group rule (on by default, configurable), and
+otherwise deny overrides allow; with no matching rule the configured default
+effect applies. The recommended and default
 posture is **default-deny**. A small set of **bootstrap administrators** forms
 the root-of-trust that seeds the first rules and performs break-glass operations.
 

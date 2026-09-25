@@ -6,15 +6,17 @@ memory of a codebase: onboard a repository once, then search it, read it back,
 and remember notes about it across restarts.
 
 The image is a self-contained single-silo Orleans host whose ONLY application
-listener is the MCP endpoint (plus HTTP health probes). No gRPC facade and no
-Explorer UI are exposed. All state - Orleans grain storage and reminders plus the
-file-backed Lattice WAL - lives under `LATTICE_DATA_ROOT` (default `/data`, a
-volume), so an indexed repository and its remembered context survive
-`docker restart`, `docker compose down`, and image upgrades.
+listener is the MCP endpoint (plus HTTP health probes and a Prometheus `/metrics`
+scrape endpoint on the same port). No gRPC facade and no Explorer UI are exposed.
+Under the default `local` durability profile all state - Orleans grain storage and
+reminders plus the file-backed Lattice WAL - lives under `LATTICE_DATA_ROOT`
+(default `/data`, a volume), so an indexed repository and its remembered context
+survive `docker restart`, `docker compose down`, and image upgrades.
 
 Embedding is delegated to a separate companion image (see
-[`apps/embedding`](../embedding/README.md)) so this host stays MCP-only and never
-embeds in-process.
+[`apps/embedding-onnx`](../embedding-onnx/README.md), the sample's default, or the
+Onyx-derived [`apps/embedding`](../embedding/README.md) it can fall back to) so
+this host stays MCP-only and never embeds in-process.
 
 ## What it wires up
 

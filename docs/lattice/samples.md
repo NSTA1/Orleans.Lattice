@@ -1,12 +1,12 @@
 # Samples
 
-Each sample lives under [`samples/`](../../samples) and is a self-contained runnable project.
+Each sample lives in its own directory under [`samples/`](../../samples); nearly all are self-contained runnable projects, and the exceptions are called out below.
 
 ## Feature gallery
 
-Minimal, single-feature samples, grouped by the same concerns as the [feature catalogue](../../FEATURES.md). Each is an independent console app that hosts a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrates exactly one capability with heavily-commented, before/after output, and carries its own README with a "When to use / When not to use" note. Run any of them with `dotnet run --project samples/<Name>`.
+Minimal, focused samples, grouped by the same concerns as the [feature catalogue](../../FEATURES.md). Most are independent console apps that host a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrate one capability with heavily-commented, before/after output, and carry their own README, most with a "When to use / When not to use" note; run those with `dotnet run --project samples/<Name>`. The exceptions say so in their row - notably the two-cluster CrossClusterReplication and CrossClusterAuthorization samples, the Azure-deployed ClusterScaling, the containerised RepoContextContainer, and AgentBacklog, a tool-driven walkthrough with no project of its own.
 
-A few samples deploy or compose more than one process and have a detailed section of their own further down: [HelloWorld](#helloworld), [MultiSiteManufacturing](#multisitemanufacturing), [VehicleFleetSimulator](#vehiclefleetsimulator), and [ClusterScaling](#clusterscaling).
+Four samples have a detailed section of their own further down: [HelloWorld](#helloworld), the minimal starting point, and [MultiSiteManufacturing](#multisitemanufacturing), [VehicleFleetSimulator](#vehiclefleetsimulator), and [ClusterScaling](#clusterscaling), which deploy or compose more than one process.
 
 ### Core Storage and Durability
 
@@ -133,7 +133,7 @@ Run it with:
 ./samples/MultiSiteManufacturing/run.ps1
 ```
 
-The script builds the host image if needed, starts both clusters (four silos plus two Azurites plus two Traefik proxies) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
+The script builds the host image if needed, starts both clusters (four silos, one Azurite per cluster plus a shared `azurite-backup` account, two Traefik proxies, and a Prometheus + Grafana pair) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
 
 ## VehicleFleetSimulator
 

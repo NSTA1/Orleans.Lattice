@@ -6,9 +6,9 @@ Cross-cluster **active-active replication** for [Orleans.Lattice](https://www.nu
 
 - **Active-active, any-cluster writes** - every peer can accept writes to the same tree; there is no primary. Concurrent updates merge algebraically via the same CRDT lattice the core store uses.
 - **Atomic visibility across clusters** - multi-key atomic writes stay all-or-nothing on every peer, never exposing a partial batch to a remote reader.
-- **Per-tree write-ahead shipping** - a producer captures mutations off the source WAL and a shipper streams them to peers; apply is idempotent and order-tolerant.
+- **Per-tree write-ahead shipping** - mutations are captured into a per-tree WAL at commit time and a per-peer shipper tails it and ships them to peers in batches; apply is idempotent and order-tolerant.
 - **Bootstrap & snapshot transfer** - a freshly-added cluster is seeded from a peer snapshot, then catches up from the live change stream.
-- **Anti-entropy** - background Merkle-walk digest probes detect and repair divergence, with automatic, guarded drift remediation.
+- **Anti-entropy** - opt-in background digest probes and Merkle walks detect and localise divergence, with guarded (rate-capped, circuit-broken) automatic repair.
 - **Pluggable transport** - the wire path is an interface; pair with [Orleans.Lattice.Replication.Grpc](https://www.nuget.org/packages/Orleans.Lattice.Replication.Grpc) for the canonical low-latency gRPC push transport.
 
 ## Getting started

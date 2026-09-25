@@ -10,7 +10,7 @@ It provides:
 
 - **Outbound live push.** The canonical sender sends one unary RPC per `ReplicationBatchEnvelope` over a cached HTTP/2 channel per peer cluster.
 - **Inbound apply.** The receiver endpoint decodes the envelope and drives `IReplicationApplier`, returning a `ReplicationAck` with the applied high-water mark and flow-control hints.
-- **Shared endpoint shape.** The same peer map is used for live push, remote snapshot bootstrap, and anti-entropy probes exposed by the replication package.
+- **Shared endpoint shape.** The same peer map is used for live push, remote snapshot bootstrap, anti-entropy probes, and the cross-cluster saga control channel exposed by the replication package.
 - **Security defaults.** HTTPS endpoints are required by default, with shared-secret authentication documented in [Transport Security](../lattice.replication/transport-security.md).
 
 The package has no external broker and no `.proto` file to maintain.
@@ -19,8 +19,8 @@ The package has no external broker and no `.proto` file to maintain.
 
 - **Public seam only.** Callers configure `LatticeReplicationGrpcOptions`, send through `IReplicationTransport`, and receive through `IReplicationApplier`.
 - **Long-lived channels.** Each peer endpoint gets a cached HTTP/2 channel that multiplexes concurrent calls.
-- **Idempotent delivery.** Sender retries may redeliver a batch; receiver high-water-mark dedup makes repeat `(origin, hlc)` records no-ops.
-- **Ack-driven progress.** Senders advance only to the `ReplicationAck.HighestAppliedHlc` reported by the receiver.
+- **Idempotent delivery.** Sender retries may redeliver a batch; the receiver's record-identity dedup (an exact `(origin, hlc, key, op)` match, backed by an idempotent leaf-level apply) makes repeated records no-ops.
+- **Ack-driven progress.** Senders advance their per-peer cursor to the `ReplicationAck.HighestAppliedHlc` reported by the receiver (or, when an accepted ack reports a frontier at or below the current cursor because every entry was deduplicated, to the last shipped entry's HLC); a rejected ack leaves the cursor in place.
 - **Transport-neutral payload.** The wire bytes are the normal `ReplicationBatchEnvelope` encoding described in [Wire Format](../lattice.replication/wire-format.md).
 
 ## Features
@@ -31,7 +31,7 @@ The package has no external broker and no `.proto` file to maintain.
 | **Unified peer options** | One `LatticeReplicationGrpcOptions` instance configures peer endpoints, TLS policy, channel customization, and origin header override. | [Configuration](configuration.md) |
 | **Receiver endpoint mapping** | `MapLatticeReplicationGrpc` exposes the inbound replication endpoints on an ASP.NET Core route builder. | [API Reference](api.md) |
 | **Bootstrap and anti-entropy transport** | The same peer endpoint carries snapshot bootstrap and read-only drift probes used by the replication package. | [Replication docs](../lattice.replication/README.md) |
-| **Transport chaos coverage** | Fault-injected channel tests prove retry convergence with no batch loss and no duplicate apply. | [Chaos Tests](chaos-tests.md) |
+| **Transport chaos coverage** | Fault-injected channel tests prove that bounded caller retries deliver every batch with no key loss. | [Chaos Tests](chaos-tests.md) |
 
 ## Quick Start
 
@@ -82,5 +82,5 @@ For internals (the "how"):
 
 - [Architecture](architecture.md) - sender, endpoint, applier, and channel topology in behavioural terms.
 - [Wire Format](../lattice.replication/wire-format.md) - `ReplicationBatchEnvelope` encoding and wire-version compatibility.
-- [Replication Apply](../lattice.replication/replication-apply.md) - receiver high-water-mark dedup and causal apply.
+- [Replication Apply](../lattice.replication/replication-apply.md) - receiver-side dedup and causal apply.
 - [Replication package index](../lattice.replication/README.md) - the full producer, WAL, shipper, apply, and bootstrap pipeline.

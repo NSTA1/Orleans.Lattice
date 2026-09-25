@@ -34,7 +34,10 @@ spec:
 ```
 
 - `url` targets the headless or ClusterIP service in front of the silo pods; KEDA
-  polls one pod and reads the cluster-aggregate value.
+  polls one pod and reads its snapshot, whose activation and resource dimensions
+  are cluster aggregates (the WAL-dispatch dimension and the smoothing state are
+  that pod's own - see
+  [cluster-aggregate answering](architecture.md#cluster-aggregate-answering)).
 - `valueLocation: "scaleValue"` and `targetValue: "1"` behave exactly as in the
   [ACA rule](keda-aca.md#the-custom-scale-rule): demand is in replica-units, so a
   target of `1` means one pod per replica-unit.
@@ -46,8 +49,8 @@ KEDA creates and manages the underlying HPA for you.
 
 ## Option 2: HPA against a custom metric
 
-If you prefer a native HPA, expose the scale value as a custom metric through the
-Prometheus adapter (scrape the [`orleans.lattice.scaling` meter](observability.md)
+If you prefer a native HPA, expose the scale value as an external metric through
+the Prometheus adapter (scrape the [`orleans.lattice.scaling` meter](observability.md)
 via the OpenTelemetry Prometheus exporter, so `scaleValue` is available as
 `orleans_lattice_scaling_scale_value`), then:
 
@@ -64,8 +67,8 @@ spec:
   minReplicas: 2
   maxReplicas: 20
   metrics:
-    - type: Pods
-      pods:
+    - type: External
+      external:
         metric:
           name: orleans_lattice_scaling_scale_value
         target:
@@ -76,15 +79,31 @@ spec:
       stabilizationWindowSeconds: 120
 ```
 
+Use an `External` metric, not a `Pods` one. The value is a cluster-wide demand
+in replica-units that every silo exports, so an `External` metric with an
+`AverageValue` target of `1` makes the HPA divide it by the current pod count
+and settle on `ceil(scaleValue)` replicas - the same arithmetic as the KEDA rule.
+A `Pods` metric would instead average the near-identical per-pod values and
+multiply by the current pod count, overshooting by roughly that factor. For the
+same reason, have the adapter's external-metric query aggregate the per-pod
+series with `max` or `avg` rather than `sum`.
+
 The KEDA route is preferred because the `metrics-api` trigger reads the endpoint
 directly and needs no Prometheus-adapter plumbing; the HPA route is useful when
 you already run the Prometheus adapter and want a single autoscaling mechanism.
 
 ## Readiness
 
-Wire the [scaling health check](configuration.md#latticescalinghealthcheckoptions)
-into a `readinessProbe` so Kubernetes stops routing to a pod whose compute axis is
-saturated, and let the autoscaler add capacity:
+The [scaling health check](configuration.md#latticescalinghealthcheckoptions)
+can back a probe, but it is not a per-pod signal: it reads the same cached
+snapshot the endpoint serves, so its activation and resource inputs are the
+cluster's worst-silo values and every pod reports the same verdict for them
+(only the WAL inputs are the pod's own). Wired into a `readinessProbe`, it
+therefore takes every pod out of rotation together once the cluster's hottest
+silo crosses the `Unhealthy` bound - a `Degraded` result still answers `200` on
+the default ASP.NET Core status mapping. If that is the behaviour you want, wire
+it like this; otherwise map it on its own endpoint (or keep it out of the
+readiness tag group) and use it for alerting:
 
 ```yaml
 readinessProbe:

@@ -40,8 +40,9 @@ using var channel = GrpcChannel.ForAddress("https://cluster.example:5001", new G
 The unary RPCs return a `Task<TResponse>`; the streaming RPCs return an `IAsyncEnumerable<TResponse>` consumed with `await foreach`. The full set, with the request and response each carries, is in [Surfaces](surfaces.md):
 
 - `ListTreesAsync` / `ListViewsAsync` / `ListTagIndexesAsync` / `ListTagValuesAsync` - paged discovery catalog.
+- `ListCoveredTreesAsync` / `ListIndexTagsAsync` / `ScanTagMembersAsync` - index-wide tag-index browsing (covered trees, distinct tags, and live tag members across every covered tree).
 - `GetTreeStructureAsync` - shard-root node graph.
-- `ScanEntriesAsync` / `GetEntryAsync` - snapshot-isolated entry inspection.
+- `ScanEntriesAsync` / `GetEntryAsync` - key-ordered entry scan (snapshot-isolated by default; `EntryScanMode.Live` / `LivePointInTime` open a cheaper baseline-free cursor) and single-key fetch.
 - `GetEntryHistoryAsync` - per-key change-history timeline.
 - `CancelScanAsync` - release a server-side scan cursor early.
 - `GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)` - count strict-mode dead-letter entries for one tree.

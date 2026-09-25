@@ -18,8 +18,8 @@ public static class LatticeBackupAzureBlobServiceCollectionExtensions
     /// <see cref="LatticeBackupServiceCollectionExtensions.AddLatticeBackup"/>
     /// installs. Because the sink is resolved purely through the
     /// <see cref="ILatticeBackupSink"/> seam, the core capture engine stays
-    /// unaware of Azure specifics. The registration is idempotent: calling this
-    /// more than once keeps the last configuration, and it may be called before
+    /// unaware of Azure specifics. Calling this more than once layers another
+    /// options configuration delegate, and it may be called before
     /// or after <c>AddLatticeBackup</c> since it replaces the sink registration
     /// outright.
     /// </summary>

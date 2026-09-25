@@ -30,7 +30,7 @@ provisions the Prometheus data source and the dashboards shipped by
 | Head | Browse / call at | Container port (host:container) | Notes |
 |---|---|---|---|
 | Explorer web console | <http://localhost:8080> | `8080:8082` (declared on `silo`) | Blazor Server; auto-connects and auto-signs-in on first load (see below). Kestrel binds `8082` because `8080`/`8081` are the silo's in the shared namespace. |
-| MCP endpoint | <http://localhost:8090> | `8090:8080` | Streamable-HTTP MCP transport root; liveness at `/health`. Advertises the full tool set (state, data, backup, auth, telemetry, replication). |
+| MCP endpoint | <http://localhost:8090> | `8090:8080` | Streamable-HTTP MCP transport root; liveness at `/health`. Advertises the state, data, backup, auth, telemetry, replication, and tree-administration tool groups (the mutating auth-administration verbs stay off). |
 | Silo health / metrics | <http://localhost:18080> | `18080:8080` | `/health`, scaling signal, Prometheus `/metrics`. |
 | Silo gRPC (state / auth / replication) | `localhost:18081` | `18081:8081` | Exposed for host-side tooling; the heads dial it in-cluster (`silo:8081`, or loopback for the Explorer). |
 | Prometheus | <http://localhost:9090> | `9090:9090` | |
@@ -96,8 +96,9 @@ provisions the Prometheus data source and the dashboards shipped by
      MCP uses) so the catalog and Access area are fully populated. See the
      dev-auth note below.
    - **MCP** - reachable at <http://localhost:8090> (Streamable-HTTP MCP transport
-     root; liveness at `/health`). It advertises the full tool set (state, data,
-     backup, auth, telemetry, replication) - see the dev-auth note below for why.
+     root; liveness at `/health`). It advertises the state, data, backup, auth,
+     telemetry, replication, and tree-administration tool groups (the mutating
+     auth-administration verbs stay off) - see the dev-auth note below for why.
    - **Grafana** - <http://localhost:3000> (anonymous viewer enabled; admin login
      `admin` / `admin`). The Orleans.Lattice dashboards appear under the
      `Orleans.Lattice` folder and populate as the silo emits metrics.
@@ -174,6 +175,7 @@ they become in a real deployment (see
 | `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` | `false` | `true` |
 | `Auth__DefaultEffect` (silo) | `Allow` | `Deny` (deny-by-default) |
 | `Mcp__DevAuthenticateAll` (mcp) | `true` (synthetic subject) | `false` (real Entra subject) |
+| `Auth__DevAuthenticateForwardedSubject` (silo) | `true` (trusts a forwarded bootstrap-admin bearer id) | unset (Entra authenticates every caller) |
 | `LATTICE_EXPLORER_USERNAME` (explorer) | `local-dev-admin` (dev bearer sign-in) | unset (interactive Entra OIDC sign-in) |
 | `Replication__AllowPlaintext` (silo) | `true` (h2c) | `false` (server TLS via the region FQDN) |
 | Storage identity | Azurite connection string | managed identity (`DefaultAzureCredential`) |

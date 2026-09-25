@@ -16,9 +16,9 @@ namespace Orleans.Lattice.Explorer.Entra.Web;
 /// </summary>
 /// <remarks>
 /// Registered <em>scoped</em> (per circuit), because the acquirer it depends on
-/// reads the per-circuit authenticated user. Its scopes come from the endpoint's
-/// advertised audience, falling back to statically configured
-/// <see cref="ExplorerEntraWebOptions.Scopes"/>.
+/// reads the per-circuit authenticated user. Its scopes come from statically
+/// configured <see cref="ExplorerEntraWebOptions.Scopes"/> when present; the
+/// endpoint's advertised audience fills only an otherwise empty scope set.
 /// </remarks>
 public sealed class EntraWebExplorerAuthMethod : IExplorerAuthMethod
 {

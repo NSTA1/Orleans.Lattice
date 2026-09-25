@@ -102,8 +102,8 @@ public sealed class LatticeAuthOptions
     /// </para>
     /// <para>
     /// The all-trees tier is <b>never</b> consulted for the reserved authorization
-    /// namespace (<c>sys-auth-*</c>, per
-    /// <see cref="LatticeAuthReservedTrees.IsReserved(string)"/>) nor for the
+    /// namespace (<c>sys-auth-*</c>, <c>sys-tenant-*</c>, and
+    /// <c>_lattice_tenant_admin_*</c>) nor for the
     /// sentinel id <c>"*"</c> itself, so a wildcard data grant can never reach the
     /// control plane and a literal telemetry request on <c>"*"</c> resolves exactly
     /// as before. The operation-bit separation guarantee still holds: a widened

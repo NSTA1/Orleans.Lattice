@@ -9,7 +9,7 @@ The theme control offers:
 
 | Choice | Behaviour |
 | --- | --- |
-| Follow system | Honours the browser or platform `prefers-color-scheme`. This is the default. |
+| Match my system | Honours the browser or platform `prefers-color-scheme`. This is the default. |
 | Light | Always light. |
 | Dark | Always dark. |
 
@@ -30,9 +30,11 @@ active:
 | `data-lx-density` | `comfortable`, `cosy`, `compact` | `<body>` |
 
 Keeping contrast orthogonal avoids a combinatorial set of palettes that would
-have to be kept in step with each other. `data-contrast="more"` raises contrast
-over the active theme; `data-contrast="standard"` opts back out of the
-platform's own contrast hint.
+have to be kept in step with each other. The contrast control offers **Match my
+system** (the default, which writes no attribute), **Standard**
+(`data-contrast="standard"`), and **High contrast** (`data-contrast="more"`).
+`data-contrast="more"` raises contrast over the active theme;
+`data-contrast="standard"` opts back out of the platform's own contrast hint.
 
 The token layer also honours `prefers-contrast: more` and `forced-colors`, so
 Windows High Contrast is respected without the user configuring anything.
@@ -45,7 +47,7 @@ must still be able to win.
 
 | Choice | Behaviour |
 | --- | --- |
-| Automatic | Density follows the breakpoint, as before. This is the default. |
+| Match the layout | Density follows the breakpoint, as before. This is the default. |
 | Comfortable / Cosy / Compact | An explicit choice, which overrides the breakpoint-derived value. |
 
 Choosing a density pins it. Leaving it unset preserves the adaptive behaviour,

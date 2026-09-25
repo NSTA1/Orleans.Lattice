@@ -39,7 +39,7 @@ sequenceDiagram
 ## Example
 
 ```csharp verify
-// The order key must be order-preserving: big-endian bytes of the reading.
+// The order key must be order-preserving: big-endian bytes of a non-negative reading.
 var floor = tree.MinRegister<long>("service:api:latency-floor-ms", static v =>
 {
     var key = new byte[8];
@@ -51,7 +51,11 @@ var floor = tree.MinRegister<long>("service:api:latency-floor-ms", static v =>
 await floor.SetAsync(42, cancellationToken);
 await floor.SetAsync(37, cancellationToken);
 
-long? lowest = await floor.GetAsync(cancellationToken);
+long lowest = await floor.GetAsync(cancellationToken); // 37
+
+// Before the first write GetAsync returns default(T) - 0 for a long - so ask
+// HasValueAsync when "never written" must be told apart from a real 0.
+bool written = await floor.HasValueAsync(cancellationToken);
 ```
 
 See also: its high-water mirror [Max-Register](maxregister.md), the multi-value

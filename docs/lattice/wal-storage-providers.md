@@ -1,6 +1,6 @@
 # WAL Storage Providers
 
-The write-ahead log (WAL) is the per-shard, durable, ordered record of every committed mutation. `IWalStorageProvider` is the pluggable seam that lets a host swap the WAL's underlying storage backend - in-memory for tests and single-process samples, Azure Table Storage for cross-region replicated production deployments, future durable backends as they are introduced - without touching the rest of the commit-log pipeline.
+The write-ahead log (WAL) is the per-shard, durable, ordered record of every committed mutation. `IWalStorageProvider` is the pluggable seam that lets a host swap the WAL's underlying storage backend - in-memory for tests and single-process samples, a local disk file for a durable deployment with no cloud dependency, Azure Table Storage for cross-region replicated production deployments, or a custom backend - without touching the rest of the commit-log pipeline.
 
 ## Contract
 
@@ -11,7 +11,7 @@ The write-ahead log (WAL) is the per-shard, durable, ordered record of every com
 | **All-or-nothing append** | `AppendBatchAsync` (and its zero-copy `AppendEncodedBatchAsync` overload) is atomic per call. Either every entry in the supplied list is durably persisted before the returned task completes, or none of them are. A backend that cannot satisfy this for a particular batch (e.g. a multi-partition write on a backend without cross-partition transactions) must reject the batch at validation time rather than silently fragmenting it. |
 | **Dense offsets** | Caller-assigned offsets are dense (gap-free) per shard. Implementations must preserve offsets verbatim so `GetHighestOffsetAsync` on activation always returns a value exactly one less than the next offset the caller will assign. |
 | **Read order** | `ReadAsync` yields entries with `Offset` strictly greater than `fromOffsetExclusive`, in ascending offset order, capped at `maxEntries`. Pass `-1` to read from the start. |
-| **Trim is idempotent** | `TrimAsync` removes every entry with offset `<= throughOffsetInclusive`. Trimming through an offset that has already been trimmed is a no-op; trimming through an offset that does not yet exist reserves the trim point for a future append. The persisted head sentinel is never rolled back. |
+| **Trim is idempotent** | `TrimAsync` removes every entry with offset `<= throughOffsetInclusive`. Trimming through an offset that has already been trimmed is a no-op. Trimming through an offset that does not yet exist is permitted, but whether the trim point is kept for a future append is provider-specific: the file provider records it and reports it through `GetHighestOffsetAsync`, while the in-memory and Azure Table providers do not (see *A partition with no live entries* below). The persisted head sentinel is never rolled back. |
 | **Lowest-offset query** | `GetLowestOffsetAsync` returns the lowest still-persisted offset, or `-1` for an empty / fully-trimmed shard. Together with `GetHighestOffsetAsync` it lets a caller compute the live entry count (`highest - lowest + 1`) without scanning the log, so trim-aware diagnostics observe the persisted footprint rather than the monotonically-growing offset counter. |
 
 The contract:
@@ -20,11 +20,14 @@ The contract:
 Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken);
 Task AppendEncodedBatchAsync(string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken);
 IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken);
+Task<WalShardEncodedPage> ReadEncodedAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, IWalRecordEncoder encoder, CancellationToken cancellationToken); // optional, default drains ReadAsync and re-encodes
 Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken);
 Task EvaluateCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default no-op
 Task ReconcileAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default no-op
+Task<long> GetRetainedByteSizeAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default -1 (unsupported)
+Task<long> GetPhysicalByteSizeAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default -1 (unsupported)
 ```
 
 ### Reclamation without a trim (`EvaluateCompactionAsync`)
@@ -51,6 +54,8 @@ The WAL grain encodes each captured `WalRecord` exactly once via the configured 
 
 The default encoder, `OrleansBinaryWalRecordEncoder`, wraps the canonical `Serializer<WalRecord>` from `Orleans.Serialization`; hosts that wish to substitute a different wire format register their own `IWalRecordEncoder` singleton before `AddLattice` (the default registration uses `TryAddSingleton`).
 
+`ReadEncodedAsync` is the read-side mirror of that seam: it returns the same entries `ReadAsync` would yield, as pre-encoded byte segments rather than materialised `WalEntry` values. The WAL grain's encoded read path and the partition-move copy use it. The default interface implementation drains `ReadAsync` and re-encodes each entry through the supplied encoder, so a provider that has not overridden it keeps working; a provider that stores the encoded bytes natively overrides it to return them verbatim.
+
 A `WalEntry` pairs the `LatticeMutation` with its dense per-shard offset:
 
 ```csharp verify
@@ -68,6 +73,10 @@ var entry = new WalEntry
     },
 };
 ```
+
+### Byte accounting (`GetRetainedByteSizeAsync`, `GetPhysicalByteSizeAsync`)
+
+Two optional members let a provider report its size without scanning the log. `GetRetainedByteSizeAsync` returns the retained **payload** bytes of a shard's live entries - the logical WAL size, excluding per-row framing and bytes already trimmed but not yet reclaimed. `GetPhysicalByteSizeAsync` returns every byte the backend physically holds for the shard, framing and dead bytes included, which is the figure that bounds disk. Both default to `-1`, meaning "byte accounting unsupported": the storage-usage aggregator then reports the affected surface as partial rather than as a wrong zero, and a caller that wants occupancy falls back to the retained figure when the physical one is unsupported. The WAL garbage collector samples them for the advisory byte ceiling ([`WalMaxRetainedBytes`](configuration.md#walmaxretainedbytes)) and for the durability hold ([`WalDurabilityHoldCeilingBytes`](configuration.md#waldurabilityholdceilingbytes)), and the hold declines to engage on a provider that reports no bytes. Providers must answer from a running counter or a bounded metadata read, never by scanning the log.
 
 ## Registering a provider
 
@@ -88,9 +97,9 @@ Net effect: a host-supplied factory is **order-independent** with respect to `Ad
 
 This contract was tightened to fix a silent-drop bug: previously both branches used `TryAddSingleton`, so a host that called `AddLattice` before `AddAzureTableWalStorage` would silently end up on the in-memory baseline because `AddLattice`'s own `AddWalStorage()` call had already won the `TryAdd` race.
 
-The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
+`LatticeOptions.WalStorageProvider` is the core per-tree override: an optional `Func<string, IWalStorageProvider>` that receives the tree id and, when it returns a provider, is used for that tree instead of the baseline (default: `null`, so every tree uses the baseline). It applies only to partitions whose placement resolves to the reserved `default` key - a partition pinned to a named key (see below) always resolves through the provider catalogue - and, being one choice per tree, it cannot spread a tree's partitions across accounts. The replication package's `LatticeReplicationOptions.WalStorageProvider` is copied into it when the core option is unset.
 
-For production deployments, the canonical durable WAL backend is the Azure Table Storage provider in the optional `Orleans.Lattice.Storage.AzureTable` package - register it with `AddAzureTableWalStorage` so the commit log survives silo restarts. See [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/README.md) for its setup, configuration, and operations guide.
+For production deployments, the canonical durable WAL backend is the Azure Table Storage provider in the optional `Orleans.Lattice.Storage.AzureTable` package - register it with `AddAzureTableWalStorage` so the commit log survives silo restarts. See [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/README.md) for its setup, configuration, and operations guide. For a durable WAL with no cloud dependency, the optional `Orleans.Lattice.Storage.File` package persists it to local disk - register it with `AddFileWalStorage`; see [Orleans.Lattice.Storage.File](../lattice.storage.file/README.md).
 
 ## Multi-account fan-out: named providers and pinned placement
 
@@ -137,7 +146,7 @@ WalMoveReceipt receipt = await admin.ExecuteWalMoveAsync(
 
 `ExecuteWalMoveAsync` runs a quiesce-copy-cutover saga: it fences the partition's WAL grain (briefly refusing appends), copies the retained entry range to the target provider **preserving every offset**, re-converges on any entries that landed during the copy, flips the durable pin under a compare-and-swap, then forces the WAL grain to deactivate so its next activation - on any silo - reads the new pin and binds the new provider. Appends resume against the target with no offset discontinuity. The move is **non-destructive**: the source's entries are retained (`receipt.SourceRetained == true`) so the operation is recoverable.
 
-`WalMoveOptions.Default` is fine for most moves; override `QuiesceLease`, `CopyPageSize`, or `VerifyAfterCopy` for large partitions or stricter post-copy verification.
+`WalMoveOptions.Default` (a 30-second quiesce lease, 256-entry copy pages, and post-copy verification on) is fine for most moves. To tune `QuiesceLease` or `CopyPageSize` for a large partition, start from it - `WalMoveOptions.Default with { CopyPageSize = 1024 }` - rather than from `new WalMoveOptions { ... }`: an unset lease, page size or batch concurrency falls back to its default, but `VerifyAfterCopy` is a plain `bool` that such an initializer leaves `false`, which skips the check that the target tail matches the copied source range before the pin flips.
 
 ### Reverting and reclaiming
 
@@ -179,7 +188,7 @@ var moves = new (int Partition, string TargetProviderKey)[]
 };
 WalMoveBatchPlan batchPlan = await admin.PlanWalMoveAsync("orders", moves, cancellationToken);
 WalMoveBatchReceipt batchReceipt = await admin.ExecuteWalMoveAsync(
-    "orders", moves, new WalMoveOptions { MaxConcurrentPartitionMoves = 2 }, cancellationToken);
+    "orders", moves, WalMoveOptions.Default with { MaxConcurrentPartitionMoves = 2 }, cancellationToken);
 ```
 
 Each partition runs the same quiesce-copy-verify phases as a single move; `WalMoveOptions.MaxConcurrentPartitionMoves` (default `1` = sequential) bounds how many run in parallel, so you can trade a faster cutover against the extra storage-tier pressure of concurrent copies. `batchReceipt.Moves` carries one `WalMoveReceipt` per requested partition, in request order, and `batchReceipt.Outcome` is `Moved` when at least one partition was relocated (or `AlreadyAtTarget` when every partition was already pinned to its target).
@@ -203,6 +212,18 @@ Durable Azure Table Storage implementation shipped in the optional `Orleans.Latt
 
 Its storage and row layout, transactional append pipeline, retry and saturation handling, compression, capacity planning, and the Azurite-backed test setup are documented in the dedicated [Azure Table WAL docs](../lattice.storage.azuretable/README.md) - start with [configuration](../lattice.storage.azuretable/configuration.md), [architecture](../lattice.storage.azuretable/architecture.md), and [chaos tests](../lattice.storage.azuretable/chaos-tests.md).
 
+### `FileWalStorageProvider`
+
+Durable local-disk implementation shipped in the optional `Orleans.Lattice.Storage.File` NuGet package, for a deployment that needs a crash-safe WAL without a cloud storage account. Register it with `AddFileWalStorage(o => o.RootDirectory = "/data/wal")`, which, like `AddAzureTableWalStorage`, also wires the WAL cursor registry and garbage collector.
+
+- **Atomicity**: each batch is written as its data records followed by one commit record in a single write, then flushed to disk before the append completes (`FileWalStorageOptions.FlushToDisk`, default `true`). Records that no commit record seals are discarded on recovery.
+- **Layout**: one append-only `wal.log` per tree and WAL partition, under `{RootDirectory}/{encoded tree id}/shard-{index}`.
+- **Recovery**: `ReconcileAsync` rolls every committed batch forward, truncates a torn or uncommitted tail, and reclaims space already trimmed.
+- **Reclamation**: a trim writes a durable trim marker, and space is physically reclaimed by rewriting the file once the configured dead-byte policy is met. It is the one shipped provider that overrides `EvaluateCompactionAsync`, and the one that reports a trim point past its last entry through `GetHighestOffsetAsync`.
+- **Byte accounting**: overrides both `GetRetainedByteSizeAsync` and `GetPhysicalByteSizeAsync`; the physical figure is the file length, dead bytes included.
+
+Its options, on-disk framing, compaction policy, and recovery behaviour are documented in the dedicated [File WAL docs](../lattice.storage.file/README.md) - see [configuration](../lattice.storage.file/configuration.md) and [architecture](../lattice.storage.file/architecture.md).
+
 ## Implementing a custom provider
 
 Authoring a custom provider is purely an exercise in implementing the contract. The guide-rails are:
@@ -216,7 +237,10 @@ Authoring a custom provider is purely an exercise in implementing the contract. 
 
 The `InMemoryWalStorageProvider` source under `src/lattice/InMemoryWalStorageProvider.cs` is the canonical reference implementation; the `AzureTableWalStorageProvider` source under `src/lattice.storage.azuretable/` is the canonical durable reference implementation.
 
-Once the implementation is in place, register it through the standard `AddWalStorage` extension - no other wiring is required:
+Once the implementation is in place, register it through the standard `AddWalStorage` extension. A **durable** provider also needs the two seams the shipped storage packages' registration helpers add for you, because `AddLattice` wires neither: `AddLatticeWalGc()` registers the WAL garbage collector and its per-silo scheduler, without which nothing trims the log, and `AddWalCursorRegistry()` upgrades leaf cursor reporting to mirror each leaf's checkpoint into the durable pin store. Without the second, the collector's trim floor is process-local, so after a full restart it can trim committed writes that a still-dormant leaf has not yet checkpointed (issue #919). Both calls are idempotent:
 
 ```csharp verify
 siloBuilder.AddWalStorage(sp => new InMemoryWalStorageProvider());
+siloBuilder.AddWalCursorRegistry();
+siloBuilder.AddLatticeWalGc();
+```

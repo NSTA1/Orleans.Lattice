@@ -14,15 +14,17 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Saga coordinator for atomic multi-key writes. One grain activation
-/// per batch, keyed by <c>{treeId}/{operationId}</c>. Applies each write
-/// sequentially, persists progress after every step, and compensates
-/// previously-committed keys if a step throws. Crash recovery is driven by a
-/// keepalive reminder registered at saga start and unregistered on completion.
+/// per batch, keyed by <c>{treeId}/{operationId}</c>. Stages the whole batch
+/// through the tree's batched write path as prepared writes readers cannot
+/// see, then records a single commit or abort decision in the tree's
+/// transaction registry and broadcasts the matching terminal to every
+/// participating shard. Crash recovery is driven by a keepalive reminder
+/// registered at saga start and unregistered on completion.
 /// <para>
-/// Compensation relies on LWW: rewriting the pre-saga value (or tombstoning an
-/// absent key) with a freshly-ticked <c>HybridLogicalClock</c> wins over the
-/// partial write. Readers may observe a brief partial-visibility window during
-/// execution and during compensation; this is inherent to the saga pattern.
+/// An abort issues no per-key rollback writes: the recorded abort decision
+/// and the broadcast abort terminals discard the prepared writes, so every
+/// key keeps its pre-saga value and readers never observe a partial batch.
+/// The pre-saga values read at prepare time feed guard evaluation only.
 /// </para>
 /// <para>
 /// <b>Retention cleanup.</b> After the saga reaches a terminal state

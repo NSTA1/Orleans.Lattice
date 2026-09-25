@@ -45,10 +45,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Replication;
 ///     rebuildable content and cross-reference projections, the per-session reuse
 ///     bookkeeping, and the vector payload and metadata projections - is authored as a
 ///     plain last-writer-wins value through <c>ILattice.SetAsync</c>, so each enrols
-///     under <see cref="LatticeMergeMode.LwwRegister"/> by default. The helper lets a
-///     host override any of these (they are per-key LWW or immutable and
-///     content-addressed, so a deployment with a single authoritative writer per key
-///     may pick a different mode), but never membership or memory.
+///     under <see cref="LatticeMergeMode.LwwRegister"/> by default. The topology
+///     validator rejects mode overrides for the index-plane trees; only the session
+///     reuse tree can be deliberately overridden by a host.
 ///     </description>
 ///   </item>
 /// </list>
@@ -82,8 +81,9 @@ internal static class RepoContextReplicatedTrees
     /// <summary>
     /// The default convergence rule for every non-membership repository-context tree.
     /// These trees are authored as whole last-writer-wins values, so last-writer-wins
-    /// is the only mode consistent with how they are written; a host may still override
-    /// an individual tree.
+    /// is the only mode consistent with how they are written. The topology validator
+    /// rejects overrides for source-derived index-plane trees; only the session tree
+    /// can be deliberately overridden by a host.
     /// </summary>
     internal const LatticeMergeMode DefaultMode = LatticeMergeMode.LwwRegister;
 

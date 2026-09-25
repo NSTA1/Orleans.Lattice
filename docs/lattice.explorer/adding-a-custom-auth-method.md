@@ -12,8 +12,10 @@ without any change to the Explorer core.
 - `SchemeId` - the stable scheme id your method implements. The Explorer matches
   this against the scheme an endpoint advertises.
 - `CanHandle(advertisedScheme)` - decides whether your method services a given
-  advertised scheme. The built-in default is an ordinal, case-insensitive match
-  against `SchemeId`; override it to accept aliases or a family of names.
+  advertised scheme. The interface has no default implementation: every method
+  implements it. The built-in methods use an ordinal, case-insensitive match
+  against `SchemeId` (Basic also accepts an empty advertisement); a custom method
+  can instead accept aliases or a family of names.
 - `ChallengeAsync(context, cancellationToken)` - runs the (possibly interactive)
   sign-in and returns an `ExplorerAuthSignIn` carrying the credential the
   connection attaches to every call.
@@ -138,6 +140,25 @@ var services = new ServiceCollection();
 services.AddExplorerAuth();
 services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, ApiKeyAuthMethod>());
 ```
+
+## Re-authentication, federated sign-out and CSP
+
+Three core option types let a provider shape the UI around its sign-in without
+the core Explorer depending on it. Register your own `ExplorerReauthOptions` and
+`ExplorerSignOutOptions` instances with `AddSingleton`, exactly as the hosted-web
+Entra provider does: `AddExplorerAuth` registers their defaults with `TryAdd`, so
+your instance is the one resolved whichever is registered first.
+
+- `ExplorerReauthOptions` - the forced-interactive challenge path the "sign in
+  again" interstitial navigates to when your token source latches as revoked.
+  Leave `ChallengePath` unset if a plain page reload is enough to recover.
+- `ExplorerSignOutOptions` - a federated sign-out endpoint for the "Sign out"
+  button, for a method whose sign-in leaves a separate browser session behind.
+- `ExplorerContentSecurityPolicyOptions` - extra `form-action` sources, needed
+  when that sign-out endpoint redirects to another origin. Contribute with
+  `services.Configure<ExplorerContentSecurityPolicyOptions>(...)`.
+
+Every property and default is listed in [Configuration](configuration.md#explorerreauthoptions).
 
 ## Security notes
 

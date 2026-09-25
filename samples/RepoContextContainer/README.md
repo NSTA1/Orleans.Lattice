@@ -247,7 +247,13 @@ an unrecognised `EMBED_PROVIDER` falls back to the CPU rather than failing to
 boot. That fallback is silent by design, so verify what actually bound:
 
 ```bash
-docker compose exec repocontext curl -s http://embedder:9000/api/health
+docker compose logs embedder | grep "Embedding server listening"
+# ... listening on port 9000 using Cuda with model model.onnx (768-dim) ...
+
+# Or ask the health endpoint. Both images are chiseled and carry no curl, and the
+# embedder port is only exposed on the compose network, so borrow its namespace:
+docker run --rm --network "container:$(docker compose ps -q embedder)" \
+  curlimages/curl -s http://localhost:9000/api/health
 # {"status":"ok","provider":"Cuda","model":"model.onnx","dimension":768}
 ```
 
@@ -319,7 +325,8 @@ mcp call http://localhost:8080 repocontext_search \
 
 # B. Budgeted context bundle. repocontext_context packs the ranked, explained
 #    source for a task into ONE response under a HARD token ceiling: the reported
-#    `totalTokens` never exceeds `responseBudgetTokens`, and `truncated` /
+#    `responseTokens` (the response as delivered, envelope included) never exceeds
+#    `responseBudgetTokens`, `totalTokens` is the narrower sum of packed source, and `truncated` /
 #    `retryBudgetTokens` say whether more would fit at a larger budget. `detail`
 #    trades richness for budget - 'paths' (cheapest) -> 'outline' (declared-symbol
 #    skeleton) -> 'slices' (bounded body text, richest), or 'auto' (default) which
@@ -352,7 +359,7 @@ for the full model.
 Tear down (state on the named volumes is preserved unless you pass `-v`):
 
 ```bash
-docker compose down          # keeps the data + model-cache volumes
+docker compose down          # keeps the data volume (and the Onyx overlay's model cache, if used)
 docker compose down -v       # also deletes durable state (start clean)
 ```
 
@@ -415,7 +422,7 @@ directory nobody picked.
 Verify where it actually landed, rather than where you meant it to land:
 
 ```bash
-docker inspect repocontext-mcp \
+docker inspect "$(docker compose ps -q repocontext)" \
   --format '{{range .Mounts}}{{.Destination}} <- {{.Type}} {{.Source}}{{"\n"}}{{end}}'
 pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 7 refuses a doomed path
 ```
@@ -424,7 +431,7 @@ pwsh -File scripts/Assert-ContainerProvenance.ps1   # check 5 of 7 refuses a doo
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | `/memory-archive` in this sample; unset (feature off) otherwise | Container path the archive is written to. Unset disables the whole mechanism. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. This is the size of the window an ungraceful stop loses. Values below 30 are raised to 30. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores only into an empty store, `always` restores on every start, `off` never restores. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores into an empty store, or into one whose restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60. |
 | `REPOCONTEXT_MEMORY_ARCHIVE_PATH` | none - **required** | HOST path bound at `/memory-archive`. Deliberately has no default: a relative one resolves against the compose invocation directory (issue #2627). Must be absolute and outside every checkout and worktree. |
 
@@ -554,8 +561,9 @@ to roll back.
 
 The same listener also serves `GET /metrics`, a Prometheus text exposition of every
 instrument on a meter whose name starts with `orleans.lattice` - the core meter and
-every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included. It needs no
-second port and no sidecar:
+every per-package meter, `Orleans.Lattice.Api.Mcp.RepoContext` included - plus the
+`Microsoft.Orleans` and `System.Runtime` runtime meters. It needs no second port and
+no sidecar:
 
 ```bash
 curl -fsS http://localhost:8080/metrics | head -n 20
@@ -585,19 +593,21 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   below**: `init` decides whether the drain starts, the grace period decides how
   long it may take, and setting one without the other leaves half the failure in
   place.
-- **That drain's budget is 90 seconds and it belongs to the host, not to Docker.**
-  The host sets `HostOptions.ShutdownTimeout` to 90s
-  (`RepoContextHostBuilder.ShutdownBudget`); Docker's `stop_grace_period` defaults
-  to **10 seconds**. The two are enforced independently and the smaller wins, so
-  without an explicit `stop_grace_period` the process is `SIGKILL`ed at 10s with
-  the drain still running and the 90s is dead configuration (issue #2389). The
-  `stop_grace_period: 120s` in `docker-compose.yml` is what makes it reachable.
+- **That drain's budget is 180 seconds in this sample, and it belongs to the
+  host, not to Docker.** The host sets `HostOptions.ShutdownTimeout` from the
+  grace period the deployment declares - 180s from this sample's declared `240s`,
+  or the 90s default (`RepoContextHostBuilder.ShutdownBudget`) when nothing is
+  declared; Docker's `stop_grace_period` defaults to **10 seconds**. The two are
+  enforced independently and the smaller wins, so without an explicit
+  `stop_grace_period` the process is `SIGKILL`ed at 10s with the drain still
+  running and the budget is dead configuration (issue #2389). The
+  `stop_grace_period: 240s` in `docker-compose.yml` is what makes it reachable.
   If you run this image under your own orchestration you must grant the same
   budget there - Kubernetes has the identical trap under a different name, since
   `terminationGracePeriodSeconds` defaults to 30s.
 - The drain reports its own duration, so the budget can be derived rather than
   bisected. `docker logs` carries `RepoContext drain complete in <n>s, consuming
-  <p>% of the 90s host shutdown budget`. Read it together with its severity,
+  <p>% of the 180s host shutdown budget`. Read it together with its severity,
   because there are three distinct outcomes and the level is what separates them:
   - **No completion line at all.** The container was killed mid-drain, so
     `stop_grace_period` is smaller than the drain (issue #2389). The exit code
@@ -606,7 +616,7 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   - **`drain complete` at `Warning`.** The drain finished but consumed more than
     70% of the budget. Nothing has failed; treat it as a lead indicator, because
     drain time grows with resident state.
-  - **`drain ABANDONED after 90s` at `Error`, and the container exits `70`.** The
+  - **`drain ABANDONED after 180s` at `Error`, and the container exits `70`.** The
     *host* stopped waiting and deactivation was abandoned part-way. Raise the
     service's `stop_grace_period` and the `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD`
     that declares it, together and to the same value; the budget is derived from
@@ -641,20 +651,24 @@ curl -fsS http://localhost:8080/metrics | head -n 20
   the drain begins, so it is reported at the moment the budget expires rather
   than depending on a callback that may never arrive.
 - Drain time scales with resident state: the same 400-file rig drained in 33.9s
-  before its vector trees had landed and 67.2s once they had, which is already
-  three quarters of the 90s budget. The budget was nevertheless **not** raised,
-  because measurements on a live box show the resident set that a drain must
-  flush has no observed ceiling (idle-deactivation sweeps ranging from 1 to 4,418
-  activations, still climbing between readings). A fixed ceiling on an unbounded
-  quantity moves the threshold without changing the failure mode, so #2397
-  shipped the diagnostic instead of a new number, and #2402 - which proposed
-  raising it - did not ship one either.
-- The 90s is no longer written down as an independent constant. Since issue #2402
+  before its vector trees had landed and 67.2s once they had, which was already
+  three quarters of the 90s budget the host then ran with. #2397 nevertheless did
+  **not** raise it, because measurements on a live box show the resident set that
+  a drain must flush has no observed ceiling (idle-deactivation sweeps ranging from
+  1 to 4,418 activations, still climbing between readings). A fixed ceiling on an
+  unbounded quantity moves the threshold without changing the failure mode, so
+  #2397 shipped the diagnostic instead of a new number, and #2402 - which proposed
+  raising it - did not ship one either. Issue #3304 later did raise it, to 180s,
+  against two consecutive drains that no longer fitted (89.7s and 91.9s against
+  90s); see the
+  [container quickstart](../../docs/lattice.api.mcp.repocontext/container.md#graceful-shutdown).
+- The budget is no longer written down as an independent constant. Since issue #2402
   the host derives it from the grace period the deployment declares through
   `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD`, taking 75% of it or all but a
-  two-second unwind reserve, whichever is smaller. The declared `120s` in
-  `docker-compose.yml` yields exactly the 90s the container has always run with,
-  so nothing moved; what changed is that there is one number to set instead of
+  two-second unwind reserve, whichever is smaller. The `120s` the sample declared
+  when that derivation landed yielded exactly the 90s the container had always run
+  with, so nothing moved at the time (the sample now declares `240s`, deriving
+  180s, since issue #3304); what changed is that there is one number to set instead of
   two, and a budget larger than the grace period can no longer be expressed. That
   matters because such a budget is not merely useless - the container kills the
   process at the real grace period regardless, so the `ABANDONED` line above is
@@ -709,8 +723,8 @@ the expected configuration could not be read), so automation can gate on it. Unt
 SUPPOSED to fail; the full contract is in the
 [local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#what-its-exit-code-means).
 
-It takes four readings from the running container and refuses unless all four
-agree, printing every value it read either way:
+It performs seven checks against the running container and refuses unless all
+seven agree, printing every value it read either way:
 
 1. **Compose provenance.** The container's own
    `com.docker.compose.project.working_dir` label resolves to the checkout you
@@ -738,6 +752,19 @@ agree, printing every value it read either way:
    literally**: Compose normalises `120s` to `2m0s`, so a text comparison would
    accuse a correctly configured stack of exactly this defect, and the obvious
    remedy for that accusation is to change a deployment that was already right.
+5. **Archive durability.** The bind mount holding durable agent memory resolves
+   to an absolute host path outside every git worktree and checkout. It is the
+   only check on the WRITE path, and it keys on the archive path alone, never on
+   the compose directory (issue #2627).
+6. **Build provenance.** The image the container is executing was built from the
+   expected commit, read from the image's own `org.opencontainers.image.revision`
+   label or failing that a `candidate-<sha>` tag, and cross-checked against
+   chronology. It fails closed. Checks 1 and 2 adjudicate a checkout; this one
+   adjudicates the image (issue #2686).
+7. **Workspace provenance.** The `/workspace` bind the container indexes out of
+   exists, is a bind rather than a volume, and resolves to an absolute host path -
+   and, when you name them, it is the expected workspace root and a registered
+   repository is indexed from the expected repository root (issue #2617).
 
 ### The count assertion, and why it is not a walk of tracked files
 
@@ -834,7 +861,7 @@ consulted and answered exactly nothing approximately.**
 
 ```bash
 pwsh -File ./scripts/Invoke-AnnQueryProbe.ps1
-pwsh -File ./scripts/Invoke-AnnQueryProbe.ps1 -QueryCount 12 -RepoId lattice
+pwsh -File ./scripts/Invoke-AnnQueryProbe.ps1 -RepoId lattice -Repetitions 4
 ```
 
 It scrapes the three `state` arms before and after, issues its queries over the

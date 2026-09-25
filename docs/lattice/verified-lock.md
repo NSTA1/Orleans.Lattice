@@ -42,7 +42,7 @@ path. The core is `internal` and exposed to the test assembly through
 
 | Function | Decision it owns |
 |---|---|
-| `LockAdmissionCore.NextFencingToken` | The next fencing token is the strict successor of the last issued one; it overflows rather than wraps. |
+| `LockAdmissionCore.NextFencingToken` | The next fencing token is the strict successor of the last issued one; at `long.MaxValue` it throws `OverflowException` rather than wrapping. |
 | `LockAdmissionCore.Grant` | Mint the next fencing token, install the holder, and set the lease expiry - the only place a token is minted. |
 | `LockAdmissionCore.Decide` | Grant iff the lock is free or its lease has expired; otherwise hold the current holder. |
 | `LockAdmissionCore.IsCurrentHolder` | A presented token is valid iff it equals the current holder's token (and the lock is held). |
@@ -65,6 +65,10 @@ then three events race in every order the runtime explores -
 - `A` wakes and issues a stale `Release` with its old token;
 - `A` wakes and issues a stale `Renew` with its old token.
 
+The race is a choice space the model encodes as data and walks with
+`runtime.RandomBoolean()`, not a thread schedule: the model runs at a Coyote
+concurrency degree of zero, exactly like the atomic-commit models (see
+[The Coyote concurrency tier](verified-atomic-commit.md#the-coyote-concurrency-tier)).
 After every delivered event, on every explored order, the model asserts the
 safety properties below with `Specification.Assert`.
 
@@ -81,7 +85,8 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Coy
 A model that asserts nothing an interleaving can break is worthless, so the
 fixture proves the model can fail. `LockAdmissionModel` takes a
 `useBrokenTokenCheck` flag: when set, `Release` frees the lock **without**
-checking the presented token matches the current holder. `LockAdmissionCoyoteTests`
+checking the presented token matches the current holder (and, for parity, `Renew`
+extends whichever holder is current). `LockAdmissionCoyoteTests`
 has two tests:
 
 - `Stale_token_never_dislodges_current_holder_on_any_order` runs the proven core
@@ -118,8 +123,9 @@ Safety properties:
   counter is preserved, so the reclaiming grant still strictly increases and the
   reclaimed holder is fenced out. Owned by `ReclaimIfExpired`.
 
-Liveness / fairness properties (checked by the grain integration tier, not the
-pure model, because they concern the FIFO queue the grain owns):
+Liveness / fairness properties (checked by the grain-level tests in
+`LatticeLockGrainTests`, not the pure model, because they concern the FIFO queue
+the grain owns):
 
 - **FifoFairness** - waiters are granted the lock in strict enqueue order; no
   reordering. Checked by `AcquireAsync_grants_waiters_in_strict_fifo_order`.

@@ -32,9 +32,8 @@ public readonly record struct LatticeTreeEvent
     /// For <see cref="LatticeTreeEventKind.DeleteRange"/> this carries the literal
     /// <c>"startInclusive..endExclusive"</c> range string. For
     /// <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/> this is <c>null</c> -
-    /// individual saga writes emit per-key <see cref="LatticeTreeEventKind.Set"/> /
-    /// <see cref="LatticeTreeEventKind.Delete"/> events stamped with the
-    /// <see cref="OperationId"/>.
+    /// the saga's staged entries emit per-key <see cref="LatticeTreeEventKind.Set"/>
+    /// events stamped with the <see cref="OperationId"/>.
     /// </summary>
     [Id(2)] public string? Key { get; init; }
 
@@ -47,9 +46,9 @@ public readonly record struct LatticeTreeEvent
     /// <summary>
     /// Correlation id for events produced by a multi-key saga (atomic write) or
     /// other bulk operation. <c>null</c> for stand-alone writes. Subscribers may
-    /// use this to group per-key <see cref="LatticeTreeEventKind.Set"/> /
-    /// <see cref="LatticeTreeEventKind.Delete"/> events under their parent
-    /// <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/> event.
+    /// use this to group the per-key <see cref="LatticeTreeEventKind.Set"/> events
+    /// under their parent <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/>
+    /// event.
     /// </summary>
     [Id(4)] public string? OperationId { get; init; }
 

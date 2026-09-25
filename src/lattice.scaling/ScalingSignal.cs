@@ -21,9 +21,14 @@ public readonly record struct ScalingSignal
 {
     /// <summary>
     /// Aggregate scale demand expressed in replica-units: the number of silo
-    /// replicas the combined compute and storage pressure implies. <c>0.0</c>
-    /// means no additional demand. Fractional values are permitted so callers
-    /// can apply their own rounding or hysteresis.
+    /// replicas the scale-relievable compute pressure implies (the storage axis is
+    /// carried through but does not drive it), after conservative scale-in
+    /// smoothing and gating and floored at the configured
+    /// <see cref="LatticeScalingSignalOptions.MinReplicas"/>; see
+    /// <see cref="RawScaleValue"/> for the unsmoothed, unfloored demand. It reads
+    /// <c>0.0</c> only while the facade is warming up, or when the floor is zero and
+    /// the sampled pressure implies no demand. Fractional values are permitted so
+    /// callers can apply their own rounding or hysteresis.
     /// </summary>
     [Id(0)] public double ScaleValue { get; init; }
 

@@ -22,12 +22,12 @@ Each module registration is idempotent, and within a module the destructive verb
 |---|---|---|---|
 | State | `AddStateTools()` | always | none (read-only facade) |
 | Data | `AddDataTools(enableWrites)` | always | writes, gated by `enableWrites` |
-| Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
-| Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
+| Backup | `AddBackupTools(enableControl)` | always | capture / incremental capture / restore / revert / delete, gated by `enableControl` |
+| Auth | `AddAuthTools(enableAdministration)` | always | group / membership / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
-| TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
+| TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, orphaned-leaf repair, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
 | Tenant self-awareness | `AddTenantSelfAwarenessTools()` | always (self-gates on tenancy) | none (read-only facade) |
-| Tenant-admin | `AddTenantAdminTools(enableControl)` | none | tenant create / suspend / resume / delete, gated by `enableControl` |
+| Tenant-admin | `AddTenantAdminTools(enableControl)` | none (its one inspect tool, `lattice_tenant_region_status`, is contributed only with `enableControl`) | tenant create / suspend / resume / delete / set-quotas and region authorize / set-residency, gated by `enableControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -73,26 +73,26 @@ Read-only introspection over `ILatticeStateQuery`. Registered by `AddStateTools(
 
 | Tool | Purpose |
 |---|---|
-| `lattice_state_get_cluster_info` | Cluster-wide summary. |
+| `lattice_state_get_cluster_info` | The connected cluster's identity (Orleans cluster and service ids). |
 | `lattice_state_list_trees` | Paged catalog of registered trees. |
 | `lattice_state_list_views` | Paged catalog of materialised views. |
 | `lattice_state_list_tag_indexes` | Tag indexes defined on the cluster. |
-| `lattice_state_list_tag_values` | Values seen for a tag index. |
+| `lattice_state_list_tag_values` | Distinct tag values one tag index carries over one subject tree. |
 | `lattice_state_list_covered_trees` | Trees covered by a tag index. |
-| `lattice_state_list_index_tags` | Tags an index covers. |
+| `lattice_state_list_index_tags` | Distinct tag values one tag index carries across every tree it covers. |
 | `lattice_state_scan_tag_members` | Members matching a tag value. |
 | `lattice_state_get_tree_summary` | Summary of one tree. |
 | `lattice_state_get_shard_summaries` | Per-shard summaries for a tree. |
 | `lattice_state_get_physical_shard_count` | Physical shard count for a tree. |
 | `lattice_state_get_tree_structure` | Depth-bounded shard-root node graph. |
-| `lattice_state_scan_entries` | Key-ordered, snapshot-isolated entry page. |
+| `lattice_state_scan_entries` | Key-ordered entry page; the optional `mode` selects the cursor (`Snapshot`, the default, or the cheaper `Live` / `LivePointInTime`). |
 | `lattice_state_get_entry` | One key's full record. |
 | `lattice_state_get_entry_history` | Version history for a key. |
 | `lattice_state_cancel_scan` | Cancel an in-flight scan. |
 
 ## Data tools (`lattice_data_*`)
 
-Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrites)`. The read tools - the two point / range reads plus the eight typed-CRDT reads - are always exposed; the write tools (the point / batch writes plus the eight typed-CRDT writes) require `enableWrites: true`.
+Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrites)`. The read tools - the two point / range reads plus the thirteen typed-CRDT reads - are always exposed; the write tools (the six point / batch writes plus the thirteen typed-CRDT writes) require `enableWrites: true`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -107,12 +107,12 @@ Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrit
 
 ### Typed CRDT tools
 
-These surface the replicated CRDT primitives directly, so a caller reads and writes a value's convergent type without hand-encoding CRDT state. Element and value bytes are base64-encoded; a write attributes its mutation to a `replicaId`. Each write tool takes an `operation` discriminator; each type also has a paired read. See [CRDT primitives](../crdt/readme.md) for the merge rules summarised below.
+These surface the replicated CRDT primitives directly, so a caller reads and writes a value's convergent type without hand-encoding CRDT state. Element and value bytes are base64-encoded. Every write except the G-Set add and the Max- / Min-Register sets names its writer with a `replicaId`. The writes that offer more than one operation (PN-Counter, OR-Set, OR-Flag, RW-Flag, RW-Set, Sequence, and OR-Map) take an `operation` discriminator with the values shown in parentheses below; the remaining writes perform one fixed operation and take no discriminator. Each type also has a paired read. See [CRDT primitives](../crdt/readme.md) for the merge rules summarised below.
 
 | Type | Write tool | Read tool | Merge rule |
 |---|---|---|---|
 | PN-Counter | `lattice_data_pncounter` (increment / decrement) | `lattice_data_pncounter_get` | Per-replica signed sum. |
-| G-Counter | `lattice_data_gcounter` (increment) | `lattice_data_gcounter_get` | Per-replica grow-only sum. |
+| G-Counter | `lattice_data_gcounter` (increment only) | `lattice_data_gcounter_get` | Per-replica grow-only sum. |
 | OR-Set | `lattice_data_orset` (add / remove) | `lattice_data_orset_get` | Add-wins, observed-remove. |
 | OR-Flag | `lattice_data_orflag` (enable / disable) | `lattice_data_orflag_get` | Enable-wins. |
 | RW-Flag | `lattice_data_rwflag` (enable / disable) | `lattice_data_rwflag_get` | Disable-wins. |
@@ -123,7 +123,7 @@ These surface the replicated CRDT primitives directly, so a caller reads and wri
 | Min-Register | `lattice_data_minregister_set` | `lattice_data_minregister_get` | Keep the least observed value. |
 | Sequence | `lattice_data_sequence` (insert-at / remove-at) | `lattice_data_sequence_get` | Ordered insert / tombstone. |
 | OR-Map | `lattice_data_ormap` (set / remove) | `lattice_data_ormap_get` | Recursive per-key merge. |
-| G-Set | `lattice_data_gset` (add) | `lattice_data_gset_get` | Grow-only set. |
+| G-Set | `lattice_data_gset` (add only) | `lattice_data_gset_get` | Grow-only set. |
 
 The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; each field value a multi-value register of base64 bytes). The host must register that shape for the target tree name (`AddOrMapShape<string, MvRegister>(treeName)`) for these tools to resolve.
 
@@ -137,7 +137,7 @@ Backup control over `ILatticeBackupControl`. Registered by `AddBackupTools(enabl
 | `lattice_backup_describe` | inspect | A manifest and its restore chain. |
 | `lattice_backup_inventory` | inspect | Catalog-wide inventory summary. |
 | `lattice_backup_scope_status` | inspect | A scope's schedule and last-run status. |
-| `lattice_backup_export_artifact` | inspect | Stream a backup artifact. |
+| `lattice_backup_export_artifact` | inspect | Export one bounded, base64-encoded page of a backup artifact's bytes, resumed from `chunkOffset` until `endOfStream`. |
 | `lattice_backup_create` | control | Capture a full backup. |
 | `lattice_backup_create_incremental` | control | Capture an incremental backup. |
 | `lattice_backup_restore` | control | Restore a backup. |
@@ -186,7 +186,7 @@ The control tools carry `destructiveHint = true`; the inspect tool carries `read
 
 ## TreeAdmin schema tools (`lattice_treeadmin_schema_*`)
 
-Schema-management control over `ILatticeSchemaControl`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableSchemaControl)`. The read-only schema-inspection tools are always exposed; the mutating schema-management tools require `enableSchemaControl: true`, and every tool remains subject to the facade's own fail-closed schema access gate regardless (a read authorizes on ordinary read authority; a mutation authorizes on schema-management authority). The group is discovered only by a caller granted `LatticeOperation.Admin`.
+Schema-management control over `ILatticeSchemaControl`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableSchemaControl)`. The read-only schema-inspection tools are always exposed; the mutating schema-management tools require `enableSchemaControl: true`, and every tool remains subject to the facade's own fail-closed schema access gate regardless (a read authorizes on ordinary read authority; a mutation authorizes on schema-management authority). The group is discovered by a caller granted any one of `LatticeOperation.Admin`, `TreeLifecycle`, `BulkLoad`, or `Restore`; each tool is still authorized by the facade at call time.
 
 The MCP group holds the `ILatticeSchemaControl` facade and delegates to it verbatim - it adds no method to the tree-administration facade and no authorization path of its own. The schema facade and its packages are unchanged.
 
@@ -214,7 +214,7 @@ This module is served under both topologies. In-silo it delegates to the co-host
 
 ## TreeAdmin diagnostics tools (`lattice_treeadmin_*`)
 
-Read-only administrative diagnostics and storage accounting over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools` and always exposed (no opt-in flag). Each tool wraps the existing public grain surface (`ILattice`, `ILatticeAdmin`) rather than re-implementing shard fan-out, and every tool remains subject to the facade's own fail-closed access gate: the per-tree verbs authorize on whole-tree `LatticeOperation.Read` authority, and `lattice_treeadmin_storage_usage` authorizes on the distinct cluster-wide `LatticeOperation.Telemetry` capability. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+Read-only administrative diagnostics and storage accounting over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools` and always exposed (no opt-in flag). Each tool wraps the existing public grain surface (`ILattice`, `ILatticeAdmin`) rather than re-implementing shard fan-out, and every tool remains subject to the facade's own fail-closed access gate: the per-tree verbs authorize on whole-tree `LatticeOperation.Read` authority, and `lattice_treeadmin_storage_usage` authorizes on the distinct cluster-wide `LatticeOperation.Telemetry` capability. The group is discovered by a caller granted any one of `LatticeOperation.Admin`, `TreeLifecycle`, `BulkLoad`, or `Restore`; each tool is still authorized by the facade at call time.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -253,7 +253,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree. |
 | `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
-| `lattice_treeadmin_tree_resize_undo` | manage | Undo an in-flight or staged tree resize when supported. |
+| `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. |
 | `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |
 
 ### Bulk load, restore, and WAL placement
@@ -287,11 +287,11 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tag_index_list` | read | List tag indexes and their backing membership trees. |
 | `lattice_treeadmin_tag_index_status` | read | Read one tag index's backing tree, covered trees, and reconcile state. |
 | `lattice_treeadmin_tag_index_reconcile` | manage | Reconcile a tag index. |
-| `lattice_treeadmin_compaction_trigger` | manage | Trigger shard compaction for a tree. |
+| `lattice_treeadmin_compaction_trigger` | manage | Trigger an out-of-cycle tombstone-compaction pass on one physical shard of a tree (`shardIndex`), bypassing the shard's cooldown; reaps only tombstones and TTL-expired entries. |
 | `lattice_treeadmin_retention_get` | read | Read a tree's durable-history retention policy. |
 | `lattice_treeadmin_retention_set` | manage | Set a tree's durable-history retention policy. |
 
-The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
+The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`, except `lattice_treeadmin_compaction_trigger` and `lattice_treeadmin_retention_set`, which are mutating but non-destructive to readable state and so carry `readOnlyHint = false` and `destructiveHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle/control tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
@@ -369,7 +369,7 @@ Every facade-backed tool call is routed through a single translation seam, so a 
 
 The seam never forwards a raw server exception or stack trace across the gRPC boundary: the deliberately generic `Internal` wire message stays generic, and the translation only ever adds the gRPC status code and the detail the binding already chose to expose (see [Security](security.md)).
 
-Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front as an `InvalidArgument` ("value must be base64-encoded") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
+Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
 
 ## Next
 
