@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Pure-pull, cursor-driven subscriber API over the per-shard
-/// write-ahead log. Lets in-process consumers (the outbound ship loop,
-/// custom bridges, integration tests, in-process projections) read every
+/// write-ahead log. Lets in-process consumers (custom bridges, integration tests,
+/// in-process projections) read every
 /// captured <see cref="WalRecord"/> for a tree without touching the
 /// primary state and without depending on transport-shaped acks.
 /// <para>
@@ -95,10 +95,9 @@ public interface IChangeFeed
     /// value are yielded. Must not be <see langword="null"/>.
     /// </param>
     /// <param name="cursor">
-    /// Strict lower-bound timestamp; the feed yields entries with
-    /// <c>entry.Timestamp &gt; cursor</c>. Pass
-    /// <see cref="HybridLogicalClock.Zero"/> to read from the start of
-    /// the WAL.
+    /// Reserved HLC cursor parameter. The current implementation snapshots the
+    /// locally-authored feed without applying this cursor; pass
+    /// <see cref="HybridLogicalClock.Zero"/> until cursor filtering is restored.
     /// </param>
     /// <param name="includeLocalOrigin">
     /// When <see langword="true"/> (the default), entries authored by

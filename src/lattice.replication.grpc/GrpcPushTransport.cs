@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
-/// gRPC streaming push transport. Implements
+/// Unary gRPC push transport. Implements
 /// <see cref="IReplicationTransport"/> on top of a long-lived,
 /// HTTP/2-multiplexed <see cref="GrpcChannel"/> per peer cluster, and
 /// invokes the unary <c>Push</c> RPC defined by

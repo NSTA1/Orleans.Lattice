@@ -109,19 +109,26 @@ length, the width of an allocated key range.
 What it buys is a denominator. Without one, a backfill's progress is a count of
 keys processed; with one, it is also a percentage, and the `backfill.total` and
 `backfill.percent_complete` gauges publish a series for the index instead of
-staying silent.
+staying silent. (A completed crawl reports `percent_complete` as `100` either
+way.)
 
 ## How the crawl runs
 
-The crawl is driven by an Orleans reminder, so it survives silo restarts and
-does not depend on any one host staying up:
+The crawl is anchored by an Orleans reminder, so it survives silo restarts and
+does not depend on any one host staying up. The reminder is a one-minute
+heartbeat - Orleans floors a reminder period at a minute, which is too coarse to
+pace a crawl - that re-establishes a grain timer on whichever silo hosts the
+crawl, and the timer runs the passes:
 
 - Each pass visits `BackfillBatchSize` grains (default `256`).
 - Passes are separated by `BackfillInterval` (default 1 second), which is what
   paces the crawl against foreground traffic.
 - After each pass the resume key is checkpointed durably, so an interrupted
   crawl restarts from where it stopped rather than from the beginning.
-- When the source is exhausted the crawl completes and the reminder stops.
+- A pass that faults as a whole leaves the crawl `Failed` at its checkpoint; the
+  next heartbeat returns it to `Running`.
+- When the source is exhausted the crawl completes, the reminder is
+  unregistered, and the index's needs-backfill flag is cleared.
 
 Tune the rate per index:
 
@@ -165,8 +172,14 @@ deliberately - or a test that needs a pass to happen at an exact moment - wants.
 | `RebuildAsync(indexName)` | Restarts the crawl from the beginning of the key range. |
 | `RunBackfillPassAsync(indexName)` | Runs exactly one pass now, whatever the schedule says. |
 
-`RebuildAsync` is what clears the needs-backfill flag raised by a
-`Rebuild`-policy [drift](configuration.md#drift-detection) acceptance.
+The needs-backfill flag that a `Rebuild`-policy
+[drift](configuration.md#drift-detection) acceptance raises is cleared when a
+crawl runs to completion, not by `RebuildAsync` itself. A silo start that finds
+the index's fingerprint changed restarts the crawl over the whole key range on
+its own (on a host that drives the crawl and has a key source registered),
+re-visiting grains the index already records, so `RebuildAsync` is for forcing a
+restart - for example on a host whose driver is off (`BackfillEnabled = false`),
+which then also drives the passes.
 
 See [Observability](observability.md) for the gauges that report progress and
 state.

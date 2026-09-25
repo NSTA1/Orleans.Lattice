@@ -121,11 +121,13 @@ It reads only variable names, never the credential values.
 `Orleans.Lattice.Membership.Entra.Graph` registers a Microsoft Graph-backed
 `ILatticeIdentityDirectory` (`ProviderId` `"entra"`) that searches and
 resolves real users and groups in an Entra tenant. It is **app-only**: it uses the
-client-credentials flow with an application registration, independent of how a
-console operator signs in.
+client-credentials flow with an application registration (or a secret-less
+`TokenCredential` such as a managed identity), independent of how a console
+operator signs in.
 
 Register the Entra credential authenticator **before** the Graph resolver (the
-resolver's registration marker throws otherwise):
+resolver's registration checks for the authenticator's registration marker and
+throws otherwise):
 
 ```
 siloBuilder.AddLatticeMembership();

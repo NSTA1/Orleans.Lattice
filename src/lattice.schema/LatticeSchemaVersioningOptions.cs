@@ -25,7 +25,7 @@ public sealed class LatticeSchemaVersioningOptions
     /// The maximum number of leading value bytes copied into a
     /// <see cref="LatticeSchemaDeadLetterEntry.ValuePreview"/> when a strict-ingest
     /// item is dead-lettered. Bounds the storage cost of retaining a diverted item.
-    /// Must be positive. Defaults to 4096.
+    /// Values below 1 are clamped to 1. Defaults to 4096.
     /// </summary>
     public int DeadLetterPreviewMaxBytes { get; set; } = 4096;
 }

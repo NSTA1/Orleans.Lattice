@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// Validates <see cref="LatticeBackupOptions"/> at silo start: rejects a
+/// Validates <see cref="LatticeBackupOptions"/> when options are first resolved: rejects a
 /// non-positive history retention window, an undefined history retention mode,
 /// non-positive fence timings, and an undefined or non-positive sink-sharing
 /// probe configuration.

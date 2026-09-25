@@ -9,13 +9,14 @@ A dashboard only charts data if the matching meter is exported to the backend Gr
 ```csharp
 builder.Services.AddOpenTelemetry()
     .WithMetrics(b => b
-        .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews
+        .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews, GrainIndex, and Replication's WAL panels
         .AddMeter("orleans.lattice.replication")  // Replication (only if the replication package is registered)
         .AddMeter("orleans.lattice.replication.grpc") // ReplicationGrpc (only if the gRPC replication transport is registered)
         .AddMeter("orleans.lattice.auth")         // Authorization (only if the auth package is registered)
         .AddMeter("orleans.lattice.membership")   // Authorization (only if the membership package is registered)
         .AddMeter("orleans.lattice.backup")       // Backup (only if the backup package is registered)
         .AddMeter("orleans.lattice.scaling")      // Scaling (only if the scaling package is registered)
+        .AddMeter("orleans.lattice.tenancy")      // Tenancy (only if the tenancy package is registered)
         .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory, messaging
         .AddMeter("System.Runtime")               // .NET runtime: GC heap, allocation, pause time, working set, thread pool
         .AddPrometheusExporter());
@@ -28,16 +29,17 @@ registers only the `orleans.lattice` family exports no runtime telemetry at all.
 
 | Meter | Emitted by | Dashboards that need it |
 |---|---|---|
-| `orleans.lattice` | the core library, always | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews` |
+| `orleans.lattice` | the core library, always (the grain-index package publishes onto it too) | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews`, `GrainIndex`, and the WAL, WAL-compaction and WAL GC panels on `Replication` |
 | `orleans.lattice.replication` | the replication package, only when registered on the silo | `Replication` |
 | `orleans.lattice.replication.grpc` | the gRPC replication transport, only when registered on the silo | `ReplicationGrpc` |
 | `orleans.lattice.auth`, `orleans.lattice.membership` | the auth / membership packages, only when registered on the silo | `Authorization` |
 | `orleans.lattice.backup` | the backup package, only when registered on the silo | `Backup` |
 | `orleans.lattice.scaling` | the scaling package, only when registered on the silo | `Scaling` |
+| `orleans.lattice.tenancy` | the tenancy package, only when registered on the silo | `Tenancy` |
 | `Microsoft.Orleans` | the Orleans runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 | `System.Runtime` | the .NET runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 
-If you do not register the replication package, omit the replication meter and do not import the `Replication` dashboard - its panels would resolve to no data.
+If you do not register the replication package, omit the replication meter. Its panels on the `Replication` dashboard would resolve to no data; the WAL, WAL-compaction and WAL GC panels on the same dashboard read the core meter and still populate.
 
 ### Why register the two runtime meters
 
@@ -101,6 +103,8 @@ var kinds = new[]
     // LatticeDashboardKind.Authorization, // add when the auth / membership packages are registered
     // LatticeDashboardKind.Backup, // add when the backup package is registered
     // LatticeDashboardKind.Scaling, // add when the scaling package is registered
+    // LatticeDashboardKind.Tenancy, // add when the tenancy package is registered
+    // LatticeDashboardKind.GrainIndex, // add when the grain-index package is registered
 };
 
 foreach (var kind in kinds)

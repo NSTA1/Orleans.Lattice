@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Schema;
 /// <summary>
 /// The phase of a background schema-remediation shadow build. The coordinator
 /// advances strictly forward through these phases and persists each transition
-/// before performing the phase's external side effects, so a reactivation after a
-/// silo restart resumes at the last durably-recorded phase.
+/// before performing the phase's external side effects. There is no automatic
+/// reactivation hook: after a silo restart the remediation resumes at the last
+/// durably-recorded phase when the same remediation is requested again.
 /// </summary>
 [GenerateSerializer]
 [Alias(SchemaTypeAliases.LatticeSchemaRemediationPhase)]

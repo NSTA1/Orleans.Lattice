@@ -19,7 +19,8 @@ namespace Orleans.Lattice.Replication;
 /// tree under a different mode is rejected with
 /// <see cref="LatticeReplicationModeChangeRejectedException"/>. To change a
 /// mode, disable the tree (which pauses shipping) and re-enable it under the new
-/// mode, which re-fixes the mode and re-bootstraps peers.
+/// mode. A re-enable requests a bootstrap only when the caller supplies a
+/// bootstrap source cluster id and the tree already contains data.
 /// </para>
 /// <para>
 /// <b>Enabling a non-empty tree.</b> The replication change feed only carries

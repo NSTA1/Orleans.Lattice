@@ -7,7 +7,7 @@ replication consumers are all rebuilt from it on activation or recovery.
 
 If you're looking for a different angle on the WAL:
 
-- For the pluggable storage backend (in-memory vs Azure Table) see
+- For the pluggable storage backend (in-memory, local file, or Azure Table) see
   [`wal-storage-providers.md`](wal-storage-providers.md).
 - For how the in-memory projection is rebuilt from the WAL on activation see
   [`projection-rebuild.md`](projection-rebuild.md).
@@ -51,8 +51,10 @@ This is a deliberate trade. The wins:
   commit. The in-memory projection has no independent durability guarantee;
   it is reconstructed from the WAL on activation.
 - **Replay-driven recovery.** Activation rebuilds the in-memory projection from
-  the WAL via `ILeafReplayCoordinatorGrain` + `ILeafProjection.Apply`; there is
-  no separate snapshot file to keep in sync.
+  the leaf's latest durable snapshot plus a replay of the WAL tail past its
+  projection checkpoint. The WAL entry is the only thing a foreground commit
+  must make durable before it returns; nothing else holds a second copy of the
+  value that has to be kept in step with it.
 - **Replication coupling.** A peer's change feed and the local commit log are
   the same byte stream. Cross-cluster replication is an additional consumer of
   the same WAL, not a parallel pipeline.
@@ -65,9 +67,12 @@ The cost:
   to the last few hundred entries.
 - **The WAL provider must be durable.** The default `InMemoryWalStorageProvider`
   is fine for tests and single-process samples but is not crash-safe; production
-  deployments register a durable provider such as
-  `AzureTableWalStorageProvider` via `siloBuilder.AddWalStorage(...)` (or via
-  `AddLatticeReplication` for multi-cluster).
+  deployments register a durable provider through its package's registration
+  helper - `AddAzureTableWalStorage` from `Orleans.Lattice.Storage.AzureTable`
+  or `AddFileWalStorage` from `Orleans.Lattice.Storage.File`, each of which also
+  wires the cursor registry and WAL garbage collector a durable log needs. See
+  [`wal-storage-providers.md`](wal-storage-providers.md#implementing-a-custom-provider)
+  for what a custom provider registered through `AddWalStorage(...)` must add.
 
 ## Commit pipeline
 
@@ -89,16 +94,18 @@ and the observer publish must happen after both, inside a commit-log scope.
    `LatticeOriginContext`, `LatticeVectorClockContext`, `LatticeTransactionContext`,
    `LatticeMaintenanceContext`, and any ambient `LatticeDeltaContext`.
 
-2. **wal** - Resolve the shard's `ICommitLogWriter` and append the mutation. If
-   the writer is absent (no WAL provider registered) this step is a no-op, and
-   the operation has the same semantics as a pre-WAL Lattice - durable on the
-   grain-state provider only. Failures here propagate to the caller before any
-   in-memory state has been touched.
+2. **wal** - Resolve the silo's commit-log writer and append the mutation.
+   `AddLattice` always registers the writer, with the in-memory WAL provider as
+   its baseline, so on a silo wired through `AddLattice` this step always runs;
+   it is skipped only for a leaf that has no tree id yet (one created outside
+   `ILattice`, for example by a test harness). Failures here propagate to the
+   caller before any in-memory state has been touched.
 
 3. **apply** - LWW-merge the value into the in-memory entry cache. If
-   the leaf's entry count crosses `MaxLeafKeys`, trigger a split. This step is
-   the only place that mutates the per-leaf in-memory state on the foreground
-   path.
+   the leaf's entry count crosses `MaxLeafKeys`, or its live state bytes cross
+   [`MaxLeafBytes`](configuration.md#maxleafbytes), trigger a split. This step
+   is the only place that mutates the per-leaf in-memory state on the
+   foreground path.
 
 4. **observer** - If any `IMutationObserver` is registered, publish the
    post-commit mutation inside a `LatticeCommitLogContext` scope. The scope
@@ -109,12 +116,16 @@ and the observer publish must happen after both, inside a commit-log scope.
 The pipeline is implemented in
 [`BPlusLeafGrain.CommitSetAsync`](../../src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs)
 and the mirror paths for `DeleteAsync`, `DeleteRangeAsync`, `MergeEntriesAsync`,
-`MergeManyAsync`, and `CompactTombstonesAsync`. Each step records its elapsed
-wall-clock duration to the `leaf.commit.duration` histogram tagged by `step`;
-the foreground-write histogram `leaf.write.duration` is tagged by `kind` so
-operators can size ordinary writes (`kind=set` / `kind=delete`), the
-cross-migration LWW backstop (`kind=backstop`), merge traffic (`kind=merge`),
-and tombstone compaction (`kind=compact`) independently.
+`MergeManyAsync`, and `CompactTombstonesAsync`. The `wal`, `apply` and
+`observer` steps - plus `digest`, the awaited projection-digest publish to the
+parent internal node - record their elapsed wall-clock duration to the
+`orleans.lattice.leaf.commit.duration` histogram tagged by `step`; `build` is
+not timed separately. The `orleans.lattice.leaf.write.duration` histogram times
+the leaf's grain-state persists with a `tree` tag only, and additionally carries
+`kind`-tagged samples that time the WAL appends of merge traffic
+(`kind=merge`), tombstone compaction (`kind=compact`) and the cross-migration
+LWW backstop (`kind=backstop`). Ordinary set and delete commits carry no `kind`
+tag; size them with the per-step commit histogram.
 
 The merge family (`MergeEntriesAsync` / `MergeManyAsync`) emits one envelope
 per accepted entry with `Kind = Set | Delete` and `IsMerge = true`; the
@@ -237,8 +248,10 @@ or transitively via durable WAL storage / views / replication). To close
 that window each leaf then also mirrors its checkpoint frontier
 into a sharded cluster-wide durable pin store (`WalMaterialiserPinShards`
 grain activations per tree, each persisted through the configured grain
-storage; the GC dual-reads every shard plus the legacy unsuffixed key
-during the migration window so no trim floor is lost). The
+storage; the GC reads every shard under the current count plus the legacy
+unsuffixed key, so raising the shard count loses no trim floor - lowering
+it is covered under
+[`WalMaterialiserPinShards`](configuration.md#walmaterialiserpinshards)). The
 mirror is fire-and-forget and coalesced off the checkpoint path - a
 debounce keeps a busy every-write-checkpoint leaf from issuing a durable
 write per write - and because a too-low durable pin only ever retains
@@ -596,10 +609,14 @@ To keep tail-replay bounded, the leaf flushes a **projection checkpoint**
 durably whenever the elapsed wall-clock time since the last flush reaches
 `MaterialiserCheckpointInterval` (default: 5 seconds) **or** the count of
 unflushed advances reaches `MaterialiserCheckpointEntries` (default: 5 000),
-whichever happens first. The checkpoint is a single grain-state write that
-captures the in-memory entries, the local HLC, the version vector, and the
-WAL offset of the last applied mutation. On the next activation the replay
-coordinator starts from the checkpoint offset rather than from zero.
+whichever happens first. The checkpoint is a single grain-state write of the
+leaf's persisted row, which records the WAL offset of the last applied mutation
+for each WAL partition together with the leaf's hybrid-logical clock and
+version vector. It does **not** capture entry values: the persisted leaf row
+has carried no per-key entries since the leaf-state collapse, and its former
+entries slot is reserved. On the next activation the leaf rehydrates its
+entries from its latest durable snapshot and replays the WAL from the
+checkpoint offset rather than from zero.
 
 The checkpoint is **not** an additional durability boundary - it's a replay-cost
 optimization. If a checkpoint flush fails, the next activation simply replays
@@ -780,23 +797,33 @@ cadence floor engage. See
 `ILatticeWalGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
 
 The core library ships a per-silo background scheduler that drives this
-pass for **every** registered tree on the `LatticeOptions.WalGcInterval`
-cadence. It defaults to **1 hour, enabled**, so a durable-WAL host gets
-bounded WAL retention out of the box - including for non-replicated trees
-and for hosts that do not use the replication package - and
-`WalRetention` is effective with no extra wiring. A pass is retention
-housekeeping, not a latency-sensitive operation: its cost scales with
-`trees × WalPartitions` storage reads and runs on every silo, so the
-default cadence is deliberately coarse to keep the storage cost low (one
-fan-out per silo per hour). A host that needs a tighter disk bound - a
-high write rate paired with a small `WalRetention` - can lower it; set
-`WalGcInterval` to `TimeSpan.Zero` (or any non-positive value) to
-**disable** the built-in scheduler and let the host own the cadence (an
+pass for **every** registered tree. It is registered by `AddLatticeWalGc`,
+which the shipped durable WAL storage packages and `AddLatticeReplication`
+call for you, so a durable-WAL host gets bounded WAL retention out of the box -
+including for non-replicated trees - and `WalRetention` is effective with no
+extra wiring.
+
+The cadence is adaptive and per tree. Each tree's interval moves inside the
+band `[WalGcMinInterval, WalGcInterval]` (30 seconds to 1 hour by default). A
+pass that trims at least one entry snaps that tree back to the floor, so a
+growing log keeps being collected; a pass that reclaims nothing doubles the
+tree's interval towards the ceiling, so a quiet tree relaxes and costs little.
+A tree whose pass reports `blocked` or `over_ceiling` is held at the floor, and
+one that reclaims nothing while its scan still stops on WAL it must retain
+relaxes no further than five minutes (clamped into the band); see
+[`WalGcMinInterval`](configuration.md#walgcmininterval) for the full rule. A
+pass is retention housekeeping, not a latency-sensitive operation - its cost
+scales with `trees x WalPartitions` storage reads and runs on every silo -
+which is why the quiet-path ceiling is deliberately coarse. A host that needs a
+tighter disk bound - a high write rate paired with a small `WalRetention` - can
+lower it; set `WalGcInterval` to `TimeSpan.Zero` (or any non-positive value)
+to **disable** the built-in scheduler and let the host own the cadence (an
 admin trigger, an Orleans reminder, or - for replicated trees - the
 replication package's per-tree maintenance grain).
 
 The first pass is **not** run at silo start; it is staggered by a random
-offset of half to one full interval. That lets the silo finish activating
+offset in `[WalGcStartupDelay / 2, WalGcStartupDelay)` - 15 to 30 seconds by
+default, capped at `WalGcInterval`. That lets the silo finish activating
 before the scheduler adds scan/trim I/O, and de-correlates the first pass
 across silos so a rolling cluster restart does not align every silo's
 full-tree fan-out into a correlated I/O storm.
@@ -830,11 +857,16 @@ LatticeWalGcReport report = await gc.RunOnceAsync(
 
 ### Metrics
 
-The GC publishes one counter on the `orleans.lattice` meter:
+The GC and its scheduler publish a family of instruments on the
+`orleans.lattice` meter, all catalogued in [Metrics](metrics.md). The ones to
+start from:
 
 | Instrument | Tags | Description |
 |---|---|---|
-| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
+| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | Counter. WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
+| `orleans.lattice.wal.gc.passes` | `tree`, `outcome` | Counter. One count per scheduled pass, by outcome: `reclaimed`, `blocked`, `no_consumer`, `idle`, `over_ceiling`, `stranded`, `unclassified` or `failed`. Only `reclaimed` states that WAL came back; every other arm says why nothing was trimmed. |
+| `orleans.lattice.wal.gc.interval` | `tree` | Histogram (seconds). The adaptive interval the scheduler chose for the tree after its latest pass. A series pinned at `WalGcMinInterval` is a tree the scheduler is holding at the floor - reclaiming, blocked, or over its byte ceiling. |
+| `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each shard's trim scan stopped - for example `exhausted`, `cursor_floor`, `offset_floor`, `block_pin` or `durability_hold`. |
 
 ## Relationship to replication
 
@@ -855,8 +887,10 @@ for the driver-grain scheduling model that consumes the WAL on each peer.
 
 ## Configuration
 
-The WAL pipeline exposes a small number of knobs on `LatticeOptions`. Defaults
-suit most workloads.
+The knobs below shape WAL retention and replay; defaults suit most workloads.
+They are a subset: the full WAL option set - batching and pipeline depth,
+admission and saturation, GC cadence, and the materialiser pin store - is in
+the [Options Reference](configuration.md#options-reference).
 
 | Option | Default | Purpose |
 |---|---|---|
@@ -869,20 +903,23 @@ suit most workloads.
 | `WalMaxRetainedBytes` | `null` (disabled) | Advisory per-tree byte ceiling that schedules byte-pressure trim work, but only within the safe consumer frontier. See [Tree Storage](tree-storage.md#advisory-byte-pressure-wal-retention). |
 | `WalBytePressureReclaimTarget` | `0.8` | Low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the byte-pressure policy after a trim. Inert unless `WalMaxRetainedBytes` is set. |
 
-The WAL provider itself is registered separately via
-`siloBuilder.AddWalStorage(...)` (single-cluster) or via
-`siloBuilder.AddLatticeReplication(...)` (multi-cluster). See
+The WAL provider itself is registered separately - through a storage package's
+helper such as `AddAzureTableWalStorage` or `AddFileWalStorage`, or `siloBuilder.AddWalStorage(...)`
+for a custom provider (a replicated host can also supply a per-tree resolver
+through `LatticeReplicationOptions.WalStorageProvider`). See
 [`wal-storage-providers.md`](wal-storage-providers.md) for the provider seam
-and the in-memory / Azure Table options.
+and the in-memory, file, and Azure Table providers.
 
 ## Observability
 
-The commit pipeline emits three primary instruments. All are tagged with the
-tree id and (for `leaf.commit.duration`) the pipeline step.
+The commit pipeline's primary instrument is the per-step latency histogram
+below. The leaf write-duration histogram described under
+[Commit pipeline](#commit-pipeline), and the WAL writer and shard instruments
+catalogued in [Metrics](metrics.md), complete the picture.
 
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
-| `leaf.commit.duration` | histogram (ms) | `tree`, `step` ∈ `{wal, apply, observer}` | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is in-memory-only; `observer` is the publish under the commit-log scope. |
+| `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` (one of `wal`, `apply`, `digest`, `observer`) | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is the in-memory merge plus any relocation or split it triggers; `digest` is the awaited projection-digest publish to the parent internal node; `observer` is the publish under the commit-log scope. |
 
 The bundled Grafana dashboards consume these instruments directly; see
 [`../lattice.dashboards/README.md`](../lattice.dashboards/README.md).
@@ -890,7 +927,7 @@ The bundled Grafana dashboards consume these instruments directly; see
 ## Related surfaces
 
 - [`wal-storage-providers.md`](wal-storage-providers.md) - pluggable backend
-  contract and the in-memory / Azure Table providers.
+  contract and the in-memory, file, and Azure Table providers.
 - [`projection-rebuild.md`](projection-rebuild.md) - drift detection and the
   fall-off-log rebuild path.
 - [`tombstone-compaction.md`](tombstone-compaction.md) - how reaped tombstones

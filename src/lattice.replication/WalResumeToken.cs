@@ -1,9 +1,8 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Internal opaque resume token exchanged on the transport-side seam
-/// (the gRPC push transport will consume this) when a peer needs to
-/// resume mid-stream from a precise per-shard offset rather than a
+/// Internal opaque resume token shape for transport-side seams that need to
+/// resume from a precise per-shard offset rather than a
 /// hybrid-logical-clock cursor.
 /// <para>
 /// <b>Cursor-shape decision.</b> The public

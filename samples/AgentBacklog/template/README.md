@@ -26,7 +26,7 @@ is exposed as MCP tools, not as a public C# API. Register it **with writes
 enabled**:
 
 ```csharp
-builder.AddRepoContextTools(enableWrites: true);
+builder.Services.AddRepoContextTools(enableWrites: true);
 ```
 
 Without `enableWrites` the mutating tools are not contributed at all, so
@@ -71,8 +71,8 @@ Read both now, before you do anything else.
 Orleans.Lattice's own overrides are working examples:
 [`backlog-worker.agent.md`](../../../.github/agents/backlog-worker.agent.md) and
 [`backlog-pm.agent.md`](../../../.github/agents/backlog-pm.agent.md). Each is
-under 70 lines, which is the whole point: that is the complete deviation from
-the base.
+roughly 80 to 110 lines, which is the whole point: that is the complete
+deviation from the base.
 
 ## 4. Add the always-on memory rules
 
@@ -146,8 +146,11 @@ overlap tolerance.
 ## 7. Verify
 
 - `repocontext_list_repos` reports your `{repoId}`.
-- `repocontext_claim_status` on any key returns `exists: false` rather than an
-  error, confirming the read-only tool is contributed.
+- `repocontext_claim_status` on a memory key that holds no record
+  (`repo/{repoId}/mem/<topic>/<id>`) returns `exists: false` rather than an
+  error, confirming the read-only tool is contributed. A key that is malformed or
+  names any other record family is refused, because claims exist only on memory
+  records.
 - `repocontext_claim` on a real memory key returns `granted: true` with a
   `fencingToken`, confirming writes are enabled.
 - An unfenced `repocontext_update` against that claimed key is **refused**. If it

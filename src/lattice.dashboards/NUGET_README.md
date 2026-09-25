@@ -1,11 +1,11 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles ready-to-import JSON dashboards covering every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters.
+Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles ready-to-import JSON dashboards covering almost every instrument on the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters.
 
 ## What it gives you
 
-- **Focused dashboards** - `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, and `Authorization`, selectable via the `LatticeDashboardKind` enum.
-- **Full instrument coverage** - every metric published on the `orleans.lattice` and `orleans.lattice.replication` meters maps to at least one panel, and the add-on `orleans.lattice.auth` / `orleans.lattice.membership` meters are covered by the `Authorization` dashboard; drift guards in the test suite assert the coverage stays complete in both directions.
+- **Focused dashboards** - `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization`, `Backup`, `Scaling`, `ReplicationGrpc`, `Tenancy`, and `GrainIndex`, selectable via the `LatticeDashboardKind` enum and enumerable through `LatticeDashboards.All`.
+- **Near-complete instrument coverage** - every metric published on the `orleans.lattice` and `orleans.lattice.replication` meters maps to at least one panel, apart from a few left uncharted on purpose and listed as such in the metric-to-panel map, and each add-on meter (`orleans.lattice.auth` / `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, `orleans.lattice.replication.grpc`, `orleans.lattice.tenancy`) is covered by its own dashboard; drift guards in the test suite assert the coverage in both directions.
 - **Programmatic access** - `LatticeDashboards.GetGrafanaDashboardJson(kind)` returns the raw dashboard JSON for importing or writing to a Grafana provisioning directory.
 - **OpenTelemetry-ready** - designed for a Prometheus-exported OpenTelemetry pipeline; no bespoke agent or exporter required.
 
@@ -24,6 +24,8 @@ For the underlying instruments and what each one measures, see the [metrics refe
            .AddMeter("System.Runtime")     // .NET runtime: GC heap, working set, thread pool
            .AddPrometheusExporter());
    ```
+
+   `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard also needs its own meter registered by name: `orleans.lattice.auth` and `orleans.lattice.membership` for `Authorization`, `orleans.lattice.backup` for `Backup`, `orleans.lattice.scaling` for `Scaling`, `orleans.lattice.replication.grpc` for `ReplicationGrpc`, and `orleans.lattice.tenancy` for `Tenancy`. See the [configuration guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.dashboards/configuration.md).
 
 2. Import the dashboard JSON into Grafana, or write it to a provisioning directory:
 

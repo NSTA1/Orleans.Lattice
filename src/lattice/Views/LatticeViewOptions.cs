@@ -314,9 +314,9 @@ public sealed class LatticeViewOptions
     /// <summary>
     /// Fraction of <see cref="BatchSize"/> the maintainer drains per pass while the
     /// source tree is <see cref="WalSaturationState.Throttled"/>. The effective
-    /// batch is <c>ceil(BatchSize * ratio)</c> clamped to <c>[1, BatchSize]</c>; the
-    /// ratio itself is clamped to <c>[0, 1]</c> so an out-of-range value can never
-    /// inflate the batch. Ignored when <see cref="ObeySourceBackpressure"/> is
+    /// batch is <c>ceil(BatchSize * ratio)</c> clamped to <c>[1, BatchSize]</c>; a
+    /// ratio outside <c>[0, 1]</c> is rejected by the options validator, so an
+    /// out-of-range value can never inflate the batch. Ignored when <see cref="ObeySourceBackpressure"/> is
     /// <c>false</c>. Defaults to <see cref="DefaultThrottledBatchRatio"/>.
     /// </summary>
     public double ThrottledBatchRatio { get; set; } = DefaultThrottledBatchRatio;

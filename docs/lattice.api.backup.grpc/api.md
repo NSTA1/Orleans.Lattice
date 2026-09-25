@@ -56,7 +56,7 @@ Methods (one per RPC):
 
 ### `LatticeBackupApiGrpcOptions`
 
-See [Configuration](configuration.md) for the full table. Properties: `bool RequireAuthorization` (default `true`), `string CredentialHeaderName` (default `authorization`), `string CredentialScheme` (default `Bearer`), and `IList<AuthSchemeDescriptor> AdvertisedAuthSchemes` (empty by default).
+See [Configuration](configuration.md) for the full table. Properties: `bool RequireAuthorization` (default `true`), `string CredentialHeaderName` (default `authorization`), `string CredentialScheme` (default `Bearer`), `string ActiveTenantHeaderName` (default `lattice-active-tenant`), and `IList<AuthSchemeDescriptor> AdvertisedAuthSchemes` (empty by default).
 
 ## Authorization and identity seams
 
@@ -88,7 +88,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeBackupApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, `ScheduleBackup`, `CancelSchedule`, `GetScopeStatus`, `IsHealthMonitoringAvailable`, `CheckBackupHealth`, `GetBackupHealth`, `ConfigureBackupHealth`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, `ScheduleBackup`, `CancelSchedule`, `GetScopeStatus`, `IsHealthMonitoringAvailable`, `CheckBackupHealth`, `GetBackupHealth`, `ConfigureBackupHealth`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign). The `ProbeCapabilities` RPC has no dedicated value: the interceptor presents it to the authorizer as `Unknown`, so a policy that refuses `Unknown` also refuses capability probes. The unauthenticated `GetAuthScheme` RPC never reaches the authorizer.
 
 ### `LatticeBackupApiAuthorizationContext`
 
@@ -97,7 +97,7 @@ A `readonly struct` describing an inbound call to the authorizer.
 - Constructor: `LatticeBackupApiAuthorizationContext(ServerCallContext call, LatticeBackupApiOperation operation, string? targetId)`. Throws `ArgumentNullException` when `call` is null.
 - `ServerCallContext Call` - the underlying gRPC call context (headers, deadline, peer).
 - `LatticeBackupApiOperation Operation` - the operation being invoked.
-- `string? TargetId` - the backup id for a backup-scoped call, or the target / scope tree id for a capture or restore not yet keyed by a backup id; `null` for whole-catalog and discovery operations.
+- `string? TargetId` - the backup id for a call keyed by one (describe, delete, restore, revert, export, and the three per-backup health calls); the scope tree id for a single-scope capture or incremental, a schedule, a cancel-schedule, or a scope-status read; `null` for the whole-catalog listing and drain, a backup-set capture, a capability probe, and the health-monitoring availability flag.
 
 ## Wire message records
 

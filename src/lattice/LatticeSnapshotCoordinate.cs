@@ -25,19 +25,21 @@ namespace Orleans.Lattice;
 /// <description>
 /// <see cref="PerShardWalOffsets"/> - the next-to-be-assigned WAL
 /// sequence number on every shard the snapshot covers, captured at open
-/// time. With the frozen-baseline store this is the WAL retention pin
-/// anchor and a diagnostic bound (the per-shard projection is captured
+/// time. With the frozen-baseline store these offsets are a diagnostic
+/// bound: each shard's projection is captured up to exactly these heads
 /// and served from a durable <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/>
-/// rather than replayed per page); writes that append after the capture
-/// are invisible by construction.
+/// rather than replayed per page, and only a legacy coordinate with no
+/// <see cref="SnapshotBaselineToken"/> replays the WAL up to them. They
+/// hold back no WAL trimming. Writes that append after the capture are
+/// invisible by construction.
 /// </description>
 /// </item>
 /// <item>
 /// <description>
-/// <see cref="RegistrySnapshotHlc"/> - the HLC stamped on the
-/// <see cref="LatticeRegistrySnapshotContext"/> snapshot taken at
-/// open time. Saga decisions that commit after the capture are
-/// hidden uniformly across every shard the snapshot replays.
+/// <see cref="RegistrySnapshotHlc"/> - a diagnostic anchor recorded at
+/// open time. The current build always records
+/// <see cref="HybridLogicalClock.Zero"/>; saga visibility does not
+/// depend on it.
 /// </description>
 /// </item>
 /// </list>
@@ -45,10 +47,11 @@ namespace Orleans.Lattice;
 /// The fan-out that builds the coordinate is concurrent across
 /// shards, so the captured WAL offsets are not linearisable in
 /// real time - but determinism does not require real-time
-/// linearisability. The <see cref="RegistrySnapshotHlc"/> half
-/// resolves saga visibility uniformly across shards, so the
-/// snapshot view of any single atomic write is all-or-nothing on
-/// every shard the write touched.
+/// linearisability. Saga visibility is fixed when each shard's
+/// baseline is captured, not by <see cref="RegistrySnapshotHlc"/>: the
+/// baseline is folded to one uniform WAL head per shard, so a saga whose
+/// commit terminal lands beyond that head stays pending, and invisible,
+/// on every leaf of that shard it touched.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -134,18 +137,20 @@ public readonly record struct LatticeSnapshotCoordinate
     /// <summary>
     /// Per-shard WAL head offsets captured at open time. Each entry
     /// maps a virtual shard index to that shard's next-to-be-assigned
-    /// WAL sequence number; replay materialises offsets
+    /// WAL sequence number. A frozen-baseline coordinate serves the
+    /// baseline captured up to these heads; only a legacy coordinate
+    /// (no <see cref="SnapshotBaselineToken"/>) replays offsets
     /// <c>[0, value)</c>. Writes appended after capture are invisible
     /// by construction.
     /// </summary>
     [Id(1)] public IReadOnlyDictionary<int, long> PerShardWalOffsets { get; init; } = new Dictionary<int, long>();
 
     /// <summary>
-    /// HLC stamped on the registry-snapshot scope captured at open
-    /// time. Saga decisions that commit after this HLC are hidden
-    /// uniformly across every shard the snapshot replays;
-    /// <see cref="HybridLogicalClock.Zero"/> indicates the snapshot
-    /// covers no saga decisions.
+    /// Diagnostic registry-snapshot anchor recorded at open time. The
+    /// current build always records <see cref="HybridLogicalClock.Zero"/>:
+    /// saga visibility is fixed by the frozen per-shard baselines, and the
+    /// snapshot cursor's WAL cursor-registry registration at this position
+    /// does not hold back WAL trimming.
     /// </summary>
     [Id(2)] public HybridLogicalClock RegistrySnapshotHlc { get; init; }
 

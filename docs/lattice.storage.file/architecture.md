@@ -15,7 +15,7 @@ Every `(tree, shard)` stream is an independent segmented, append-only log under 
       wal.log
 ```
 
-A tree id is percent-encoded into a filesystem-safe path segment: every byte outside the unreserved set `[A-Za-z0-9-._]` is written as `%XX` (uppercase hex of its UTF-8 byte), so distinct tree ids always map to distinct directories. The shard directory is `shard-{index}`, and each shard's log lives in a single `wal.log` segment file.
+A tree id is percent-encoded into a filesystem-safe path segment: every byte outside the unreserved set `[A-Za-z0-9-._]` is written as `%XX` (uppercase hex of its UTF-8 byte), and a trailing run of dots is escaped as well (each as `%2E`), so a segment can never be a relative-path token such as `..` or end in a dot that Windows would strip; distinct tree ids therefore always map to distinct directories. The shard directory is `shard-{index}`, and each shard's log lives in a single `wal.log` segment file.
 
 ## Append and commit framing
 

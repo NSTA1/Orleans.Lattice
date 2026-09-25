@@ -251,8 +251,9 @@ public interface ILatticeStateQuery
 
     /// <summary>
     /// Releases the server-side snapshot cursor named by a scan continuation
-    /// token, freeing its WAL-retention pin and per-shard baseline promptly
-    /// instead of waiting for the cursor's idle TTL. Intended for a client that
+    /// token, freeing its frozen per-shard baselines and cursor state promptly
+    /// instead of waiting for the cursor's idle TTL (the cursor holds back no
+    /// WAL trimming, so no WAL is released). Intended for a client that
     /// abandons a multi-page scan before draining it (e.g. the explorer
     /// refreshing, re-filtering, or navigating away). The operation is
     /// best-effort and idempotent: an empty token, or one that names an unknown,

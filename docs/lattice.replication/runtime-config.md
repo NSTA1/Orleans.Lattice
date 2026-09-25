@@ -9,7 +9,7 @@ Replication configuration is not a bespoke store and not a cross-cluster handsha
 The tree is an OR-Map keyed by target tree id. Each value is a small composite CRDT record (`LatticeReplicationConfigEntry`):
 
 - **Enablement** is a disable-wins `RwFlag`. Enabling adds an enable dot; disabling adds a disable dot that wins, so a concurrent enable and disable resolves to disabled - the safe direction.
-- **Merge mode** is an `MvRegister<LatticeMergeMode>`. Two clusters that concurrently enable the same tree under different modes both survive convergence, so a divergent mode is **detectable** rather than silently overwritten. An `MvRegister` is used deliberately in place of an `LwwRegister`, whose last-writer-wins contract would drop the loser under a concurrent multi-cluster write - exactly the correctness hazard here.
+- **Merge mode** is an `MvRegister` holding the encoded `LatticeMergeMode`. Two clusters that concurrently enable the same tree under different modes both survive convergence, so a divergent mode is **detectable** rather than silently overwritten. An `MvRegister` is used deliberately in place of an `LwwRegister`, whose last-writer-wins contract would drop the loser under a concurrent multi-cluster write - exactly the correctness hazard here.
 
 Because the configuration is a converging tree, an operator flips a tree on once, on any cluster, and every peer converges to the same decision through normal replication. Per-cluster propagation is not re-consented; the trust boundary is the existing peer enrolment.
 
@@ -26,7 +26,7 @@ The existing static replicated-tree options map (`LatticeReplicationOptions.Repl
 
 ## The compiled snapshot
 
-A grain call must never sit on the commit hot path, so the config tree is projected into an in-memory snapshot. The compiled-snapshot maintainer observes the config tree's change feed and rebuilds a `treeId -> { enabled, mode, ambiguous }` projection whenever the tree advances, mirroring how the auth stack compiles its policy snapshot. The snapshot is invalidated and recompiled off the change feed, so a read is a lock-light lookup against a fixed epoch, not a grain round-trip.
+A grain call must never sit on the commit hot path, so the config tree is projected into an in-memory snapshot. The compiled-snapshot maintainer observes commits to the config tree through the core mutation-observer hook (`IMutationObserver`) and rebuilds a `treeId -> { enabled, mode, ambiguous }` projection whenever the tree advances, mirroring how the auth stack compiles its policy snapshot. A commit only schedules a coalesced background rebuild, so the snapshot is eventually consistent - an edit is reflected shortly after it commits - and a read is a lock-light lookup against a fixed epoch, not a grain round-trip.
 
 Two dynamic seams read that snapshot:
 
@@ -45,9 +45,9 @@ This is the load-bearing safety property of the whole feature: a divergent multi
 
 The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed only when `AddLatticeReplication(..., enableRuntimeConfig: true)` is called:
 
-- **Enable** fixes the merge mode at enable time. Enabling an already-enabled tree under the same mode is idempotent; under a **different** mode it is rejected (`LatticeReplicationModeChangeRejectedException`), because a mode change would reinterpret every already-shipped value under a new merge algebra. The sanctioned way to change a mode is to disable then re-enable, which re-bootstraps the tree cleanly.
+- **Enable** fixes the merge mode at enable time. Enabling an already-enabled tree under the same mode is idempotent; under a **different** mode it is rejected (`LatticeReplicationModeChangeRejectedException`), because a mode change would reinterpret every already-shipped value under a new merge algebra. The sanctioned way to change a mode is to disable, then re-enable under the new mode; naming a bootstrap source cluster on that enable re-seeds a tree that already holds data (next bullet).
 - **Enable on a non-empty tree** composes the existing snapshot bootstrap: when a bootstrap source cluster is named and the tree already holds rows, a receiver-driven snapshot is requested (through `ILatticeBootstrapCoordinator` / `ILatticeReplicationAdmin.RequestSnapshotAsync`) so the peer converges on the pre-existing rows the change feed will not carry.
-- **Disable** writes the disable-wins dot. It pauses shipping new mutations; it never purges data already replicated to peers, and it keeps the fixed mode so a later re-enable is a clean re-bootstrap.
+- **Disable** writes the disable-wins dot. It pauses shipping new mutations; it never purges data already replicated to peers, and it keeps the entry (with its last mode) in the config tree. A later enable re-fixes the mode to the value it requests; no bootstrap runs unless that enable names a bootstrap source cluster.
 
 ## Reading the effective configuration
 

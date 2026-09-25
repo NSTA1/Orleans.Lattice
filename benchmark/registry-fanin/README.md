@@ -254,7 +254,10 @@ indistinguishable from a correct read in the output.
 | path | what it is |
 |---|---|
 | `Driver/` | sidecar console driver; joins the cluster as an Orleans client and addresses `ILattice` / `ILatticeRegistry` directly |
-| `scripts/rig.ps1` | container lifecycle: `build` `up` `ready` `driver` `down` `reset` `status` |
+| `docker-compose.rig.yml` | the isolated stack: the rig-built silo image and the re-tagged embedder, on external rig-prefixed volumes |
+| `scripts/parameters.ps1` | default parameters and the isolation contract; a gitignored `parameters.local.ps1` overrides it |
+| `scripts/build-driver.ps1` | publishes the driver on the host and lays it into a COPY-only sidecar image |
+| `scripts/rig.ps1` | container lifecycle: `build` `tag` `up` `ready` `driver` `down` `reset` `status` |
 | `scripts/_fanin-helpers.ps1` | timeout census, counter baselining, restart detection, isolation guard, Prometheus parse, host load, interleaving parse |
 | `scripts/collect-window.ps1` | the measurement proper: per-arm service time, fan-in width, attribution validity, timeout census, host load |
 | `scripts/run-cell.ps1` | one cell = K x depth x cold start x window |
@@ -263,6 +266,7 @@ indistinguishable from a correct read in the output.
 | `scripts/run-fanout.ps1` | **the fan-out arm** - the only arm that reaches the regime in which the fan-in bound binds, plus its ungated A/B control; see [The fan-out arm](#the-fan-out-arm-the-only-arm-that-reaches-the-bound) |
 | `scripts/run-host-pressure.ps1` | cold start at fixed K while a throwaway burner contends for the host |
 | `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers (41) |
+| `results/` | committed per-run JSON results quoted below (`results/runs/` spills are gitignored) |
 
 ## Driver
 
@@ -273,7 +277,7 @@ indistinguishable from a correct read in the output.
 ./scripts/rig.ps1 driver -DriverArgs "teardown --trees 40"
 ```
 
-Verbs: `create`, `populate`, `probe`, `fanout`, `census`, `list`, `teardown`.
+Verbs: `create`, `populate`, `census`, `load`, `probe`, `fanout`, `list`, `teardown`.
 The driver emits client-side timing independent of every server instrument -
 per-call latency, deadline exceptions, and peak in-flight concurrency.
 
@@ -401,7 +405,7 @@ it there reproduces the false green rather than testing anything.
 
 ### The gate's own instruments
 
-Three series were added, all on the `Orleans.Lattice` meter:
+Three series were added, all on the `orleans.lattice` meter:
 
 | instrument | what it answers |
 |---|---|

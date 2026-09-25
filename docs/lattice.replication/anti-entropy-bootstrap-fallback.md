@@ -20,13 +20,13 @@ The fallback ships **committed projection rows only**: prepared (not-yet-decided
 ## Scope and limitations
 
 - **Client-side scoping in the default provider.** The default `ISnapshotProvider` implements the range overload by exporting the whole tree and filtering the stream client-side - it does **not** push the range bound into storage. A storage-aware provider can override the overload to avoid streaming out-of-range entries it then discards; the metadata it returns must match the whole-tree export at the same as-of HLC so receivers pin the same resume cut.
-- **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair, exactly as for leaf re-replay.
+- **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport delivers nothing and returns an unaccepted ack, so every repair pass reports zero entries shipped and counts toward the remediation circuit breaker. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair, exactly as for leaf re-replay.
 - **Committed projection only.** Prepared-saga rows are not re-shipped; per-entry origin is stamped as the local cluster id on the wire, matching the existing whole-tree bootstrap convention. For CRDT-mode trees the re-shipped value is the committed state at snapshot time applied through the receiver's per-tree merge mode, consistent with whole-tree bootstrap semantics.
 - **Bounded per pass.** A divergence larger than the entry/byte caps makes partial progress per cadence.
 
 ## Enabling it
 
-The fallback ships **dark** and is gated: targeted leaf re-replay must be enabled and must report either a trimmed WAL (`reason=wal_trimmed`) or an empty selection over a genuinely divergent range (`reason=range_empty`, the below-cursor blind spot), the walk must have localised at least one leaf, and `BootstrapFallbackEnabled` must be `true`. An un-opted host sees no new behaviour; when either signal fires while the flag is off, a single `bootstrap_fallback.skipped{reason=disabled}` is emitted so operators can see the fallback was available but not taken.
+The fallback ships **dark** and is gated: the walk must have localised at least one leaf, the [remediation guards](anti-entropy-remediation-guards.md) must admit the repair pass (the `AutoRemediateOnDigestMismatch` master gate, then the per-`(tree, peer)` circuit breaker and traffic budget), targeted leaf re-replay must be enabled and must report either a trimmed WAL (`reason=wal_trimmed`) or an empty selection over a genuinely divergent range (`reason=range_empty`, the below-cursor blind spot), and `BootstrapFallbackEnabled` must be `true`. An un-opted host sees no new behaviour; when either signal fires while the flag is off, a single `bootstrap_fallback.skipped{reason=disabled}` is emitted so operators can see the fallback was available but not taken.
 
 ```csharp verify
 siloBuilder.AddLatticeReplication(o =>
@@ -42,6 +42,9 @@ siloBuilder.AddLatticeReplication(o =>
     o.MerkleWalkEnabled = true;
     o.LeafReReplayEnabled = true;
 
+    // Master gate for all automatic repair (off by default).
+    o.AutoRemediateOnDigestMismatch = true;
+
     // GC'd- or below-cursor-divergence fallback (off by default). Runs after a
     // trimmed WAL or an empty below-cursor re-replay selection.
     o.BootstrapFallbackEnabled = true;
@@ -52,7 +55,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 | Option | Default | Notes |
 |---|---|---|
-| `BootstrapFallbackEnabled` | `false` | Master switch. When `false`, a trimmed-WAL or below-cursor divergence is counted (`bootstrap_fallback.skipped{reason=disabled}`) but never repaired. |
+| `BootstrapFallbackEnabled` | `false` | Stage switch for the snapshot repair pass, checked after the remediation guards admit the pass. When `false`, a trimmed-WAL or below-cursor divergence is counted (`bootstrap_fallback.skipped{reason=disabled}`) but never repaired. |
 | `BootstrapFallbackMaxEntries` | `4096` | Soft cap on committed entries re-shipped per pass; always ships at least one. Validated `>= 1`. |
 | `BootstrapFallbackMaxBytes` | `1048576` | Soft cap on the estimated re-shipped payload bytes per pass; always ships at least one. Validated `>= 1`. |
 
@@ -62,11 +65,11 @@ Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|
-| `orleans.lattice.replication.bootstrap_fallback.triggered` | `tree`, `peer` | Once when a fallback pass begins (after the ranges-non-empty check). |
-| `orleans.lattice.replication.bootstrap_fallback.entries` | `tree`, `peer` | By the number of committed entries re-shipped to the peer in a pass. |
-| `orleans.lattice.replication.bootstrap_fallback.skipped` | `tree`, `peer`, `reason` | Once per pass that skipped without re-shipping. |
+| `orleans.lattice.replication.bootstrap_fallback.triggered` | `tree`, `peer`, `tenant` | Once when a fallback pass begins (after the ranges-non-empty check). |
+| `orleans.lattice.replication.bootstrap_fallback.entries` | `tree`, `peer`, `tenant` | By the number of committed entries re-shipped to the peer in a pass. |
+| `orleans.lattice.replication.bootstrap_fallback.skipped` | `tree`, `peer`, `reason`, `tenant` | Once per pass that skipped without re-shipping. |
 
-Skip reasons: `disabled` (the feature is off but a trimmed-WAL divergence was available), `range_empty` (the localiser produced no ranges), and `empty` (the scoped export yielded no committed entries in range).
+Skip reasons: `disabled` (the feature is off but a trimmed-WAL or below-cursor divergence was available), `range_empty` (the localiser produced no ranges), and `empty` (the scoped export yielded no committed entries in range).
 
 The metric-name constants and the skip-reason mapping are exposed for dashboards built from the public surface:
 

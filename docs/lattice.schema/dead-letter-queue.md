@@ -10,14 +10,20 @@ diverted here for an operator to inspect and act on out of band.
 
 An entry is created only in [strict-ingest](schema-enforcement.md#strict-mode-ingest)
 mode. Each entry records the offending key, a bounded preview of the value
-(capped by `DeadLetterPreviewMaxBytes`), the full byte length, a human-readable
-reason, the source, and a UTC timestamp. The source is one of:
+(capped by the writing add-on's `DeadLetterPreviewMaxBytes` option), the full byte
+length, a human-readable reason, the source, and a UTC timestamp. The source is one
+of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|
 | `Replication` | A replicated apply from a peer cluster failed strict validation. |
 | `Restore` | A backup restore item failed strict validation. |
 | `LocalRejected` | Reserved for a rejected local write retained for inspection. Not produced by the current release, which fails local writes closed (see below). |
+
+The `Restore` source is assigned only by enforcement. An item the versioning stage
+dead-letters (a version that is newer than the target or cannot be upcast) is
+always recorded with the `Replication` source, even when it arrived through a
+restore.
 
 A direct local write that violates a policy fails closed: it is *rejected* to the
 caller with `LatticeSchemaViolationException` and nothing is made durable. The
@@ -29,7 +35,10 @@ value; no code path produces it today.
 
 ## Reading it from the schema admin
 
-The `SchemaAdmin`-gated `ILatticeSchemaAdmin` exposes the queue directly:
+The in-process `ILatticeSchemaAdmin` exposes the queue directly. It performs no
+authorization of its own; the [schema API facade](../lattice.api.schema/README.md)
+authorizes remote reads of the queue on Read authority (see
+[Capability gate](README.md#capability-gate)):
 
 ```csharp verify
 using Orleans.Lattice.Schema;
@@ -53,8 +62,8 @@ and a paginated `ListDeadLettersAsync` that takes a `DeadLetterQueueRequest`
 (`TreeId`, `PageSize`, `PageToken`) and returns a `DeadLetterQueuePage` - a list of
 `DeadLetterEntryRecord` plus a `NextPageToken` for the next page. Each record
 carries the offending `Key`, a bounded `ValuePreview` (with `PreviewTruncated` and
-the full `ValueByteLength`), the `Reason`, a `DeadLetterSourceKind`, and
-`TimestampUtc`.
+the full `ValueByteLength`), the `Reason`, the `Source` (a `DeadLetterSourceKind`),
+and `TimestampUtc`.
 
 The DLQ store is an **optional** dependency: if the schema package is not
 installed, the count is zero and the page is empty rather than an error. The

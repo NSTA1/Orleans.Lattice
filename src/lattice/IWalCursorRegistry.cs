@@ -17,9 +17,9 @@ namespace Orleans.Lattice;
 /// The registry is consumer-neutral: a <c>consumerId</c> may be a
 /// remote peer cluster id, an internal materialiser handle, a custom
 /// bridge name, or any other stable string. The garbage collector
-/// pins the WAL to the slowest consumer of the lot, which mirrors the
-/// "min(cursor across IChangeFeed subscribers)" predicate the
-/// replication design requires for v1 and the future log-first model.
+/// pins the WAL to the slowest registered consumer of the lot - leaf
+/// materialisers, view maintainers, WAL subscribers, replication shippers,
+/// or custom bridges all participate through the same cursor registry.
 /// </para>
 /// <para>
 /// Implementations must be safe for concurrent use; the default

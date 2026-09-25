@@ -4,8 +4,8 @@ This page describes the security posture of the Orleans.Lattice authorization
 layer (`Orleans.Lattice.Auth` and the identity packages it builds on). It
 summarises the threat model, enumerates the attack surface, states the
 fail-closed guarantees the layer makes, defines the trust boundary for internal
-grain calls, sets out the transport-security expectations, and records the
-findings from a full security and design review together with their resolutions.
+grain calls, describes the bootstrap-administrator root of trust, and sets out
+the transport-security expectations.
 
 The review that produced this page, and the regression coverage that locks the
 fixes in, are tracked in
@@ -47,10 +47,10 @@ The layer assumes the following trust model:
 | Surface | Entry point | Enforcement |
 |---|---|---|
 | Data plane (external) | gRPC state / data API to the `ILattice` facade grain | The facade calls the registered access gate on every operation. |
-| Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every auth-admin call, reads included, is authorized against the reserved authorization namespace, which is fail-closed (see finding A2). |
-| Read catalog (external) | State-API catalog and structure endpoints | Existence of a tree/view/key is hidden from a caller who cannot read the underlying source (see finding A1). |
-| Explorer (operator tool) | The Explorer's gRPC client to the state API | Credentials only attach over a transport gRPC can confirm is secure (see finding A3). |
-| Internal grain calls | Direct in-cluster calls to the shard / leaf grains | Defense-in-depth internal-origin assertion (see finding A4). |
+| Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every auth-admin call, reads included, is authorized against the reserved authorization namespace, which is fail-closed (see [Fail-closed guarantees](#fail-closed-guarantees)). |
+| Read catalog (external) | State-API catalog and structure endpoints | Existence of a tree/view/key is hidden from a caller who cannot read the underlying source (see [Fail-closed guarantees](#fail-closed-guarantees)). |
+| Explorer (operator tool) | The Explorer's gRPC client to the state API | Credentials only attach over a transport gRPC can confirm is secure (see [Transport-security (TLS) expectations](#transport-security-tls-expectations)). |
+| Internal grain calls | Direct in-cluster calls to the shard, leaf, and write-ahead-log shard grains | Defense-in-depth internal-origin assertion (see [Trust boundary for internal grain calls](#trust-boundary-for-internal-grain-calls)). |
 | Credential smuggling | Reserved `RequestContext` capability keys | The capability-stripping incoming call filter re-derives every internal capability from the real caller identity on each hop (see below). |
 
 ## Fail-closed guarantees
@@ -64,7 +64,7 @@ path:
   Even when the data-plane default effect is configured to allow, an unmatched
   decision in the reserved authorization namespace resolves to deny, so only a
   bootstrap administrator (or an explicitly modelled grant) is ever an
-  administrator. See finding A2.
+  administrator.
 - **Denied mutations leave no partial state.** A denied single-key write,
   delete, range delete, CRDT apply, batch write, atomic multi-key write, or bulk
   load throws before any leg of the operation is applied. The adversarial
@@ -72,7 +72,7 @@ path:
 - **Existence is hidden on a read-around.** A caller who cannot read a tree's
   source data receives an empty or not-found result from the read and catalog
   surfaces, and cannot distinguish "exists but I cannot read it" from "does not
-  exist". See finding A1. This is enforced on the facade grain itself:
+  exist". This is enforced on the facade grain itself:
   `ILattice.TreeExistsAsync` authorizes a whole-tree read and answers `false` for
   a denied caller, so the guarantee holds for a direct in-cluster grain call and
   not only for the state-API surfaces layered above it.
@@ -88,9 +88,11 @@ path:
 
 ## Trust boundary for internal grain calls
 
-All access-gate enforcement lives on the `ILattice` facade grain. The physical
-shard and leaf grains it delegates to enforce no policy of their own, so a direct
-in-cluster grain call to a shard or leaf key would otherwise bypass policy.
+Access-gate enforcement lives on the grains the public API routes a caller to:
+the `ILattice` facade grain, the durable cursor it opens, and the coordinator a
+cross-tree atomic write runs on. The physical shard, leaf, and write-ahead-log
+shard grains beneath them enforce no policy of their own, so a direct in-cluster
+grain call to one of those keys would otherwise bypass policy.
 
 Two mechanisms harden this boundary:
 
@@ -108,8 +110,9 @@ Two mechanisms harden this boundary:
    the system-origin or internal-origin marker on its outbound `RequestContext`
    therefore cannot smuggle a forged capability into a grain call.
 
-2. **The shard / leaf internal-origin assertion.** The shard and leaf mutation
-   entry points assert that the current turn carries the internal-origin marker
+2. **The internal-origin assertion.** The shard, leaf, and write-ahead-log shard
+   grains assert, on their read entry points as well as their mutation entry
+   points, that the current turn carries the internal-origin marker
    (established only inside the trust boundary). A direct external client call
    carries no such marker - any forged one having been stripped by the filter -
    and is refused. The assertion is keyed on the presence of the filter (a
@@ -141,7 +144,8 @@ is in the set is short-circuited to allow *before* the decision engine is
 consulted, so it works even against a cold or empty policy snapshot. It exists
 for one reason: to stop a deployment locking every operator out of the
 authorization tree itself. Under the recommended deny-by-default posture the
-reserved control-plane namespace is forced closed (see finding A2), so with no
+reserved control-plane namespace is forced closed (see
+[Fail-closed guarantees](#fail-closed-guarantees)), so with no
 rules yet authored nobody could seed the first one. A bootstrap administrator
 seeds that first policy and repairs a misconfiguration that would otherwise be
 unrecoverable.
@@ -178,7 +182,7 @@ plainly:
   gRPC insecure-channel safeguard for an endpoint that is genuinely plaintext
   (an `http` address) and only when the operator has explicitly opted into
   unencrypted transport. For an `https` endpoint the safeguard stays active and
-  credentials still attach over the confirmed-secure channel. See finding A3.
+  credentials still attach over the confirmed-secure channel.
 - **Production deployments should terminate TLS at or before the cluster's
   external endpoints.** The plaintext opt-in exists for local development and for
   deployments that terminate TLS at a trusted proxy; it should not be enabled on

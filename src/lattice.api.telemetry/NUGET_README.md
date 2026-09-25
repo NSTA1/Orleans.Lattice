@@ -6,6 +6,7 @@ Every telemetry binding adapts over this one package, so the security-critical P
 
 ## What it gives you
 
+- **The curated telemetry facade** - `AddLatticeTelemetryApi()` registers `ILatticeTelemetry` (implemented by `LatticeTelemetry`) over a server-authored named-query catalogue: a caller selects a query by id and never supplies PromQL, the facade derives the tenant scope from the authenticated caller and reports the scope it applied on every response, and discovery degrades to an empty catalogue rather than failing. It calls `AddLatticeTelemetryBackend()` itself.
 - **A read-only backend client** - `IPrometheusQueryClient` covers the four operations a telemetry surface needs: instant query, range query, metric-name listing, and metric metadata.
 - **A dual-credential trust boundary** - the proxy stamps the configured **backend** credential (bearer, basic, dynamic bearer, or mutual-TLS) on every backend request. It takes no dependency on any Lattice credential source, so a caller's Lattice credential can never be forwarded to the backend. `ITelemetryBackendTokenProvider` is the seam a cloud-identity add-on plugs a rotating token into.
 - **Guardrails** - a request timeout plus a maximum range and step for range queries, applied by `TelemetryRangeGuardrails` so every binding rejects an over-budget request with the same message.
@@ -28,4 +29,4 @@ services.AddLatticeTelemetryBackend();
 
 `AddLatticeTelemetryBackend()` is idempotent and defers to an `IPrometheusQueryClient` the host registered first, so a test or an alternative backend can be substituted without touching the policy wiring.
 
-This package starts nothing and exposes no transport of its own. The MCP tool group ships in `Orleans.Lattice.Api.Mcp.Telemetry`.
+This package starts nothing and exposes no transport of its own. The gRPC binding for the curated facade ships in `Orleans.Lattice.Api.Telemetry.Grpc`, and the MCP tool group ships in `Orleans.Lattice.Api.Mcp.Telemetry`.

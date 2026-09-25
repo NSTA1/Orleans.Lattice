@@ -25,24 +25,30 @@ namespace Orleans.Lattice;
 /// attempt against a fresh silo activation.
 /// </para>
 /// <para>
-/// <b>Sources.</b> Surfaces from three distinct shutdown failure
+/// <b>Sources.</b> Surfaces from four distinct shutdown failure
 /// shapes that share the same operational meaning ("this silo is
 /// going away; the operation was refused"):
 /// </para>
 /// <list type="bullet">
-///   <item><description>The writer-side drain refusal from
-///   <c>WalCommitLogWriter.DrainAsync</c>, raised inline on any new
-///   <c>AppendAsync</c> / <c>AppendBatchAsync</c> dispatch after the
-///   drain flag flips.</description></item>
-///   <item><description>The Orleans runtime's refusal to re-activate
-///   a grain that has been deactivated as part of the same shutdown
-///   ("Unable to create local activation" / "invalid activation"
-///   reported by <c>OrleansMessageRejectionException</c>).</description></item>
-///   <item><description>The saga coordinator's own short-circuit
-///   when either of the above is observed mid-saga; rather than
-///   surfacing the inner shape verbatim and forcing every caller to
-///   parse exception messages, the saga wraps the cause in this
-///   typed exception so consumers can detect the regime via a
+///   <item><description>The lifetime-aware pre-dispatch fast-fail: the
+///   public write entry points (and the internal shard-root write path
+///   and the tombstone-compaction pass) check that the host has begun
+///   stopping and throw before they dispatch anything.</description></item>
+///   <item><description>The writer-side drain refusal, raised inline on
+///   any new WAL append (single or batched) dispatched after the
+///   writer's drain flag flips.</description></item>
+///   <item><description>The admission-semaphore drain release: a caller
+///   already parked on a WAL partition's admission gate when the drain
+///   fired is released with this exception (the original
+///   <see cref="TimeoutException"/> is kept as the inner exception).</description></item>
+///   <item><description>The saga coordinator's own short-circuit when
+///   any of the above - or the Orleans runtime's refusal to re-activate
+///   a grain deactivated by the same shutdown ("Unable to create local
+///   activation" / "invalid activation", reported by
+///   <c>OrleansMessageRejectionException</c>) - is observed mid-saga;
+///   rather than surfacing the inner shape verbatim and forcing every
+///   caller to parse exception messages, the saga wraps the cause in
+///   this typed exception so consumers can detect the regime via a
 ///   single <see langword="is"/> check.</description></item>
 /// </list>
 /// <para>

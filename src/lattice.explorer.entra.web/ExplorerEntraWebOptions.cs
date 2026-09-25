@@ -12,7 +12,8 @@ public enum ExplorerWebTokenCacheKind
     /// <summary>
     /// A per-process in-memory token cache. Correct for a single-replica host;
     /// on a multi-replica host a user's cached token is not shared across
-    /// replicas, so a request routed to a cold replica re-acquires silently.
+    /// replicas, so a request routed to a cold replica cannot acquire a token
+    /// until that replica receives a fresh authorization-code sign-in.
     /// </summary>
     InMemory,
 

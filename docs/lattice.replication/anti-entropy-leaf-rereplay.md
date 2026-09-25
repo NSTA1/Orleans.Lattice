@@ -16,13 +16,13 @@ An entry is a candidate when it is the local cluster's own origin, its clock is 
 ## Scope and limitations
 
 - **Peer cursor seam over gRPC.** Reading the peer's applied watermark needs a read-only RPC. The `Orleans.Lattice.Replication.Grpc` binding now implements `IReplicationDigestProbeTransport.GetPeerHighWaterMarkAsync` by resolving the peer's per-origin applied watermark, so the pass re-ships only entries whose clock is strictly greater than the peer's reported cursor instead of every in-range retained entry. An un-upgraded peer that has not bound the `GetPeerHighWaterMark` method answers `Unimplemented` and the seam falls back to `HybridLogicalClock.Zero` (re-ship everything, rely on the receiver's per-origin idempotent dedup) - rolling-upgrade safe. A custom transport can still override the method directly.
-- **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
+- **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport delivers nothing and returns an unaccepted ack, so every repair pass reports zero entries shipped and counts toward the remediation circuit breaker. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
 - **Bounded read window.** The pass reads the oldest retained entries per partition up to a bounded budget; a divergence larger than the window makes partial progress per cadence as the peer's cursor advances.
 - **`wal_trimmed` hands off to the bootstrap-snapshot fallback.** When the local WAL has been garbage-collected past the divergence point, the missing entries are gone from the log, so re-replay cannot ship them. The pass emits `leaf_rereplay.skipped{reason=wal_trimmed}` and hands the localised ranges to the [anti-entropy bootstrap fallback](anti-entropy-bootstrap-fallback.md), which re-derives their committed projection from the live tree and re-ships it; an empty selection over a divergent range (`reason=range_empty`) takes the same path. The fallback ships dark: with `BootstrapFallbackEnabled` off (the default) it records `bootstrap_fallback.skipped{reason=disabled}` and repair is left to the operator.
 
 ## Enabling it
 
-The repair ships **dark** and is gated five ways: the digest probe must be enabled, a mismatch must be found, `MerkleWalkEnabled` must be `true`, the walk must localise at least one leaf, and `LeafReReplayEnabled` must be `true`. An un-opted host sees no new behaviour.
+The repair ships **dark** and runs only when every gate passes: the digest probe must be enabled, a mismatch must be found, `MerkleWalkEnabled` must be `true`, the walk must localise at least one leaf, the [remediation guards](anti-entropy-remediation-guards.md) must admit the pass (the `AutoRemediateOnDigestMismatch` master gate, then the per-`(tree, peer)` circuit breaker and traffic budget), and `LeafReReplayEnabled` must be `true`. An un-opted host sees no new behaviour.
 
 ```csharp verify
 siloBuilder.AddLatticeReplication(o =>
@@ -37,6 +37,9 @@ siloBuilder.AddLatticeReplication(o =>
     o.DigestProbeEnabled = true;
     o.MerkleWalkEnabled = true;
 
+    // Master gate for all automatic repair (off by default).
+    o.AutoRemediateOnDigestMismatch = true;
+
     // Repair (off by default). Runs only after a localised leaf.
     o.LeafReReplayEnabled = true;
     o.LeafReReplayMaxEntries = 4096;
@@ -46,7 +49,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 | Option | Default | Notes |
 |---|---|---|
-| `LeafReReplayEnabled` | `false` | Master switch for the repair pass. When `false`, a localised leaf is counted but never repaired (`leaf_rereplay.skipped{reason=disabled}`). |
+| `LeafReReplayEnabled` | `false` | Stage switch for the WAL repair pass, checked after the remediation guards admit the pass. When `false`, an admitted pass records `leaf_rereplay.skipped{reason=disabled}` and repairs nothing. |
 | `LeafReReplayMaxEntries` | `4096` | Soft cap on entries re-shipped per pass; never splits an atomic batch. Validated `>= 1`. |
 | `LeafReReplayMaxBytes` | `1048576` | Soft cap on the estimated re-shipped payload bytes per pass; never splits an atomic batch. Validated `>= 1`. |
 
@@ -58,8 +61,8 @@ Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|
-| `orleans.lattice.replication.leaf_rereplay.entries` | `tree`, `peer` | By the number of WAL entries re-shipped to the peer in a pass. |
-| `orleans.lattice.replication.leaf_rereplay.skipped` | `tree`, `peer`, `reason` | Once per pass that skipped without re-shipping. |
+| `orleans.lattice.replication.leaf_rereplay.entries` | `tree`, `peer`, `tenant` | By the number of WAL entries re-shipped to the peer in a pass. |
+| `orleans.lattice.replication.leaf_rereplay.skipped` | `tree`, `peer`, `reason`, `tenant` | Once per pass that skipped without re-shipping. |
 
 Skip reasons: `disabled` (the feature is off), `range_empty` (the localised range yielded no candidate entries), and `wal_trimmed` (the operator-only alert: the WAL was GC'd past the divergence point).
 

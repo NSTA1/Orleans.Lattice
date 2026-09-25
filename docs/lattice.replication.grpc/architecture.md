@@ -4,12 +4,12 @@
 
 ## Transport pipeline
 
-A sender reads local WAL entries through `IChangeFeed`, packages them as a `ReplicationBatchEnvelope`, sends them through `IReplicationTransport`, and waits for a `ReplicationAck`. The receiver endpoint decodes the same envelope and drives `IReplicationApplier`.
+A sender - the replication shipper - tails the local WAL partitions directly, packages the entries as a `ReplicationBatchEnvelope`, sends them through `IReplicationTransport`, and waits for a `ReplicationAck`. The receiver endpoint decodes the same envelope and drives `IReplicationApplier`.
 
 ```mermaid
 flowchart LR
     subgraph "Cluster A sender"
-        Feed[IChangeFeed]
+        Feed[Local WAL partitions]
         Batch[ReplicationBatchEnvelope]
         Transport[IReplicationTransport]
         Feed -->|batched records| Batch
@@ -36,7 +36,7 @@ The gRPC call boundary carries the public `ReplicationBatchEnvelope` bytes descr
 2. **Channel construction.** The first send to a peer creates a long-lived `GrpcChannel`. HTTPS is required unless `AllowPlaintextEndpoints` is enabled.
 3. **Channel customization.** `ConfigureChannel` runs during channel construction so the host can attach handlers, credentials, retry policy, keep-alive, and message-size settings.
 4. **Unary batch push.** Each batch is sent as one unary call. HTTP/2 multiplexing lets concurrent calls share the peer channel.
-5. **Ack handling.** The sender uses `ReplicationAck.HighestAppliedHlc` as the only durable progress point for that peer and tree.
+5. **Ack handling.** On an accepted ack the sender advances its durable per-peer cursor to `ReplicationAck.HighestAppliedHlc`; when that frontier is at or below the current cursor (for example every entry was deduplicated), it advances to the last shipped entry's HLC instead so the same batch is not re-shipped. A rejected ack (`Accepted = false`) leaves the cursor in place and retries after a backoff.
 
 The transport is safe for concurrent sends to different peer and tree pairs. Ordering, batching, cursor persistence, retry cadence, and adaptive throttling are owned by the replication shipper; see [Replication Drivers](../lattice.replication/replication-drivers.md) and [Receiver Flow Control](../lattice.replication/receiver-flow-control.md).
 
@@ -44,24 +44,25 @@ The transport is safe for concurrent sends to different peer and tree pairs. Ord
 
 1. **Endpoint mapping.** `MapLatticeReplicationGrpc` maps the receiver routes on an ASP.NET Core endpoint route builder.
 2. **Decode.** The inbound body is decoded with the replication batch encoder, preserving the same envelope shape used by other transports.
-3. **Apply.** The decoded records are passed to `IReplicationApplier`, which handles high-water-mark dedup, causal buffering, dead-letter quarantine, and CRDT merge dispatch.
+3. **Apply.** The decoded records are passed to `IReplicationApplier`, which handles duplicate suppression, causal buffering, dead-letter quarantine, and CRDT merge dispatch.
 4. **Acknowledge.** The receiver returns `ReplicationAck` with accepted state, the highest applied HLC, and optional flow-control or compatibility hints.
 
 Receiver idempotency is essential: a retry may redeliver a batch after the receiver applied it but before the sender observed the ack. The apply path turns repeated `(origin, hlc)` records into no-ops.
 
 ## Shared endpoint topology
 
-The gRPC package also carries remote snapshot bootstrap and read-only anti-entropy probe traffic over the same peer endpoint map. Those protocols are documented by the replication package:
+The gRPC package also carries remote snapshot bootstrap, read-only anti-entropy probe traffic, and the cross-cluster saga control channel over the same peer endpoint map. Those protocols are documented by the replication package:
 
 - [Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md) - point-in-time seeding before live incremental shipping.
 - [Automatic drift remediation](../lattice.replication/automatic-drift-remediation.md) - opt-in anti-entropy orchestration.
+- [Coordinated restore](../lattice.replication/coordinated-restore.md) - the all-or-nothing cross-cluster restore saga driven over the saga control channel.
 - [Transport Security](../lattice.replication/transport-security.md) - shared-secret auth and HTTPS posture for every replication call.
 
 ## Invariants preserved
 
 1. **Payload semantics stay in replication.** The transport moves envelopes and acks; it does not decide merge order, conflict resolution, or dead-letter policy.
 2. **Origin metadata is preserved.** Outbound calls stamp the local origin header from `LocalClusterId` or `LatticeReplicationOptions.ClusterId`; records still carry their source origin inside the envelope.
-3. **Progress is receiver-owned.** The sender advances only to the high-water mark in the ack returned by the receiver.
+3. **Progress is ack-driven.** The sender advances its cursor only on an accepted ack from the receiver - to the acked high-water mark, or to the last shipped entry when the receiver deduplicated the whole batch.
 4. **Peer endpoints are explicit.** A batch never falls back to discovery or broadcast when a peer id is missing from `Peers`.
 5. **Security fails closed by default.** Non-HTTPS peer endpoints are rejected unless `AllowPlaintextEndpoints` opts in.
 

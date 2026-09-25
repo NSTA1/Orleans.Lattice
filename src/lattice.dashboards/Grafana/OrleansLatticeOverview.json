@@ -1305,7 +1305,7 @@
     {
       "id": 40,
       "title": "Snapshot pins (current)",
-      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins observable gauge, derived from the WAL cursor registry). Pins hold a snapshot alive against trimming. The gauge reports only the pins held now, so a value that climbs and does not come back down is a real pin leak rather than accumulated metric drift.",
+      "description": "Current number of snapshot cursors registered in the WAL cursor registry (orleans.lattice.snapshot.pins observable gauge). These registrations do not hold back WAL trimming - snapshot pages are served from per-shard baselines frozen at open - so read the value as a count of open snapshot cursors. The gauge reports only the registrations held now, so a value that climbs and does not come back down is a real registration leak rather than accumulated metric drift.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 124 },

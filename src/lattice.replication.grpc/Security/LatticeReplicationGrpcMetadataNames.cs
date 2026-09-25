@@ -21,12 +21,10 @@ internal static class LatticeReplicationGrpcMetadataNames
     public const string SecretHeader = "x-lattice-replication-secret";
 
     /// <summary>
-    /// Header that carries the sender's local cluster id. Used by the
-    /// receiver-side interceptor to choose the correct per-peer secret
-    /// when the host's <see cref="ILatticeReplicationSecretSource"/>
-    /// partitions secrets per origin. Sent on every batch; the
-    /// interceptor falls back to the cluster-wide accepted-set when
-    /// the header is absent.
+    /// Header that carries the sender's local cluster id. Sent on every batch
+    /// for diagnostics and peer attribution; the receiver-side interceptor does
+    /// not use it to select a secret and validates against the configured accepted
+    /// secret set.
     /// </summary>
     public const string OriginClusterIdHeader = "x-lattice-replication-origin";
 }

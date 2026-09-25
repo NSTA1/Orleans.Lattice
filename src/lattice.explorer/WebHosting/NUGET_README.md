@@ -19,10 +19,23 @@ the shared explorer libraries, which restore automatically for a consumer:
   static web assets are served automatically at
   `_content/Orleans.Lattice.Explorer.UI/`).
 - `Orleans.Lattice.Explorer.Core` - the head-agnostic connection, configuration,
-  session, capability, and navigation services.
+  session, authentication, tenant-scoping, and navigation services.
+- `Orleans.Lattice.Explorer.DesignSystem` - the design tokens, named breakpoints,
+  and adaptive layout primitives.
+- `Orleans.Lattice.Explorer.Plugins.Abstractions` - the plugin contract and its
+  four-state access model.
+- `Orleans.Lattice.Explorer.Plugins.Selection` and the per-selection surfaces
+  built on it (`Orleans.Lattice.Explorer.Plugins.Data`, `.Topology`, `.Metrics`,
+  `.DeadLetter`, `.History`, and `.TagIndex`).
 - `Orleans.Lattice.Explorer.Backup` - the Backups management area.
 - `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
   management area.
+- `Orleans.Lattice.Explorer.Plugins.Tenancy` - the shared tenant-administration
+  seam behind `Orleans.Lattice.Explorer.Plugins.Tenants` (the Tenant
+  administration area) and `Orleans.Lattice.Explorer.Plugins.MyTenant` (the My
+  tenant area).
+- `Orleans.Lattice.Explorer.Plugins.Telemetry` - the Telemetry area and the My
+  tenant metrics section.
 - `Orleans.Lattice.Explorer.Schema` - the Schema (schema-policy management) area.
 
 ## Usage
@@ -50,8 +63,9 @@ app.Run();
 components with interactive server components, the shared explorer UI, the
 state-API connection seam, the configuration backing store plus environment
 bootstrap, the catalog / metrics / topology / data / dead-letter / history /
-session services, the capability store, the Backups, Access, Tenants, My Tenant,
-and Telemetry areas, the Schema services (the Schema tab itself stays withheld
+session services, the plugin host and its keyed access store, the per-selection
+surfaces, the Backups, Access, Tenant administration, My tenant, and Telemetry
+areas, the Schema services (the Schema tab itself stays withheld
 until the head also calls `AddExplorerSchemaPlugin()`), and the auth / cookie /
 data-protection plumbing.
 

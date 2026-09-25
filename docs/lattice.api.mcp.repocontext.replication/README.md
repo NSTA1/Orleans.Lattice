@@ -2,7 +2,7 @@
 
 Turn on cross-cluster replication for the repository-context store with one guardrailed call.
 
-`Orleans.Lattice.Api.Mcp.RepoContext.Replication` is an opt-in multi-cluster add-on for [`Orleans.Lattice.Api.Mcp.RepoContext`](../lattice.api.mcp.repocontext/README.md). It contributes a single extension method, `EnableRepoContextMultiCluster(...)`, that registers the Lattice replication engine and enrols every repository-context tree for cross-cluster replication under the correct per-tree merge mode - so an operator turns multi-cluster on with one call and cannot misconfigure the convergence rules.
+`Orleans.Lattice.Api.Mcp.RepoContext.Replication` is an opt-in multi-cluster add-on for [`Orleans.Lattice.Api.Mcp.RepoContext`](../lattice.api.mcp.repocontext/README.md). It contributes a single extension method, `EnableRepoContextMultiCluster(...)`, that registers the Lattice replication engine and enrols every replicated repository-context tree for cross-cluster replication under the correct per-tree merge mode - so an operator turns multi-cluster on with one call and cannot misconfigure the convergence rules.
 
 ## Why it is a separate package
 
@@ -28,7 +28,7 @@ siloBuilder.EnableRepoContextMultiCluster(opts =>
 
 ## The tree-to-mode map
 
-Every repository-context tree is enrolled. The merge mode of each is fixed by **how the store authors that tree's values**, not by taste:
+Every repository-context tree that holds replicable state is enrolled - the nine below. The two wholly derived local accelerators, the approximate-index tree and the vector-coverage digest, are deliberately not replicated: each cluster derives its own far more cheaply than it could ship one. The merge mode of each enrolled tree is fixed by **how the store authors that tree's values**, not by taste:
 
 | Tree | Merge mode | Why |
 |------|------------|-----|

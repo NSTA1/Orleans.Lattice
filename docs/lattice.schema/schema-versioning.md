@@ -48,9 +48,27 @@ siloBuilder.AddLatticeSchemaVersioning(
     });
 ```
 
+Declare the whole registry in one `AddLatticeSchemaVersioning` call: a repeat call
+still layers its `configureOptions` delegate, but its `configureRegistry` delegate
+is ignored.
+
+### Versioning options
+
+`LatticeSchemaVersioningOptions` holds the silo-wide switches; per-tree behaviour
+(the schema id, the target version, and the per-tree strict flag) lives in each
+tree's `LatticeSchemaVersionConfig`.
+
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `StrictIngest` | `bool` | `false` | The global half of strict-mode ingest (see [Ingest trust model](#ingest-trust-model)). While it is `false` the versioning stage does not ask to see system-origin (replication apply / restore) writes. |
+| `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the versioning stage writes. A value below `1` is treated as `1`. An eager migration's abort preview is bounded by `LatticeSchemaEnforcementOptions.DeadLetterPreviewMaxBytes` instead. |
+
 ## Opting a tree in
 
-Install a version config with the `SchemaAdmin`-gated `ILatticeSchemaVersionAdmin`:
+Install a version config with the in-process `ILatticeSchemaVersionAdmin`. It
+performs no authorization of its own; remote callers reach it through the
+`SchemaAdmin`-gated [schema API facade](../lattice.api.schema/README.md) (see
+[Capability gate](README.md#capability-gate)):
 
 ```csharp verify
 using Orleans.Lattice.Schema;
@@ -172,6 +190,18 @@ stored with whatever version tag it carries, and read-time upcasting brings it t
 the target when it is later read. Opt into `StrictIngest` to re-validate ingest: an
 item whose version is newer than the target, or which cannot be upcast, is
 [dead-lettered](dead-letter-queue.md) rather than applied, so ingest never blocks.
+
+As with enforcement, strict ingest takes **two** flags: the global
+`LatticeSchemaVersioningOptions.StrictIngest` switch, which makes the versioning
+stage see system-origin writes at all, and the per-tree flag on the tree's version
+config (`new LatticeSchemaVersionConfig(schemaId, targetVersion, strictIngest: true)`),
+which makes that tree dead-letter a non-upcastable ingested item. While the global
+switch is on, an ingested value or CRDT delta that carries no envelope is stamped
+at its tree's target version, as a local write is, whatever that tree's per-tree
+flag. When the silo also registers enforcement, both add-ons share one composed
+write interceptor that is consulted for system-origin writes when *either* global
+switch is on (see the caveat under
+[strict-mode ingest](schema-enforcement.md#strict-mode-ingest)).
 
 ## Composition with enforcement
 

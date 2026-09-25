@@ -34,19 +34,19 @@ siloBuilder.AddLatticeScalingSignal(options =>
 | Option | Type | Default | Guidance |
 |---|---|---|---|
 | `EndpointPath` | `string` | `/lattice/scale` | The HTTP path `MapLatticeScalingSignal` serves the signal from. `MapLatticeScalingSignal(path)` can override it per-call; keep this and the mapped path in sync. |
-| `MinReplicas` | `int` | `0` | Lower bound applied to `RecommendedReplicas` - the recommendation is never reported below this floor. Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. |
+| `MinReplicas` | `int` | `0` | Lower bound applied to both `ScaleValue` and `RecommendedReplicas` - neither is reported below this floor once the first sample lands. Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. |
 
 ### Compute axis
 
 | Option | Type | Default | Guidance |
 |---|---|---|---|
-| `SampleInterval` | `TimeSpan` | `5s` | How often the silo recomputes the signal. The per-scrape facade reads the cached result, so this is the freshness bound, not the scrape cost. Keep it well below your autoscaler's polling interval. |
-| `EwmaHalfLife` | `TimeSpan` | `30s` | Half-life of the exponentially-weighted moving average applied to the scalar on the scale-in (release) side. Longer damps noise and makes scale-in more conservative; scale-out reacts immediately regardless. |
+| `SampleInterval` | `TimeSpan` | `5s` | How often the silo recomputes the signal. The per-scrape facade reads the cached result, so this is the freshness bound, not the scrape cost. Keep it well below your autoscaler's polling interval. A non-positive value falls back to the 5-second default. |
+| `EwmaHalfLife` | `TimeSpan` | `30s` | Half-life of the exponentially-weighted moving average applied to the scalar on the scale-in (release) side. Longer damps noise and makes scale-in more conservative; scale-out reacts immediately regardless. A non-positive value disables the smoothing, so a falling scalar is adopted directly once the gate allows it. |
 | `ScaleInGateWindow` | `TimeSpan` | `2m` | How long every scale-in precondition (all compute dimensions low, WAL healthy, no shard split in flight) must hold continuously before the scalar is allowed to fall. Any break resets the window. |
 | `ActivationScaleInThreshold` | `double` | `0.25` | Activation-pressure level (0..1) at or above which the activation dimension is too hot to permit scale-in. |
 | `ResourceScaleInThreshold` | `double` | `0.25` | Resource-pressure level (0..1) at or above which the resource dimension is too hot to permit scale-in. |
 | `WalDispatchScaleInThreshold` | `double` | `0.25` | WAL-dispatch-pressure level (0..1) at or above which the WAL-dispatch dimension is too hot to permit scale-in. |
-| `ActivationWorkingSetTarget` | `int` | `100000` | Per-silo grain-activation count treated as full activation saturation. Activation pressure is `activationCount / target`, clamped to 0..1. Size it to the activation count at which a silo's memory or scheduler starts to strain. |
+| `ActivationWorkingSetTarget` | `int` | `100000` | Per-silo grain-activation count treated as full activation saturation. Activation pressure is `activationCount / target`, clamped to 0..1, and the worst silo sets the cluster value. Size it to the activation count at which a silo's memory or scheduler starts to strain. A non-positive value disables the activation dimension (it reads `0.0`). |
 | `SplitAwareScaleIn` | `bool` | `true` | Whether the scale-in gate is suppressed while any adaptive shard split is in flight cluster-wide. Reads `ILatticeAdmin.GetSplitActivityAsync` once per `SampleInterval` - a single call to the split-admission singleton, never a fan-out. Set to `false` to make the axis inert (a deployment with autonomic splitting disabled, where the query is pure overhead). Scale-**out** is never influenced either way. See [split-aware scale-in](architecture.md#split-aware-scale-in). |
 
 ### Storage axis
@@ -56,7 +56,7 @@ The storage axis is report-only: none of these knobs affect the compute
 
 | Option | Type | Default | Guidance |
 |---|---|---|---|
-| `RetainedBytesAdvisoryRatio` | `double` | `0.8` | Fraction of an account's retention budget at or above which its retained WAL bytes count as capacity pressure. The budget is the sum of the *effective* per-tree `WalMaxRetainedBytes` ceilings (runtime override, then named options, then the silo default) of the trees holding partitions on that account, attributed across their partitions. Clamped to `(0, 1]`. A tree whose ceiling is `null` contributes neither bytes nor budget, so an account backing only such trees never reports capacity pressure. |
+| `RetainedBytesAdvisoryRatio` | `double` | `0.8` | Fraction of an account's retention budget at or above which its retained WAL bytes count as capacity pressure. The budget is the sum of the *effective* per-tree `WalMaxRetainedBytes` ceilings (runtime override, then named options, then the silo default) of the trees holding partitions on that account, attributed across their partitions. A value above `1` is treated as `1`, and a non-positive value falls back to the `0.8` default. A tree whose ceiling is `null` contributes neither bytes nor budget, so an account backing only such trees never reports capacity pressure. |
 | `AccountSaturationWindow` | `TimeSpan` | `30s` | How long a provider key must be continuously observed saturated before the collector classifies it throughput-bound and recommends a move. Debounces a transient blip. A non-positive value classifies on the first saturated sample. |
 | `StorageRecommendationsEnabled` | `bool` | `true` | Master switch for emitting a `WalRebalanceRecommendation`. When `false` the collector still reports `OverThreshold` and the per-account breakdown but leaves `Recommendation` `null`. |
 

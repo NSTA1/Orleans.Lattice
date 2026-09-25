@@ -14,7 +14,7 @@ The facade holds no replication state. It delegates to `ILatticeReplicationConfi
 
 - **Enable** fixes the merge mode at enable time by writing an add to the enablement `RwFlag` and setting the `MvRegister` mode. Enabling an already-enabled tree under a different mode is rejected with `LatticeReplicationModeChangeRejectedException`; enabling under the same mode is idempotent. A runtime precondition failure (for example a flag-based mode without a configured local replica) surfaces as `LatticeReplicationPreconditionFailedException`.
 - **Enable on a non-empty tree** composes the existing snapshot bootstrap: when `bootstrapSourceClusterId` is supplied and the tree already holds rows, the authority requests a receiver-driven snapshot so the peer converges on data the change feed will not carry, then reports `BootstrapRequested = true`.
-- **Disable** writes a disable-wins dot to the `RwFlag`. It pauses shipping without purging peer data, and keeps the fixed mode so a later re-enable is a clean re-bootstrap.
+- **Disable** writes a disable-wins dot to the `RwFlag`. It pauses shipping without purging peer data and keeps the entry, with its last mode, in the config tree. A later enable re-fixes the mode to the value it requests and, when `bootstrapSourceClusterId` is supplied for a tree that holds data, requests a fresh snapshot bootstrap; without it, no bootstrap runs.
 
 ## Permission-scoped discovery
 

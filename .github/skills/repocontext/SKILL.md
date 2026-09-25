@@ -33,8 +33,8 @@ to drift. It covers:
 - **Retrieval** - `list_topics` (the memory topic map), `search` (relevance, how to
   read the `mode` field, and the
   per-hit `reasons` explaining why a hit ranked), `scan` (ordered completeness over
-  Files / Packages / Symbols / Memory), `recall` (one record by key, and memory
-  link-staleness `stale` / `staleLinks`), `neighbors` (walk the knowledge-linking
+  Files / Packages / Symbols / Memory / MemoryTopic), `recall` (one record by key,
+  and memory link-staleness `stale` / `staleLinks` / `danglingLinks`), `neighbors` (walk the knowledge-linking
   edges out of a memory entry), the graph-navigation tools `outline` / `related` /
   `changed` (a file's declared symbols, structural neighbours, and workspace drift
   without full-file reads), and `context` (a ranked, explained source bundle packed
@@ -46,13 +46,16 @@ to drift. It covers:
   (`addLinks` / `removeLinks` with a small `broader` / `narrower` / `related` /
   `partOf` relation vocabulary), TTL and CRDT-merge semantics, and what is and
   is not worth capturing.
-- **The agent-operated backlog** - how work items themselves live in memory:
-  the item schema (what is a scalar, what is an attribute tag, and what is
-  derived rather than stored), the three-phase grouping model, the five
-  relations that extend the base link vocabulary (`blockedBy`, `anchoredTo`,
-  `claims`, `integrates`, `informs`), how a ready set is computed without a
-  reverse index, how items mirror to GitHub issues for human oversight, and
-  the entry gating that keeps items well-formed.
+- **The agent-operated backlog** - the two rules that bind every agent that
+  touches memory: the five relations that extend the base link vocabulary
+  (`blockedBy`, `anchoredTo`, `claims`, `integrates`, `informs`) must never be
+  pruned, and a backlog item never carries a TTL. Everything else - the item
+  schema (what is a scalar, what is an attribute tag, and what is derived rather
+  than stored), the three-phase grouping model, how a ready set is computed
+  without a reverse index, how items mirror to GitHub issues for human
+  oversight, and the entry gating that keeps items well-formed - lives in the
+  protocol that file points to,
+  [`samples/AgentBacklog/template/backlog-protocol.md`](../../../samples/AgentBacklog/template/backlog-protocol.md).
 - **Safety and health** - write tools are destructive and fail-closed;
   `repocontext_health` and `repocontext_index_status`; and what a `keyword` /
   `Failed` degraded state means.
@@ -66,9 +69,11 @@ open it for the full rules before you rely on any of this. If these ever
 disagree with the master file, the master file wins.
 
 - **The four moments (the master file's opening section - the part that changes
-  behaviour).** (1) **Session start, once**: `health` + `index_status`, then sweep
-  the memory you are about to need (`search` your task; `scan` scope `Memory`, or
-  `MemoryTopic` for a topic you can predict). (2) **Before any discovery**: probe
+  behaviour).** (1) **Session start, once**: `health`, `list_repos` (to resolve
+  the repo id), and `index_status`, then sweep the memory you are about to need:
+  `list_topics` for the map, the whole `gotchas` topic (`scan` scope
+  `MemoryTopic`) every session, then the topics bearing on the task - `search`
+  over memory is a supplement for discovery, not the mechanism. (2) **Before any discovery**: probe
   with `search` / `scan`, never a guessed path or a cold `grep` - and note that
   "why is it like this / has this bitten us before" are *memory* questions.
   (3) **Before reading source in order to change it**: `context` with a stable
@@ -89,7 +94,10 @@ disagree with the master file, the master file wins.
   links are add-wins and fields are last-writer-wins. A ready set is a topic
   scan plus a depth-1 `blockedBy` check per candidate - never one graph query,
   because `neighbors` walks outbound edges only and there is no reverse index.
-  The master file has the schema, the relations, and the gating rules.
+  The protocol
+  ([`samples/AgentBacklog/template/backlog-protocol.md`](../../../samples/AgentBacklog/template/backlog-protocol.md))
+  has the schema and the gating rules; the master file keeps the relations that
+  must never be pruned.
 - **Reach for it first.** When the `repocontext_*` tools are present, lead with
   `search` / `scan` / `recall` *before* `grep` / `glob` - both for finding code
   and for recalling what past sessions captured. If the tools are absent (or
@@ -115,7 +123,8 @@ disagree with the master file, the master file wins.
   is to repair a wedged or stale index for a repository whose memory is worth
   keeping, reach for `reset_index` instead - it drops the code index and its
   vectors but preserves the memory tree, and the repository stays in
-  `list_repos` with a null `lastIngested` / `fileCount` / `indexedCommit` until
+  `list_repos` with a null `lastIngested` / `fileCount` / `indexedCommit` /
+  `indexedRoot` until
   it is re-onboarded, so the preserved memory stays discoverable. A reset whose
   call times out keeps running: poll `index_status` (phase `Resetting`, then
   `Completed` / `Failed`) instead of re-running it.

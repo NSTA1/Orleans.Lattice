@@ -22,7 +22,7 @@ flowchart LR
         Leaf -->|"step 1: append (commit-log writer)"| Wal[(Per-shard WAL)]
         Leaf -->|"step 2: apply"| Proj[(Leaf projection)]
         Leaf -->|"step 3: observe (nudge)"| Capture[IMutationObserver]
-        Wal -->|"IChangeFeed cursor, tailed + batched"| Ship[Per-peer shipper]
+        Wal -->|"durable per-partition cursor, tailed + batched"| Ship[Per-peer shipper]
         Capture -.->|"ring doorbell: drain now"| Ship
         Ship --> Transport[IReplicationTransport<br/>in-process / gRPC]
     end
@@ -56,13 +56,15 @@ flowchart LR
    [`wal.md`](wal.md); the pluggable durability backend lives in
    [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
 
-3. **Change feed (`IChangeFeed`).** The shipping path reads the WAL through the
-   change feed seam, which walks every partition for a tree, filters by HLC
-   cursor and origin, and merges in HLC-ascending order. See
-   [`change-feed.md`](change-feed.md).
+3. **Change feed (`IChangeFeed`).** A public, in-process pull feed over the
+   locally-authored WAL for custom consumers - bridges, tests, and in-process
+   projections. It walks every partition for a tree from a per-partition offset
+   cursor, filters by origin, and merges in HLC-ascending order. The shipping
+   path does not use it; the shipper tails the WAL partitions directly (step 4).
+   See [`change-feed.md`](change-feed.md).
 
 4. **Shipping.** A per-`(tree, peer)` outbound worker - the log-first replication
-   producer - tails the WAL from a durable per-partition cursor and streams batches
+   producer - tails the WAL from a durable per-partition cursor and ships batches
    to each configured
    peer, advancing the resume cursor as acknowledgements arrive. It is the sole ship
    driver; the commit-time observer does not ship, it only rings the worker's doorbell
@@ -76,7 +78,8 @@ flowchart LR
    and the cursor/cadence knobs in [`configuration.md`](configuration.md).
 
 5. **Transport (`IReplicationTransport`).** The public transport seam carries
-   batches between clusters. A long-lived gRPC streaming binding is the
+   batches between clusters. The gRPC binding - one unary push call per batch
+   over a long-lived, HTTP/2-multiplexed channel per peer - is the
    canonical implementation; in-process and custom transports plug into the same
    contract. See [`transport.md`](transport.md) and
    [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md). The receiver stamps
@@ -87,8 +90,10 @@ flowchart LR
    public applier seam, which first gates each entry against this receiver's own
    per-tree replication enrollment and locally-resolved merge mode - dropping a
    tree not enrolled here and dead-lettering an entry whose peer-supplied wire
-   merge mode disagrees - then performs per-origin high-water-mark dedup, causal
-   dependency parking, shadow-forward de-duplication, and CRDT-aware merges
+   merge mode disagrees - then drops entries a pinned bootstrap snapshot already
+   covers, suppresses repeated records by exact `(origin, hlc, key, op)` identity
+   (shadow-forward de-duplication), parks entries whose causal dependencies have
+   not arrived, and performs CRDT-aware merges
    before committing through the same core leaf path that local writes use. See
    [`replication-apply.md`](replication-apply.md).
 
@@ -116,9 +121,9 @@ flowchart LR
    record with its configured `LatticeReplicationOptions.ClusterId`, and the
    receiver applies under that same origin. This is what breaks cycles: when the
    receiver's shipper tails its own WAL, the producer-side cycle-break filter
-   skips any entry whose origin matches the destination peer, so a write
-   replicated into and back out of a
-   peer never loops.
+   ships only entries whose origin is the local cluster, so an apply-installed
+   entry - which keeps its source cluster's origin - is never re-shipped and a
+   write replicated into and back out of a peer never loops.
 
 3. **Source HLCs are preserved on the receiver.** Apply does not advance the
    receiver's local clock over an incoming write; the persisted timestamp is the
@@ -145,9 +150,13 @@ flowchart LR
 
 ## Relationship to the core library
 
-The only contact surfaces between the core library and the replication
-subsystem are `IMutationObserver` (commit-time nudge) and `IReplicationApplier`
-(receiver-side merge), both first-class public extension points. The
+The replication subsystem attaches to the core library only through public
+seams: `IMutationObserver` (the commit-time nudge), the per-tree
+`ILatticeMergeModeResolver`, `ILatticeOriginClusterIdResolver`, and
+`ILatticeReplicationContext` implementations `AddLatticeReplication` swaps in,
+the `ITreeAliasObserver` that rebinds shippers after an alias swap, and the
+`IWalCursorRegistry` that carries receiver-side trim pins; its own
+`IReplicationApplier` is the receiver-side merge seam. The
 single-cluster and multi-cluster code paths are identical up to the point where
 the transport carries a batch across a network boundary; there is no
 "replication mode" that changes how a foreground commit durabilizes. The WAL

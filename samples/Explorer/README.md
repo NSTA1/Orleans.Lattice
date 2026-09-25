@@ -13,7 +13,8 @@ The console is registered and mounted with the exact two calls a consumer makes
 to embed it in their own ASP.NET app:
 
 - `AddLatticeExplorerWeb()` registers the Razor components, the shared explorer
-  UI, the state-API connection seam, and the Backups and Access areas. The Schema
+  UI, the state-API connection seam, and the Backups, Access, Tenant
+  administration, My tenant, and Telemetry areas. The Schema
   area ships hidden and stays hidden here too; set the
   `LATTICE_EXPLORER_ENABLE_SCHEMA=true` environment variable before running to
   surface it (the sample maps that to an `AddExplorerSchemaPlugin()` call).
@@ -36,7 +37,11 @@ The console is seeded to connect to the co-hosted gRPC endpoint through the
 launcher-friendly bootstrap environment variables (`LATTICE_EXPLORER_ENDPOINT`
 and `LATTICE_EXPLORER_INSECURE_DEV`), so it connects with no first-run setup. It
 also auto-signs-in as a demo administrator (`LATTICE_EXPLORER_USERNAME` /
-`LATTICE_EXPLORER_PASSWORD`), which is what unlocks the admin areas below. To keep
+`LATTICE_EXPLORER_PASSWORD`), which is what unlocks the admin areas below. The web
+head withholds that environment credential by default, because it would sign every
+anonymous visitor in as the operator; the sample opts in with
+`AllowEnvironmentCredentialSeed = true`, which is appropriate only for a
+single-operator loopback demo like this one. To keep
 the demo deterministic, the sample pins the console's persisted configuration to
 its own file (`AddLatticeExplorerWeb(o => o.ConfigFilePath = ...)`) and clears it
 on startup, so it never inherits a saved endpoint from your per-user Explorer
@@ -55,7 +60,9 @@ live out of the box. The **Schema** area ships hidden and stays hidden here; set
 `LATTICE_EXPLORER_ENABLE_SCHEMA=true` before running to surface it. The
 **Backups** area resolves as unavailable, because this sample maps the state,
 auth and schema gRPC services but not the backup one, so the probe reports the
-capability as absent from the cluster.
+capability as absent from the cluster. The **Tenant administration**, **My
+tenant**, and **Telemetry** areas are unavailable for the same reason: the sample
+runs no tenancy add-on and serves no telemetry facade.
 
 An unavailable area renders no entry at all, and the rail's "why can I not see
 everything?" affordance names it, so the absence is disclosed once rather than
@@ -145,7 +152,7 @@ example (PowerShell):
 
 ```powershell
 $env:LATTICE_MEMBERSHIP_MERGE_MODE = 'TokenOnly'
-dotnet run
+dotnet run --project samples/Explorer/Explorer.csproj
 ```
 
 ## Identity directory: static (default) and Entra (opt-in)

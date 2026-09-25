@@ -65,10 +65,10 @@ Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|
-| `orleans.lattice.replication.merkle_walk.localised` | `tree`, `depth` | Once per pass that narrows the mismatch to one or more leaves; the value is the number of diverging leaves, and `depth` is the level reached. |
-| `orleans.lattice.replication.merkle_walk.aborted` | `reason` | Once per pass that stops before localising. |
+| `orleans.lattice.replication.merkle_walk.localised` | `tree`, `depth`, `tenant` | Once per pass that narrows the mismatch to one or more leaves; the value is the number of diverging leaves, and `depth` is the level reached. |
+| `orleans.lattice.replication.merkle_walk.aborted` | `reason`, `tenant` (always `_platform_`) | Once per pass that stops before localising. |
 
-Abort reasons: `depth_cap`, `byte_budget`, `remote_unavailable`, `version_skew`. With the default transport every triggered walk reports `remote_unavailable` (see the limitation above), so a sustained `reason=remote_unavailable` rate simply means no range-answering transport is wired up yet.
+Abort reasons: `depth_cap`, `byte_budget`, `remote_unavailable`, `version_skew`. A sustained `reason=remote_unavailable` rate means the peer cannot answer range folds: a custom transport that does not override `ProbeMerkleWalkAsync`, a peer that has not bound the `ProbeMerkleWalk` RPC yet (for example mid rolling upgrade), a peer whose shard map has no shard at the probed index, or a transport fault part-way through the walk. The default no-op probe transport never triggers a walk at all, because its digest probe always reports `remote_unavailable` rather than `Mismatch`.
 
 The metric-name constants are exposed for dashboards built from the public surface:
 

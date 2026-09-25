@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Api.Backup;
 /// and no transport concern leaks into the control logic.
 /// </summary>
 /// <remarks>
-/// Every operation authorizes through the backup access gate
-/// (<see cref="BackupAccessAuthorizer"/>) fail-closed <i>before</i> it touches
+/// Every operation authorizes through the backup access gate fail-closed
+/// <i>before</i> it touches
 /// data: a capture / incremental / restore authorizes its target scope, and a
 /// list / describe / delete authorizes the scope carried by each manifest. List
 /// and artifact export are streamed as <see cref="IAsyncEnumerable{T}"/> so a
@@ -97,7 +97,7 @@ public interface ILatticeBackupControl
 
     /// <summary>
     /// Lists the catalogued backups as a deterministic, cursor-resumable page
-    /// ordered by backup id, hiding any manifest whose scope the caller may not
+    /// ordered by the request's catalog order, hiding any manifest whose scope the caller may not
     /// read. Pass the previous page's
     /// <see cref="BackupCatalogPage.NextPageToken"/> to continue.
     /// </summary>
@@ -175,7 +175,7 @@ public interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Streams one of a backup's content-addressed artifacts back chunk-wise,
+    /// Streams one of a backup's manifest-declared artifacts back chunk-wise,
     /// with bounded memory, after authorizing the backup's scope fail-closed and
     /// verifying the artifact belongs to the backup.
     /// </summary>

@@ -30,8 +30,9 @@ Neither feature costs anything until a tree opts in. With the package
 unregistered, the core write interceptor and value decoder are null
 implementations and the read/write path is byte-for-byte identical to a plain
 lattice. Even with the package registered, a tree with no policy and no version
-config pays only a single cached lookup on write and a single leading-byte check
-on read, and its stored bytes keep their exact steady-state shape.
+config pays only one cached lookup per registered feature on write and a single
+leading-byte check on read, and its stored bytes keep their exact steady-state
+shape.
 
 ## Getting started
 
@@ -63,7 +64,10 @@ siloBuilder.AddLatticeSchemaVersioning(registry =>
 
 > When both features are used, call `AddLatticeSchemaEnforcement` **before**
 > `AddLatticeSchemaVersioning` so the enforcement validation stage is composed
-> ahead of the versioning envelope stage on the write path.
+> ahead of the versioning envelope stage on the write path. The order is not
+> checked at registration: calling `AddLatticeSchemaEnforcement` second replaces
+> the composed write interceptor with the enforcement stage alone, so new writes
+> are no longer stamped with a version envelope.
 
 To layer further option delegates after registration, use
 `ConfigureLatticeSchemaEnforcement(Action<LatticeSchemaEnforcementOptions>)` and
@@ -81,7 +85,19 @@ To layer further option delegates after registration, use
 
 ## Capability gate
 
-Both admin surfaces (setting a policy, advancing a version, triggering a
-remediation) are authorized as the `LatticeOperation.SchemaAdmin` capability when
-the [security](../lattice/security.md) layer is enabled, so schema control-plane
-actions can be granted independently of ordinary data-plane read/write rights.
+The in-process admin services this package registers (`ILatticeSchemaAdmin`,
+`ILatticeSchemaVersionAdmin`, and `ILatticeSchemaRemediationAdmin`) are trusted,
+host-side surfaces: they perform no authorization of their own, and they read
+and write the package's reserved `sys-schema-*` trees (and, for a remediation or
+a migration, the governed tree itself) as system origin, so any code holding the
+service can change a tree's schema. The `LatticeOperation.SchemaAdmin` capability
+is enforced by the remote schema control facade,
+[`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md), which authorizes
+every call fail-closed before it touches these services: SchemaAdmin for
+mutations (setting or clearing a policy, changing or advancing a version config,
+migrating, remediating) and ordinary Read for inspection. With the
+[security](../lattice/security.md) layer enabled, schema control-plane actions
+reached through that facade can therefore be granted independently of ordinary
+data-plane read/write rights. The compliance audit
+(`ILatticeSchemaComplianceAdmin`) reads the tree through the ordinary data plane,
+so its scan is subject to the caller's Read authority.

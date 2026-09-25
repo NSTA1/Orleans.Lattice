@@ -370,8 +370,8 @@ internal static class StateToolHandlers
 
     /// <summary>
     /// Releases the server-side snapshot cursor named by a scan continuation
-    /// token, freeing its WAL-retention pin and per-shard baseline promptly. The
-    /// operation is best-effort and idempotent.
+    /// token, freeing its frozen per-shard baselines and cursor state promptly.
+    /// The operation is best-effort and idempotent.
     /// </summary>
     public static async Task<ScanCancellationResult> CancelScanAsync(
         ILatticeStateQuery query,

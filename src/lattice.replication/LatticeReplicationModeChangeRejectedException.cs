@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Replication;
 /// match the tree's CRDT semantics, and silently switching it risks
 /// last-writer-wins data loss. The sanctioned way to change a mode is to
 /// <see cref="ILatticeReplicationConfigAuthority.DisableReplicationAsync">disable</see>
-/// the tree and then re-enable it under the new mode, which re-bootstraps.
+/// the tree and then re-enable it under the new mode. Re-enable requests a
+/// bootstrap only when the caller supplies a bootstrap source and the tree has data.
 /// <para>
 /// This is raised in two cases: the tree is enabled under an unambiguous mode
 /// that differs from the requested one, or the tree's mode is currently

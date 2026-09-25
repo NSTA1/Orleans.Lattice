@@ -125,7 +125,7 @@ public static class LatticeBackupMetrics
         BackupMetrics.Meter.CreateCounter<long>("orleans.lattice.backup.bytes_processed", unit: "By",
             description: "Bytes processed by capture operations, tagged by kind.");
 
-    /// <summary>Counter of bytes reclaimed by retention / deletion, tagged with <see cref="TagScope"/>.</summary>
+    /// <summary>Counter of bytes reclaimed by the retention pass, tagged with <see cref="TagScope"/>.</summary>
     public static readonly Counter<long> RetentionBytesReclaimed =
         BackupMetrics.Meter.CreateCounter<long>("orleans.lattice.backup.retention.bytes_reclaimed", unit: "By",
             description: "Artifact bytes reclaimed by retention / deletion, tagged by scope.");

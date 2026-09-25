@@ -42,6 +42,6 @@ are required. Each run starts from an empty cluster.
 - `ILatticeBackupCatalogStore` - enumerate the catalogued backups.
 - `ILatticeBackupRestoreService` - restore a backup (and its base chain) into a
   target tree, or revert a shadow-cutover restore.
-- The `orleans.lattice.backup.*` metrics (on the core `orleans.lattice` meter)
+- The `orleans.lattice.backup.*` metrics (on the dedicated `orleans.lattice.backup` meter)
   report capture / restore durations, bytes and entries processed, failures by
   phase and reason, and live inventory gauges.

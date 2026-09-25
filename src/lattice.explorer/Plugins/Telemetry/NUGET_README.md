@@ -6,7 +6,7 @@ two surfaces built on it. The seam is the single place the Explorer's telemetry
 panels reach the cluster's telemetry facade, so each panel operates against a
 controlled domain model rather than the raw connection. The operator-facing
 Telemetry area (`AddExplorerTelemetryPlugin()`) and the tenant-metrics section of
-the My Tenant area (`AddExplorerTelemetryMyTenantSection()`) are independent
+the My tenant area (`AddExplorerTelemetryMyTenantSection()`) are independent
 opt-ins; both need `AddExplorerTelemetry()`.
 
 ## What it provides

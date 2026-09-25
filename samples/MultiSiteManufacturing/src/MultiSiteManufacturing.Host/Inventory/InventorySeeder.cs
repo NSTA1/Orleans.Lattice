@@ -55,7 +55,7 @@ public sealed class InventorySeeder(
 
     /// <summary>
     /// Sequence number of the part the seeder drives CRDT change-history into,
-    /// so the Explorer History tab has a non-trivial timeline to render for
+    /// so the Explorer's History timeline has non-trivial revisions to render for
     /// both CRDT shapes (operator last-writer-wins register and process-label
     /// OR-Set) the moment the sample starts.
     /// </summary>
@@ -149,19 +149,19 @@ public sealed class InventorySeeder(
 
     /// <summary>
     /// Writes several revisions into the same CRDT keys for one representative
-    /// part so the Explorer History tab shows a non-trivial timeline for both
+    /// part so the Explorer's History timeline shows non-trivial revisions for both
     /// CRDT shapes:
     /// <list type="bullet">
     ///   <item>
     ///     the operator last-writer-wins register in the
     ///     <see cref="PartCrdtStore.OperatorTreeId"/> tree - a sequence of
-    ///     operator handoffs, so the History tab renders successive values
+    ///     operator handoffs, so the History timeline renders successive values
     ///     plus diffs;
     ///   </item>
     ///   <item>
     ///     the process-label OR-Set in the
     ///     <see cref="PartCrdtStore.LabelsTreeId"/> tree - interleaved add and
-    ///     remove operations, so the History tab renders element-level member
+    ///     remove operations, so the History timeline renders element-level member
     ///     changes.
     ///   </item>
     /// </list>

@@ -12,11 +12,13 @@ If you're sizing for a different backend or a different silo SKU, the
 [`benchmark/azure-throughput`](../../benchmark/azure-throughput/)
 harness show the measurement protocol used to derive these numbers.
 
-## The two knobs
+## The knobs
 
 The per-shard WAL grain's pipeline depth against
 `IWalStorageProvider.AppendBatchAsync` is bounded by two independent
-caps:
+caps - `WalMaxPendingBatches` and `WalPartitions` - and shaped by a third
+knob, `WalAppendCoalescingInFlightThreshold`, that decides how full each
+flush gets:
 
 | Knob | Default | What it bounds |
 |---|---|---|
@@ -24,9 +26,10 @@ caps:
 | `LatticeOptions.WalAppendCoalescingInFlightThreshold` | `4` | In-flight depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables. |
 | `LatticeOptions.WalPartitions` | `8` | Number of per-shard WAL grains the producer fans out across. |
 
-The combined ceiling on simultaneous provider calls from a single silo
-is therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,
-`8 * 16 = 128` concurrent `AppendBatchAsync` calls.
+The combined ceiling on simultaneous provider calls for one tree is
+therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,
+`8 * 16 = 128` concurrent `AppendBatchAsync` calls. Each tree's WAL
+partitions carry their own caps, so concurrently written trees add up.
 
 ## Why 16 is the default
 
@@ -126,11 +129,14 @@ further in combination with the silo's other concurrency knobs:
 
 The recovery is **not** to raise the per-grain timeouts further - the
 underlying constraint is the storage account, not the grain. The
-recovery is to **partition the storage**: raise `WalPartitions` to
-fan-out across multiple accounts (the per-partition storage resolver
-seam in `LatticeOptions.WalStorageProvider` is purpose-built for
-exactly this), or to a Premium account with a higher per-account
-throughput target.
+recovery is to **partition the storage**: spread the tree's WAL
+partitions across multiple accounts - register one provider per account
+under its own key and pin partitions to them (see
+[Multi-account fan-out](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement)) -
+or move to a Premium account with a higher per-account throughput target.
+`WalPartitions` adds partitions to spread only for trees registered after
+the change; an existing tree keeps the count pinned at its first
+registration.
 
 **Throttle the producer before the regime fires.** The per-tree
 saturation back-pressure signal (`IWalSaturationSignal`,
@@ -199,18 +205,18 @@ For a single Azure Tables Standard storage account:
 |---|---|---|
 | 2 vCPU (Standard_D2as_v5 and smaller) | `8` | The silo is CPU-bound at the 4k:5 rung; the admission gate is not the binding constraint. Default 16 wastes admission depth on a CPU that cannot pull faster. |
 | 4 vCPU (Standard_D4as_v5) | `16` (default) | The sweet spot the default is tuned for. Silo CPU sits 55-75% of box at peak; admission depth is the binding constraint and 16 unblocks it without saturating the storage account. |
-| 8+ vCPU (Standard_D8as_v5 and larger) | `16` (still default) | The single-account ceiling, not the silo, is the binding constraint at this SKU. Measured envelope on D8as_v5 + single Azure Tables Standard account: **~22-24 ke/s** at 6k:5 with `WalMaxPendingBatches=16`, `WalPartitions=8` - only ~10-15% above the D4as_v5 baseline at the same defaults (~21 ke/s at 4k:5). Lifting `WalMaxPendingBatches` to 32 against the same account is strictly worse (the cycle 31 A/B at `WalPartitions=16` showed per-partition throughput collapsing 64% and 36k failed batches in 45 s). The recovery is `WalPartitions` fan-out across accounts via a per-partition `LatticeOptions.WalStorageProvider` resolver, not a higher cap. |
+| 8+ vCPU (Standard_D8as_v5 and larger) | `16` (still default) | The single-account ceiling, not the silo, is the binding constraint at this SKU. Measured envelope on D8as_v5 + single Azure Tables Standard account: **~22-24 ke/s** at 6k:5 with `WalMaxPendingBatches=16`, `WalPartitions=8` - only ~10-15% above the D4as_v5 baseline at the same defaults (~21 ke/s at 4k:5). Lifting `WalMaxPendingBatches` to 32 against the same account is strictly worse (the cycle 31 A/B at `WalPartitions=16` showed per-partition throughput collapsing 64% and 36k failed batches in 45 s). The recovery is spreading the tree's WAL partitions across accounts with named providers and pinned placement (see [WAL Storage Providers](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement)), not a higher cap. |
 
-For a Premium Azure Tables account, or a fan-out across multiple
-Standard accounts via `LatticeOptions.WalStorageProvider`, the
-per-account throughput ceiling is higher in proportion and the cap can
-be lifted accordingly. The mechanical rule does not change: keep the
+For a Premium Azure Tables account, or a fan-out of a tree's partitions
+across multiple Standard accounts through named providers and pinned
+placement, the available throughput ceiling is higher in proportion and
+the cap can be lifted accordingly. The mechanical rule does not change: keep the
 combined `WalPartitions * WalMaxPendingBatches * average flush rate`
 below the aggregate storage budget.
 
 ## What to measure
 
-Three instruments tell you which regime you are in:
+Four instruments tell you which regime you are in:
 
 - **`wal.writer.append.admission_wait`** - time spent waiting at the
   per-shard admission gate. If p99 is on the order of seconds and
@@ -234,10 +240,13 @@ Three instruments tell you which regime you are in:
 
 - **`wal.saturation.state`** - the per-tree saturation regime,
   emitted as a `0` / `1` / `2` step function for `Healthy` /
-  `Throttled` / `Saturated`. A tree at `2` is the leading-edge
-  signal that the offered rate exceeds the silo's drain rate;
-  pair with `wal.saturation.transitions` to plot how often the
-  regime flips. The same signal is exposed to callers via
+  `Throttled` / `Saturated`. A tree at `1` is the leading edge -
+  admission depth at or above the throttled ratio, or a sustained
+  drain-lag or pin-latency condition; a tree at `2` means an acute
+  cause is firing (dispatch timeouts, provider failures, or sustained
+  flush latency, plus an at-cap partition only when
+  `WalSaturationAcuteOnly` is `false`). Pair with
+  `wal.saturation.transitions` to plot how often the regime flips. The same signal is exposed to callers via
   `IWalSaturationSignal` / `IWalSaturationObserver` so producers
   can throttle without scraping the meter.
 

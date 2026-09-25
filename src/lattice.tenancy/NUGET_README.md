@@ -39,13 +39,14 @@ makes a host that never calls `AddLatticeTenancy()` unchanged.
 ## Quotas, metering, and rate limiting
 
 Usage metering samples each tenant's live keys, bytes, memory, and tree count
-into a durable per-tenant usage store, and `LatticeTenantAdmissionController`
-refuses a write that would breach the tenant's quota with a
+into a durable per-tenant usage store, and quota admission refuses a write once
+the tenant's metered usage is beyond its quota and burst allowance, with a
 `LatticeQuotaExceededException` (surfaced over gRPC as `ResourceExhausted`
 carrying the breached dimension). A cluster-wide operations-per-second budget is
 apportioned across live silos and enforced silo-locally by a token bucket, so
-rate limiting needs no per-request cross-silo hop. Sustained breaches are
-recorded as billable overage samples.
+rate limiting needs no per-request cross-silo hop. Usage above a steady-state cap
+that the burst allowance still admits is accrued as billable overage on every
+metering tick.
 
 ## Region residency and observability
 

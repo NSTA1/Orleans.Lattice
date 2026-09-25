@@ -80,7 +80,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 Two cross-cutting prerequisites apply to the repair stages:
 
-- **A real transport.** The repair re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
+- **A real transport.** The repair re-ship goes through `IReplicationTransport`; the default no-op transport delivers nothing and returns an unaccepted ack, so every repair pass reports zero entries shipped and counts toward the remediation circuit breaker. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
 - **Projection-digest maintenance must be on.** Detection reads the core library's leaf-projection digest, which only exists when `MaintainProjectionDigest` is `true` (the default for user trees). A tree that opts out of digest maintenance has no digest to compare, so the entire stack is inert for it - see [the projection-rebuild digest opt-out](../lattice/projection-rebuild.md) for the cross-cluster impact.
 
 ## Metrics surface

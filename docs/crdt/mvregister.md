@@ -38,13 +38,20 @@ graph TD
 ```csharp verify
 var status = tree.MvRegister<string>("ticket:7:status");
 
-// Two agents set the status concurrently, each unaware of the other's write.
+// Agent A sets the status on this cluster.
 await status.SetAsync("agent-A", "in-progress", cancellationToken);
-await status.SetAsync("agent-B", "resolved", cancellationToken);
+
+// Meanwhile agent B set it on another cluster, before A's write had reached it.
+// Replication delivers B's register; MergeAsync stands in for that here. (Two
+// SetAsync calls in a row on one cluster would not conflict: the second write
+// would observe the first and replace it.)
+var fromB = new MvRegister();
+fromB.Set("agent-B", status.Serializer.Serialize("resolved"));
+await status.MergeAsync(fromB, cancellationToken);
 
 // Neither write observed the other, so both survive as a conflict set the
 // application resolves - last-writer-wins would have dropped one silently.
-IReadOnlyList<string> candidates = await status.ValuesAsync(cancellationToken);
+IReadOnlyList<string> candidates = await status.ValuesAsync(cancellationToken); // in-progress, resolved
 
 // A later write that has observed both collapses the register to one value.
 await status.SetAsync("agent-A", "closed", cancellationToken);

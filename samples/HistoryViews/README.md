@@ -50,7 +50,9 @@ Total durable revisions read: 5
 ```
 
 (Clock values differ per run. `window=00:00:00` means no age bound - revisions
-never expire.)
+never expire. The program's `(forward-only)` label simplifies: this run writes
+nothing to `orders` before the view exists, but a view created over existing data
+can also record earlier revisions - see [When not to use](#when-not-to-use).)
 
 ## When to use
 
@@ -64,8 +66,12 @@ never expire.)
 - For quick, ad-hoc inspection with zero setup - the best-effort WAL-window
   fallback (see [ChangeHistory](../ChangeHistory)) needs no view and no extra
   storage.
-- History is **forward-only**: it begins at view creation, so it cannot recover
-  revisions that predate enabling the view.
+- To reconstruct revisions from before the view existed. A new view starts from
+  what the source still holds: while nothing has been trimmed from the source
+  write-ahead log, its first drain replays the log from the beginning and keeps
+  the original clocks, but once garbage collection has trimmed the log's start it
+  seeds only one revision per live key, from current state. Enable the view
+  before the writes you need to keep, as this sample does.
 
 ## Feature doc
 

@@ -23,12 +23,12 @@ slots.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> BeginShadowWrite : SplitAsync(sourceShard)
-    BeginShadowWrite --> Drain : S.BeginSplitAsync(target, slots, virt)
+    [*] --> BeginShadowWrite : split requested for source shard S
+    BeginShadowWrite --> Drain : S starts mirroring moved-slot writes to T
     Drain --> Reject : forward all moved-slot entries (live + tombstones) to T
-    Reject --> Swap : S.EnterRejectPhaseAsync() + final drain pass
-    Swap --> Complete : registry.SetShardMapAsync(newMap)
-    Complete --> [*] : final drain pass + S.CompleteSplitAsync()
+    Reject --> Swap : S rejects moved-slot operations + final drain pass
+    Swap --> Complete : registry reassigns the moved slots to T in one call
+    Complete --> [*] : final drain pass, then S seals the moved slots
 ```
 
 1. **BeginShadowWrite** - Coordinator persists intent and calls
@@ -71,8 +71,11 @@ stateDiagram-v2
    this order - flipping the map before the source rejects - would open a
    window in which a stale-routing reader could still be served the pre-split
    value by the source.
-4. **Swap** - Coordinator persists a new `ShardMap` in the registry that
-   redirects moved slots to *T*. New `LatticeGrain` activations immediately
+4. **Swap** - Coordinator reassigns the moved slots to *T* in the
+   registry's `ShardMap` with a single registry call that re-reads the
+   live map, applies the reassignment, and persists it under a fresh
+   `Version`, so a concurrent split or shard consolidation of the same
+   tree cannot erase either change. New router activations immediately
    route the moved slots to *T*; stale activations that still cache the old
    map hit the source's reject gate, catch `StaleShardRoutingException`,
    invalidate their cached map, fetch the fresh map from the registry, and
@@ -212,10 +215,11 @@ and cannot pick the last-writer-wins winner on its own).
 The authoritative live leaf has its own activation-time WAL replay, and
 the same stamp-versus-slot distinction applies to it. When a live leaf
 activates (a cold reactivation after deactivation, a silo move, or a
-crash), it rebuilds its in-memory projection by replaying every WAL
-entry past its persisted projection checkpoint through
-`BPlusLeafGrain.ShouldApplyDuringReplay`. Unlike the snapshot leaf the
-live leaf has no pinned map - it serves the *current* point in time -
+crash), it rebuilds its in-memory projection by replaying the WAL
+through its replay filter - from its snapshot's offset when a persisted
+snapshot rehydrated it, otherwise across the whole readable window (see
+[State Model](state-model.md#activation-replay-rehydrate-and-the-safety-net)).
+Unlike the snapshot leaf the live leaf has no pinned map - it serves the *current* point in time -
 so it resolves per-mutation shard ownership by the key's virtual slot
 under the **current** registry `ShardMap`, fetched once at the start of
 replay.
@@ -285,21 +289,27 @@ reminder-service startup recovers), and re-anchored by a keepalive reminder. On 
    independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
 4. Selects the top-`(MaxConcurrentAutoSplits - inFlight)` hottest shards
-   whose rate exceeds `HotShardOpsPerSecondThreshold` (default 200 ops/s),
+   whose rate reaches `HotShardOpsPerSecondThreshold` (default 200 ops/s),
    skipping any shard already splitting, on cooldown, or owning a single
-   virtual slot.
+   virtual slot. Three shape clauses can refuse a hot shard as well: no
+   shard is admitted once the tree has `MaxPhysicalShardsPerTree`
+   physical shards (default 256), or while its load is uniform - the
+   hottest shard's rate below `HotShardMinSkewRatio` (default 1.5) times
+   the median shard rate, the signature of a bulk ingest that a split
+   cannot relieve - and a candidate holding fewer than
+   `HotShardMinShardEntries` live entries (default 1024) is skipped.
 5. Triggers `ITreeShardSplitGrain.SplitAsync` on each selected shard in
    parallel via `Task.WhenAll` and starts a per-shard cooldown.
 
-Each split runs in its own coordinator activation: the
-`ITreeShardSplitGrain` key format is **`{treeId}/{sourceShardIndex}`**,
-so independent splits of different source shards within the same tree do
-not contend on a single coordinator. Concurrent target-index allocation is
-made collision-free by a registry-side atomic counter
-(`ILatticeRegistry.AllocateNextShardIndexAsync`), and concurrent shard-map
-swaps are made composition-safe by re-reading the current map inside the
-swap phase before persisting the diff. Both atomicity guarantees rely on
-the singleton `LatticeRegistryGrain` being non-reentrant.
+Each split runs in its own coordinator activation, keyed
+**`{treeId}/{sourceShardIndex}`**, so independent splits of different
+source shards within the same tree do not contend on a single
+coordinator. Concurrent target-index allocation is made collision-free
+by an atomic registry-side counter, and concurrent shard-map swaps
+compose because each applies its moved-slot reassignment in a single
+registry call that re-reads the live map before persisting. Both
+atomicity guarantees rely on the singleton registry grain running each
+mutating call to completion before the next (it is not reentrant).
 
 A split is **suppressed** (whole pass skipped) or a candidate is **skipped
 individually** when:
@@ -312,6 +322,9 @@ individually** when:
 | Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
 | In-flight splits already at `MaxConcurrentAutoSplits` | Whole pass | Sum of `IsSplittingAsync()` results. |
 | Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |
+| Tree already has `MaxPhysicalShardsPerTree` physical shards (default 256) | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=shard_ceiling`. |
+| Uniform load: hottest shard's rate below `HotShardMinSkewRatio` (default 1.5) times the median shard rate | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=uniform_load`. |
+| Shard holds fewer than `HotShardMinShardEntries` live entries (default 1024) | Per shard | One count per candidate that cleared every cheaper clause; counted with `reason=low_occupancy`. |
 | Shard already splitting | Per shard | Excluded from candidate set. |
 | Per-shard cooldown active (default 2 min) | Per shard | In-memory cooldown timestamp. |
 | Shard owns a single virtual slot | Per shard | Cannot be subdivided further. |
@@ -358,7 +371,12 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 | `MaxClusterConcurrentAutoSplits` | `null` | Optional cluster-wide ceiling on the aggregate number of concurrent autonomic splits across **all** trees. `null` disables the gate (per-tree caps only, zero cost); a positive value opts in to a singleton admission gate enforced in addition to each tree's `MaxConcurrentAutoSplits`. |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
+| `HotShardMinSkewRatio` | `1.5` | Minimum ratio of the hottest shard's rate to the tree's median shard rate before any split is admitted, so a uniformly loaded tree (a bulk ingest) is never split. A value at or below `1.0` disables the clause. It is the upper edge of the split/heal dead band whose lower edge is `HotShardConsolidationSkewRatio`. |
+| `HotShardMinShardEntries` | `1024` | Minimum live entries a shard must hold to be split. `0` disables the floor and its per-candidate count probe. |
+| `MaxPhysicalShardsPerTree` | `256` | Ceiling on the physical shard count autonomic splits may reach. An explicit `ReshardAsync` is not gated by it. `0` or less for no ceiling. |
 | `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |
+
+Automatic over-split healing, which folds shards back together once a tree's load is uniform, is tuned separately - see `ShardHealingEnabled`, `HotShardConsolidationSkewRatio`, and `MaxConcurrentShardConsolidations` in [Configuration](configuration.md#shardhealingenabled).
 
 ## Convergence guarantees
 
