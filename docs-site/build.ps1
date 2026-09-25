@@ -13,9 +13,10 @@
 # worked down. Lower the ceiling as the backlog shrinks; 0 is the goal.
 #
 # After DocFX, the build publishes each page's markdown alternate beside it and
-# links the page to it, then fails unless every page has one, every page's
-# source link names a file in the repository, and llms.txt, sitemap.xml and the
-# footer's docs version are all in place (see stage.ps1 for what they are).
+# links the page to it, places each page's note under its title, then fails
+# unless every page has both, every page's source link names a file in the
+# repository, and llms.txt, sitemap.xml and the footer's docs version are all in
+# place (see stage.ps1 for what they are).
 
 param(
     [switch]$Serve,
@@ -104,7 +105,14 @@ try {
 
     $unpaired = New-Object System.Collections.Generic.List[string]
     $badSource = New-Object System.Collections.Generic.List[string]
+    $unnoted = New-Object System.Collections.Generic.List[string]
     $pagesWithAlternate = 0
+    # Each page's note (Get-PageNote in stage.ps1), placed after DocFX has run so
+    # it is in the page but not in the search index, whose results would
+    # otherwise all open with it.
+    $notesFile = Join-Path $PSScriptRoot 'obj/page-notes.json'
+    if (-not (Test-Path $notesFile)) { throw "No page notes at $notesFile; stage.ps1 writes them, so it did not run to completion." }
+    $notes = [System.IO.File]::ReadAllText($notesFile) | ConvertFrom-Json
     foreach ($html in Get-ChildItem $site -Recurse -Filter *.html) {
         $relative = $html.FullName.Substring($site.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
         if ($html.Name -eq 'toc.html' -or $relative.StartsWith('public/')) { continue }
@@ -118,10 +126,25 @@ try {
         $alternate = [System.IO.Path]::ChangeExtension($html.FullName, '.md')
         $head = $text.IndexOf('</head>')
         if (-not (Test-Path -LiteralPath $alternate) -or $head -lt 0) { $unpaired.Add($relative); continue }
-        if (-not $text.Contains('type="text/markdown"')) {
+        $updated = $text
+        if (-not $updated.Contains('type="text/markdown"')) {
             $link = "<link rel=`"alternate`" type=`"text/markdown`" href=`"$([System.IO.Path]::GetFileName($alternate))`" title=`"This page as markdown`">`n  "
-            [System.IO.File]::WriteAllText($html.FullName, $text.Insert($head, $link), $utf8)
+            $updated = $updated.Insert($head, $link)
         }
+
+        # The note goes straight after the page's title, the first thing a reader
+        # that takes the page as text keeps, or opens the article on a page
+        # without one.
+        $note = $notes.PSObject.Properties[[System.IO.Path]::ChangeExtension($relative, '.md')]
+        $article = $updated.IndexOf('<article')
+        if (-not $note -or $article -lt 0) { $unnoted.Add($relative) }
+        elseif (-not $updated.Contains('class="visually-hidden lt-page-note"')) {
+            $articleEnd = $updated.IndexOf('</article>', $article)
+            $title = $updated.IndexOf('</h1>', $article)
+            $at = if ($title -ge 0 -and ($articleEnd -lt 0 -or $title -lt $articleEnd)) { $title + '</h1>'.Length } else { $updated.IndexOf('>', $article) + 1 }
+            $updated = $updated.Insert($at, "`n" + [string]$note.Value)
+        }
+        if ($updated -ne $text) { [System.IO.File]::WriteAllText($html.FullName, $updated, $utf8) }
         $pagesWithAlternate++
     }
     if ($unpaired.Count -gt 0) {
@@ -130,7 +153,10 @@ try {
     if ($badSource.Count -gt 0) {
         throw "$($badSource.Count) page(s) have no source link, or one into the staged copy: $(($badSource | Select-Object -First 10) -join ', '). stage.ps1 sets each page's docurl from where it was staged from."
     }
-    Write-Host "Markdown alternates: $pagesWithAlternate page(s) linked to their .md"
+    if ($unnoted.Count -gt 0) {
+        throw "$($unnoted.Count) page(s) have no page note, or no article to put it in: $(($unnoted | Select-Object -First 10) -join ', '). stage.ps1 writes a note for every staged page."
+    }
+    Write-Host "Markdown alternates: $pagesWithAlternate page(s) linked to their .md, each with its note"
 
     # llms.txt, the sitemap, and the footer's version line are what an agent
     # reads first; the build fails without them rather than publishing a site
