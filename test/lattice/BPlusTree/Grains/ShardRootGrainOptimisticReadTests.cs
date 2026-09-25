@@ -24,9 +24,10 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
     private static (ShardRootGrain Grain, FakePersistentState<ShardRootState> State, IBPlusLeafGrain Leaf, ILeafCacheGrain Cache) CreateGrain(
         bool optimisticReads = true,
-        bool seedRoot = true)
+        bool seedRoot = true,
+        IGrainContext? context = null)
     {
-        var context = Substitute.For<IGrainContext>();
+        context ??= Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
 
         var state = new FakePersistentState<ShardRootState>();
