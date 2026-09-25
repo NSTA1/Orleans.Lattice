@@ -274,6 +274,9 @@ var tcpPort     = ReadInt("BENCH_TCP_PORT", 7000);
 var batchSize   = ReadInt("BENCH_BATCH_SIZE", 4096);
 var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
+// BENCH_POINT_FANOUT: per-slot fan-out for the point modes; unset falls back to
+// BENCH_FLUSH_CONCURRENCY (in-flight = that bound squared). See IngestSettings.
+var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
@@ -605,7 +608,7 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode) { PointFanOut = pointFanOut });
 // (#3348) Hold warm-up until this silo's cluster manifest lists the cohort's
 // full silo count, so the hot grains it activates are placed across the whole
 // cluster rather than the first silos to join. 0 (the default) disables it.
@@ -1034,7 +1037,7 @@ internal sealed class TcpIngestService(
         var asm = typeof(TcpIngestService).Assembly;
         var asmLoc = asm.Location;
         var builtAtUtc = string.IsNullOrEmpty(asmLoc) ? "unknown" : File.GetLastWriteTimeUtc(asmLoc).ToString("yyyy-MM-ddTHH:mm:ssZ");
-        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
+        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.EffectivePointFanOut={settings.EffectivePointFanOut} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
 
         var lattice = grainFactory.GetGrain<ILattice>(settings.TreeId);
 

@@ -173,7 +173,7 @@ offers the same load per silo.
 | `-VehiclesPerSilo <N>` | `1200` | Per-silo fleet size; the cohort offers `VehiclesPerSilo x SiloCount` keys. |
 | `-TickHz <N>` | `5` | Samples/sec/vehicle. |
 | `-BatchSize <N>` / `-FlushMs <N>` | `4096` / `50` | As `BENCH_BATCH_SIZE` / `BENCH_FLUSH_MS`. |
-| `-FlushConcurrencyPerSilo <N>` | `8` | Multiplied by `SiloCount` into `BENCH_FLUSH_CONCURRENCY`. |
+| `-FlushConcurrencyPerSilo <N>` | `8` | Multiplied by `SiloCount` into `BENCH_FLUSH_CONCURRENCY`, and passed unmultiplied as `BENCH_POINT_FANOUT`, so the point modes hold `FlushConcurrencyPerSilo^2 x SiloCount` calls in flight (constant per-silo demand). |
 | `-ShardCount <N>` | `64` | Fixed across the sweep (not per silo), so the fan-out width stays constant. |
 | `-WalPartitions <N>` | `16` | Sets `BENCH_WAL_PARTITIONS`. |
 | `-ClientsPerSilo <N>` | `4` | Sets `BENCH_CLIENT_COUNT` to `min(64, ClientsPerSilo x SiloCount)`. |
@@ -257,6 +257,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
 | `BENCH_FLUSH_MS` | 50 | Max flush latency (ms) before a partial batch is sent. |
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Max in-flight `SetManyAsync` calls. Pairs with `BENCH_WAL_PARTITIONS` so parallel flushes fan out across distinct WAL grains. Drop to 1 to isolate per-leaf-turn RTT from mailbox queueing. |
+| `BENCH_POINT_FANOUT` | `BENCH_FLUSH_CONCURRENCY` | Concurrent calls each flush slot fans out into for the point modes (`set-point`, `set-point-mv`, `get-point`), so their in-flight count is `BENCH_FLUSH_CONCURRENCY x BENCH_POINT_FANOUT`. Unset falls back to `BENCH_FLUSH_CONCURRENCY` (the single-VM rig behaviour). `run-cohort-aca.ps1` sets it to `-FlushConcurrencyPerSilo` so the count grows linearly with the silo count rather than quadratically (#3474). |
 
 ### WAL fan-out and pipeline
 

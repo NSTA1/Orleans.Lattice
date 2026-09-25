@@ -589,8 +589,12 @@ $Layer2Rows = @(
 # undersized client would measure. The rig default of 8 was measured to cap
 # them below the cluster's own ceiling; 64 lifts that cap clear of it (the
 # 2-key sagas reach the transaction-registry refusal ceiling there). The
-# point modes' in-flight call count is this bound squared (slots x per-slot
-# fan-out), so get-point, whose calls complete in milliseconds, takes 16.
+# point modes fan each of the FlushConcurrencyPerSilo x N slots out into
+# FlushConcurrencyPerSilo calls (BENCH_POINT_FANOUT), so their in-flight
+# call count is FlushConcurrencyPerSilo^2 x N: linear in N, with constant
+# per-silo demand. get-point, whose calls complete in milliseconds, takes 16.
+# (Before #3474 the per-slot fan-out was the cohort bound, making the count
+# (FlushConcurrencyPerSilo x N)^2, so per-silo demand grew with N.)
 #
 # CohortsPerCell raises -N for one workload. get-point needs it: its per-cell
 # result is bimodal across cohorts, so the median of 2 is a coin toss.
