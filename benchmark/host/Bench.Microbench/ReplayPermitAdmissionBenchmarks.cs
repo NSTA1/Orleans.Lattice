@@ -38,6 +38,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 [MemoryDiagnoser]
 public class ReplayPermitAdmissionBenchmarks
 {
+    private readonly SemaphoreSlim _starvationGate = new(6, 6);
+    private readonly SemaphoreSlim _busyStarvationGate = new(0, 6);
     /// <summary>The shipped default, so the arms measure the real bound.</summary>
     private static readonly TimeSpan MaxQueueWait = new LatticeOptions().WalReplayPermitMaxQueueWait;
 
@@ -57,7 +59,11 @@ public class ReplayPermitAdmissionBenchmarks
     /// the harness happened to run them in.
     /// </summary>
     [GlobalSetup]
-    public void Setup() => BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+    public void Setup()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 6, queued: 0);
+    }
 
     /// <summary>
     /// Restores the gate so a benchmark class running after this one in the
@@ -114,4 +120,19 @@ public class ReplayPermitAdmissionBenchmarks
     [Benchmark(Description = "Replay permit wait fold")]
     public void NoteQueueWait() =>
         BPlusLeafGrain.NoteReplayPermitQueueWaitForTest(HealthyWait, acquired: true);
+
+    /// <summary>Measures the successful GC reservation and shared-permit round trip.</summary>
+    [Benchmark]
+    public bool StarvationAdmission()
+    {
+        var acquired = BPlusLeafGrain.TryAcquireStarvationReplayPermit(_starvationGate);
+        if (acquired)
+            BPlusLeafGrain.ReleaseStarvationReplayPermit(_starvationGate);
+        return acquired;
+    }
+
+    /// <summary>Measures refusal before constructing the caller's typed exception.</summary>
+    [Benchmark]
+    public bool StarvationAdmissionBusy() =>
+        BPlusLeafGrain.TryAcquireStarvationReplayPermit(_busyStarvationGate);
 }

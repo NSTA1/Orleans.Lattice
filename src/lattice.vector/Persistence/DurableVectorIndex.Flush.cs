@@ -14,6 +14,16 @@ public sealed partial class DurableVectorIndex
     private string? _chunkBoundaryCursor;
     private string? _durableCursor;
 
+    // The uncommitted generation the slot arrays currently describe, or -1 when
+    // they describe the committed one. A write of a new generation that fails
+    // part-way leaves the partitions it did commit recorded here, so the retry
+    // resumes after them instead of writing the whole generation again (#3547).
+    private long _writingGeneration = -1;
+
+    // The epoch the writing generation's centroids were stored under, or -1 when
+    // they have not been written yet.
+    private long _writingCentroidEpoch = -1;
+
     /// <summary>
     /// Makes the index's current contents durable.
     /// <para>
@@ -30,7 +40,15 @@ public sealed partial class DurableVectorIndex
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         RequireMutable();
-        return WritePartitionsAsync(_generation, full: false, cancellationToken);
+
+        // While a trained generation is part-way through committing, the slot
+        // arrays describe that generation rather than the committed one, so a
+        // flush of the committed generation would be measured against the wrong
+        // chunks. The flush completes the commit instead, which makes the current
+        // contents durable just the same.
+        return _commitTarget > _generation
+            ? WritePartitionsAsync(_commitTarget, full: true, cancellationToken)
+            : WritePartitionsAsync(_generation, full: false, cancellationToken);
     }
 
     /// <summary>
@@ -43,20 +61,36 @@ public sealed partial class DurableVectorIndex
         var header = snapshot.Header;
         var slots = Math.Max(1, header.PartitionCount);
         var epoch = header.IndexVersion;
-        if (generation != _generation)
+        var resuming = false;
+        if (generation == _generation)
+        {
+            EnsureSlotArrays(slots);
+        }
+        else if (generation == _writingGeneration && _persistedPartitionVersion.Length == slots)
+        {
+            // An earlier attempt at this generation failed part-way. The slots
+            // describe what that attempt committed under it, so only what it did
+            // not commit - or what has changed since - is written now.
+            resuming = true;
+        }
+        else
         {
             // A new generation holds nothing yet, so nothing it is about to write
             // can match or supersede a stored chunk: whatever the slots describe
             // belongs to the generation being replaced, which is reclaimed whole.
             ResetSlotArrays(slots);
-        }
-        else
-        {
-            EnsureSlotArrays(slots);
+            _writingGeneration = generation;
+            _writingCentroidEpoch = -1;
         }
 
         var centroidEpoch = _centroidEpoch;
-        if (header.PartitionCount > 0 && (full || !_centroidsPersisted))
+        if (resuming && _writingCentroidEpoch >= 0)
+        {
+            // Centroids change only when the index is trained, and training
+            // abandons the resume, so the ones already written are still current.
+            centroidEpoch = _writingCentroidEpoch;
+        }
+        else if (header.PartitionCount > 0 && (full || !_centroidsPersisted))
         {
             centroidEpoch = epoch;
             await WriteChunkRangeAsync(
@@ -69,6 +103,11 @@ public sealed partial class DurableVectorIndex
                 generation,
                 epoch,
                 cancellationToken).ConfigureAwait(false);
+
+            if (generation != _generation)
+            {
+                _writingCentroidEpoch = epoch;
+            }
         }
 
         var chunkIndex = header.CentroidChunkCount;
@@ -78,7 +117,12 @@ public sealed partial class DurableVectorIndex
             var size = header.PartitionCount == 0 ? _index.Count : _index.PartitionSize(partition);
             var version = PartitionVersionOf(partition);
 
-            if (!full && version == _persistedPartitionVersion[partition])
+            // A resumed write skips what the failed attempt already committed
+            // under this generation, exactly as an incremental flush skips what
+            // an earlier flush committed: the slot describes the stored partition
+            // either way.
+            var incremental = !full || resuming;
+            if (incremental && version == _persistedPartitionVersion[partition])
             {
                 chunkIndex += chunks;
                 continue;
@@ -92,7 +136,7 @@ public sealed partial class DurableVectorIndex
                 chunks,
                 fromSequence: 0,
                 NextEpoch(partition, epoch),
-                onlyChanged: !full,
+                onlyChanged: incremental,
                 size,
                 version,
                 cancellationToken).ConfigureAwait(false);
@@ -106,6 +150,8 @@ public sealed partial class DurableVectorIndex
         _centroidsPersisted = header.PartitionCount > 0;
         _centroidEpoch = centroidEpoch;
         _generation = generation;
+        _writingGeneration = -1;
+        _writingCentroidEpoch = -1;
         _persistedPartitions = slots;
         await SweepRetirementsAsync(cancellationToken).ConfigureAwait(false);
     }

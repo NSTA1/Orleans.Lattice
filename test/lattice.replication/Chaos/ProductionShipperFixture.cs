@@ -64,6 +64,16 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
     private readonly LoopbackTransportRegistry _registry;
     private readonly TimeSpan _livenessProbeInterval;
     private readonly TimeSpan? _sourceIdentityBackstopInterval;
+    private readonly TimeSpan _interSiteDeployDelay;
+
+    /// <summary>
+    /// Upper bound on how long <see cref="InitializeAsync"/> waits for every
+    /// directed edge to clear its startup backoff. The shipper's backoff is
+    /// capped at <see cref="LatticeReplicationOptions.DefaultShipBackoffMax"/>
+    /// (30 s, plus up to 20 % jitter), so a healthy edge always clears well
+    /// inside this.
+    /// </summary>
+    internal static readonly TimeSpan EdgeReadinessTimeout = TimeSpan.FromSeconds(90);
 
     public static string ClusterIdFor(int siteIndex) => $"shipper-site-{siteIndex}";
 
@@ -90,11 +100,18 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
     /// the deterministic notify/rebind seam rather than a race the
     /// backstop timer would eventually win regardless.
     /// </param>
+    /// <param name="interSiteDeployDelay">
+    /// Extra pause inserted before deploying each site after the first.
+    /// Defaults to zero. Models a loaded CI runner on which a site takes
+    /// seconds to come up, so the fixture's startup-backoff readiness
+    /// barrier can be exercised deterministically.
+    /// </param>
     public ProductionShipperFixture(
         string treeName,
         int siteCount = 2,
         TimeSpan? livenessProbeInterval = null,
-        TimeSpan? sourceIdentityBackstopInterval = null)
+        TimeSpan? sourceIdentityBackstopInterval = null,
+        TimeSpan? interSiteDeployDelay = null)
     {
         ArgumentNullException.ThrowIfNull(treeName);
         if (siteCount < 2)
@@ -110,6 +127,7 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
         _registry = new LoopbackTransportRegistry();
         _livenessProbeInterval = livenessProbeInterval ?? TimeSpan.FromMilliseconds(200);
         _sourceIdentityBackstopInterval = sourceIdentityBackstopInterval;
+        _interSiteDeployDelay = interSiteDeployDelay ?? TimeSpan.Zero;
     }
 
     public TestCluster ClusterOf(int siteIndex) => _clusters[siteIndex];
@@ -117,6 +135,16 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
     public LoopbackReplicationTransport TransportOf(int siteIndex) => _registry.Get(_clusterIds[siteIndex]);
     public FaultInjectingReplicationApplier ApplierOf(int siteIndex) => _appliers[siteIndex];
     public ReplicationPeerStats PeerStatsOf(int siteIndex) => _peerStats[siteIndex];
+
+    /// <summary>
+    /// The silo-side <see cref="ReplicationPeerStats"/> the production
+    /// shipper grains on <paramref name="siteIndex"/> record outbound
+    /// contact into. Distinct from <see cref="PeerStatsOf"/>, which is the
+    /// fixture-side applier's inbound recorder.
+    /// </summary>
+    public ReplicationPeerStats SiloPeerStatsOf(int siteIndex) =>
+        ((InProcessSiloHandle)_clusters[siteIndex].Silos.First())
+            .SiloHost.Services.GetRequiredService<ReplicationPeerStats>();
 
     /// <summary>Per-silo liveness-probe interval used at silo configure time.</summary>
     internal TimeSpan LivenessProbeInterval => _livenessProbeInterval;
@@ -137,6 +165,11 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
         FixtureRegistry.Register(this);
         for (var i = 0; i < SiteCount; i++)
         {
+            if (i > 0 && _interSiteDeployDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(_interSiteDeployDelay);
+            }
+
             var localClusterId = _clusterIds[i];
             var builder = new TestClusterBuilder(initialSilosCount: 1);
             builder.Options.ClusterId = localClusterId;
@@ -177,6 +210,96 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             _registry.RegisterEncoder(localClusterId,
                 siloHandle.SiloHost.Services.GetRequiredService<IWalRecordEncoder>());
         }
+
+        await WaitForStartupBackoffToClearAsync();
+    }
+
+    /// <summary>
+    /// Readiness barrier: returns only once every directed edge's shipper
+    /// has completed a successful round trip with no failure since, so a
+    /// test starts from a clean backoff state rather than inheriting one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sites deploy one at a time, and each site's shippers activate at
+    /// silo start. Until a peer site is deployed and registered the
+    /// loopback transport ack-rejects every liveness probe sent to it, and
+    /// each rejection escalates that shipper's exponential backoff
+    /// (<c>ShipBackoffInitial * 2^(failures - 1)</c>). Without this barrier
+    /// the escalation leaks into the test. A test that then injects its own
+    /// faults stacks them on top of the inherited failure count, so on a
+    /// runner slow enough to reject six startup probes, three injected
+    /// faults push the next retry roughly 25 s out and the test's
+    /// convergence window closes first. That was issue #3337: the shipper
+    /// had not stopped retrying, it was retrying on a 51 s cumulative
+    /// schedule.
+    /// </para>
+    /// <para>
+    /// The signal is the silo's outbound <see cref="ReplicationPeerStats"/>
+    /// row, which the shipper resets on the same success paths that reset
+    /// its backoff. A row with a recorded contact and zero consecutive
+    /// errors therefore means the edge's peer-attributable backoff is
+    /// clear. The barrier waits out any inherited backoff; it does not
+    /// shorten it, so production backoff behaviour is untouched.
+    /// </para>
+    /// <para>
+    /// With the liveness probe disabled nothing is sent on an idle edge, so
+    /// no startup backoff can accumulate and there is nothing to wait for.
+    /// </para>
+    /// </remarks>
+    private async Task WaitForStartupBackoffToClearAsync()
+    {
+        if (_livenessProbeInterval == Timeout.InfiniteTimeSpan)
+        {
+            return;
+        }
+
+        var deadline = DateTime.UtcNow + EdgeReadinessTimeout;
+        while (true)
+        {
+            var pending = FindEdgeWithStartupBackoff();
+            if (pending is null)
+            {
+                return;
+            }
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"ProductionShipperFixture readiness barrier: edge {pending} did not complete a clean " +
+                    $"round trip within {EdgeReadinessTimeout.TotalSeconds}s of all sites being registered.");
+            }
+            await Task.Delay(50);
+        }
+    }
+
+    /// <summary>
+    /// Returns a description of the first directed edge whose shipper has
+    /// not yet recorded a clean round trip, or <see langword="null"/> when
+    /// every edge is clean.
+    /// </summary>
+    internal string? FindEdgeWithStartupBackoff()
+    {
+        for (var i = 0; i < SiteCount; i++)
+        {
+            var snapshot = SiloPeerStatsOf(i).Snapshot();
+            for (var j = 0; j < SiteCount; j++)
+            {
+                if (i == j) continue;
+                var peer = _clusterIds[j];
+                var row = snapshot.FirstOrDefault(s =>
+                    s.Direction == ReplicationContactDirection.Outbound
+                    && s.Tree == TreeName
+                    && s.Peer == peer);
+                if (row == default || double.IsNaN(row.LastContactSeconds) || row.ConsecutiveErrors != 0)
+                {
+                    return row == default
+                        ? $"{_clusterIds[i]} -> {peer} (no outbound row yet)"
+                        : $"{_clusterIds[i]} -> {peer} (consecutive errors = {row.ConsecutiveErrors}, " +
+                          $"last contact = {row.LastContactSeconds}s)";
+                }
+            }
+        }
+        return null;
     }
 
     public async ValueTask DisposeAsync()

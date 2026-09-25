@@ -363,6 +363,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void RetireReplayBarrier()
     {
+        if (_warmRescueInFlight)
+            throw new InvalidOperationException("Cannot reset a leaf while its warm stale-cache rescue is persisting.");
         _replayBarrierRetired = true;
         _replayBarrier = null;
         CancelReplayBarrier();

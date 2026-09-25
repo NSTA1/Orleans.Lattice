@@ -14,106 +14,114 @@ internal sealed partial class BPlusLeafGrain
     public async Task MarkSlotsMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount)
     {
         await AwaitReplayBarrierAsync();
-
-        ArgumentNullException.ThrowIfNull(sortedMovedSlots);
-        if (virtualShardCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+        await _splitGate.WaitAsync();
+        try
+        {
+            _warmCacheTopologyChanged = true;
+            ArgumentNullException.ThrowIfNull(sortedMovedSlots);
+            if (virtualShardCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
 
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG mark-moved-away-enter] gid={context.GrainId} slots=[{string.Join(',', sortedMovedSlots)}] vsc={virtualShardCount} existingSlots=[{(state.State.MovedAwaySlots is null ? "" : string.Join(',', state.State.MovedAwaySlots))}] existingVsc={state.State.MovedAwayVirtualShardCount?.ToString() ?? "(none)"}");
 #endif
 
-        if (sortedMovedSlots.Length == 0)
-        {
-            // Nothing to record. The implementation tolerates an empty
-            // slot list as a no-op rather than throwing so a shard-side
-            // walk over leaves whose ownership is unchanged is cheap.
-            return;
-        }
-
-        // Idempotency: if every incoming slot is already recorded under
-        // the same virtual shard count, this is a no-op.
-        var existingSlots = state.State.MovedAwaySlots;
-        var existingVsc = state.State.MovedAwayVirtualShardCount;
-        if (existingVsc == virtualShardCount && existingSlots is { Length: > 0 })
-        {
-            var allPresent = true;
-            for (var i = 0; i < sortedMovedSlots.Length; i++)
+            if (sortedMovedSlots.Length == 0)
             {
-                if (Array.BinarySearch(existingSlots, sortedMovedSlots[i]) < 0)
-                {
-                    allPresent = false;
-                    break;
-                }
+                // Nothing to record. The implementation tolerates an empty
+                // slot list as a no-op rather than throwing so a shard-side
+                // walk over leaves whose ownership is unchanged is cheap.
+                return;
             }
-            if (allPresent) return;
-        }
 
-        // Merge the incoming slots into the existing set (sorted, distinct).
-        // Slots are sticky once moved, so the merge is monotonic.
-        int[] merged;
-        if (existingSlots is null || existingSlots.Length == 0)
-        {
-            // Fresh state: dedupe the incoming array in case the caller
-            // supplied duplicates. Cheap linear dedupe over a sorted
-            // input avoids a HashSet allocation.
-            var tmp = new List<int>(sortedMovedSlots.Length);
-            int? last = null;
-            foreach (var s in sortedMovedSlots)
+            // Idempotency: if every incoming slot is already recorded under
+            // the same virtual shard count, this is a no-op.
+            var existingSlots = state.State.MovedAwaySlots;
+            var existingVsc = state.State.MovedAwayVirtualShardCount;
+            if (existingVsc == virtualShardCount && existingSlots is { Length: > 0 })
             {
-                if (last is null || s != last.Value)
-                    tmp.Add(s);
-                last = s;
+                var allPresent = true;
+                for (var i = 0; i < sortedMovedSlots.Length; i++)
+                {
+                    if (Array.BinarySearch(existingSlots, sortedMovedSlots[i]) < 0)
+                    {
+                        allPresent = false;
+                        break;
+                    }
+                }
+                if (allPresent) return;
             }
-            merged = tmp.ToArray();
-        }
-        else
-        {
-            // Linear merge of two sorted arrays.
-            var tmp = new List<int>(existingSlots.Length + sortedMovedSlots.Length);
-            int i = 0, j = 0;
-            while (i < existingSlots.Length && j < sortedMovedSlots.Length)
+
+            // Merge the incoming slots into the existing set (sorted, distinct).
+            // Slots are sticky once moved, so the merge is monotonic.
+            int[] merged;
+            if (existingSlots is null || existingSlots.Length == 0)
             {
-                if (existingSlots[i] == sortedMovedSlots[j])
+                // Fresh state: dedupe the incoming array in case the caller
+                // supplied duplicates. Cheap linear dedupe over a sorted
+                // input avoids a HashSet allocation.
+                var tmp = new List<int>(sortedMovedSlots.Length);
+                int? last = null;
+                foreach (var s in sortedMovedSlots)
                 {
-                    tmp.Add(existingSlots[i]);
-                    i++;
-                    j++;
+                    if (last is null || s != last.Value)
+                        tmp.Add(s);
+                    last = s;
                 }
-                else if (existingSlots[i] < sortedMovedSlots[j])
-                {
-                    tmp.Add(existingSlots[i++]);
-                }
-                else
-                {
-                    tmp.Add(sortedMovedSlots[j++]);
-                }
+                merged = tmp.ToArray();
             }
-            while (i < existingSlots.Length) tmp.Add(existingSlots[i++]);
-            while (j < sortedMovedSlots.Length) tmp.Add(sortedMovedSlots[j++]);
-            merged = tmp.ToArray();
-        }
+            else
+            {
+                // Linear merge of two sorted arrays.
+                var tmp = new List<int>(existingSlots.Length + sortedMovedSlots.Length);
+                int i = 0, j = 0;
+                while (i < existingSlots.Length && j < sortedMovedSlots.Length)
+                {
+                    if (existingSlots[i] == sortedMovedSlots[j])
+                    {
+                        tmp.Add(existingSlots[i]);
+                        i++;
+                        j++;
+                    }
+                    else if (existingSlots[i] < sortedMovedSlots[j])
+                    {
+                        tmp.Add(existingSlots[i++]);
+                    }
+                    else
+                    {
+                        tmp.Add(sortedMovedSlots[j++]);
+                    }
+                }
+                while (i < existingSlots.Length) tmp.Add(existingSlots[i++]);
+                while (j < sortedMovedSlots.Length) tmp.Add(sortedMovedSlots[j++]);
+                merged = tmp.ToArray();
+            }
 
-        state.State.MovedAwaySlots = merged;
-        state.State.MovedAwayVirtualShardCount = virtualShardCount;
+            state.State.MovedAwaySlots = merged;
+            state.State.MovedAwayVirtualShardCount = virtualShardCount;
 
-        // Publish a Version advance + bump the revision cookie so
-        // LeafCacheGrain observes the change on its next refresh cadence
-        // and prunes cached entries for moved slots via the new StateDelta
-        // fields. This op does not stamp any Entries, so the published
-        // value must be derived from the local HLC - but it MUST be
-        // strictly greater than Version[ReplicaId] to populate the
-        // dictionary (PublishVersionAdvance is gated `> current`). Tick
-        // the local Clock and publish the result; this never outruns
-        // anything because no Entries are being stamped concurrently.
-        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
-        PublishVersionAdvance(state.State.Clock);
-        BumpLocalRevision();
-        await PersistAsync();
+            // Publish a Version advance + bump the revision cookie so
+            // LeafCacheGrain observes the change on its next refresh cadence
+            // and prunes cached entries for moved slots via the new StateDelta
+            // fields. This op does not stamp any Entries, so the published
+            // value must be derived from the local HLC - but it MUST be
+            // strictly greater than Version[ReplicaId] to populate the
+            // dictionary (PublishVersionAdvance is gated `> current`). Tick
+            // the local Clock and publish the result; this never outruns
+            // anything because no Entries are being stamped concurrently.
+            state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+            PublishVersionAdvance(state.State.Clock);
+            BumpLocalRevision();
+            await PersistAsync();
 
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG moved-away-slots] gid={context.GrainId} entriesCount={Cache.Count}");
 #endif
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     /// <summary>

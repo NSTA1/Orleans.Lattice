@@ -61,7 +61,9 @@ namespace Orleans.Lattice;
 ///   is the point: an activation admitted to a queue it cannot reach the
 ///   head of burns its whole request deadline and then enqueues a
 ///   replacement, so refusing immediately is the cheaper failure as well
-///   as the more honest one.</description></item>
+///   as the more honest one. Background starvation drives also use this source
+///   when no shared permit is immediately available or the process-wide GC
+///   share is occupied; they never join the replay queue (issue #3480).</description></item>
 /// </list>
 /// <para>
 /// The typed slot lets callers that care about the saturation

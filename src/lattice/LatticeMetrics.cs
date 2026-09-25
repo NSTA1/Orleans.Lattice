@@ -7338,8 +7338,10 @@ public static class LatticeMetrics
     /// A first-class arm rather than a fold into
     /// <see cref="BlockedLeafReactivationDroveNoAdvance"/>, because an abandoned
     /// drive and a drive that ran to completion without advancing are different
-    /// events with different remedies: the first says storage did not answer
-    /// within the budget, the second says there was nothing to absorb. Reporting
+    /// events with different remedies: the first says the drive ran out of
+    /// budget before its replay finished (the grain's warning log reports how
+    /// its time divided between admission and replay, issue #3479), the second
+    /// says there was nothing to absorb. Reporting
     /// the first as the second is the misfiling the verdict enum's contract
     /// forbids, and <c>DriveOutcomeTag</c> throwing on an unmapped member is the
     /// mechanism that forces this arm to exist.
@@ -7406,48 +7408,40 @@ public static class LatticeMetrics
             description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
 
     /// <summary>
-    /// Deferred terminals (<c>TxCommit</c>, <c>TxAbort</c>, <c>DeleteRange</c>)
-    /// that pass 1 of replay could NOT record durably because the leaf's
-    /// <c>UnresolvedReplayWork</c> ledger was already at
-    /// <c>MaxDurableUnresolvedReplayWork</c>, and which therefore fell back to
-    /// the pre-#2165 in-memory clamp (issue #2756). Tagged <c>tree</c> and
-    /// <c>partition</c>.
+    /// Durable ledger records refused for deferred terminals (<c>TxCommit</c>,
+    /// <c>TxAbort</c>, <c>DeleteRange</c>) in replay pass 1. The terminals
+    /// themselves are retained in memory and drained by pass 2; they are NOT
+    /// dropped (issue #3190). The shipped instrument name and unit are retained.
     /// <para>
-    /// This is the counterpart of
-    /// <see cref="LeafUnresolvedPrepareLedgerBeyondCap"/> for the OTHER ledger
-    /// arm, and it is not interchangeable with it. That counter is emitted by
-    /// the prepare recorder, which is uncapped by design and records
-    /// unconditionally; this one is emitted by the capped deferred-terminal
-    /// recorder, at the point where a terminal is DROPPED. Different ledger,
-    /// different policy, opposite outcome.
+    /// A refused record falls back to the in-memory checkpoint clamp. If replay
+    /// is interrupted before pass 2, a later activation must re-read the
+    /// unbanked work rather than reconstruct it from the durable ledger.
+    /// Saturation at <c>MaxDurableUnresolvedReplayWork</c> permits this refusal
+    /// only when a prefix can still bank; the head-of-window liveness admission
+    /// is unchanged. Disabling the ledger also emits this counter.
     /// </para>
     /// <para>
-    /// It exists because that drop was previously silent - no metric, no log,
-    /// no counter - while being able to pin the replay checkpoint and so block
-    /// WAL reclamation for the whole tree. On a non-transactional tree (one
-    /// that runs no sagas and therefore carries no prepares at all) the
-    /// deferred-terminal clamp is the ONLY clamp that can fire, so without this
-    /// instrument a frozen tree is indistinguishable between "this clamp is
-    /// pinning the checkpoint" and "this clamp never fired and the cause is
-    /// elsewhere".
+    /// Range-delete-heavy replay can fill the ledger without any sagas:
+    /// non-last partitions defer until pass 2. Completing that pass drains the
+    /// terminal records. Raising the cap can bank a larger interrupted prefix
+    /// at the cost of a larger persisted row, but any finite cap can saturate
+    /// on a sufficiently long replay window.
     /// </para>
     /// <para>
-    /// Note the neighbouring counter cannot be used as a proxy for it even on a
-    /// tree that does run sagas. It fires on <c>work.Count &gt; cap</c>, so a
-    /// ledger resting at EXACTLY the cap drops every subsequent terminal
-    /// forever while leaving it at zero - it is a near-miss detector that is
-    /// blind at precisely the value where this clamp bites. That boundary is
-    /// now inclusive for the same reason.
+    /// Tagged by tree, WAL partition and tenant, not by leaf. This cumulative
+    /// count does not establish a continuously full ledger, a failure to drain,
+    /// or the identity of a leaf holding the WAL floor.
+    /// <see cref="LeafUnresolvedPrepareLedgerBeyondCap"/> measures the separate,
+    /// uncapped prepare-recording arm, not refusals of terminal records.
     /// </para>
     /// <para>
-    /// Pre-minted at zero per (tree, partition) when a partition enters replay,
-    /// so an absent series means the build did not land rather than that the
-    /// clamp never fired. Observability only: the drop behaviour is unchanged.
+    /// Zero-primed when a partition enters replay, so zero is distinguishable
+    /// from an absent series. No replay, admission or metric identity changes.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafDeferredTerminalsDroppedAtCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deferred_terminals_dropped_at_cap", unit: "{terminal}",
-            description: "Deferred terminals (TxCommit, TxAbort, DeleteRange) dropped by replay pass 1 because the durable UnresolvedReplayWork ledger was at the MaxDurableUnresolvedReplayWork cap, falling back to the in-memory clamp that can pin the replay checkpoint. Tagged by tree and WAL partition.");
+            description: "Durable ledger records refused in replay pass 1 when UnresolvedReplayWork is capped or disabled; the TxCommit, TxAbort and DeleteRange terminals themselves are retained in memory and drained by pass 2. Refusal falls back to the checkpoint clamp and can require re-reading unbanked work after interruption. Tagged by tree, WAL partition and tenant, not leaf; not evidence of terminal loss or a stalled WAL floor.");
 
     /// <summary>
     /// Canonical name of <see cref="LeafSpanFailOpenCommits"/>.

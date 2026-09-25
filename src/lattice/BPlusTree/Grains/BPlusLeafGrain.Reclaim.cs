@@ -117,6 +117,8 @@ internal sealed partial class BPlusLeafGrain
     public async Task<bool> TryBeginRetirementAsync()
     {
         await AwaitReplayBarrierAsync();
+        if (_warmRescueInFlight)
+            return false;
 
         // Latch FIRST, before any await THAT COULD CARRY AN OBSERVATION ACROSS
         // IT. The replay-gate await above is deliberately outside that rule and
@@ -187,6 +189,8 @@ internal sealed partial class BPlusLeafGrain
     public async Task<bool> TryBeginOrphanRetirementAsync()
     {
         await AwaitReplayBarrierAsync();
+        if (_warmRescueInFlight)
+            return false;
 
         // Latch FIRST, for exactly the reason TryBeginRetirementAsync latches
         // first, and the reasoning there is the reasoning here - read it. The
@@ -494,6 +498,7 @@ internal sealed partial class BPlusLeafGrain
         GrainId? newNext,
         string? absorbHighKeyExclusive)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -640,6 +645,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task AbsorbSuccessorRangeAsync(string? highKeyExclusive)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         // See SetNextSiblingAsync for the gate rationale.

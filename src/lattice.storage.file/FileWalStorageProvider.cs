@@ -52,6 +52,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     private readonly Serializer<WalRecord> _serializer;
     private readonly Func<ReadOnlySequence<byte>, WalRecord> _decode;
     private readonly IWalReadPressureGovernor _governor;
+    private readonly IFileWalFileSystem _fileSystem;
     private readonly ConcurrentDictionary<(string TreeId, int ShardIndex), FileWalShard> _shards = new();
     private bool _disposed;
 
@@ -73,10 +74,20 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
         IOptions<FileWalStorageOptions> options,
         Serializer<WalRecord> serializer,
         IWalReadPressureGovernor governor)
+        : this(options, serializer, governor, PhysicalFileWalFileSystem.Instance)
+    {
+    }
+
+    internal FileWalStorageProvider(
+        IOptions<FileWalStorageOptions> options,
+        Serializer<WalRecord> serializer,
+        IWalReadPressureGovernor governor,
+        IFileWalFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(governor);
+        ArgumentNullException.ThrowIfNull(fileSystem);
         _options = options.Value ?? throw new ArgumentException(
             $"{nameof(IOptions<FileWalStorageOptions>)}.{nameof(IOptions<FileWalStorageOptions>.Value)} returned null.",
             nameof(options));
@@ -102,6 +113,7 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
         _serializer = serializer;
         _governor = governor;
+        _fileSystem = fileSystem;
 
         // Cached so the decode path allocates no delegate per read: the one
         // thing a memory-pressure fix must not do is allocate on the page it
@@ -357,8 +369,9 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
                 state.Options.RootDirectory,
                 EncodePathSegment(key.TreeId),
                 "shard-" + key.ShardIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            return new FileWalShard(directory, state.Options, key.TreeId, key.ShardIndex, state.Governor);
-        }, (Options: _options, Governor: _governor));
+            return new FileWalShard(
+                directory, state.Options, key.TreeId, key.ShardIndex, state.Governor, state.FileSystem);
+        }, (Options: _options, Governor: _governor, FileSystem: _fileSystem));
     }
 
     /// <summary>
