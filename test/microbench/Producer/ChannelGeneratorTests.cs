@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.AzureThroughput.Producer;
 
@@ -83,7 +85,7 @@ public class ChannelGeneratorTests
     }
 
     [Test]
-    public void Snapshot_backpressure_and_lateness_are_a_union_not_double_counted()
+    public void Snapshot_channel_wait_is_counted_even_when_also_late()
     {
         var progress = new GeneratorProgress();
         var before = Stopwatch.GetTimestamp();
@@ -99,5 +101,44 @@ public class ChannelGeneratorTests
         Assert.That(state.Blocked, Is.GreaterThanOrEqualTo(sleepEnd - sleepStart));
         Assert.That(state.Blocked, Is.LessThanOrEqualTo(after - before));
         Assert.That(state.Slip, Is.GreaterThanOrEqualTo(Stopwatch.Frequency));
+    }
+
+    [Test]
+    public void Snapshot_late_without_channel_wait_does_not_report_backpressure()
+    {
+        var progress = new GeneratorProgress();
+        progress.BeginTick(Stopwatch.GetTimestamp() - Stopwatch.Frequency, 1);
+        progress.Sent(1);
+        var state = progress.Snapshot();
+        Assert.That(state.Slip, Is.GreaterThanOrEqualTo(Stopwatch.Frequency));
+        Assert.That(state.Blocked, Is.Zero);
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task RunAsync_slow_consumer_reports_both_high_wait_fraction_and_slip()
+    {
+        var generator = new ChannelGenerator(200000, 1);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var output = new StringWriter(CultureInfo.InvariantCulture);
+        var previous = Console.Out;
+        Console.SetOut(TextWriter.Synchronized(output));
+        try
+        {
+            var run = generator.RunAsync(5, 1, true, timeout.Token);
+            await generator.Reader.WaitToReadAsync(timeout.Token);
+            await Task.Delay(1500, timeout.Token);
+            await foreach (var entry in generator.Reader.ReadAllAsync(timeout.Token)) { }
+            await run;
+            var done = Regex.Match(output.ToString(), @"\[producer\] DONE .*genBlockedFrac=([\d.]+) slipMaxMs=([\d.]+)");
+            Assert.That(done.Success, Is.True);
+            Assert.That(double.Parse(done.Groups[1].Value, CultureInfo.InvariantCulture), Is.GreaterThanOrEqualTo(0.2));
+            Assert.That(double.Parse(done.Groups[2].Value, CultureInfo.InvariantCulture), Is.GreaterThan(1000));
+        }
+        finally
+        {
+            await timeout.CancelAsync();
+            Console.SetOut(previous);
+        }
     }
 }

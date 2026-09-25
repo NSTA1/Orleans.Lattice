@@ -323,22 +323,30 @@ addition to the channel, each worker and the reader can hold one chunk.
 
 Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
 
-- `genBlockedFrac` is generator-seconds spent waiting for channel capacity or
-  behind the scheduled tick budget, divided by elapsed seconds x worker count.
-  Overlapping wait and lateness count once. Periodic values cover the reporting
-  interval; `DONE` covers the full run. Live blocked writes remain observable.
+- `genBlockedFrac` is generator-seconds spent waiting for channel capacity,
+  divided by elapsed seconds x worker count. It excludes CPU/scheduling lateness:
+  a high value is consumer/cluster back-pressure, not a slow generator. Periodic
+  values cover the reporting interval; `DONE` covers the full run. Live blocked
+  writes remain observable.
 - `slipMaxMs` is the run-wide maximum schedule slip across workers, including
   overrun of an unfinished tick, not just the last completed tick.
 
-`performance-report.ps1` warns and renders `>= X` when a retained producer log
-shows slip above 1,000 ms, or `genBlockedFrac` at least 0.2 while completed
-throughput is below 90% of offered load. These are conservative lower bounds:
-channel back-pressure can originate downstream, so this is not proof of a
-producer CPU bottleneck. Such cells cannot establish a cluster ceiling. Scaling
-ratios are omitted when the cell or its 1-silo anchor is producer-bound, and
-charts omit affected workload curves rather than plot a misleading plateau.
-Resume and dry-run aggregation re-read retained logs, including legacy slip
-fields. New evidence is also retained in cohort state.
+`performance-report.ps1` warns and renders `>= X` only when the same `DONE` line
+reports slip above 1,000 ms AND `genBlockedFrac` below 0.2. High slip with high
+channel-wait time is consistent with a saturated cluster and is NOT marked
+producer-bound, even when achieved throughput is below offered load. Slip still
+includes lateness accumulated during channel waits; the wait fraction is what
+distinguishes that case from generation falling behind without back-pressure.
+The rule uses paired full-run totals, never maxima from different windows.
+Legacy logs without both fields, and logs without `DONE`, cannot establish a
+producer bottleneck and are not flagged. Re-run known producer-limited legacy
+cells with the new producer before making a cluster-ceiling claim.
+
+Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
+and charts omit affected workload curves rather than plot a misleading plateau.
+An omission note appears only when a curve was actually excluded. Resume and
+dry-run aggregation re-read retained logs; paired evidence is retained in cohort
+state as `producerSlipMaxMs` and `producerGenBlockedFrac`.
 
 For a local generator-only measurement, build the Producer project in Release,
 then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,

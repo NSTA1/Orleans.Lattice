@@ -1646,24 +1646,28 @@ function Set-Layer3ProducerEvidence {
 	)
 	$slip = $null
 	$blocked = $null
-	foreach ($line in (Select-String -Path $LogPath -Pattern '^\[producer\] (?:t=|DONE )')) {
+	# Use paired full-run totals, never maxima drawn from different windows.
+	# Slip alone (including legacy logs) cannot distinguish a slow generator
+	# from one that fell behind because the cluster held its channel full.
+	$line = Select-String -Path $LogPath -Pattern '^\[producer\] DONE ' | Select-Object -Last 1
+	if ($line) {
 		if ($line.Line -match 'slipMaxMs=\s*([\d.]+)') {
-			$slip = [math]::Max([double]$slip, [double]$Matches[1])
+			$slip = [double]$Matches[1]
 		}
 		if ($line.Line -match 'genBlockedFrac=\s*([\d.]+)') {
-			$blocked = [math]::Max([double]$blocked, [double]$Matches[1])
+			$blocked = [double]$Matches[1]
 		}
 	}
 	$offered = [double](Get-StateOr $Cohort 'rungVehicles' 0) * [double](Get-StateOr $Cohort 'rungTickHz' 0)
 	$achieved = Get-StateOr $Cohort 'finalThroughput' $null
-	$bound = ($null -ne $slip -and $slip -gt 1000) -or
-		($null -ne $blocked -and $blocked -ge 0.2 -and $offered -gt 0 -and
-		 $null -ne $achieved -and [double]$achieved -lt 0.9 * $offered)
+	$bound = ($null -ne $slip -and $slip -gt 1000) -and
+		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2)
 	$Cohort['producerSlipMaxMs'] = $slip
-	$Cohort['producerGenBlockedFracMax'] = $blocked
+	$Cohort.Remove('producerGenBlockedFracMax')
+	$Cohort['producerGenBlockedFrac'] = $blocked
 	$Cohort['producerBound'] = $bound
 	if ($bound) {
-		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : slipMaxMs=$slip genBlockedFracMax=$blocked achieved=$achieved offered=$offered keys/s. Channel back-pressure or generation delay prevents a cluster-ceiling claim; rendering a lower bound."
+		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure; rendering a lower bound, not a cluster ceiling."
 	}
 }
 
@@ -2375,14 +2379,17 @@ function Render-Layer3Chart {
 		return ,@($axis)
 	}
 
-	$measured = @($Layer3Rows | Where-Object {
-		$RowsAgg.ContainsKey($_.Label) -and
+	$available = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
+	if ($available.Count -eq 0) { return '_No multi-silo cells measured yet._' }
+	$measured = @($available | Where-Object {
 		@($RowsAgg[$_.Label].Values | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -eq 0
 	})
 	if ($measured.Count -eq 0) { return '_No cluster-ceiling curves available; producer-bound lower bounds remain in the table._' }
 
 	$blocks = New-Object System.Collections.Generic.List[string]
-	$blocks.Add('Producer-bound workload curves are omitted; their lower bounds remain in the table.')
+	if ($measured.Count -lt $available.Count) {
+		$blocks.Add('Producer-bound workload curves are omitted; their lower bounds remain in the table.')
+	}
 
 	# 1. Normalised speedup, every workload that has an N=1 anchor.
 	$anchored = @($measured | Where-Object { $RowsAgg[$_.Label].ContainsKey('1') })

@@ -15,9 +15,9 @@ internal sealed class GeneratorProgress
     private void Advance()
     {
         var now = Stopwatch.GetTimestamp();
-        // Union of channel-wait time and time beyond this tick's budget.
+        // Keep channel back-pressure separate from CPU/scheduling lateness.
         // Snapshot advances live waits too, even if a write never unblocks.
-        blocked += waiting ? now - last : Math.Max(0, now - Math.Max(last, due));
+        if (waiting) blocked += now - last;
         if (due != long.MaxValue) slip = Math.Max(slip, now - due);
         last = now;
     }
