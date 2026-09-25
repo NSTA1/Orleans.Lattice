@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -35,6 +36,19 @@ public static class LatticeCrossTreeAtomicWriteExtensions
     /// with a different tree-set or key-set. Re-submitting the same
     /// <paramref name="operationId"/> with the same tree-set/key-set re-attaches
     /// to the in-flight (or completed) saga and returns its memoized outcome.
+    /// <para>
+    /// A saga state write that loses an optimistic-concurrency (ETag) check - for
+    /// example because a storage-SDK transport retry landed the first attempt -
+    /// makes the affected saga grain deactivate so a fresh activation reloads its
+    /// durable state. This method re-attaches by <paramref name="operationId"/> a
+    /// bounded number of times when that happens, which is idempotent; if the
+    /// conflict persists it throws
+    /// <see cref="LatticeStateWriteFailedException"/> with
+    /// <see cref="LatticeStateWriteFailedException.Conflict"/> set, and the saga
+    /// can be resumed by re-submitting the same batch under the same
+    /// <paramref name="operationId"/>. The durable decision is never lost or
+    /// applied twice.
+    /// </para>
     /// </summary>
     /// <param name="factory">The grain factory / cluster client.</param>
     /// <param name="batches">Per-tree slices to commit atomically. Tree ids must be distinct and non-empty.</param>
@@ -52,7 +66,41 @@ public static class LatticeCrossTreeAtomicWriteExtensions
         cancellationToken.ThrowIfCancellationRequested();
 
         var coordinator = factory.GetGrain<ILatticeCrossTreeTxGrain>(operationId);
-        return coordinator.CommitAsync([.. batches]);
+        return CommitReattachingOnConflictAsync(coordinator, [.. batches], cancellationToken);
+    }
+
+    /// <summary>
+    /// Maximum commit attempts when a saga state write conflicts (issue #3572),
+    /// including the first.
+    /// </summary>
+    internal const int MaxConflictAttempts = 3;
+
+    /// <summary>
+    /// Invokes <see cref="ILatticeCrossTreeTxGrain.CommitAsync"/>, re-attaching
+    /// by operation id after a linear backoff (1 s, 2 s) when a saga grain
+    /// reports a state-write conflict. Every other fault propagates unchanged.
+    /// The backoff gives the conflicted activation time to deactivate, so the
+    /// re-attach lands on a fresh activation that reloads the row.
+    /// </summary>
+    internal static async Task<CrossTreeAtomicWriteOutcome> CommitReattachingOnConflictAsync(
+        ILatticeCrossTreeTxGrain coordinator,
+        List<LatticeTreeBatch> batches,
+        CancellationToken cancellationToken,
+        Func<int, TimeSpan>? backoff = null)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await coordinator.CommitAsync(batches).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                attempt < MaxConflictAttempts && GrainStateWriteFaults.IsTranslatedConflict(ex))
+            {
+                var delay = backoff?.Invoke(attempt) ?? TimeSpan.FromSeconds(attempt);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

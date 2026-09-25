@@ -53,6 +53,27 @@ internal sealed class AtomicWriteGrain(
     private const string RetentionReminderName = "atomic-write-retention";
     private const int MaxRetriesPerStep = 1;
 
+    /// <summary>Grain-type label carried on a translated state-write fault.</summary>
+    private const string StateWriteGrainType = "atomic-write";
+
+    /// <summary>
+    /// Set once a saga state write loses an optimistic-concurrency (ETag)
+    /// check (issue #3572). The write may have landed, so this activation's
+    /// in-memory state and cached ETag can no longer be trusted: it has asked
+    /// to deactivate and fails every later call fast, without touching storage,
+    /// until a fresh activation reloads the row.
+    /// </summary>
+    private bool _stateConflicted;
+
+    /// <summary>
+    /// Set once this activation has run (or confirmed) the terminal cleanup -
+    /// keepalive unregistered, retention armed - so an idempotent re-entry on a
+    /// terminal saga does not re-register reminders on every call. A fresh
+    /// activation starts clear, which is what lets it re-run the cleanup a
+    /// conflicted terminal write skipped (issue #3572).
+    /// </summary>
+    private bool _terminalRetentionEnsured;
+
     /// <summary>
     /// Sentinel prefix stamped onto
     /// <see cref="State.AtomicWriteState.FailureMessage"/> when the
@@ -199,13 +220,20 @@ internal sealed class AtomicWriteGrain(
         Logger.LogInformation(
             "Atomic-write saga {OperationKey}: retention window expired; clearing state.",
             OperationKey);
-        await state.ClearStateAsync();
+        await GrainStateWriteFaults.ClearRecoveringConflictAsync(
+            state,
+            static s => s.Phase is AtomicWritePhase.Completed or AtomicWritePhase.PreconditionFailed);
     }
 
     /// <inheritdoc />
     protected override async Task OnOtherReminderAsync(string reminderName, TickStatus status)
     {
         if (reminderName != KeepaliveReminderName) return;
+
+        // A conflicted activation's in-memory state may disagree with storage
+        // and its deactivation is already pending; the next tick lands on a
+        // fresh activation that reloads the row (issue #3572).
+        if (_stateConflicted) return;
 
         switch (state.State.Phase)
         {
@@ -232,6 +260,13 @@ internal sealed class AtomicWriteGrain(
                 break;
             case AtomicWritePhase.Completed:
             case AtomicWritePhase.PreconditionFailed:
+                // A terminal write that landed but reported a conflict (issue
+                // #3572), or a crash between the terminal persist and its
+                // cleanup, leaves the keepalive registered and retention unarmed.
+                // Arm retention idempotently so the row is eventually cleared.
+                await EnsureTerminalRetentionAsync();
+                this.DeactivateOnIdle();
+                break;
             case AtomicWritePhase.NotStarted:
                 await UnregisterKeepaliveAsync();
                 this.DeactivateOnIdle();
@@ -261,6 +296,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
@@ -292,6 +328,7 @@ internal sealed class AtomicWriteGrain(
         // the client simply sees success again.
         if (state.State.Phase == AtomicWritePhase.Completed)
         {
+            await EnsureTerminalRetentionAsync();
             await TryThrowFailureAsync();
             return;
         }
@@ -359,6 +396,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: vacuously all-match, nothing to write, commit outcome.
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
@@ -380,6 +418,7 @@ internal sealed class AtomicWriteGrain(
         // against possibly-moved data.
         if (state.State.Phase == AtomicWritePhase.PreconditionFailed)
         {
+            await EnsureTerminalRetentionAsync();
             return AtomicWriteOutcome.PreconditionFailed;
         }
 
@@ -388,6 +427,7 @@ internal sealed class AtomicWriteGrain(
         // existing failure path.
         if (state.State.Phase == AtomicWritePhase.Completed)
         {
+            await EnsureTerminalRetentionAsync();
             await TryThrowFailureAsync();
             return AtomicWriteOutcome.Committed;
         }
@@ -427,6 +467,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: vacuously prepared, nothing to stage.
         if (entries.Count == 0) return CrossTreePrepareVote.Prepared;
@@ -451,11 +492,13 @@ internal sealed class AtomicWriteGrain(
             case AtomicWritePhase.Prepared:
                 return CrossTreePrepareVote.Prepared;
             case AtomicWritePhase.PreconditionFailed:
+                await EnsureTerminalRetentionAsync();
                 return CrossTreePrepareVote.PreconditionFailed;
             case AtomicWritePhase.Completed:
                 // Already finalized under coordinator drive; report the
                 // terminal shape so a re-attaching coordinator can re-finalize
                 // idempotently (a committed/aborted finalize is a no-op).
+                await EnsureTerminalRetentionAsync();
                 return state.State.FailureMessage is not null
                     ? CrossTreePrepareVote.Failed
                     : CrossTreePrepareVote.Prepared;
@@ -506,6 +549,18 @@ internal sealed class AtomicWriteGrain(
             // transient blip AND strand this sub-saga parked forever.
             throw;
         }
+        catch (Exception ex) when (GrainStateWriteFaults.IsTranslatedConflict(ex))
+        {
+            // A state write lost an ETag check (issue #3572). The write may
+            // have landed, and this activation has deactivated so the next call
+            // reloads what is durable. Nothing was compensated, so this is NOT a
+            // failed prepare: voting Failed would abort the cross-tree saga
+            // while this sub-saga might still park Prepared on its next attempt,
+            // stranding it outside the coordinator's finalize fan-out, which
+            // only reaches Prepared voters. Propagate so the coordinator stays
+            // Preparing and re-dispatches prepare to a fresh activation.
+            throw;
+        }
         catch (Exception ex)
         {
             // A genuine staging failure self-compensated through RunSagaAsync's
@@ -532,6 +587,7 @@ internal sealed class AtomicWriteGrain(
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Only a parked (Prepared) sub-saga can be finalized. Any other phase is
         // a no-op: NotStarted / PreconditionFailed / Completed are already
@@ -540,6 +596,11 @@ internal sealed class AtomicWriteGrain(
         // next reminder tick once the participant has voted).
         if (state.State.Phase != AtomicWritePhase.Prepared)
         {
+            if (state.State.Phase is AtomicWritePhase.Completed or AtomicWritePhase.PreconditionFailed)
+            {
+                await EnsureTerminalRetentionAsync();
+            }
+
             return;
         }
 
@@ -587,6 +648,14 @@ internal sealed class AtomicWriteGrain(
                 throw;
             }
         }
+        catch (LatticeStateWriteFailedException conflict) when (conflict.Conflict)
+        {
+            // The paused-phase persist lost an ETag check (issue #3572): this
+            // activation has already deactivated itself, so propagate the
+            // conflict unchanged. It is just as retryable as a park blip, and
+            // keeping its type lets callers recognise it.
+            throw;
+        }
         catch (Exception ex)
         {
             // Both the registry delegation and the paused-phase persist are
@@ -598,16 +667,6 @@ internal sealed class AtomicWriteGrain(
             throw new CrossTreeParkRetryException(ex);
         }
     }
-
-    /// <summary>
-    /// Internal control-flow signal that the cross-tree prepare-and-pause
-    /// <see cref="ParkPreparedAsync"/> step failed on a <b>retryable</b> fault
-    /// (registry delegation RPC or paused-phase persist). Distinguished from a
-    /// genuine staging failure so the coordinator retries prepare instead of
-    /// aborting the whole cross-tree transaction.
-    /// </summary>
-    private sealed class CrossTreeParkRetryException(Exception inner)
-        : Exception("Cross-tree sub-saga park step failed on a retryable fault.", inner);
 
     /// <summary>
     /// Validates the batch: no duplicate keys, no null keys, and a non-null
@@ -927,26 +986,38 @@ internal sealed class AtomicWriteGrain(
             DiagSink.Write($"[DIAG saga-prepare-persist-exit] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
 #endif
         }
-        catch
+        catch (Exception ex)
         {
+            // A terminal PreconditionFailed write that landed and then reported
+            // a conflict (issue #3572) is confirmed by a re-read, and then falls
+            // through to the terminal cleanup below rather than skipping it.
+            var fingerprint = state.State.KeyFingerprint;
+            if (!(guardFailed
+                && GrainStateWriteFaults.IsTranslatedConflict(ex)
+                && await ConfirmLandedTerminalAsync(
+                    s => s.Phase == AtomicWritePhase.PreconditionFailed
+                        && s.KeyFingerprint.AsSpan().SequenceEqual(fingerprint),
+                    "precondition-failed")))
+            {
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG saga-prepare-persist-fail] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
+                DiagSink.Write($"[DIAG saga-prepare-persist-fail] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
 #endif
-            state.State.Phase = prevPhase;
-            state.State.TreeId = prevTreeId;
-            state.State.Entries = prevEntries;
-            state.State.PreValues = prevPreValues;
-            state.State.NextIndex = prevNextIndex;
-            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
-            state.State.FailureMessage = prevFailureMessage;
-            state.State.KeyFingerprint = prevKeyFingerprint;
-            state.State.TransactionId = prevTransactionId;
-            state.State.Delta = prevDelta;
-            state.State.VectorClock = prevVectorClock;
-            state.State.AtomicBatchSize = prevAtomicBatchSize;
-            state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
-            state.State.TouchedShards = prevTouchedShards;
-            throw;
+                state.State.Phase = prevPhase;
+                state.State.TreeId = prevTreeId;
+                state.State.Entries = prevEntries;
+                state.State.PreValues = prevPreValues;
+                state.State.NextIndex = prevNextIndex;
+                state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                state.State.FailureMessage = prevFailureMessage;
+                state.State.KeyFingerprint = prevKeyFingerprint;
+                state.State.TransactionId = prevTransactionId;
+                state.State.Delta = prevDelta;
+                state.State.VectorClock = prevVectorClock;
+                state.State.AtomicBatchSize = prevAtomicBatchSize;
+                state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
+                state.State.TouchedShards = prevTouchedShards;
+                throw;
+            }
         }
 
         // Guard rejected the batch: the saga is terminal in
@@ -958,6 +1029,7 @@ internal sealed class AtomicWriteGrain(
         {
             await UnregisterKeepaliveAsync();
             await SlideTtlAsync();
+            _terminalRetentionEnsured = true;
             return;
         }
 
@@ -2945,11 +3017,27 @@ internal sealed class AtomicWriteGrain(
         state.State.Phase = AtomicWritePhase.Completed;
         state.State.RetriesOnCurrentStep = 0;
         ReleaseStagedPayload();
+        var completedTxid = state.State.TransactionId;
+        Exception? terminalFault = null;
         try
         {
             await WriteSagaStateAsync("complete");
         }
-        catch
+        catch (Exception ex)
+        {
+            terminalFault = ex;
+        }
+
+        // A terminal write that lost an ETag check may still have landed (issue
+        // #3572). Re-read the row: when the Completed checkpoint is durable, the
+        // rest of this method's cleanup - keepalive, retention, metrics, the
+        // completion event, the registry forget - runs exactly once, here,
+        // rather than being skipped by the throw and never redone.
+        if (terminalFault is not null
+            && !(GrainStateWriteFaults.IsTranslatedConflict(terminalFault)
+                && await ConfirmLandedTerminalAsync(
+                    s => s.Phase == AtomicWritePhase.Completed && s.TransactionId == completedTxid,
+                    "complete")))
         {
             state.State.Phase = prevPhase;
             state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
@@ -2958,10 +3046,12 @@ internal sealed class AtomicWriteGrain(
             state.State.EntryDeltas = prevEntryDeltas;
             state.State.EntryDeletes = prevEntryDeletes;
             state.State.Delta = prevDelta;
-            throw;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(terminalFault);
         }
+
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
+        _terminalRetentionEnsured = true;
 
         // Emit a terminal outcome counter for operators. "committed" = all
         // writes applied; "failed" = compensation ran after a Prepare/Execute
@@ -3312,11 +3402,22 @@ internal sealed class AtomicWriteGrain(
     /// </param>
     private async Task WriteSagaStateAsync(string phase)
     {
+        ThrowIfStateConflicted();
         var (treeTag, walTag, tenantTag) = GetSagaMetricTags();
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            var translated = OnStateWriteFault(ex, phase);
+            if (translated is null)
+            {
+                throw;
+            }
+
+            throw translated;
         }
         finally
         {
@@ -3329,6 +3430,116 @@ internal sealed class AtomicWriteGrain(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, phase),
                     tenantTag,
                 });
+        }
+    }
+
+    /// <summary>
+    /// Classifies a failed saga state write (issue #3572). An
+    /// optimistic-concurrency conflict means the write may have landed while
+    /// this activation's cached ETag went stale, so every later write would
+    /// fail the same way: the activation marks itself conflicted, requests
+    /// deactivation, and the caller's retry lands on a fresh activation that
+    /// reloads the row and resumes from what is durable. Every persisted step
+    /// is idempotent on resume (the same path crash recovery takes), and the
+    /// commit or abort decision lives in the write-once registry, so the retry
+    /// neither double-applies nor loses a decision. A provider exception type
+    /// is translated so it never crosses the grain boundary; a BCL fault
+    /// propagates unchanged. Returns <see langword="null"/> to rethrow the
+    /// original.
+    /// </summary>
+    private LatticeStateWriteFailedException? OnStateWriteFault(Exception failure, string phase)
+    {
+        var translated = GrainStateWriteFaults.Translate(StateWriteGrainType, OperationKey, failure);
+        if (translated is { Conflict: true })
+        {
+            _stateConflicted = true;
+            Logger.LogWarning(
+                failure,
+                "Atomic-write saga {OperationKey}: the {Phase} state write lost an optimistic-concurrency check (the write may have landed); deactivating so the next call reloads durable state.",
+                OperationKey,
+                phase);
+            this.DeactivateOnIdle();
+        }
+
+        return translated;
+    }
+
+    /// <summary>
+    /// Confirms that a terminal state write which reported an ETag conflict had
+    /// in fact landed (issue #3572). The re-read refreshes the cached ETag and
+    /// loads the durable row, so on success the activation is trustworthy again
+    /// and the conflicted flag is cleared; the deactivation already requested
+    /// still runs once the terminal cleanup finishes. Returns
+    /// <see langword="false"/> when the write did not land or the re-read
+    /// failed, leaving the activation conflicted.
+    /// </summary>
+    private async Task<bool> ConfirmLandedTerminalAsync(Func<AtomicWriteState, bool> landed, string phase)
+    {
+        if (!await GrainStateWriteFaults.TryConfirmLandedAsync(state, landed))
+        {
+            return false;
+        }
+
+        _stateConflicted = false;
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: the conflicted {Phase} state write had landed; completing terminal cleanup.",
+            OperationKey,
+            phase);
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the terminal cleanup idempotently for a saga whose durable phase is
+    /// already terminal: unregisters the keepalive, arms (or slides) the
+    /// retention reminder, and, for a Completed saga, forgets its registry
+    /// decision. The activation that wrote the terminal checkpoint normally does
+    /// all of this, but a terminal write that landed and then reported a
+    /// conflict (issue #3572), or a crash straight after the checkpoint, skips
+    /// it; a fresh activation that finds the terminal phase redoes it here, so
+    /// the row is always eventually cleared. Every step is idempotent. Runs at
+    /// most once per activation. The completion metrics and the
+    /// <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/> event are not
+    /// re-emitted: this activation cannot tell whether a predecessor already
+    /// emitted them, and a duplicate is worse than the rare loss.
+    /// </summary>
+    private async Task EnsureTerminalRetentionAsync()
+    {
+        if (_terminalRetentionEnsured)
+        {
+            return;
+        }
+
+        await UnregisterKeepaliveAsync();
+        await SlideTtlAsync();
+        _terminalRetentionEnsured = true;
+
+        var txid = state.State.TransactionId;
+        if (state.State.Phase == AtomicWritePhase.Completed && txid != Guid.Empty)
+        {
+            try
+            {
+                await RegistryFor(state.State.TreeId, txid).ForgetAsync(txid);
+            }
+            catch (Exception ex)
+            {
+                // Registry GC is non-critical, exactly as on the first pass.
+                Logger.LogDebug(ex,
+                    "Atomic-write saga {OperationKey}: re-entry registry forget failed; ignoring.",
+                    OperationKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fails fast once an earlier state write conflicted, so a call that reaches
+    /// this activation before it deactivates neither drives the saga from
+    /// untrusted in-memory state nor retries a write that cannot succeed.
+    /// </summary>
+    private void ThrowIfStateConflicted()
+    {
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, OperationKey);
         }
     }
 
