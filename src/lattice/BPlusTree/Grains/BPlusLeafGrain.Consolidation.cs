@@ -88,17 +88,68 @@ internal sealed partial class BPlusLeafGrain
         PublishVersionAdvance(state.State.Clock);
         BumpLocalRevision();
 
-        // Advance the delivery cursor as well, without recording a key. The
-        // cursor-based delivery route short-circuits to a stripped envelope
-        // when the caller is already at head and this leaf holds no sealed
-        // slot - which, after a lift, is exactly the state that must NOT be
-        // stripped, or the lift signal never reaches the cache. Bumping the
-        // sequence takes every at-head cache off that fast path for one
-        // refresh, which is all it takes to deliver the signal; the very next
-        // refresh finds the cache at the new head and the fast path is back.
-        EnsureDeliveryEpochInitialized();
-        _deliverySequence++;
+        // Re-ship every row this leaf holds in a reclaimed slot (issue #3524).
+        // While a slot was sealed, every LeafCacheGrain refresh pruned its
+        // cached rows for that slot, yet kept advancing its delivery cursor
+        // past their recorded sequences. Clearing the seal changes no row, so
+        // without a fresh sequence per key GetDeltaSinceCursorAsync would never
+        // deliver those rows again: the cache would stop refusing the keys but
+        // hold nothing for them, and answer null / false for keys this leaf
+        // owns and serves. Recording each one restores the cache/leaf
+        // invariant that everything the leaf owns and a cache does not hold is
+        // re-shipped. Only slots that were actually sealed are walked: a slot
+        // that was never sealed here was never pruned by any cache.
+        var redelivered = RecordReclaimedKeysForDelivery(existing, sortedSlots, virtualShardCount);
+
+        // When no key was recorded (the reclaimed slots hold nothing here),
+        // still advance the delivery cursor. The cursor-based delivery route
+        // short-circuits to a stripped envelope when the caller is already at
+        // head and this leaf holds no sealed slot - which, after a lift, is
+        // exactly the state that must NOT be stripped, or the lift signal
+        // never reaches the cache. Bumping the sequence takes every at-head
+        // cache off that fast path for one refresh, which is all it takes to
+        // deliver the signal; the very next refresh finds the cache at the new
+        // head and the fast path is back. A recorded key has already advanced
+        // the sequence, so the bump is only needed on the empty path.
+        if (!redelivered)
+        {
+            EnsureDeliveryEpochInitialized();
+            _deliverySequence++;
+        }
 
         await PersistAsync();
+    }
+
+    /// <summary>
+    /// Records a fresh delivery sequence for every key this leaf holds in a
+    /// slot that was sealed (<paramref name="previouslySealed"/>) and is now
+    /// being reclaimed (<paramref name="reclaimedSlots"/>), so every
+    /// <see cref="LeafCacheGrain"/> that pruned those rows while the slot was
+    /// sealed receives them again on its next incremental refresh.
+    /// <para>
+    /// Walks keys only, through
+    /// <see cref="LeafEntryCache.EnumerateKeysUnordered"/>, so a lazily
+    /// hydrated snapshot stays unhydrated and no payload is decoded.
+    /// <see cref="BumpDeliverySequenceFor"/> touches only the sequence map,
+    /// never the entry cache, so mutating it inside the walk is safe. A lift is
+    /// a rare consolidation step, not a per-request path.
+    /// </para>
+    /// </summary>
+    /// <returns><see langword="true"/> when at least one key was recorded.</returns>
+    private bool RecordReclaimedKeysForDelivery(int[] previouslySealed, int[] reclaimedSlots, int virtualShardCount)
+    {
+        var recorded = false;
+        foreach (var key in Cache.EnumerateKeysUnordered())
+        {
+            var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+            if (Array.BinarySearch(reclaimedSlots, slot) >= 0
+                && Array.BinarySearch(previouslySealed, slot) >= 0)
+            {
+                BumpDeliverySequenceFor(key);
+                recorded = true;
+            }
+        }
+
+        return recorded;
     }
 }
