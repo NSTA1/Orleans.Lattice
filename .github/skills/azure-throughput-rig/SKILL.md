@@ -209,7 +209,7 @@ kebab- or concatenated form. Unset/unknown => `set-many`.
 | `cross-tree-atomic-64` | Cross-tree atomic saga of 64 keys (32 per tree). |
 | `set-point` | One `ILattice.SetAsync` per key - fan-out point writes. |
 | `set-point-mv` | Identical write path to `set-point`, but the silo also attaches an asynchronous materialised view (key-preserving passthrough) over the tree via `AddLatticeViews`. The A/B partner of `set-point` for measuring whether maintaining a view perturbs the source tree's point-write path. |
-| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace is pre-seeded at startup via `ILattice.BulkLoadAsync` (size = `BENCH_VEHICLE_COUNT`). |
+| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace of `BENCH_VEHICLE_COUNT` keys is pre-seeded via `ILattice.SetManyAsync` before the measured window: by the silo at startup on the single-VM rig, and by the producer after warm-up in Layer 3 cluster mode (the silo returns early there). The producer logs `[producer] preseed treeId=.. entries=N`, and `performance-report.ps1` refuses a Layer 3 read cohort whose log lacks it, because an unseeded cohort measures only the miss path (#3474). |
 | `get-many` | `ILattice.GetManyAsync` - batched reads. Keyspace pre-seeded as for `get-point`. |
 
 > The `set-point-mv` workload and the multi-account knobs below only exist on a checkout

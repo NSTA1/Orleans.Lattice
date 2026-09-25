@@ -1480,6 +1480,7 @@ function Invoke-Layer3Cohorts {
 						executionState  = 'unknown'
 					}
 					Set-Layer3ProducerEvidence -Cohort $entry -LogPath $expectedLog
+					Set-Layer3PreseedEvidence -Cohort $entry -LogPath $expectedLog -WorkloadMode $mode
 					Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed of {3} offered ({4} steady-mean, failed={5})" -f $parsed.Verdict, $mode, $parsed.FinalThroughput, $offered, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
 
 					# Only the first cohort of a cell escalates, so every cohort
@@ -1488,6 +1489,9 @@ function Invoke-Layer3Cohorts {
 					# so it never escalates.
 					$reachedOffered = ($SaturationRatio -gt 0) -and ($parsed.Verdict -eq 'HEALTHY') -and ($null -ne $parsed.FinalThroughput) -and ([double]$parsed.FinalThroughput -ge ($SaturationRatio * $offered))
 					if ($entry.producerBound) { $accepted = $entry; break }
+					# An unseeded read cohort measured the miss path; a higher
+					# offered load would not make it a read measurement.
+					if ($entry.unseeded) { $accepted = $entry; break }
 					if (-not $reachedOffered) { $accepted = $entry; break }
 					if ($cohortList.Count -gt 0 -or $escalations -ge $MaxRungEscalations) {
 						$entry.offerBound = $true
@@ -1552,7 +1556,16 @@ function Aggregate-Layer3Cells {
 				$log = Get-StateOr $cohort 'siloLog' $null
 				if ($log -and (Test-Path $log)) {
 					Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
+					Set-Layer3PreseedEvidence -Cohort $cohort -LogPath $log -WorkloadMode $mode
 				}
+			}
+			# A read cohort whose log carries no producer preseed line read an
+			# empty tree, so it measured the miss path rather than the read
+			# path (#3474). Refuse it before the HEALTHY reduction.
+			$unseeded = @($cohorts | Where-Object { Get-StateOr $_ 'unseeded' $false })
+			if ($unseeded.Count -gt 0) {
+				Write-Warning "[aggregate-l3] mode=$mode silos=${key}: excluding $($unseeded.Count)/$($cohorts.Count) UNSEEDED cohort(s) (no '[producer] preseed' line; the read keyspace was empty)"
+				$cohorts = @($cohorts | Where-Object { -not (Get-StateOr $_ 'unseeded' $false) })
 			}
 			# Same HEALTHY-only rule as Layer 2: a wedged cohort's reporter
 			# often closes on a single sample, so its quantiles collapse to
@@ -1672,6 +1685,40 @@ function Set-Layer3ProducerEvidence {
 	$Cohort['producerBound'] = $bound
 	if ($bound) {
 		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure; rendering a lower bound, not a cluster ceiling."
+	}
+}
+
+function Set-Layer3PreseedEvidence {
+	<#
+	.SYNOPSIS
+		Mark a read-mode Layer 3 cohort UNSEEDED when its log shows no
+		producer preseed.
+	.DESCRIPTION
+		The Layer 3 silo returns early in cluster ingest mode and never runs
+		the single-VM silo's read-mode preseed, so until #3474 every get-point
+		and get-many cohort read an empty tree: each call was a miss, and a
+		miss takes the serial shard-root turn instead of the optimistic read.
+		The producer now seeds and logs '[producer] preseed ... entries=N'.
+		A read cohort without that line (or with entries=0) is refused; the
+		write modes are not applicable and are left unmarked.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $Cohort,
+		[Parameter(Mandatory)][string] $LogPath,
+		[Parameter(Mandatory)][string] $WorkloadMode
+	)
+	if ($WorkloadMode -notin @('get-point', 'get-many')) {
+		$Cohort.Remove('preseedEntries')
+		$Cohort['unseeded'] = $false
+		return
+	}
+	$entries = $null
+	$line = Select-String -Path $LogPath -Pattern '^\[producer\] preseed treeId=\S+ entries=(\d+)' | Select-Object -Last 1
+	if ($line) { $entries = [long]$line.Matches[0].Groups[1].Value }
+	$Cohort['preseedEntries'] = $entries
+	$Cohort['unseeded'] = -not ($null -ne $entries -and $entries -gt 0)
+	if ($Cohort['unseeded']) {
+		Write-Warning "[layer3] UNSEEDED $LogPath : $WorkloadMode cohort has no '[producer] preseed ... entries=N' line, so it read an empty keyspace (every call a miss). Refusing the cohort."
 	}
 }
 

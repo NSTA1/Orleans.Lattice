@@ -528,9 +528,10 @@ if (clusteringMode == "azuretable"
 // both the configured value and the effective fire-or-not state so a
 // glance at the silo log line answers "did the seed actually run?"
 // unambiguously.
-var preseedWillFire = preseedKeyCount > 0
-    && (workloadMode == BenchWorkloadMode.GetPoint
-        || workloadMode == BenchWorkloadMode.GetMany);
+// In cluster ingest mode the silo never seeds: the Layer 3 producer does
+// (see Producer/Program.cs), so the silo banner reports false there.
+var preseedWillFire = BenchPreseed.IsRequired(workloadMode, preseedKeyCount)
+    && ingestMode != "cluster";
 // Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
 // operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
 // "off" when explicitly disabled (supplied 0), or the supplied second-count.
@@ -1396,32 +1397,15 @@ internal sealed class TcpIngestService(
         // cache population) happens for every mode via the
         // `lattice.WarmUpAsync` call earlier in startup; only the
         // tree-content pre-seed is gated on the read modes.
-        var preseedEnabled = settings.PreseedKeyCount > 0
-            && (settings.WorkloadMode == BenchWorkloadMode.GetPoint
-                || settings.WorkloadMode == BenchWorkloadMode.GetMany);
+        var preseedEnabled = BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount);
         if (preseedEnabled)
         {
             var preseedSw = System.Diagnostics.Stopwatch.StartNew();
-            const int PreseedPayloadBytes = 245;
-            var seedEntries = new List<KeyValuePair<string, byte[]>>(settings.PreseedKeyCount);
-            Span<byte> idBytes = stackalloc byte[16];
-            for (var i = 0; i < settings.PreseedKeyCount; i++)
-            {
-                // Mirror Producer/Program.cs vehicle-id construction.
-                BitConverter.TryWriteBytes(idBytes[..4], i);
-                BitConverter.TryWriteBytes(idBytes.Slice(4, 4), 0xC0FFEE);
-                BitConverter.TryWriteBytes(idBytes.Slice(8, 4), unchecked((int)0xDEADBEEF));
-                BitConverter.TryWriteBytes(idBytes.Slice(12, 4), unchecked((int)0xCAFEBABE));
-                var vehicleId = new Guid(idBytes).ToString("N");
-                // Deterministic 245-byte payload so two re-runs over the
-                // same keyspace produce bit-identical rows in the WAL
-                // (cleanest cross-run diff). i mod 256 fill is enough to
-                // tell the rows apart on a hex-dump if anything is ever
-                // off.
-                var payload = new byte[PreseedPayloadBytes];
-                for (var b = 0; b < PreseedPayloadBytes; b++) payload[b] = (byte)((i + b) & 0xFF);
-                seedEntries.Add(new KeyValuePair<string, byte[]>(vehicleId, payload));
-            }
+            const int PreseedPayloadBytes = BenchPreseed.PayloadBytes;
+            // Keys mirror the producer's vehicle-id construction; the payload
+            // is deterministic so re-runs write bit-identical rows. Shared
+            // with the Layer 3 producer's cluster-mode pre-seed.
+            var seedEntries = BenchPreseed.BuildEntries(settings.PreseedKeyCount);
             try
             {
                 // Use SetManyAsync (not BulkLoadAsync) for the pre-seed:

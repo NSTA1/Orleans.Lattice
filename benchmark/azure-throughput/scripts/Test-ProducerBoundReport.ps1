@@ -73,7 +73,7 @@ try {
     Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
     Assert-Case 'windows cannot be combined without paired DONE totals' (-not $cohort.producerBound)
 
-    [IO.File]::WriteAllText($log, "[producer] t=1s genBlockedFrac=0.8 slipMaxMs=0.0`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.1 slipMaxMs=12000.0")
+    [IO.File]::WriteAllText($log, "[producer] preseed treeId=t entries=1200 payloadBytes=245 attempts=1 elapsedMs=10`n[producer] t=1s genBlockedFrac=0.8 slipMaxMs=0.0`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.1 slipMaxMs=12000.0")
     Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
     Assert-Case 'CPU-bound DONE is not masked by earlier blocked window' $cohort.producerBound
 
@@ -89,7 +89,7 @@ try {
     Assert-Case 'chart cannot publish producer ceiling' (-not $chart.Contains('```mermaid'))
     Assert-Case 'omitted curves are explained' ($chart -match 'producer-bound')
 
-    [IO.File]::WriteAllText($log, '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=10.0')
+    [IO.File]::WriteAllText($log, "[producer] preseed treeId=t entries=1200 payloadBytes=245 attempts=1 elapsedMs=10`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=10.0")
     $rows = Aggregate-Layer3Cells -Cells $cells
     Assert-Case 'resume reparses retained logs instead of stale grading' (-not $rows.GetManyAsync['1'].producerBound)
     Assert-Case 'healthy speedup unchanged' ($rows.GetManyAsync['2'].speedup -eq 2)
