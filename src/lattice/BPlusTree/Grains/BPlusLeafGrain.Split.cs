@@ -740,6 +740,7 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<SplitResult?> SplitAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Issue #3265. A split whose intent is already durable must be RESUMED,
         // never re-minted.
@@ -952,6 +953,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Register this completion as in flight for as long as this call is
         // suspended inside the method body (issue #2967). The scope disposes on

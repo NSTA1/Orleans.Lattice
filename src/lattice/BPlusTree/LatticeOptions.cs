@@ -652,9 +652,15 @@ public class LatticeOptions
     /// root promotion, a split or move-away publish, a bulk load, a state reload) is
     /// discarded and repeated on the serial path, so the result is never less
     /// consistent than the serial read. The optimistic read goes to the primary leaf
-    /// (bypassing the leaf cache), and a miss is always repeated serially, so the
-    /// gain is on reads of present keys. Set to <c>false</c> to send every point read
-    /// straight to the serial path (issue #3474).
+    /// (bypassing the leaf cache). Uncontended present reads use the raw byte reply;
+    /// a point-write admission epoch detects overlap across the leaf await.
+    /// Overlapping point writes and missing keys require the leaf's activation epoch
+    /// and routing generation. A missing key validates only when the leaf proves
+    /// ownership of its range in the same synchronous turn as the observation.
+    /// Non-splitting point Sets preserve those proofs; topology changes invalidate
+    /// them. Old leaves without ownership metadata fall back to serial reads
+    /// whenever this proof is required.
+    /// Set to <c>false</c> to send every point read straight to the serial path.
     /// </summary>
     public bool OptimisticShardRootPointReads { get; set; } = DefaultOptimisticShardRootPointReads;
 

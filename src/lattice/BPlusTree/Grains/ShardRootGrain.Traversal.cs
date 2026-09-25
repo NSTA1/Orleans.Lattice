@@ -506,6 +506,16 @@ internal sealed partial class ShardRootGrain
 #endif
         var cache = ResolveLeafCacheGrain(leafId);
         RecordLeafAccess(leafId);
+        if (_cachedOptions?.OptimisticShardRootPointReads == true && !_leafRoutingStamps.ContainsKey(leafId))
+        {
+            var epoch = _routingEpoch;
+            var proof = await ResolveLeafGrain(leafId).GetWithVersionAsync(key);
+            if (_routingEpoch == epoch && _routingMutationsInFlight == 0
+                && proof.LeafRoutingEpoch != Guid.Empty && proof.LeafRoutingGeneration > 0)
+            {
+                _leafRoutingStamps[leafId] = (proof.LeafRoutingEpoch, proof.LeafRoutingGeneration);
+            }
+        }
         return await cache.GetAsync(key);
     }
 
@@ -802,6 +812,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<SplitResult?> LinkSplitAsync(SplitResult splitResult, int height)
     {
+        using var routingMutation = EnterRoutingMutation();
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {

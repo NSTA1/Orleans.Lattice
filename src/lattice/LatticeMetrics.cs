@@ -8618,9 +8618,8 @@ public static class LatticeMetrics
     /// full leaf round trip. A high non-<c>validated</c> share therefore predicts
     /// per-shard-root read queueing, which is invisible on the get latency
     /// histograms because both attempts land inside one <c>shard</c> stage
-    /// sample. The <c>absent</c> arm in particular is by design: an absent key is
-    /// never validated optimistically, so a miss-heavy workload runs entirely on
-    /// the serial path.
+    /// sample. Absence validates only with matching leaf ownership evidence;
+    /// the <c>absent</c> arm identifies misses without that evidence.
     /// </para>
     /// </summary>
     public static readonly Counter<long> ShardRootOptimisticReadOutcomes =
@@ -8667,11 +8666,19 @@ public static class LatticeMetrics
         new(TagOutcome, "epoch_changed");
 
     /// <summary>
-    /// <see cref="TagOutcome"/> = <c>absent</c> (the leaf returned no value; an
-    /// absent key is always adjudicated by the serial path).
+    /// <see cref="TagOutcome"/> = <c>absent</c> (the leaf returned no value
+    /// without matching ownership evidence; the serial path adjudicates it).
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadAbsentTag =
         new(TagOutcome, "absent");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>leaf_generation_changed</c> (no cached leaf
+    /// stamp when required, no matching ownership proof, or a raw leaf fault
+    /// while a point write overlapped).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadLeafGenerationChangedTag =
+        new(TagOutcome, "leaf_generation_changed");
 
     /// <summary>
     /// Count of shard-root page-fill ceiling fires that made <b>zero</b>

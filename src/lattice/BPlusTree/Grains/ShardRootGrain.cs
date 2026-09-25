@@ -450,6 +450,7 @@ internal sealed partial class ShardRootGrain(
     {
         if (ex is not LeafRetiredException) return false;
 
+        using var routingMutation = EnterRoutingMutation();
         var remaining = deadlineUtc - DateTime.UtcNow;
         if (remaining <= TimeSpan.Zero) return false;
 

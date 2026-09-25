@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Routing-epoch and incoming-call-filter tests for the optimistic point read: every
-/// incoming call except the pure reads is bracketed as a potential routing mutation.
+/// non-exempt calls are bracketed as potential routing mutations.
 /// </summary>
 public sealed partial class ShardRootGrainOptimisticReadTests
 {
@@ -44,12 +44,12 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [TestCase(nameof(IShardRootGrain.GetManyAsync))]
     [TestCase(nameof(IShardRootGrain.GetHotnessAsync))]
     [TestCase(nameof(IShardRootGrain.PublishLeafByteFootprintAsync))]
-    public void IsRoutingNeutralMethod_exempts_pure_reads(string methodName)
+    [TestCase(nameof(IShardRootGrain.SetAsync))]
+    public void IsRoutingNeutralMethod_exempts_only_the_audited_calls(string methodName)
     {
         Assert.That(ShardRootGrain.IsRoutingNeutralMethod(methodName), Is.True);
     }
 
-    [TestCase(nameof(IShardRootGrain.SetAsync))]
     [TestCase(nameof(IShardRootGrain.SetManyAsync))]
     [TestCase(nameof(IShardRootGrain.MergeManyAsync))]
     [TestCase(nameof(IShardRootGrain.DeleteAsync))]
@@ -70,7 +70,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             .Distinct()
             .ToArray();
 
-        Assert.That(exempt, Has.Length.EqualTo(7));
+        Assert.That(exempt, Has.Length.EqualTo(8));
     }
 
     [Test]
@@ -102,6 +102,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             nameof(IShardRootGrain.GetManyAsync),
             nameof(IShardRootGrain.GetWithVersionAsync),
             nameof(IShardRootGrain.PublishLeafByteFootprintAsync),
+            nameof(IShardRootGrain.SetAsync),
             nameof(IShardRootGrain.TryGetOptimisticAsync),
         }));
     }
@@ -129,7 +130,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
         mutation.SetResult();
         await filtered;
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
         var afterMutation = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(duringMutation.IsValidated, Is.False);
@@ -144,7 +145,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var filter = (IIncomingGrainCallFilter)grain;
         var start = grain.RoutingEpoch;
 
-        await filter.Invoke(CallContext(typeof(IShardRootGrain), nameof(IShardRootGrain.SetAsync), Task.CompletedTask));
+        await filter.Invoke(CallContext(typeof(IShardRootGrain), nameof(IShardRootGrain.SetManyAsync), Task.CompletedTask));
 
         Assert.That(grain.RoutingEpoch, Is.EqualTo(start + 2));
     }
@@ -157,9 +158,9 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var faulted = Task.FromException(new InvalidOperationException("write failed"));
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
-            filter.Invoke(CallContext(typeof(IShardRootGrain), nameof(IShardRootGrain.SetAsync), faulted)));
+            filter.Invoke(CallContext(typeof(IShardRootGrain), nameof(IShardRootGrain.SetManyAsync), faulted)));
 
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
         var result = await grain.TryGetOptimisticAsync("k1");
         Assert.That(result.IsValidated, Is.True);
     }
@@ -210,7 +211,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
         state.State.RootNodeId = RootLeafId;
         state.State.RootIsLeaf = true;
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
         var result = await grain.TryGetOptimisticAsync("k1");
         Assert.That(result.IsValidated, Is.True);
     }

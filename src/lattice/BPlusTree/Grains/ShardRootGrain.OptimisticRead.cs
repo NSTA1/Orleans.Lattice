@@ -17,11 +17,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <c>RootIsLeaf</c> / <c>MovedAwaySlots</c>, or a moved-away seal fanned out across
 /// only part of the leaf chain). Rather than relying on every such writer remembering
 /// to bump the epoch, this grain implements <see cref="IIncomingGrainCallFilter"/> and
-/// treats <em>every</em> incoming call except the pure point reads as a potential
+/// treats incoming calls except the allowlisted reads, diagnostics and point Sets as a potential
 /// routing mutation: it is counted in <see cref="_routingMutationsInFlight"/> for its
 /// whole duration and bumps <see cref="_routingEpoch"/> as it starts and finishes. The
-/// pure reads that are exempt can only mutate routing state through
-/// <see cref="PrepareForOperationSlowAsync"/>, which brackets itself the same way.
+/// exempt calls change routing only through self-bracketing prepare, split-link
+/// and retirement-retry paths. Reads overlapping point Sets and absent-key reads
+/// additionally validate leaf ownership against an activation-scoped generation.
 /// Timer callbacks bypass the filter; the only shard-root timers (dirty-leaf and
 /// leaf-access flushes) do not touch routing state.
 /// </para>
@@ -41,6 +42,21 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// is non-zero.
     /// </summary>
     private int _routingMutationsInFlight;
+
+    // Separate from the write-side routing cache: only serial reads publish these
+    // ownership proofs, and stale entries can only cause an optimistic retry.
+    private readonly Dictionary<GrainId, (Guid Epoch, long Generation)> _leafRoutingStamps = new();
+
+    private RoutingMutationScope EnterRoutingMutation()
+    {
+        BeginRoutingMutation();
+        return new RoutingMutationScope(this);
+    }
+
+    private readonly struct RoutingMutationScope(ShardRootGrain root) : IDisposable
+    {
+        public void Dispose() => root.EndRoutingMutation();
+    }
 
     /// <summary>Current routing epoch. Exposed for unit tests.</summary>
     internal long RoutingEpoch => _routingEpoch;
@@ -129,7 +145,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// <summary>
     /// Returns <c>true</c> for the incoming calls that cannot change shard-root
     /// routing state (other than through the self-bracketing
-    /// <see cref="PrepareForOperationSlowAsync"/>) and so do not invalidate an
+    /// prepare, split-link and retirement-retry paths) and so do not invalidate an
     /// in-flight optimistic read. Everything else is conservatively treated as a
     /// routing mutation.
     /// </summary>
@@ -146,7 +162,8 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// <summary>
     /// The <see cref="IShardRootGrain"/> method names exempt from the
     /// routing-mutation bracket. Kept deliberately small: point reads, the batch read,
-    /// and two activation-scoped diagnostics publishers that never touch routing.
+    /// two activation-scoped diagnostics, and point Sets whose routing changes
+    /// are covered by the self-bracketing prepare, split-link and retry seams.
     /// </summary>
     internal static bool IsRoutingNeutralMethod(string? methodName) => methodName switch
     {
@@ -157,6 +174,11 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         nameof(IShardRootGrain.GetManyAsync) => true,
         nameof(IShardRootGrain.GetHotnessAsync) => true,
         nameof(IShardRootGrain.PublishLeafByteFootprintAsync) => true,
+        // Both Set overloads change values, not ownership, unless they split.
+        // LinkSplitAsync brackets every non-null split; leaf stamps cover the
+        // earlier donor transfer and divisions absorbed below the shard root.
+        // No other non-read method is newly exempted.
+        nameof(IShardRootGrain.SetAsync) => true,
         _ => false,
     };
 
@@ -212,6 +234,44 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
             return SerialRetry(LatticeMetrics.OutcomeOptimisticReadRoutingCacheMissTag);
         }
 
+        // Preserve the byte[]-only baseline RPC for uncontended present reads.
+        // The admission epoch closes the start-and-finish-during-await race;
+        // a raw miss or an overlapping write must instead obtain ownership proof.
+        var writeEpoch = _pointWriteAdmissionEpoch;
+        if (_interleavedPointWritesInFlight == 0)
+        {
+            byte[]? value;
+            try
+            {
+                value = await ResolveLeafGrain(leafId).GetAsync(key);
+            }
+            catch when (_routingEpoch != epoch || _pointWriteAdmissionEpoch != writeEpoch)
+            {
+                return SerialRetry(_routingEpoch != epoch
+                    ? LatticeMetrics.OutcomeOptimisticReadEpochChangedTag
+                    : LatticeMetrics.OutcomeOptimisticReadLeafGenerationChangedTag);
+            }
+
+            if (_routingEpoch != epoch)
+                return SerialRetry(LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
+
+            if (value is not null && _pointWriteAdmissionEpoch == writeEpoch
+                && _interleavedPointWritesInFlight == 0)
+                return ValidatedRead(leafId, value);
+        }
+
+        return await TryGetProvedOptimisticAsync(key, leafId, epoch);
+    }
+
+    // Keep the ownership tuple and versioned awaiter out of the raw read's
+    // state machine; only reads that need proof allocate this continuation.
+    private async Task<OptimisticReadResult> TryGetProvedOptimisticAsync(string key, GrainId leafId, long epoch)
+    {
+        if (!_leafRoutingStamps.TryGetValue(leafId, out var expectedStamp))
+        {
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadLeafGenerationChangedTag);
+        }
+
         // The optimistic read goes to the PRIMARY leaf, never through the
         // stateless-worker LeafCacheGrain the serial path uses. A cache replica
         // activated or refreshed from an interleaved read during a fold / split
@@ -220,15 +280,15 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         // can then miss a key it owns (lost writes and a stale-routing retry loop
         // observed under the consolidation chaos suite). The primary leaf is the
         // authority for its own moved-away seal and pending-transaction state, so
-        // its answer needs only the routing-epoch validation below.
-        byte[]? value;
+        // its answer needs both root-epoch and leaf-ownership validation below.
+        VersionedValue result;
         try
         {
             // Resolved through the per-activation reference cache: a bare
             // GetGrain per read re-resolves the interface type and rebuilds the
             // proxy (reflection-built copiers included) on every call, which is
             // a measurable share of the point-read CPU cost.
-            value = await ResolveLeafGrain(leafId).GetAsync(key);
+            result = await ResolveLeafGrain(leafId).GetWithVersionAsync(key);
         }
         catch when (_routingEpoch != epoch)
         {
@@ -247,18 +307,24 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
             return SerialRetry(LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
         }
 
-        // An absent result is never validated optimistically. The primary leaf
-        // returns null for a key whose slot it has sealed as moved away, and a
-        // fold / split can seal leaves directly (without a shard-root routing
-        // mutation), so an unchanged epoch does not prove the key is absent. The
-        // serial path adjudicates every null, which keeps the U9h-C "key missing
-        // mid-chaos" invariant exactly as strong as before; the cost is confined
-        // to reads of absent keys.
-        if (value is null)
+        // Old-wire/default stamps never match, even if a default was cached.
+        // The leaf stamps only a synchronous value/absence observation whose
+        // key range it owns, outside splitting, sealing and retirement windows.
+        if (result.LeafRoutingEpoch == Guid.Empty || result.LeafRoutingGeneration <= 0
+            || expectedStamp != (result.LeafRoutingEpoch, result.LeafRoutingGeneration))
         {
-            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadAbsentTag);
+            _leafRoutingStamps.Remove(leafId);
+            return SerialRetry(result.Value is null
+                && (result.LeafRoutingEpoch == Guid.Empty || result.LeafRoutingGeneration <= 0)
+                ? LatticeMetrics.OutcomeOptimisticReadAbsentTag
+                : LatticeMetrics.OutcomeOptimisticReadLeafGenerationChangedTag);
         }
 
+        return ValidatedRead(leafId, result.Value);
+    }
+
+    private OptimisticReadResult ValidatedRead(GrainId leafId, byte[]? value)
+    {
         RecordRead();
         RecordLeafAccess(leafId);
         RecordOptimisticReadOutcome(1, LatticeMetrics.OutcomeOptimisticReadValidatedTag);
@@ -304,6 +370,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadRoutingCacheMissTag);
         RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
         RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadAbsentTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadLeafGenerationChangedTag);
     }
 
     /// <summary>
