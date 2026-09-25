@@ -300,6 +300,44 @@ public sealed class LatticeWalGc(
             treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds,
             offsetCoverage.AbstainedConsumerIds, cancellationToken,
             ResolvePartitionProvider).ConfigureAwait(false);
+        // Fail closed when either durable census could not be read (issue
+        // #3576). The two reads are the ONLY evidence of the retention holders
+        // the in-memory registry cannot see - dormant leaves after a restart,
+        // whose durable pin holds back an un-checkpointed WAL tail - so a pass
+        // that trims on what remains is trimming on an unknown floor, not on a
+        // lower bound of it. One unreadable pin shard or bucket makes the
+        // shard fan-in fail as a whole, so the whole pass is skipped: no
+        // partition trims, TTL included (the offset veto that bounds a TTL trim
+        // is part of what is missing). The pin read's own failure is already
+        // folded into floorResult; an offset read failure is folded here,
+        // keeping whatever blocker attribution the pin plane produced so the
+        // scheduler's blocked-leaf remedy still has names to act on.
+        var censusUnavailable = floorResult.CensusUnavailable || offsetCoverage.Unavailable;
+        if (censusUnavailable)
+        {
+            if (!floorResult.CensusUnavailable)
+            {
+                floorResult = floorResult with
+                {
+                    Floor = null,
+                    BlockedPartitions = DurableMaterialiserFloor.AllPartitions(partitions),
+                    Blocked = true,
+                    UncoveredCursor = null,
+                    UncoveredCursorComputed = false,
+                    CensusUnavailable = true,
+                };
+            }
+
+            var plane = floorResult.PinCensusUnreadable
+                ? (offsetCoverage.Unavailable ? "pin and offset" : "pin")
+                : "offset";
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                "WAL GC pass for tree {Tree} trimmed nothing: the durable materialiser {Plane} census could not be "
+                + "read, so the retention floor is unknown and the pass fails closed. The next pass retries.",
+                treeName,
+                plane);
+        }
+
         var cursorBlocked = floorResult.Blocked;
         var blockingConsumerId = floorResult.BlockingConsumerId;
         var blockingConsumerIds = floorResult.BlockingConsumerIds;
@@ -475,8 +513,14 @@ public sealed class LatticeWalGc(
                 LatticeTenantLabel.ForTree(treeName));
         }
 
-        if (!anyPartitionHasCursorPredicate && !hasTtlPredicate)
+        if (censusUnavailable || (!anyPartitionHasCursorPredicate && !hasTtlPredicate))
         {
+            // A census-unavailable pass (issue #3576) takes this exit
+            // unconditionally, even with a TTL configured: see the fail-closed
+            // note where censusUnavailable is computed. Compaction of bytes an
+            // EARLIER pass already classified dead stays safe, for the reason
+            // given below.
+            //
             // The second site at which compaction evaluation is unreachable,
             // and the one that governs a tree whose durable pins are unusable
             // (issue #3207). This early return is taken before the partition
@@ -822,14 +866,20 @@ public sealed class LatticeWalGc(
         }
         catch (Exception ex)
         {
-            // The durable pin store is unavailable on this pass; fall back to
-            // the in-memory floor rather than failing the whole GC run. The
-            // next pass retries; a missed floor never trims unsafely because
-            // the present in-memory consumers still constrain the trim point.
+            // The durable pin store is unavailable on this pass. Fail closed
+            // (issue #3576): block every partition so the pass trims nothing,
+            // rather than falling back to the in-memory floor. The in-memory
+            // registry does NOT constrain the trim point on its own: a dormant
+            // leaf that has not re-registered since a restart is represented
+            // ONLY by its durable pin, so trimming on the registry minimum
+            // reclaims that leaf's un-checkpointed WAL tail. The shard reads
+            // are joined, so one unreadable shard or bucket loses every
+            // shard's pins for the pass, not just its own. The next pass
+            // retries.
             WalGcBlockedConsumerCensus.Record(treeName, -1);
             services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
                 ex, "WAL GC blocked-consumer census unavailable for tree {Tree}: durable pins could not be read.", treeName);
-            return DurableMaterialiserFloor.Unblocked(registryMin);
+            return DurableMaterialiserFloor.Unreadable(partitions);
         }
 
         if (pins.Count == 0)
@@ -1376,6 +1426,16 @@ public sealed class LatticeWalGc(
     /// grant nothing. Every early exit takes that value, so the tri-state is
     /// what stops "we did not look" being read as "there is nobody there".
     /// </param>
+    /// <param name="CensusUnavailable">
+    /// Whether the durable pin or offset census could not be read on this pass
+    /// (issue #3576). When <see langword="true"/> the pass trims nothing at
+    /// all: the floor is unknown, not merely lower, so every partition is
+    /// blocked and the TTL branch is skipped as well.
+    /// </param>
+    /// <param name="PinCensusUnreadable">
+    /// Whether it was specifically the durable <em>pin</em> read that failed.
+    /// Diagnostic only; it names the plane in the skipped-pass log.
+    /// </param>
     private readonly record struct DurableMaterialiserFloor(
         HybridLogicalClock? Floor,
         bool[]? BlockedPartitions,
@@ -1383,8 +1443,29 @@ public sealed class LatticeWalGc(
         string? BlockingConsumerId,
         IReadOnlyList<string>? BlockingConsumerIds = null,
         HybridLogicalClock? UncoveredCursor = null,
-        bool UncoveredCursorComputed = false)
+        bool UncoveredCursorComputed = false,
+        bool CensusUnavailable = false,
+        bool PinCensusUnreadable = false)
     {
+        /// <summary>
+        /// The fail-closed floor for a pass on which the durable pin census
+        /// could not be read (issue #3576): no floor, every partition blocked,
+        /// reported blocked, and no blocker named because none could be read.
+        /// </summary>
+        public static DurableMaterialiserFloor Unreadable(int partitions)
+            => new(null, AllPartitions(partitions), true, null, null, null, false, true, true);
+
+        /// <summary>
+        /// A partition mask with every one of <paramref name="partitions"/>
+        /// partitions set.
+        /// </summary>
+        public static bool[] AllPartitions(int partitions)
+        {
+            var all = new bool[Math.Max(partitions, 1)];
+            Array.Fill(all, true);
+            return all;
+        }
+
         /// <summary>
         /// A floor with nothing blocked: every partition trims against
         /// <paramref name="floor"/>. The uncovered-consumer cursor is reported
@@ -1791,9 +1872,14 @@ public sealed class LatticeWalGc(
         catch
         {
             // Durable pin store unavailable on this pass (including an older
-            // pin grain without GetPinOffsetsAsync during a rolling upgrade):
-            // fall back to no offset floor. The HLC floor still constrains the
-            // trim, and the next pass retries once the store is reachable.
+            // pin grain without GetPinOffsetsAsync during a rolling upgrade).
+            // This is NOT the same state as "no offset floor needed": it is
+            // reported as Unreadable, and RunOnceAsync fails the whole pass
+            // closed on it (issue #3576). Removing only the offset floor used
+            // to leave the pass trimming on the HLC floor, which for a
+            // low-HLC / high-offset reap entry above a lagging leaf's
+            // checkpoint is exactly the over-trim the offset floor exists to
+            // prevent. The next pass retries once the store is reachable.
             //
             // This fallback was previously completely silent (issue #2314): a
             // persistently unreachable pin store removes the offset floor on
@@ -1801,8 +1887,7 @@ public sealed class LatticeWalGc(
             // tree that legitimately has no offset floor to apply. The counter
             // makes "no floor because unreachable" (this catch) separable from
             // "no floor because none needed" (factory null / empty offsets,
-            // which return null WITHOUT reaching here). It changes no trim
-            // behaviour - it only makes the swallowed failure observable.
+            // which return null WITHOUT reaching here).
             //
             // The deeper population caveat this counter does not cover is now
             // handled on the pin plane instead (issue #2314). The floor below
@@ -1835,7 +1920,7 @@ public sealed class LatticeWalGc(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
                 LatticeTenantLabel.ForTree(treeName));
-            return MaterialiserOffsetCoverage.None;
+            return MaterialiserOffsetCoverage.Unreadable;
         }
     }
 
@@ -1866,17 +1951,30 @@ public sealed class LatticeWalGc(
     /// population gap issue #2314 is about and which was previously
     /// indistinguishable from a reported "-1".
     /// </param>
+    /// <param name="Unavailable">
+    /// Whether the offset census could not be read on this pass (issue #3576).
+    /// RunOnceAsync fails the whole pass closed on it; see
+    /// <see cref="Unreadable"/>.
+    /// </param>
     private readonly record struct MaterialiserOffsetCoverage(
         long? Floor,
         IReadOnlySet<string>? CoveredConsumerIds,
         IReadOnlySet<string>? AbstainedConsumerIds = null,
-        IReadOnlyDictionary<int, long>? FloorsByPartition = null)
+        IReadOnlyDictionary<int, long>? FloorsByPartition = null,
+        bool Unavailable = false)
     {
         /// <summary>
         /// No offset floor on this pass, and therefore no consumer covered by
-        /// one. The fail-closed value.
+        /// one. The fail-closed value for a pass with nothing to report.
         /// </summary>
         public static MaterialiserOffsetCoverage None => new(null, null, null, null);
+
+        /// <summary>
+        /// The offset census could not be read on this pass (issue #3576). Unlike
+        /// <see cref="None"/> this is not an absence of evidence to be read as
+        /// "no offset floor": RunOnceAsync skips every trim on it.
+        /// </summary>
+        public static MaterialiserOffsetCoverage Unreadable => new(null, null, null, null, true);
 
         /// <summary>
         /// The offset floor WAL partition <paramref name="partition"/> trims

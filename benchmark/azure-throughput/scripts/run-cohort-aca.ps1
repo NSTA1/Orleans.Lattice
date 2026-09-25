@@ -261,6 +261,11 @@ param(
 	# the silo on its shipping default (off); 0 and 1 pin the control and fix
 	# arms explicitly so a cohort's arm is never implicit.
 	[int] $WalBatchedSingleEntryAppends = -1,
+	# Floor on the durable WAL materialiser pin buckets per pin shard (#3576).
+	# -1 leaves the silo on the library default, which is what published
+	# numbers must reflect; the store splits itself above that floor anyway, so
+	# this only pins a wider layout from the first write for an A/B.
+	[int] $WalMaterialiserPinBuckets = -1,
 	# (#3402) Paced release of parked WAL-admission waiters on partition
 	# recovery. 0 is MEANINGFUL here too - it is the pre-#3402 "release the
 	# whole parked herd in one pass" behaviour, which is the control arm -
@@ -386,6 +391,12 @@ if ($WalAppendCoalescingInFlightThreshold -ge 0) {
 
 if ($WalBatchedSingleEntryAppends -ge 0) {
 	$siloEnv += "BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS=$WalBatchedSingleEntryAppends"
+}
+
+# (#3576) Only pinned when explicitly requested, so the pin store runs its
+# shipping layout on an ordinary sweep.
+if ($WalMaterialiserPinBuckets -ge 1) {
+	$siloEnv += "BENCH_WAL_MATERIALISER_PIN_BUCKETS=$WalMaterialiserPinBuckets"
 }
 
 # (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
