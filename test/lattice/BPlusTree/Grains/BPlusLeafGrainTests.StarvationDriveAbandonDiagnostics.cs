@@ -10,20 +10,20 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// A WAL GC starvation drive that exceeds its budget logs one warning. Before this
 /// issue it carried a single template whose only remedy was "storage is not
 /// answering inside the budget - look at the provider", whatever the drive had
-/// actually been doing. A drive can spend its budget in two different places: queued
-/// on the per-silo replay gate, where storage never sees it, or replaying, where it
-/// does. The remedies are opposite, and the field case that raised the issue was
-/// the first one being diagnosed as the second.
+/// actually been doing, and it could not say how the budget divided between
+/// admission to the replay gate and the replay itself.
 /// </para>
 /// <para>
 /// <b>What these tests pin, and what they deliberately do not.</b> They pin the
-/// warning: that a replaying drive reports how its time divided between the permit
-/// wait and the replay and how far the replay advanced, and that a drive which never
-/// acquired a permit is never told to look at storage. They do NOT pin how a GC
-/// drive's permit wait resolves - whether it queues until the budget elapses or is
-/// refused at once - because that is replay-permit admission policy, owned
-/// separately (issue #3480), and a diagnostic test that fixed it would go red the
-/// moment the policy moved.
+/// warning: that a replaying drive reports how its time divided between admission
+/// and replay and how far the replay advanced, and that a drive abandoned before it
+/// was admitted is never told to look at storage. They do NOT depend on a GC drive
+/// queueing for a permit. GC drives never queue (issue #3480): one that finds no
+/// capacity is refused with a typed saturation and logs no abandonment at all. The
+/// never-admitted form is therefore reached the one way that remains: admission
+/// itself outlasting the budget. The test forces that deterministically by stalling
+/// the first-use sizing of the process-wide replay gate, which runs inside
+/// admission, past the budget.
 /// </para>
 /// <para>
 /// The warning's structured properties are read, not its rendered text, wherever
@@ -37,7 +37,7 @@ public partial class BPlusLeafGrainTests
     /// <summary>
     /// The storage remedies an abandonment warning may give. The first is the wording
     /// every abandonment carried before issue #3479; the second is the wording the
-    /// replaying form carries now. A drive that never held a permit must carry
+    /// replaying form carries now. A drive that never read storage must carry
     /// neither.
     /// </summary>
     private static readonly string[] StorageRemedies =
@@ -232,22 +232,28 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
-    public async Task DriveStarvedCheckpointAsync_that_never_acquires_a_replay_permit_is_never_told_to_look_at_storage()
+    public async Task DriveStarvedCheckpointAsync_abandoned_before_admission_is_never_told_to_look_at_storage()
     {
-        var gate = await QuiescentReplayGateAsync();
+        // The stall is placed INSIDE admission, through the real production path:
+        // the first drive to reach a process with no replay gate sizes it, and the
+        // sizing reads the heap ceiling through ReplayHeapPressure. That read runs
+        // after the budget has started and before the admission check, so holding
+        // it past the budget abandons the drive before it takes a permit - the one
+        // way left for a GC drive to be abandoned without one, since it never
+        // queues (issue #3480). Nothing here depends on the permit policy.
+        var budget = TimeSpan.FromMilliseconds(50);
+        var stall = TimeSpan.FromSeconds(1);
         var logs = new StructuredCapturingLoggerProvider();
         var wal = new GrowingWal();
         var (grain, _, _, _) = CreateGrainWithMaterialiser(
             wal.Coordinator,
             treeId: UniqueStarvationDriveTree(),
             persistedCheckpoint: -1L,
-            starvationDriveBudget: TestStarvationDriveBudget,
+            starvationDriveBudget: budget,
             loggerProvider: logs);
-
-        // Activate while permits are free: activation takes one, and the drive
-        // under test is the only thing that must find the gate empty.
         await ActivateAsync(grain);
         wal.GrowTo(3);
+        var checkpointBefore = grain.GetCurrentCheckpointForPartition(0);
 
         var reads = 0;
         wal.OnRead = () =>
@@ -256,76 +262,79 @@ public partial class BPlusLeafGrainTests
             return Task.CompletedTask;
         };
 
-        var heldPermits = 0;
-        LeafStarvationDriveOutcome? verdict = null;
+        var stalls = 0;
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        ReplayHeapPressure.ReaderForTest = () =>
+        {
+            if (Interlocked.Increment(ref stalls) == 1)
+            {
+                Thread.Sleep(stall);
+            }
+
+            return new ReplayHeapReading(0, long.MaxValue / 2);
+        };
+
+        LeafStarvationDriveOutcome verdict;
         try
         {
-            heldPermits = DrainEveryReplayPermit(gate);
-            Assert.That(heldPermits, Is.EqualTo(BPlusLeafGrain.ReplayConcurrencyCeilingForTest),
-                "instrument validation: every permit must be out of circulation, or the drive could "
-                + "acquire one and this test would examine the replaying form instead");
-
-            try
-            {
-                verdict = await grain.DriveStarvedCheckpointAsync();
-            }
-            catch (Exception ex) when (ex is not AssertionException)
-            {
-                // Admission policy may refuse a drive outright when the gate is
-                // saturated rather than let it queue (issue #3480). That is not
-                // this test's concern: the invariant below holds either way.
-            }
+            verdict = await grain.DriveStarvedCheckpointAsync();
         }
         finally
         {
-            gate.Release(heldPermits);
+            ReplayHeapPressure.ReaderForTest = null;
         }
 
+        var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
         var warnings = AbandonmentWarnings(logs);
+
         Assert.Multiple(() =>
         {
+            Assert.That(verdict, Is.EqualTo(LeafStarvationDriveOutcome.TimedOut),
+                "precondition: the drive must have been abandoned on its budget, or there is no "
+                + "abandonment warning to examine");
+            Assert.That(stalls, Is.GreaterThanOrEqualTo(1),
+                "precondition: the drive must have sized the replay gate itself, or the stall never "
+                + "ran inside its admission");
             Assert.That(reads, Is.Zero,
-                "precondition: with no permit the drive must not have reached storage at all, which "
-                + "is exactly why storage advice would be wrong for it");
-
-            // THE REGRESSION, and it is policy-independent. Whether the drive queued
-            // until its budget ran out or was refused at once, it never held a permit
-            // and so never issued a single read. Nothing it logs may send the operator
-            // to the storage provider. Before issue #3479 its abandonment warning
-            // did exactly that.
-            foreach (var warning in logs.Warnings)
-            {
-                foreach (var remedy in StorageRemedies)
-                {
-                    Assert.That(warning.Message, Does.Not.Contain(remedy),
-                        "a drive that never acquired a replay permit never reached storage, so no "
-                        + "warning it emits may point at the storage provider");
-                }
-            }
+                "precondition: abandoned before admission, the drive must not have reached storage "
+                + "at all, which is exactly why storage advice would be wrong for it");
+            Assert.That(gate, Is.Not.Null,
+                "precondition: the drive's admission must have re-created the replay gate");
+            Assert.That(gate?.CurrentCount, Is.EqualTo(BPlusLeafGrain.ReplayConcurrencyCeilingForTest),
+                "precondition: the drive was not admitted, so it must not have taken, or leaked, a permit");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(checkpointBefore),
+                "precondition: a drive that never started its replay cannot have moved the checkpoint");
+            Assert.That(warnings, Has.Length.EqualTo(1),
+                "exactly one abandonment warning must be emitted for one abandoned drive");
         });
 
-        // Only meaningful when admission let the drive queue and time out. When it
-        // did, the warning must say so in terms an operator can act on.
-        if (verdict == LeafStarvationDriveOutcome.TimedOut)
+        var warning = warnings[0];
+        var props = warning.Properties;
+        Assert.Multiple(() =>
         {
-            Assert.That(warnings, Has.Length.EqualTo(1),
-                "a drive that timed out must emit exactly one abandonment warning");
-            var props = warnings[0].Properties;
-            Assert.Multiple(() =>
+            // THE REGRESSION. Before issue #3479 every abandonment warning sent the
+            // operator to the storage provider, including this one, which never read
+            // it. A drive that was not admitted must carry no storage remedy.
+            foreach (var remedy in StorageRemedies)
             {
-                Assert.That(props.Keys, Is.SupersetOf(new[] { "Leaf", "Tree", "Budget", "PermitWait", "Ceiling", "QueuedWaiters" }),
-                    "the never-acquired form must carry the permit wait and the gate's state, which "
-                    + "are what an operator of a saturated gate needs");
-                Assert.That(props.ContainsKey("Replaying"), Is.False,
-                    "a drive that never acquired a permit did not replay, so it must not carry the "
-                    + "replaying form's reading");
-                Assert.That(props["Ceiling"], Is.EqualTo(heldPermits),
-                    "the ceiling reported must be the gate's real ceiling");
-                Assert.That((TimeSpan)props["PermitWait"]!,
-                    Is.GreaterThanOrEqualTo(TestStarvationDriveBudget - TimeSpan.FromMilliseconds(20)),
-                    "a drive that never acquired a permit spent its whole budget waiting for one");
-                Assert.That(warnings[0].Message, Does.Contain("replay permit").And.Contain("never acquired"));
-            });
-        }
+                Assert.That(warning.Message, Does.Not.Contain(remedy),
+                    "a drive abandoned before admission never reached storage, so its warning may "
+                    + "not point at the storage provider");
+            }
+
+            Assert.That(props.Keys, Is.SupersetOf(new[] { "Leaf", "Tree", "Budget", "Elapsed" }),
+                "the never-admitted form must identify the leaf and carry the budget and the time run");
+            Assert.That(props.Keys, Has.None.AnyOf("PermitWait", "Replaying", "CheckpointAdvanced", "CheckpointPersisted"),
+                "a drive that was never admitted did not replay, so it must not carry the replaying "
+                + "form's readings, which would read as a zero-length replay");
+            Assert.That(props["Budget"], Is.EqualTo(budget),
+                "the budget reported must be the budget that expired");
+            Assert.That(props["Elapsed"], Is.TypeOf<TimeSpan>().And.GreaterThanOrEqualTo(stall - TimeSpan.FromMilliseconds(20)),
+                "the time run must be measured, and it includes the stall inside admission");
+            Assert.That(props["Tree"], Is.Not.Null.And.Not.Empty);
+            Assert.That(warning.Message, Does.Contain("before it was admitted")
+                .And.Contain("Raise StarvationDriveBudget"),
+                "the warning must say the drive was not admitted and give the remedy that applies");
+        });
     }
 }

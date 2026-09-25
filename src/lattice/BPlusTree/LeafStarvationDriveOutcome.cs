@@ -108,10 +108,11 @@ internal enum LeafStarvationDriveOutcome
     /// completion and lifted nothing says the leaf is structurally blocked and
     /// further touches are wasted. An abandoned drive says the opposite: nothing
     /// was learned about the leaf at all, because the drive ran out of budget
-    /// before its replay finished. That is either replay-permit contention on
-    /// the silo (the drive never acquired a permit, so storage never saw it) or
-    /// a replay that storage could not complete in time; the paired warning log
-    /// says which, because the two have opposite remedies (issue #3479). Neither
+    /// before its replay finished: a replay that storage could not complete in
+    /// time, or a budget that expired while the drive was still being admitted to
+    /// the replay gate.
+    /// The paired warning log says which and, for a replay, how the budget
+    /// divided between admission and replay (issue #3479). Neither
     /// is a fact about the leaf. Folding them would report an unanswered read as
     /// a permanent structural block - the precise misreading that kept issue
     /// #2368 open, since the unbounded drive's silence was taken for a leaf that

@@ -1916,15 +1916,14 @@ internal sealed partial class BPlusLeafGrain
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 
             // Logged with the measured elapsed rather than the budget alone, and
-            // split at the moment the permit was acquired (issue #3479). The two
-            // shapes of abandonment have opposite remedies. A drive that never
-            // acquired a permit spent its budget queued behind other replays on
-            // this silo, so storage never saw it and a larger budget only parks
-            // it longer. A drive that did acquire one spent its budget replaying,
-            // which is the case where storage or the size of the WAL gap is the
-            // question. One template with a single piece of advice gave the
-            // storage advice for both, which sent operators of a saturated gate
-            // to a healthy storage provider.
+            // split at the moment the permit was acquired (issue #3479). One
+            // template with a single piece of storage advice was given whatever
+            // the drive had been doing, and could not say how the budget divided
+            // between admission and replay. A drive that holds a permit spent its
+            // budget replaying, which is the case where storage or the size of
+            // the WAL gap is the question, so it reports that split and how far
+            // the replay moved the checkpoint. A drive that never took one never
+            // read storage, so it must not be sent there.
             //
             // Keyed on whether the acquire returned rather than on
             // `replayPermit is null`: the acquire also returns null, without
@@ -1932,19 +1931,25 @@ internal sealed partial class BPlusLeafGrain
             var abandonedAt = Stopwatch.GetTimestamp();
             if (!permitAcquired)
             {
+                // Reachable only when the budget expires during admission itself.
+                // GC drives never queue for a permit (issue #3480): a drive that
+                // finds no capacity is refused with a typed saturation instead,
+                // and never reaches this arm. Admission does no I/O, but it is not
+                // free - the first drive in a process sizes the process-wide
+                // replay gate, which reads the container CPU grant and the heap
+                // ceiling and logs the result - so a budget shorter than that, or
+                // a thread stall inside it, expires before the admission check.
                 ResolveLogger()?.LogWarning(
-                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after waiting {PermitWait} for a per-silo WAL replay permit that it never acquired, which is its whole {Budget} budget: the leaf's replay never started and its checkpoint did not move. The replay gate has {Ceiling} permit(s) and {QueuedWaiters} other waiter(s) are still queued for one. This is replay-permit contention on this silo, not storage latency: raising StarvationDriveBudget or investigating the storage provider will not help. Read orleans.lattice.wal.replay.permits_queued and orleans.lattice.wal.replay.permit_queue_wait to see what is holding the permits. The in-flight latch has been cleared.",
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after {Elapsed}, before it was admitted to the per-silo WAL replay gate: its {Budget} budget expired before a replay permit was taken, so the replay never started, storage was never read and the leaf's checkpoint did not move. GC drives never queue for a replay permit - a drive that finds no capacity is refused at once with a ReplayPermitAdmission saturation rather than abandoned - so this is neither storage latency nor replay-permit contention: admission itself outlasted the budget, which means the budget is far too small or this drive's thread stalled while it was being admitted (the first drive in a process also sizes the replay gate). Raise StarvationDriveBudget. The in-flight latch has been cleared.",
                     context.GrainId,
                     state.State.TreeId,
                     Stopwatch.GetElapsedTime(startedAt, abandonedAt),
-                    budget,
-                    Volatile.Read(ref _replayConcurrencyCeiling),
-                    Volatile.Read(ref _queuedReplayPermitWaiters));
+                    budget);
             }
             else
             {
                 ResolveLogger()?.LogWarning(
-                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned while replaying: it waited {PermitWait} for a replay permit and then replayed for {Replaying} without finishing. Before it was abandoned the replay advanced the leaf's checkpoint by {CheckpointAdvanced} offset(s) in memory, of which {CheckpointPersisted} are persisted; an in-memory advance is persisted by the leaf's next checkpoint flush. The permit has been released and the in-flight latch cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment of this form means the replay itself cannot finish inside the budget, either because storage is slow to answer or because the leaf's WAL gap is too large: investigate the storage provider and this leaf's replay gap, not the replay gate.",
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned while replaying: it spent {PermitWait} being admitted to the replay gate and then replayed for {Replaying} without finishing. Before it was abandoned the replay advanced the leaf's checkpoint by {CheckpointAdvanced} offset(s) in memory, of which {CheckpointPersisted} are persisted; an in-memory advance is persisted by the leaf's next checkpoint flush. The permit has been released and the in-flight latch cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment of this form means the replay itself cannot finish inside the budget, either because storage is slow to answer or because the leaf's WAL gap is too large: investigate the storage provider and this leaf's replay gap, not the replay gate.",
                     context.GrainId,
                     state.State.TreeId,
                     budget,
