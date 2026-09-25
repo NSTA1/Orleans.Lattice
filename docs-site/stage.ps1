@@ -216,7 +216,9 @@ foreach ($page in $rootPageTitles.Keys) {
 # not render images - a screen reader, a text browser, an agent - learns nothing
 # from it. The staged copy's alt text carries the version the badge draws, read
 # from the package's newest tag (see $packageVersions above). A badge whose
-# package has no tag is left as it is.
+# package has no tag is left as it is. The text is fixed when the site is built
+# while the image stays live, so the two differ only after a wave that pushes no
+# core tag, which does not redeploy the site (docs/RELEASING.md).
 $badgePattern = [regex]'\[!\[NuGet\]\((?<image>https://img\.shields\.io/nuget/v/(?<id>[A-Za-z0-9.]+))\)\]\((?<link>https://www\.nuget\.org/packages/\k<id>/?)\)'
 $badgesVersioned = 0
 foreach ($page in @('README.md', 'PACKAGES.md')) {
