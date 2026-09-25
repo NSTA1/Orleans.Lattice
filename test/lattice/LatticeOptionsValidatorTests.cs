@@ -217,11 +217,11 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void TxRegistryShardCount_defaults_to_8()
+    public void TxRegistryShardCount_defaults_to_1()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeOptions.DefaultTxRegistryShardCount, Is.EqualTo(8));
+            Assert.That(LatticeOptions.DefaultTxRegistryShardCount, Is.EqualTo(1));
             Assert.That(LatticeOptions.MaxTxRegistryShardCount, Is.EqualTo(256));
             Assert.That(new LatticeOptions().TxRegistryShardCount, Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount));
         });

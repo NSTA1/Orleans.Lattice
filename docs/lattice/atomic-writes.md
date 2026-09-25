@@ -307,10 +307,11 @@ outcome via dial-back until their pending entries are drained.
 
 ### Sharded decision registry
 
-A tree's decision registry is split into
-`LatticeOptions.TxRegistryShardCount` shards (default 8), each a separate
-`ITxRegistryGrain` activation keyed `{treeId}~s{n}` with its own persisted
-row, its own admission budget, and its own decisions revision. Every
+A tree's decision registry can be split into
+`LatticeOptions.TxRegistryShardCount` shards (default 1, which keeps the
+unsharded layout), each a separate `ITxRegistryGrain` activation keyed
+`{treeId}~s{n}` with its own persisted row, its own admission budget, and
+its own decisions revision. Every
 completed saga leaves a tombstone in its shard's row for
 `TxDecisionRetention`, so a single row caps the saga rate a tree can
 retain. Splitting the registry lifts that ceiling linearly with the shard
@@ -324,11 +325,19 @@ the `ForgetAsync` cleanup all land on the same shard. Every other caller
 that holds the txid - a leaf resolving a pending intent, a shard root, a
 split sweep, a backup, a replication receiver - routes to that shard from
 the id alone. For any one saga the owning shard is therefore still the
-single linearization point described above.
+single linearization point described above. Routing reads the stamped index
+directly and never consults the configured shard count, so silos with
+different values still route every txid identically.
 
 Reads that need the whole tree's decisions (multi-key reads, scans,
 cursors, point-in-time pins, backups and replication snapshots) fan out to
-every shard and union the results. The per-shard revisions are summed into
+every shard up to the tree's **shard high-water mark** and union the
+results. The mark is one durable value per tree, held by
+`ITxRegistryHighWaterGrain` (keyed by the tree id), and a shard raises it
+to its own index plus one before its first write in each activation; a
+failed raise fails that write. So no decision can be persisted on a shard
+the tree-wide reads do not cover. The fan-out reads the mark alongside the
+shards and widens and re-runs if it grew. The per-shard revisions are summed into
 one tree-wide equality token, and a stable snapshot re-reads the revisions
 after the fan-out and retries if any shard moved. A per-silo coalescer
 shares one fan-out between the concurrent reads of a tree: a snapshot
@@ -342,8 +351,11 @@ route to the legacy registry keyed by the bare tree id. Tree-wide reads
 always include that legacy registry, so a saga in flight across an
 upgrade, or a leaf asking for the status of a txid recorded before it,
 resolves exactly as before. The legacy row drains within one retention
-window. See [Configuration](configuration.md#txregistryshardcount) for the
-rules on changing the shard count on a live cluster.
+window. Sharding is opt-in because a silo running an older version
+resolves every txid against the legacy registry: raise the shard count
+only once every silo, and every replication peer that applies this
+cluster's sagas, runs a version that understands sharded ids. See
+[Configuration](configuration.md#txregistryshardcount).
 
 ### Phase 4 - Complete
 

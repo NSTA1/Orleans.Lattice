@@ -1350,8 +1350,7 @@ public class LatticeOptions
     /// shard count. The default of 768 KiB (75% of 1 MiB) admits roughly 6 100
     /// retained tombstones per shard at the conservative 128-byte weight the
     /// estimate uses, which is about 100 sustained sagas/s per shard under the
-    /// default retention, or about 800 sagas/s per tree at the default eight
-    /// shards. The bound exists to turn a silent storage-limit stall into an
+    /// default retention, or about 800 sagas/s per tree with eight shards. The bound exists to turn a silent storage-limit stall into an
     /// attributed, retryable back-pressure signal. Set <see langword="null"/> to
     /// disable the bound (the pre-bound behaviour); a storage provider with no
     /// per-row limit, or a tree that never runs atomic sagas, loses nothing by
@@ -1364,50 +1363,53 @@ public class LatticeOptions
     public const long DefaultTxRegistryAdmissionBudgetBytes = 768 * 1024;
 
     /// <summary>
-    /// Number of saga decision registry shards per tree. Each shard is a separate
-    /// transaction registry grain activation
-    /// with its own persisted row, its own
+    /// Number of saga decision registry shards new atomic-write sagas are minted
+    /// across, per tree. Each shard is a separate transaction registry grain
+    /// activation with its own persisted row, its own
     /// <see cref="TxRegistryAdmissionBudgetBytes"/> admission budget, and its own
     /// decisions revision, so the sustained atomic-saga rate a single tree can
     /// retain within <see cref="TxDecisionRetention"/> scales linearly with this
     /// value.
     /// <para>
-    /// A saga's shard is chosen when its transaction id is minted and is stamped
-    /// into the id itself, so every later registry call for that saga - from the
-    /// saga coordinator, a leaf resolving a pending intent, a shard root, a split,
-    /// or a replication receiver - routes to the same shard without consulting
-    /// this setting. Raising the value on a live cluster is therefore safe for
-    /// per-saga routing: sagas minted under the old value keep their shard, and
-    /// new sagas spread across the larger set. Lowering it is not: a retained
-    /// decision on a shard at or above the new count is no longer covered by the
-    /// tree-wide reads (multi-key <c>GetManyAsync</c> reads, scans, cursors,
-    /// backups) until it ages out of
-    /// <see cref="TxDecisionRetention"/>. Lower it only with atomic writes
-    /// quiesced for one retention window, and keep the value identical on every
-    /// silo, because tree-wide reads fan out over the shards the serving silo is
-    /// configured with.
+    /// <b>Opt-in, and only once every silo runs a version that understands
+    /// sharded ids.</b> The default of <c>1</c> keeps the pre-sharding layout:
+    /// one registry per tree, keyed by the bare tree id, and plain transaction ids
+    /// that always route to it, so a cluster mid-way through a rolling upgrade -
+    /// where an older silo resolves every txid against the bare-tree-id registry
+    /// - behaves exactly as before. Raise it only after the whole cluster (and any
+    /// replication peer that applies this cluster's sagas) runs this version.
     /// </para>
     /// <para>
-    /// Setting <c>1</c> restores the pre-sharding layout: one registry per tree,
-    /// keyed by the bare tree id, and transaction ids that always route to it.
+    /// The value only decides which shards <b>new</b> transaction ids are minted
+    /// across. A saga's shard is stamped into its transaction id when the id is
+    /// minted, and every later registry call for that saga - from the saga
+    /// coordinator, a leaf resolving a pending intent, a shard root, a split, or a
+    /// replication receiver - routes by the stamped index alone, never by this
+    /// setting. Tree-wide reads (multi-key <c>GetManyAsync</c> reads, scans,
+    /// cursors, backups, replication bootstrap) cover every shard up to the
+    /// tree's durable shard high-water mark, which a shard raises before its
+    /// first write, plus the legacy registry. Silos configured with different
+    /// values therefore agree on every read, and changing the value in either
+    /// direction on a live cluster is safe: raising it spreads new sagas across
+    /// more shards, and lowering it (to <c>1</c> included) reroutes nothing and
+    /// still reads every shard already written to.
+    /// </para>
+    /// <para>
     /// Sagas minted before an upgrade (or under a value of <c>1</c>) keep routing
-    /// to that legacy registry, which the tree-wide reads continue to include, so
-    /// an upgrade needs no operator action and the legacy row drains within one
-    /// retention window.
-    /// </para>
-    /// <para>
-    /// The default of eight lifts the per-tree ceiling from about 100 to about
-    /// 800 sustained sagas/s at the default budget and retention, while keeping
-    /// the tree-wide read fan-out (every shard plus the legacy registry) at nine
-    /// registry calls, which a per-silo coalescer shares across concurrent reads.
-    /// Must be between <c>1</c> and <see cref="MaxTxRegistryShardCount"/>. Read
-    /// from the global (unnamed) options.
+    /// to the legacy registry, which the tree-wide reads always include, so
+    /// enabling sharding needs no migration and the legacy row drains within one
+    /// retention window. A value of <c>8</c> lifts the per-tree ceiling from about
+    /// 100 to about 800 sustained sagas/s at the default budget and retention,
+    /// while keeping a tree-wide read at nine registry calls, which a per-silo
+    /// coalescer shares across concurrent reads. Must be between <c>1</c> and
+    /// <see cref="MaxTxRegistryShardCount"/>. Read from the global (unnamed)
+    /// options.
     /// </para>
     /// </summary>
     public int TxRegistryShardCount { get; set; } = DefaultTxRegistryShardCount;
 
-    /// <summary>Default value for <see cref="TxRegistryShardCount"/> (8).</summary>
-    public const int DefaultTxRegistryShardCount = 8;
+    /// <summary>Default value for <see cref="TxRegistryShardCount"/> (1, the unsharded legacy layout).</summary>
+    public const int DefaultTxRegistryShardCount = 1;
 
     /// <summary>Upper bound for <see cref="TxRegistryShardCount"/> (256): the shard index is stamped into one byte of the transaction id.</summary>
     public const int MaxTxRegistryShardCount = 256;

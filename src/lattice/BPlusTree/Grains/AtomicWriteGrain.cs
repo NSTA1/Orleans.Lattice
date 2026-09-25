@@ -1054,7 +1054,7 @@ internal sealed class AtomicWriteGrain(
     /// <paramref name="treeId"/> (see <see cref="TxRegistryRouting"/>).
     /// </summary>
     private ITxRegistryGrain RegistryFor(string treeId, Guid txid) =>
-        TxRegistryRouting.GetRegistry(grainFactory, treeId, txid, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+        TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.

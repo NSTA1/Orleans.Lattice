@@ -1,5 +1,7 @@
+using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -47,6 +49,72 @@ public partial class TxRegistryGrainTests
         await sibling.EnsureSagaAdmissionAsync();
 
         Assert.That(siblingState.WriteCount, Is.Zero, "The sibling shard's own row is empty, so it admits.");
+    }
+
+    [Test]
+    public async Task Shard_raises_the_tree_high_water_before_its_first_write_and_only_once()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
+        highWater.RaiseShardHighWaterAsync(Arg.Any<int>()).Returns(ci => Task.FromResult(ci.Arg<int>()));
+        factory.GetGrain<ITxRegistryHighWaterGrain>("tree-x").Returns(highWater);
+        var raisedBeforeWrite = new List<int>();
+        var state = new FakePersistentState<TxRegistryState>();
+        state.BeforeWrite = () =>
+        {
+            raisedBeforeWrite.Add(highWater.ReceivedCalls().Count());
+            return Task.CompletedTask;
+        };
+        var (grain, _) = CreateGrain(state: state, treeId: "tree-x~s5", grainFactory: factory);
+
+        await grain.MarkCommittedAsync(Guid.NewGuid());
+        await grain.MarkCommittedAsync(Guid.NewGuid());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(raisedBeforeWrite, Is.EqualTo(new[] { 1, 1 }),
+                "The mark is raised before the first write and not again for later writes.");
+            Assert.That(TxRegistryHighWaterCache.Get(factory, "tree-x"), Is.EqualTo(6),
+                "The raised mark is recorded in this silo's cache.");
+        });
+        await highWater.Received(1).RaiseShardHighWaterAsync(6);
+    }
+
+    [Test]
+    public async Task Legacy_registry_never_raises_the_high_water()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
+        factory.GetGrain<ITxRegistryHighWaterGrain>(Arg.Any<string>()).Returns(highWater);
+        var (grain, _) = CreateGrain(treeId: "tree-x", grainFactory: factory);
+
+        await grain.MarkCommittedAsync(Guid.NewGuid());
+
+        await highWater.DidNotReceiveWithAnyArgs().RaiseShardHighWaterAsync(default);
+    }
+
+    [Test]
+    public async Task A_failed_high_water_raise_fails_the_write_and_is_retried_on_the_next()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var highWater = Substitute.For<ITxRegistryHighWaterGrain>();
+        highWater.RaiseShardHighWaterAsync(Arg.Any<int>()).Returns(
+            _ => Task.FromException<int>(new InvalidOperationException("high-water down")),
+            _ => Task.FromResult(3));
+        factory.GetGrain<ITxRegistryHighWaterGrain>("tree-x").Returns(highWater);
+        var (grain, state) = CreateGrain(treeId: "tree-x~s2", grainFactory: factory);
+        var first = Guid.NewGuid();
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.MarkCommittedAsync(first));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.Zero, "A shard must not write before its index is durable in the mark.");
+            Assert.That(state.State.Decisions.ContainsKey(first), Is.False, "The failed mutation is rolled back.");
+        });
+        await grain.MarkCommittedAsync(Guid.NewGuid());
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        await highWater.Received(2).RaiseShardHighWaterAsync(3);
     }
 
     [Test]

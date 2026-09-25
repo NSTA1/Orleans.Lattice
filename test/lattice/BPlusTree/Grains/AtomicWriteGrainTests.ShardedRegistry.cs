@@ -44,7 +44,7 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2])));
 
         var txid = state.State.TransactionId;
-        var owner = TxRegistryRouting.ShardKey(TreeId, txid, ShardedCount);
+        var owner = TxRegistryRouting.ShardKey(TreeId, txid);
         Assert.Multiple(() =>
         {
             Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
@@ -84,7 +84,7 @@ public partial class AtomicWriteGrainTests
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
-        var owner = TxRegistryRouting.ShardKey(TreeId, state.State.TransactionId, ShardedCount);
+        var owner = TxRegistryRouting.ShardKey(TreeId, state.State.TransactionId);
         Assert.That(KeysCalled(registries), Is.EqualTo(new[] { owner }),
             "The retried saga's admission and decision must land on the shard its persisted txid routes to.");
     }

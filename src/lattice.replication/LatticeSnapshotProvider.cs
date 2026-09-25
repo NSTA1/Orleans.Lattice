@@ -34,7 +34,8 @@ namespace Orleans.Lattice.Replication;
 /// <b>Atomic visibility across the bootstrap boundary.</b> The export
 /// freezes a tree-wide view of <see cref="ITxRegistryGrain"/> saga
 /// decisions via <see cref="ITxRegistryGrain.SnapshotAsync"/>, unioned
-/// across every registry shard of the tree, at the start of the export and stamps it on every leaf the export visits
+/// across every registry shard of the tree up to its durable shard
+/// high-water, at the start of the export and stamps it on every leaf the export visits
 /// via <see cref="LatticeRegistrySnapshotContext"/>. Sagas the
 /// snapshot recorded as <see cref="TxStatus.Committed"/> or
 /// <see cref="TxStatus.Aborted"/> are folded into the committed
@@ -72,22 +73,8 @@ namespace Orleans.Lattice.Replication;
 internal sealed class LatticeSnapshotProvider(
     IGrainFactory grainFactory,
     IWalCursorRegistry cursors,
-    IOptionsMonitor<LatticeReplicationOptions> options,
-    IOptionsMonitor<LatticeOptions>? latticeOptions = null) : ISnapshotProvider
+    IOptionsMonitor<LatticeReplicationOptions> options) : ISnapshotProvider
 {
-    // The saga decision registry is sharded (issue #3501). A tree-wide read
-    // must cover every shard, so the count comes from the host's core options;
-    // absent those (a provider constructed outside a silo), the library default
-    // is assumed, which matches a default-configured cluster. Over-covering is
-    // harmless for a tree-wide read, since an unused shard is empty. It is
-    // resolved per export rather than in the constructor, so building the
-    // provider never forces options validation for the whole host.
-    private readonly IOptionsMonitor<LatticeOptions>? _latticeOptions = latticeOptions;
-
-    private int RegistryShardCount => _latticeOptions is null
-        ? LatticeOptions.DefaultTxRegistryShardCount
-        : Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting.ResolveShardCount(_latticeOptions);
-
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IWalCursorRegistry _cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -142,7 +129,7 @@ internal sealed class LatticeSnapshotProvider(
         // <see cref="LatticeRegistrySnapshotContext"/> means every
         // export sees a single decision view.
         var snap0 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
-            .StableSnapshotAsync(_grainFactory, treeName, RegistryShardCount)
+            .StableSnapshotAsync(_grainFactory, treeName)
             .ConfigureAwait(false);
 
         // The prepared-row pass runs BEFORE the committed-projection

@@ -19,21 +19,38 @@ public partial class BPlusLeafGrainTests
 {
     private const int ShardedRegistryCount = 8;
 
-    private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State) BuildShardedRegistryLeaf(Guid txId, string registryKey)
+    private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State) BuildShardedRegistryLeaf(
+        Guid txId, string registryKey, int registryShardCount = ShardedRegistryCount)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(txId).Returns(TxStatus.Committed);
         return BuildSelfTerminaliseLeafCore(
             txId, registry, out _, persistedCheckpoint: 0,
-            registryShardCount: ShardedRegistryCount,
+            registryShardCount: registryShardCount,
             registryKey: registryKey);
+    }
+
+    [Test]
+    public async Task Sharded_txid_prepare_resolves_on_its_shard_on_a_silo_configured_with_one_shard()
+    {
+        // Mixed-count silos (or a count lowered after sharded sagas were minted):
+        // the leaf's own configured count must play no part in routing, so a
+        // silo at count one still asks the shard the id is stamped with.
+        var txId = TxRegistryRouting.MintTransactionId(ShardedRegistryCount);
+        var shardKey = TxRegistryRouting.ShardKey(ResumableTreeId, txId);
+        Assume.That(shardKey, Is.Not.EqualTo(ResumableTreeId));
+        var (grain, _) = BuildShardedRegistryLeaf(txId, shardKey, registryShardCount: 1);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+
+        Assert.That(grain.PendingTransactionCount, Is.EqualTo(0));
     }
 
     [Test]
     public async Task Sharded_txid_prepare_resolves_against_its_owning_registry_shard()
     {
         var txId = TxRegistryRouting.MintTransactionId(ShardedRegistryCount);
-        var shardKey = TxRegistryRouting.ShardKey(ResumableTreeId, txId, ShardedRegistryCount);
+        var shardKey = TxRegistryRouting.ShardKey(ResumableTreeId, txId);
         Assume.That(shardKey, Is.Not.EqualTo(ResumableTreeId));
         var (grain, state) = BuildShardedRegistryLeaf(txId, shardKey);
 

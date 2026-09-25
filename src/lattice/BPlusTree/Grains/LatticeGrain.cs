@@ -4747,8 +4747,7 @@ internal sealed partial class LatticeGrain(
             var coalescer = RegistryReadCoalescer;
             var pair = coalescer is not null
                 ? await coalescer.GetSnapshotAsync(TreeId)
-                : await TxRegistryFanOut.SnapshotWithRevisionAsync(
-                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
         catch
@@ -4789,8 +4788,7 @@ internal sealed partial class LatticeGrain(
         {
             revision2 = coalescer is not null
                 ? await coalescer.GetRevisionAsync(TreeId)
-                : await TxRegistryFanOut.GetDecisionsRevisionAsync(
-                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+                : await TxRegistryFanOut.GetDecisionsRevisionAsync(grainFactory, TreeId);
         }
         catch
         {
@@ -4817,8 +4815,7 @@ internal sealed partial class LatticeGrain(
         {
             var snap2Pair = coalescer is not null
                 ? await coalescer.GetFreshSnapshotAsync(TreeId)
-                : await TxRegistryFanOut.SnapshotWithRevisionAsync(
-                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             snap2 = snap2Pair.Decisions;
         }
         catch

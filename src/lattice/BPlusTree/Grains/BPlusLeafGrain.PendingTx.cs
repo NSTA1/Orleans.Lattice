@@ -191,20 +191,6 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<Guid, HashSet<string>>? _backstoppedTerminals;
 
     /// <summary>
-    /// Cached saga decision registry shard count (issue #3501), resolved once per
-    /// activation from the activation services. Zero means not yet resolved.
-    /// Every per-txid registry call routes by the shard stamped into the txid,
-    /// so a pre-sharding (version-4) txid keeps resolving against the legacy
-    /// bare-tree-id registry.
-    /// </summary>
-    private int _txRegistryShardCount;
-
-    private int TxRegistryShardCount =>
-        _txRegistryShardCount != 0
-            ? _txRegistryShardCount
-            : _txRegistryShardCount = TxRegistryRouting.ResolveShardCountFromServices(context.ActivationServices);
-
-    /// <summary>
     /// Records a prepared-phase per-key mutation in the pending-tx map.
     /// The entry is invisible to readers until a matching terminal mark
     /// flips or drops it. Idempotent under LWW: a re-applied prepare
@@ -929,7 +915,7 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
         return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid, TxRegistryShardCount)
+            .GetRegistry(grainFactory, treeId, txid)
             .GetStatusAsync(txid);
     }
 
@@ -1105,7 +1091,7 @@ internal sealed partial class BPlusLeafGrain
         try
         {
             recorded = await TxRegistryRouting
-                .GetRegistry(grainFactory, treeId, txid, TxRegistryShardCount)
+                .GetRegistry(grainFactory, treeId, txid)
                 .GetRecordedStatusAsync(txid);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1231,7 +1217,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
-            grainFactory, treeId, TxRegistryShardCount, txids);
+            grainFactory, treeId, txids);
         return (outcomes, pendingKeys);
     }
 

@@ -376,8 +376,8 @@ internal sealed class LatticeBackupCaptureService(
         var options = backupOptions.Value;
         // Each tree's saga decision registry is sharded (issue #3501), so every
         // observation below sums across the tree's shards plus its legacy
-        // registry. The summed epoch is monotonic because each term is.
-        var registryShardCount = TxRegistryRouting.ResolveShardCount(optionsMonitor);
+        // registry, widened to the tree's durable shard high-water. The summed
+        // epoch is monotonic because each term is and widening only adds terms.
         var registries = new string[scopes.Count];
         for (var i = 0; i < scopes.Count; i++)
         {
@@ -394,7 +394,7 @@ internal sealed class LatticeBackupCaptureService(
             // Step 1: drain in-flight cross-tree sagas touching the set and
             // capture the per-tree registration epoch at the drained moment.
             var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
-                grainFactory, registries, registryShardCount, options, cancellationToken).ConfigureAwait(false);
+                grainFactory, registries, options, cancellationToken).ConfigureAwait(false);
             totalDrainWait += waited;
             totalDrained += drained;
 
@@ -436,7 +436,7 @@ internal sealed class LatticeBackupCaptureService(
             for (var i = 0; i < registries.Length; i++)
             {
                 var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
-                    grainFactory, registries[i], registryShardCount).ConfigureAwait(false);
+                    grainFactory, registries[i]).ConfigureAwait(false);
                 if (after.RegistrationEpoch != epochBefore[i] || after.InFlightCount != 0)
                 {
                     stable = false;
@@ -495,7 +495,6 @@ internal sealed class LatticeBackupCaptureService(
     private static async Task<(long[] EpochBefore, int Drained, TimeSpan Waited)> DrainCrossTreeInFlightAsync(
         IGrainFactory grainFactory,
         string[] registries,
-        int registryShardCount,
         LatticeBackupOptions options,
         CancellationToken cancellationToken)
     {
@@ -511,7 +510,7 @@ internal sealed class LatticeBackupCaptureService(
             for (var i = 0; i < registries.Length; i++)
             {
                 var obs = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
-                    grainFactory, registries[i], registryShardCount).ConfigureAwait(false);
+                    grainFactory, registries[i]).ConfigureAwait(false);
                 epoch[i] = obs.RegistrationEpoch;
                 totalInFlight += obs.InFlightCount;
             }

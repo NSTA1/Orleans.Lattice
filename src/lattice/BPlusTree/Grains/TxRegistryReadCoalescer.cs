@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -45,7 +44,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class TxRegistryReadCoalescer
 {
     private readonly IGrainFactory _grainFactory;
-    private readonly IOptionsMonitor<LatticeOptions> _options;
     private readonly ConcurrentDictionary<string, JoinSlot<TxRegistrySnapshot>> _snapshots = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, FreshSlot<TxRegistrySnapshot>> _freshSnapshots = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, FreshSlot<long>> _revisions = new(StringComparer.Ordinal);
@@ -54,13 +52,10 @@ internal sealed class TxRegistryReadCoalescer
     /// Creates the coalescer.
     /// </summary>
     /// <param name="grainFactory">The grain factory used to reach the registry.</param>
-    /// <param name="options">The options monitor the shard count is read from.</param>
-    public TxRegistryReadCoalescer(IGrainFactory grainFactory, IOptionsMonitor<LatticeOptions> options)
+    public TxRegistryReadCoalescer(IGrainFactory grainFactory)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
-        ArgumentNullException.ThrowIfNull(options);
         _grainFactory = grainFactory;
-        _options = options;
     }
 
     /// <summary>Number of trees with a round in flight or queued. Exposed for tests.</summary>
@@ -76,11 +71,10 @@ internal sealed class TxRegistryReadCoalescer
     public Task<TxRegistrySnapshot> GetSnapshotAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var shardCount = TxRegistryRouting.ResolveShardCount(_options);
         var task = JoinSlot<TxRegistrySnapshot>.Join(
             _snapshots,
             treeId,
-            () => TxRegistryFanOut.SnapshotWithRevisionAsync(_grainFactory, treeId, shardCount));
+            () => TxRegistryFanOut.SnapshotWithRevisionAsync(_grainFactory, treeId));
         return cancellationToken.CanBeCanceled ? task.WaitAsync(cancellationToken) : task;
     }
 
@@ -94,11 +88,10 @@ internal sealed class TxRegistryReadCoalescer
     public Task<TxRegistrySnapshot> GetFreshSnapshotAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var shardCount = TxRegistryRouting.ResolveShardCount(_options);
         var task = FreshSlot<TxRegistrySnapshot>.Join(
             _freshSnapshots,
             treeId,
-            () => TxRegistryFanOut.SnapshotWithRevisionAsync(_grainFactory, treeId, shardCount));
+            () => TxRegistryFanOut.SnapshotWithRevisionAsync(_grainFactory, treeId));
         return cancellationToken.CanBeCanceled ? task.WaitAsync(cancellationToken) : task;
     }
 
@@ -112,11 +105,10 @@ internal sealed class TxRegistryReadCoalescer
     public Task<long> GetRevisionAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        var shardCount = TxRegistryRouting.ResolveShardCount(_options);
         var task = FreshSlot<long>.Join(
             _revisions,
             treeId,
-            () => TxRegistryFanOut.GetDecisionsRevisionAsync(_grainFactory, treeId, shardCount));
+            () => TxRegistryFanOut.GetDecisionsRevisionAsync(_grainFactory, treeId));
         return cancellationToken.CanBeCanceled ? task.WaitAsync(cancellationToken) : task;
     }
 

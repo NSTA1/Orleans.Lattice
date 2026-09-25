@@ -651,7 +651,7 @@ internal sealed partial class LatticeGrain
         // receiver's registry shard is derived from it exactly as the local
         // leaves derive it when they resolve the saga (issue #3501).
         var registry = TxRegistryRouting.GetRegistry(
-            grainFactory, TreeId, transactionId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+            grainFactory, TreeId, transactionId);
         var tally = await registry.RecordTerminalArrivalAsync(
             transactionId, shardIndex, committed, atomicShardCount);
 
@@ -792,7 +792,7 @@ internal sealed partial class LatticeGrain
         CancellationToken cancellationToken)
     {
         var registry = TxRegistryRouting.GetRegistry(
-            grainFactory, TreeId, transactionId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
+            grainFactory, TreeId, transactionId);
         if (committed)
         {
             await registry.MarkCommittedAsync(transactionId);

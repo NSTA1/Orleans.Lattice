@@ -97,7 +97,7 @@ public class LatticeSnapshotProviderUnitTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
-    private static async Task<List<string>> ExportAndCaptureRegistryKeysAsync(IOptionsMonitor<LatticeOptions>? latticeOptions)
+    private static async Task<List<string>> ExportAndCaptureRegistryKeysAsync(int shardHighWater)
     {
         var (_, factory, cursors, _, _) = Create();
         var requested = new List<string>();
@@ -107,10 +107,13 @@ public class LatticeSnapshotProviderUnitTests
                 requested.Add((string)ci[0]);
                 return Substitute.For<Orleans.Lattice.BPlusTree.ITxRegistryGrain>();
             });
+        var highWater = Substitute.For<Orleans.Lattice.BPlusTree.ITxRegistryHighWaterGrain>();
+        highWater.GetShardHighWaterAsync().Returns(Task.FromResult(shardHighWater));
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ITxRegistryHighWaterGrain>(Tree).Returns(highWater);
         cursors.GetCausalStableAsync(Tree, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<VersionVector?>(new VersionVector()));
 
-        var provider = new LatticeSnapshotProvider(factory, cursors, TestOptions(), latticeOptions);
+        var provider = new LatticeSnapshotProvider(factory, cursors, TestOptions());
         var snapshot = await provider.ExportAsync(Tree, HybridLogicalClock.Zero);
         await foreach (var _ in snapshot.Entries)
         {
@@ -120,25 +123,21 @@ public class LatticeSnapshotProviderUnitTests
     }
 
     [Test]
-    public async Task Entries_freeze_the_saga_decision_view_across_every_configured_registry_shard()
+    public async Task Entries_freeze_the_saga_decision_view_across_every_registry_shard_up_to_the_high_water()
     {
-        var latticeOptions = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        latticeOptions.Get(Arg.Any<string>()).Returns(new LatticeOptions { TxRegistryShardCount = 3 });
-        latticeOptions.CurrentValue.Returns(new LatticeOptions { TxRegistryShardCount = 3 });
-
-        var requested = await ExportAndCaptureRegistryKeysAsync(latticeOptions);
+        var requested = await ExportAndCaptureRegistryKeysAsync(shardHighWater: 3);
 
         Assert.That(requested.Distinct().OrderBy(k => k, StringComparer.Ordinal),
             Is.EqualTo(new[] { Tree, $"{Tree}~s0", $"{Tree}~s1", $"{Tree}~s2" }),
-            "The export must union the decision view of every shard plus the legacy registry, and nothing beyond the configured count.");
+            "The export must union the decision view of every shard below the durable high-water plus the legacy registry, and nothing beyond it.");
     }
 
     [Test]
-    public async Task Entries_assume_the_default_registry_shard_count_without_lattice_options()
+    public async Task Entries_read_only_the_legacy_registry_when_no_shard_has_written()
     {
-        var requested = await ExportAndCaptureRegistryKeysAsync(latticeOptions: null);
+        var requested = await ExportAndCaptureRegistryKeysAsync(shardHighWater: 0);
 
-        Assert.That(requested.Distinct().Count(), Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount + 1));
+        Assert.That(requested.Distinct(), Is.EqualTo(new[] { Tree }));
     }
 
     [Test]

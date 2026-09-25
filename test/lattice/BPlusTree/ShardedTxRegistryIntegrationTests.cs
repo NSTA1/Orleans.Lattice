@@ -130,5 +130,20 @@ public class ShardedTxRegistryIntegrationTests
 
         var sample = await tree.GetAsync($"k{SagaCount - 1:D4}-b");
         Assert.That(sample, Is.EqualTo(new[] { (byte)(SagaCount - 1) }));
+
+        // Tree-wide reads are count-free: they cover the durable shard
+        // high-water mark, so a caller that has never observed this tree (the
+        // test client's grain factory has an empty high-water cache, exactly
+        // like a silo configured with one shard) still reads every shard.
+        var highWater = await _cluster.GrainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).GetShardHighWaterAsync();
+        var coldSnapshot = await TxRegistryFanOut.SnapshotAsync(_cluster.GrainFactory, treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(highWater, Is.GreaterThanOrEqualTo(perShard.FindLastIndex(c => c > 0) + 1),
+                "The durable mark covers every shard that holds a decision.");
+            Assert.That(highWater, Is.LessThanOrEqualTo(ShardedTxRegistryClusterFixture.ShardCount));
+            Assert.That(coldSnapshot, Has.Count.EqualTo(perShard.Sum()),
+                "A cold tree-wide read covers every written shard.");
+        });
     }
 }

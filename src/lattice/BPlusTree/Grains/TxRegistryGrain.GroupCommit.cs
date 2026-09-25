@@ -224,6 +224,11 @@ internal sealed partial class TxRegistryGrain
                 Exception? failure = null;
                 try
                 {
+                    if (!_shardHighWaterRaised)
+                    {
+                        await RaiseShardHighWaterAsync();
+                    }
+
                     await state.WriteStateAsync();
                 }
                 catch (Exception ex)
@@ -284,6 +289,33 @@ internal sealed partial class TxRegistryGrain
                 this.DeactivateOnIdle();
             }
         });
+    }
+
+    /// <summary>
+    /// Whether this activation has made its shard's index durable in the tree's
+    /// <see cref="ITxRegistryHighWaterGrain"/> mark (issue #3501). Always
+    /// <see langword="true"/> for the legacy registry, which every tree-wide read
+    /// covers unconditionally.
+    /// </summary>
+    private bool _shardHighWaterRaised;
+
+    /// <summary>
+    /// Raises the tree's shard high-water mark to cover this shard before the
+    /// activation's first state write, so a tree-wide read that could miss this
+    /// shard's decisions (its mark is below this shard's index) provably ran
+    /// before any of them were durable. A failure fails the pending write group,
+    /// which rolls back and surfaces the fault to its callers exactly as a
+    /// storage failure would; the next write retries the raise.
+    /// </summary>
+    private async Task RaiseShardHighWaterAsync()
+    {
+        if (TxRegistryRouting.TryParseShardKey(GrainKey, out var treeId, out var shard))
+        {
+            var mark = await grainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).RaiseShardHighWaterAsync(shard + 1);
+            TxRegistryHighWaterCache.Observe(grainFactory, treeId, mark);
+        }
+
+        _shardHighWaterRaised = true;
     }
 
     /// <summary>Records one registry write on the group-commit instruments.</summary>

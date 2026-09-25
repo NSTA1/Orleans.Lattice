@@ -182,9 +182,10 @@ internal sealed partial class LatticeCursorGrain(
                 // The decision registry is sharded (issue #3501); the stable
                 // snapshot unions every shard plus the legacy registry and
                 // brackets the union with a revision re-read so it is a
-                // consistent cut whenever one can be established.
-                var registryShardCount = TxRegistryRouting.ResolveShardCount(optionsMonitor);
-                snapshot = await TxRegistryFanOut.StableSnapshotAsync(grainFactory, treeId, registryShardCount);
+                // consistent cut whenever one can be established. The shards it
+                // covers come from the tree's durable high-water mark, not from
+                // this silo's configured shard count.
+                snapshot = await TxRegistryFanOut.StableSnapshotAsync(grainFactory, treeId);
                 if (snapshot is { Count: > 0 })
                 {
                     // Pin every txid whose decision the snapshot
@@ -210,7 +211,7 @@ internal sealed partial class LatticeCursorGrain(
                     {
                         pinId = Guid.NewGuid();
                         var ttl = optionsMonitor.Get(treeId).MaxCursorSnapshotPinTtl;
-                        await TxRegistryFanOut.PinSnapshotAsync(grainFactory, treeId, registryShardCount, pinId, pinned, ttl);
+                        await TxRegistryFanOut.PinSnapshotAsync(grainFactory, treeId, pinId, pinned, ttl);
                     }
                 }
             }
@@ -243,7 +244,7 @@ internal sealed partial class LatticeCursorGrain(
                     try
                     {
                         await TxRegistryFanOut.UnpinSnapshotAsync(
-                            grainFactory, treeId, TxRegistryRouting.ResolveShardCount(optionsMonitor), pinId);
+                            grainFactory, treeId, pinId);
                     }
                     catch (Exception unpinEx)
                     {
@@ -765,8 +766,7 @@ internal sealed partial class LatticeCursorGrain(
         }
 
         var refreshed = await TxRegistryFanOut.RefreshPinAsync(
-            grainFactory, state.State.TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor),
-            state.State.SnapshotPinId, pinned, ttl);
+            grainFactory, state.State.TreeId, state.State.SnapshotPinId, pinned, ttl);
         if (refreshed) return;
 
         // Pin has been evicted. Mark the cursor closed so a follow-up
@@ -813,7 +813,7 @@ internal sealed partial class LatticeCursorGrain(
         try
         {
             await TxRegistryFanOut.UnpinSnapshotAsync(
-                grainFactory, state.State.TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor), pinId);
+                grainFactory, state.State.TreeId, pinId);
         }
         catch (Exception ex)
         {

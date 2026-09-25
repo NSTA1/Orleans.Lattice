@@ -6,28 +6,31 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Stateless routing helper that spreads a tree's saga decision registry across
-/// <see cref="LatticeOptions.TxRegistryShardCount"/> durable
-/// <see cref="ITxRegistryGrain"/> activations (issue #3501). Each shard has its
-/// own persisted row, admission budget, and decisions revision, so the sustained
-/// saga rate a tree can retain scales with the shard count.
+/// durable <see cref="ITxRegistryGrain"/> activations (issue #3501). Each shard
+/// has its own persisted row, admission budget, and decisions revision, so the
+/// sustained saga rate a tree can retain scales with the number of shards new
+/// sagas are minted across (<see cref="LatticeOptions.TxRegistryShardCount"/>).
 /// <para>
-/// <b>The shard travels in the transaction id.</b> A sharded transaction id is
-/// minted by <see cref="MintTransactionId"/> as an RFC 9562 version-8 (custom)
-/// UUID whose last byte carries the shard index. Every registry caller - the
-/// saga coordinator, a leaf resolving a pending intent, a shard root, a split,
-/// a replication receiver - derives the owning grain from the id alone through
-/// <see cref="ShardKey"/>, so a saga keeps routing to the shard it was admitted
-/// under even if the configured shard count later changes. Any other id (a
-/// version-4 id minted before sharding existed, or under a shard count of one)
-/// routes to the <b>legacy</b> registry keyed by the bare tree id, which is the
-/// pre-sharding layout byte-for-byte. That is the upgrade path: an in-flight or
-/// retained pre-upgrade saga keeps resolving against the legacy row, which
-/// drains within one <see cref="LatticeOptions.TxDecisionRetention"/> window.
+/// <b>The shard travels in the transaction id, and routing depends on the id
+/// alone.</b> A sharded transaction id is minted by
+/// <see cref="MintTransactionId"/> as an RFC 9562 version-8 (custom) UUID whose
+/// last byte carries the shard index. Every registry caller - the saga
+/// coordinator, a leaf resolving a pending intent, a shard root, a split, a
+/// replication receiver - derives the owning grain from that stamped index
+/// through <see cref="ShardKey"/>, with no reference to any silo's configured
+/// shard count. Two silos configured with different counts therefore route the
+/// same txid to the same grain, and changing the count (up or down) never
+/// reroutes an existing id. Any other id (a version-4 id minted before sharding
+/// existed, or under a shard count of one) routes to the <b>legacy</b> registry
+/// keyed by the bare tree id, which is the pre-sharding layout byte-for-byte.
 /// </para>
 /// <para>
 /// Tree-wide operations (snapshots, the decisions revision, the cross-tree
 /// in-flight observation, cursor pins) cover every key returned by
-/// <see cref="EnumerateKeys"/>: each shard plus the legacy key.
+/// <see cref="EnumerateKeys"/> for the tree's durable shard high-water mark
+/// (see <see cref="ITxRegistryHighWaterGrain"/> and
+/// <see cref="TxRegistryFanOut"/>): each shard that can hold a decision, plus the
+/// legacy key.
 /// </para>
 /// </summary>
 internal static class TxRegistryRouting
@@ -48,7 +51,10 @@ internal static class TxRegistryRouting
     /// <summary>
     /// Resolves the configured shard count from the global (unnamed) options,
     /// clamped to <c>[1, <see cref="LatticeOptions.MaxTxRegistryShardCount"/>]</c>.
-    /// A <see langword="null"/> monitor yields one (the legacy layout).
+    /// A <see langword="null"/> monitor yields one (the legacy layout). The
+    /// count only decides which shards <b>new</b> transaction ids are minted
+    /// across; it never takes part in routing an existing id or in choosing
+    /// which keys a tree-wide read covers.
     /// </summary>
     /// <param name="options">The options monitor, or <see langword="null"/>.</param>
     /// <returns>The effective shard count.</returns>
@@ -109,25 +115,25 @@ internal static class TxRegistryRouting
     public static bool IsSharded(Guid txid) => txid.Version == ShardedTransactionIdVersion;
 
     /// <summary>
-    /// Returns the registry shard owning <paramref name="txid"/> under
-    /// <paramref name="shardCount"/>, or <c>-1</c> when the id routes to the
-    /// legacy registry (an unsharded id, or a shard count of one). The stamped
-    /// index is reduced modulo the count, so an id minted on a cluster with a
-    /// larger count (a replicated saga, for instance) still maps into range.
+    /// Returns the registry shard stamped into <paramref name="txid"/>, or
+    /// <c>-1</c> when the id routes to the legacy registry (an unsharded id).
+    /// The stamped index is returned as-is, never reduced by a configured shard
+    /// count: routing is a pure function of the id, so every silo agrees on the
+    /// owner whatever its configuration, and an id minted on a cluster with a
+    /// larger count (a replicated saga, for instance) keeps its own shard.
     /// </summary>
     /// <param name="txid">The transaction id.</param>
-    /// <param name="shardCount">The configured shard count.</param>
-    /// <returns>The shard index, or <c>-1</c> for the legacy registry.</returns>
-    public static int ShardOf(Guid txid, int shardCount)
+    /// <returns>The shard index in <c>[0, 255]</c>, or <c>-1</c> for the legacy registry.</returns>
+    public static int ShardOf(Guid txid)
     {
-        if (shardCount <= 1 || !IsSharded(txid))
+        if (!IsSharded(txid))
         {
             return -1;
         }
 
         Span<byte> bytes = stackalloc byte[16];
         txid.TryWriteBytes(bytes);
-        return bytes[ShardByteIndex] % shardCount;
+        return bytes[ShardByteIndex];
     }
 
     /// <summary>
@@ -137,12 +143,11 @@ internal static class TxRegistryRouting
     /// </summary>
     /// <param name="treeId">The physical tree id.</param>
     /// <param name="txid">The transaction id.</param>
-    /// <param name="shardCount">The configured shard count.</param>
     /// <returns>The registry grain key.</returns>
     [GrainKeyBuilder]
-    public static string ShardKey(string treeId, Guid txid, int shardCount)
+    public static string ShardKey(string treeId, Guid txid)
     {
-        var shard = ShardOf(txid, shardCount);
+        var shard = ShardOf(txid);
         return shard < 0 ? treeId : ShardKeyAt(treeId, shard);
     }
 
@@ -158,27 +163,30 @@ internal static class TxRegistryRouting
         string.Concat(treeId, ShardSeparator, shard.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>
-    /// Enumerates every registry grain key a tree-wide read must cover: each
-    /// shard in ordinal order, then the legacy bare-tree-id key. A shard count
-    /// of one yields only the legacy key.
+    /// Enumerates the registry grain keys a tree-wide read covers when shards
+    /// <c>[0, <paramref name="shardHighWater"/>)</c> may hold decisions: each
+    /// such shard in ordinal order, then the legacy bare-tree-id key. A
+    /// high-water of zero or less (a tree no shard has written to) yields only
+    /// the legacy key.
     /// </summary>
     /// <param name="treeId">The physical tree id.</param>
-    /// <param name="shardCount">The configured shard count.</param>
+    /// <param name="shardHighWater">One more than the highest shard index that may hold a decision, or zero.</param>
     /// <returns>The registry grain keys.</returns>
-    public static string[] EnumerateKeys(string treeId, int shardCount)
+    public static string[] EnumerateKeys(string treeId, int shardHighWater)
     {
-        if (shardCount <= 1)
+        if (shardHighWater <= 0)
         {
             return [treeId];
         }
 
-        var keys = new string[shardCount + 1];
-        for (var shard = 0; shard < shardCount; shard++)
+        var count = Math.Min(shardHighWater, LatticeOptions.MaxTxRegistryShardCount);
+        var keys = new string[count + 1];
+        for (var shard = 0; shard < count; shard++)
         {
             keys[shard] = ShardKeyAt(treeId, shard);
         }
 
-        keys[shardCount] = treeId;
+        keys[count] = treeId;
         return keys;
     }
 
@@ -189,10 +197,9 @@ internal static class TxRegistryRouting
     /// <param name="grainFactory">The grain factory.</param>
     /// <param name="treeId">The physical tree id.</param>
     /// <param name="txid">The transaction id.</param>
-    /// <param name="shardCount">The configured shard count.</param>
     /// <returns>The owning registry grain reference.</returns>
-    public static ITxRegistryGrain GetRegistry(IGrainFactory grainFactory, string treeId, Guid txid, int shardCount) =>
-        grainFactory.GetGrain<ITxRegistryGrain>(ShardKey(treeId, txid, shardCount));
+    public static ITxRegistryGrain GetRegistry(IGrainFactory grainFactory, string treeId, Guid txid) =>
+        grainFactory.GetGrain<ITxRegistryGrain>(ShardKey(treeId, txid));
 
     /// <summary>
     /// Strips a shard suffix from a registry grain key, yielding the tree id.
@@ -212,7 +219,16 @@ internal static class TxRegistryRouting
     /// <returns>Whether the key addresses the legacy registry.</returns>
     public static bool IsLegacyKey(string key) => !TryParseShardKey(key, out _, out _);
 
-    private static bool TryParseShardKey(string key, out string treeId, out int shard)
+    /// <summary>
+    /// Parses a registry grain key into its tree id and shard index. Returns
+    /// <see langword="false"/> (with <paramref name="treeId"/> set to the whole
+    /// key and <paramref name="shard"/> to <c>-1</c>) for a legacy key.
+    /// </summary>
+    /// <param name="key">The registry grain key.</param>
+    /// <param name="treeId">The tree id the key belongs to.</param>
+    /// <param name="shard">The shard index, or <c>-1</c> for a legacy key.</param>
+    /// <returns>Whether <paramref name="key"/> addresses a shard.</returns>
+    public static bool TryParseShardKey(string key, out string treeId, out int shard)
     {
         var idx = key.LastIndexOf(ShardSeparator, StringComparison.Ordinal);
         if (idx > 0)

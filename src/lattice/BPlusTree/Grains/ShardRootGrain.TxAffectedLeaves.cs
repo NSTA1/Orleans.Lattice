@@ -181,8 +181,7 @@ internal sealed partial class ShardRootGrain
             // broadcast can discover us authoritatively, regardless
             // of any routing flips between prepare and broadcast.
             var registry = TxRegistryRouting.GetRegistry(
-                grainFactory, TreeId, txid,
-                TxRegistryRouting.ResolveShardCountFromServices(context.ActivationServices));
+                grainFactory, TreeId, txid);
             await registry.RegisterParticipantAsync(txid, MyShardIndex);
         }
         catch

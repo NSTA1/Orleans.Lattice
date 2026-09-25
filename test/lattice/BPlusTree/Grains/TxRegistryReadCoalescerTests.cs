@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -225,7 +224,7 @@ public class TxRegistryReadCoalescerTests
             return tcs.Task;
         });
         factory.GetGrain<ITxRegistryGrain>("tree").Returns(registry);
-        var coalescer = new TxRegistryReadCoalescer(factory, SingleShardOptions());
+        var coalescer = new TxRegistryReadCoalescer(factory);
 
         var early = coalescer.GetRevisionAsync("tree");
         await WaitUntilAsync(() => Volatile.Read(ref calls) == 1);
@@ -261,13 +260,11 @@ public class TxRegistryReadCoalescerTests
     public void Constructor_and_members_reject_null_arguments()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var options = SingleShardOptions();
-        var coalescer = new TxRegistryReadCoalescer(factory, options);
+        var coalescer = new TxRegistryReadCoalescer(factory);
 
         Assert.Multiple(() =>
         {
-            Assert.Throws<ArgumentNullException>(() => new TxRegistryReadCoalescer(null!, options));
-            Assert.Throws<ArgumentNullException>(() => new TxRegistryReadCoalescer(factory, null!));
+            Assert.Throws<ArgumentNullException>(() => new TxRegistryReadCoalescer(null!));
             Assert.Throws<ArgumentNullException>(() => coalescer.GetSnapshotAsync(null!));
             Assert.Throws<ArgumentNullException>(() => coalescer.GetFreshSnapshotAsync(null!));
             Assert.Throws<ArgumentNullException>(() => coalescer.GetRevisionAsync(null!));
@@ -298,15 +295,9 @@ public class TxRegistryReadCoalescerTests
         var gate = new Gate();
         registry.SnapshotWithRevisionAsync().Returns(_ => gate.Snapshot());
         factory.GetGrain<ITxRegistryGrain>("tree").Returns(registry);
-        return (new TxRegistryReadCoalescer(factory, SingleShardOptions()), factory, gate);
+        return (new TxRegistryReadCoalescer(factory), factory, gate);
     }
 
-    private static IOptionsMonitor<LatticeOptions> SingleShardOptions()
-    {
-        var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        options.Get(Arg.Any<string>()).Returns(new LatticeOptions { TxRegistryShardCount = 1 });
-        return options;
-    }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {

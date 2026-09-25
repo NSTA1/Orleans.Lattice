@@ -24,7 +24,7 @@ public class TxRegistryRoutingTests
         {
             Assert.That(id.Version, Is.EqualTo(4));
             Assert.That(TxRegistryRouting.IsSharded(id), Is.False);
-            Assert.That(TxRegistryRouting.ShardOf(id, 8), Is.EqualTo(-1));
+            Assert.That(TxRegistryRouting.ShardOf(id), Is.EqualTo(-1));
         });
     }
 
@@ -36,7 +36,7 @@ public class TxRegistryRoutingTests
         for (var i = 0; i < 200; i++)
         {
             var id = TxRegistryRouting.MintTransactionId(count);
-            var shard = TxRegistryRouting.ShardOf(id, count);
+            var shard = TxRegistryRouting.ShardOf(id);
             Assert.Multiple(() =>
             {
                 Assert.That(id.Version, Is.EqualTo(TxRegistryRouting.ShardedTransactionIdVersion));
@@ -54,7 +54,7 @@ public class TxRegistryRoutingTests
         var seen = new HashSet<int>();
         for (var i = 0; i < 2000 && seen.Count < count; i++)
         {
-            seen.Add(TxRegistryRouting.ShardOf(TxRegistryRouting.MintTransactionId(count), count));
+            seen.Add(TxRegistryRouting.ShardOf(TxRegistryRouting.MintTransactionId(count)));
         }
 
         Assert.That(seen, Has.Count.EqualTo(count));
@@ -71,25 +71,48 @@ public class TxRegistryRoutingTests
     public void ShardOf_is_stable_for_the_same_id()
     {
         var id = TxRegistryRouting.MintTransactionId(8);
-        Assert.That(TxRegistryRouting.ShardOf(id, 8), Is.EqualTo(TxRegistryRouting.ShardOf(id, 8)));
+        Assert.That(TxRegistryRouting.ShardOf(id), Is.EqualTo(TxRegistryRouting.ShardOf(id)));
     }
 
     [Test]
-    public void ShardOf_reduces_an_id_minted_under_a_larger_count_into_range()
+    public void ShardOf_returns_the_stamped_index_unreduced()
     {
-        // A replicated saga's id may have been minted on a peer with more shards.
-        for (var i = 0; i < 200; i++)
+        // An id minted on a cluster with more shards (a replicated saga, or a
+        // silo configured with a larger count) keeps its own shard: routing is
+        // never reduced by the reading silo's count.
+        var id = WithStampedShard(200);
+
+        Assert.Multiple(() =>
         {
-            var id = TxRegistryRouting.MintTransactionId(256);
-            Assert.That(TxRegistryRouting.ShardOf(id, 3), Is.InRange(0, 2));
-        }
+            Assert.That(TxRegistryRouting.ShardOf(id), Is.EqualTo(200));
+            Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo("tree-route~s200"));
+        });
     }
 
     [Test]
-    public void ShardOf_with_count_one_routes_a_sharded_id_to_the_legacy_registry()
+    public void ShardKey_is_identical_on_silos_configured_with_different_counts()
     {
-        var id = TxRegistryRouting.MintTransactionId(8);
-        Assert.That(TxRegistryRouting.ShardOf(id, 1), Is.EqualTo(-1));
+        // Mixed-count silos during a rolling reconfiguration: routing takes no
+        // count, so the owner is a pure function of the id. Minting under 8 and
+        // then "lowering" the count to 1 must leave every id on its original key.
+        var ids = Enumerable.Range(0, 64).Select(_ => TxRegistryRouting.MintTransactionId(8)).ToArray();
+        var before = ids.Select(id => TxRegistryRouting.ShardKey(TreeId, id)).ToArray();
+        var lowered = TxRegistryRouting.MintTransactionId(1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ids.Select(id => TxRegistryRouting.ShardKey(TreeId, id)), Is.EqualTo(before));
+            Assert.That(before, Has.All.StartsWith("tree-route~s"));
+            Assert.That(TxRegistryRouting.ShardKey(TreeId, lowered), Is.EqualTo(TreeId));
+        });
+    }
+
+    private static Guid WithStampedShard(byte shard)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        TxRegistryRouting.MintTransactionId(2).TryWriteBytes(bytes);
+        bytes[15] = shard;
+        return new Guid(bytes);
     }
 
     [Test]
@@ -105,16 +128,16 @@ public class TxRegistryRoutingTests
     [Test]
     public void ShardKey_routes_a_v4_id_to_the_bare_tree_id()
     {
-        Assert.That(TxRegistryRouting.ShardKey(TreeId, Guid.NewGuid(), 8), Is.EqualTo(TreeId));
+        Assert.That(TxRegistryRouting.ShardKey(TreeId, Guid.NewGuid()), Is.EqualTo(TreeId));
     }
 
     [Test]
     public void ShardKey_routes_a_sharded_id_to_its_suffixed_key()
     {
         var id = TxRegistryRouting.MintTransactionId(8);
-        var shard = TxRegistryRouting.ShardOf(id, 8);
+        var shard = TxRegistryRouting.ShardOf(id);
 
-        Assert.That(TxRegistryRouting.ShardKey(TreeId, id, 8), Is.EqualTo($"{TreeId}~s{shard}"));
+        Assert.That(TxRegistryRouting.ShardKey(TreeId, id), Is.EqualTo($"{TreeId}~s{shard}"));
     }
 
     [Test]
@@ -123,10 +146,29 @@ public class TxRegistryRoutingTests
         Assert.That(TxRegistryRouting.ShardKeyAt(TreeId, 12), Is.EqualTo("tree-route~s12"));
     }
 
-    [Test]
-    public void EnumerateKeys_with_count_one_returns_only_the_legacy_key()
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void EnumerateKeys_with_no_shard_high_water_returns_only_the_legacy_key(int highWater)
     {
-        Assert.That(TxRegistryRouting.EnumerateKeys(TreeId, 1), Is.EqualTo(new[] { TreeId }));
+        Assert.That(TxRegistryRouting.EnumerateKeys(TreeId, highWater), Is.EqualTo(new[] { TreeId }));
+    }
+
+    [Test]
+    public void EnumerateKeys_with_high_water_one_covers_shard_zero_and_the_legacy_key()
+    {
+        Assert.That(TxRegistryRouting.EnumerateKeys(TreeId, 1), Is.EqualTo(new[] { "tree-route~s0", TreeId }));
+    }
+
+    [Test]
+    public void EnumerateKeys_clamps_the_high_water_to_the_maximum_shard_count()
+    {
+        var keys = TxRegistryRouting.EnumerateKeys(TreeId, 10_000);
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Has.Length.EqualTo(LatticeOptions.MaxTxRegistryShardCount + 1));
+            Assert.That(keys[^2], Is.EqualTo("tree-route~s255"));
+            Assert.That(keys[^1], Is.EqualTo(TreeId));
+        });
     }
 
     [Test]
@@ -197,7 +239,12 @@ public class TxRegistryRoutingTests
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(string.Empty).Returns(new LatticeOptions());
-        Assert.That(TxRegistryRouting.ResolveShardCount(monitor), Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount));
+        Assert.Multiple(() =>
+        {
+            Assert.That(TxRegistryRouting.ResolveShardCount(monitor), Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount));
+            Assert.That(LatticeOptions.DefaultTxRegistryShardCount, Is.EqualTo(1),
+                "Sharding is opt-in: a default-configured silo must keep minting legacy ids a pre-sharding silo can resolve.");
+        });
     }
 
     [Test]
@@ -227,10 +274,10 @@ public class TxRegistryRoutingTests
         var factory = Substitute.For<IGrainFactory>();
         var expected = Substitute.For<ITxRegistryGrain>();
         var id = TxRegistryRouting.MintTransactionId(8);
-        var key = TxRegistryRouting.ShardKey(TreeId, id, 8);
+        var key = TxRegistryRouting.ShardKey(TreeId, id);
         factory.GetGrain<ITxRegistryGrain>(key).Returns(expected);
 
-        Assert.That(TxRegistryRouting.GetRegistry(factory, TreeId, id, 8), Is.SameAs(expected));
+        Assert.That(TxRegistryRouting.GetRegistry(factory, TreeId, id), Is.SameAs(expected));
     }
 
     [Test]
@@ -240,6 +287,6 @@ public class TxRegistryRoutingTests
         var expected = Substitute.For<ITxRegistryGrain>();
         factory.GetGrain<ITxRegistryGrain>(TreeId).Returns(expected);
 
-        Assert.That(TxRegistryRouting.GetRegistry(factory, TreeId, Guid.NewGuid(), 8), Is.SameAs(expected));
+        Assert.That(TxRegistryRouting.GetRegistry(factory, TreeId, Guid.NewGuid()), Is.SameAs(expected));
     }
 }
