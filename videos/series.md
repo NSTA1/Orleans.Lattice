@@ -183,9 +183,15 @@ narrative and diagram, code walkthrough, and concept animation.
    voice, cached by what it says so a re-run speaks only the cues that changed,
    and each heard back by two local speech recognisers and made again when it
    does not say what the script says; the cues joined on a timeline and
-   mastered to the series loudness; and WebVTT captions. A `<!-- pause N -->` comment in the script adds N seconds
-   of silence, and a new scene waits a little longer than the next cue in a
-   scene does (`voice/voice.json`).
+   mastered to the series loudness; and WebVTT captions. A `<!-- pause N -->`
+   comment in the script adds N seconds of silence, and a new scene waits a
+   little longer than the next cue in a scene does (`voice/voice.json`). Then
+   listen to the narration alone (`npm run review -- <slug> --audio`). Where a
+   line reads wrongly - a word said wrong, a statement that rises like a
+   question - make several takes of it and pick one by ear
+   (`npm run audition -- <slug> <cue>`), and narrate again to master the
+   picked take in. Takes and picks stay on the machine; only the published
+   cut is committed.
 4. **Storyboard** - `episodes/<slug>/STORYBOARD.md`: what is on screen for each
    cue.
 5. **Composition** - `episodes/<slug>/composition.html`, built from the shared
@@ -268,6 +274,23 @@ What is in place, and why.
   cue that never passed is listed at the end of the run to be listened to.
   Each seed comes from the clip's name, so a run is repeatable on the same
   machine; across machines the audio can differ in detail.
+- **Picked by ear where it matters:** the checks catch a wrong or missing
+  word and a stray sound, not a word said with the wrong stress or a
+  statement that rises like a question. When a line reads wrongly, `npm run
+  audition` makes several takes of it (take n is narration's attempt n, so
+  the kept take is among them), each checked, on a page to listen and pick
+  from, and `--pick` makes the chosen take the cue's clip; a picked take
+  stands whatever the recognisers heard. Takes live in `renders/takes/` and
+  are never committed: the published cut is the record of what was chosen.
+- **Listened for, too:** recognisers ignore sounds that are not speech, and
+  Chatterbox sometimes fails to stop cleanly, adding a squeal or a burst
+  after its last word (the introduction's first Chatterbox cut had one at
+  1:52). Every clip is inspected frame by frame: a sound that follows a
+  silence after the last word is cut off, keeping 150 ms of the silence, and a
+  burst louder than the speech or a squeak far above the voice inside it
+  makes the clip fail, so it is made again. Chatterbox also pauses at a
+  hyphen ("active... active"), so a hyphen between two letters is read as a
+  space (`readingFor` in [tools/lib/lexicon.js](tools/lib/lexicon.js)).
 - **Pronunciation:** [voice/lexicon.json](voice/lexicon.json) maps written forms
   to spoken ones, with a form per engine where engines read differently.
   "Orleans" is said or-LEENZ, with the stress on the second syllable: Kokoro

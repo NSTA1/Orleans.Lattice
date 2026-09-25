@@ -49,6 +49,16 @@ export function loadLexicon(file) {
   return validateLexicon(JSON.parse(readFileSync(file, "utf8")).entries);
 }
 
+/**
+ * The text an engine is given, after the lexicon: Chatterbox pauses at a
+ * hyphen ("active... active", "Or... Leens"), so for it a hyphen between two
+ * letters becomes a space, and a compound is read as one breath. Other engines
+ * get the text unchanged.
+ */
+export function readingFor(text, engine) {
+  return engine === "chatterbox" ? text.replace(/(?<=[A-Za-z])-(?=[A-Za-z])/g, " ") : text;
+}
+
 /** What an entry says for an engine: its own form for that engine, the written form for null, else the default. */
 export function spokenFor(entry, engine) {
   if (engine !== undefined && entry.engines && Object.hasOwn(entry.engines, engine)) {

@@ -126,13 +126,17 @@ export function describeDifference({ expected, heard }) {
  * recogniser, their total, whether every recogniser heard it exactly, and
  * whether its pace is plausible for its length (`secondsPerWord`, { min, max },
  * catches a clip that trails off, stalls on a word or is cut short, which a
- * transcript can miss).
+ * transcript can miss). Sounds that are not speech (`artefacts`, found by the
+ * voice worker's inspection: a burst louder than the speech, a squeak far
+ * above the voice) are problems too, because recognisers ignore them.
+ * Intonation is not judged here: measured pitch did not match what a listener
+ * hears as a question, so a take is chosen by ear (npm run audition).
  */
-export function judgeAttempt(text, { seconds, transcripts }, { secondsPerWord } = {}) {
+export function judgeAttempt(text, { seconds, transcripts, artefacts = [] }, { secondsPerWord } = {}) {
   const expected = comparableWords(text);
   const byRecogniser = {};
   let total = 0;
-  for (const [name, transcript] of Object.entries(transcripts)) {
+  for (const [name, transcript] of Object.entries(transcripts ?? {})) {
     const differences = wordDifferences(expected, comparableWords(transcript)).map(describeDifference);
     byRecogniser[name] = differences;
     total += differences.length;
@@ -145,7 +149,10 @@ export function judgeAttempt(text, { seconds, transcripts }, { secondsPerWord } 
   if (secondsPerWord?.min !== undefined && pace < secondsPerWord.min) {
     problems.push(`${pace.toFixed(2)}s a word is faster than ${secondsPerWord.min}s: words are missing or rushed`);
   }
-  const heardExactly = Object.keys(transcripts).length > 0 && total === 0;
+  for (const artefact of artefacts ?? []) {
+    problems.push(`${artefact.kind} at ${artefact.start}-${artefact.end}s`);
+  }
+  const heardExactly = Object.keys(transcripts ?? {}).length > 0 && total === 0;
   return { heardExactly, passed: heardExactly && problems.length === 0, differences: byRecogniser, total, problems };
 }
 

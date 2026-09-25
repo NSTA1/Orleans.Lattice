@@ -92,6 +92,8 @@ the CLI cannot find that interpreter).
 | `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4` | render an episode; naming the output also writes the render's receipt, a digest of what it was rendered from, which `publish` checks |
 | `npm run render -- --docker ...` | render in Docker (pinned Chromium, fonts and FFmpeg) when output must be byte-reproducible |
 | `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, each heard back by two local recognisers and made again until it matches the script; then master the joined track to the series loudness, and write the cue timeline and WebVTT captions |
+| `npm run review -- <slug> --audio` | a page with the narration alone, every cue listed to play from, highlighting what changed and what the checks could not settle: approve the voice by ear before rendering |
+| `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/`; only the published cut is committed |
 | `npm run phonemes -- <slug>` | for the Kokoro engine: how its phonemizer will read each cue, with words that have two readings flagged (`--flagged` for only those cues) |
 | `npm run timeline -- <slug>` | stamp the narration's timeline into the episode's composition (`--check` fails if it is out of date) |
 | `npm run review -- <slug>` | a local review page for the episode's latest render: the player with captions, its size, bit rate and delivered loudness, and the transcript (serve `videos/` over HTTP to watch it) |
@@ -143,7 +145,7 @@ videos/
   voice/                            the series voice: its settings, reference clip, Python environment and lexicon;
                                     the Kokoro audition candidates and heteronyms
   tools/                            workspace tooling and its tests
-  renders/, snapshots/              output, never committed
+  renders/, snapshots/              output, never committed: renders, narration, takes, review pages
 ```
 
 Nothing that belongs to one episode sits at the root, and nothing two episodes
@@ -190,11 +192,13 @@ committed to `docs-site/media/`, which the site plays (`npm run publish`).
 8. **One place for each thing.** An episode's own material stays in its
    folder, anything reused lives once in `shared/`, and nothing goes at the
    root.
-9. **Commit no renders and no narration audio.** What is committed is each
-   episode's published cut, in `docs-site/media/`, which `npm run publish`
+9. **Commit no renders, no narration audio and no takes.** What is committed is
+   each episode's published cut, in `docs-site/media/`, which `npm run publish`
    writes from a reviewed render (see
    [series.md, Hosting - decided](series.md#hosting---decided)), and the
    voice's reference clip, `voice/reference.wav`, which defines the voice.
+   Takes made to pick from (`npm run audition`) live in `renders/takes/`, and a
+   picked take in the local clip cache.
 
 ## CI
 

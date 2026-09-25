@@ -72,6 +72,15 @@ test("an attempt passes only when every recogniser hears it exactly, at a plausi
   assert.match(stalled.problems[0], /slower than 0.75s/);
 
   assert.equal(judgeAttempt(text, { seconds: 1.5, transcripts: {} }).passed, false, "an attempt nobody heard is not verified");
+
+  const squealed = judgeAttempt(
+    text,
+    { seconds: 1.5, transcripts: { a: text }, artefacts: [{ kind: "a burst louder than the speech", start: 0.9, end: 1.1, level: -5 }] },
+    pace,
+  );
+  assert.equal(squealed.heardExactly, true, "recognisers ignore a squeal");
+  assert.equal(squealed.passed, false, "the inspection does not");
+  assert.deepEqual(squealed.problems, ["a burst louder than the speech at 0.9-1.1s"]);
 });
 
 test("the first attempt that passed is kept; otherwise the one with the fewest problems, the earlier on a tie", () => {

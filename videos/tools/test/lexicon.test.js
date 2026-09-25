@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { workspaceRoot } from "../lib/hyperframes.js";
-import { applyLexicon, heteronymsIn, loadHeteronyms, loadLexicon, validateLexicon } from "../lib/lexicon.js";
+import { applyLexicon, heteronymsIn, loadHeteronyms, loadLexicon, readingFor, validateLexicon } from "../lib/lexicon.js";
 
 const entries = validateLexicon([
   { written: "CRDT", spoken: "C R D T" },
@@ -80,6 +80,12 @@ test("the series lexicon gives Chatterbox one-word names and leaves it the words
       if (spoken !== null) assert.doesNotMatch(spoken, /-/, `'${entry.written}': a hyphen makes Chatterbox pause`);
     }
   }
+});
+
+test("Chatterbox reads a hyphenated compound as one breath; other engines keep the hyphen", () => {
+  assert.equal(readingFor("Go global: active-active across regions, a key-value store.", "chatterbox"), "Go global: active active across regions, a key value store.");
+  assert.equal(readingFor("Go global: active-active across regions.", "kokoro"), "Go global: active-active across regions.");
+  assert.equal(readingFor("Three - and no more; 2-3 minutes.", "chatterbox"), "Three - and no more; 2-3 minutes.", "only a hyphen between two letters");
 });
 
 test("an engine the workspace does not run, or an empty form for one, is rejected", () => {

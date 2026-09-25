@@ -27,14 +27,15 @@ test("an episode slug is kebab-case", () => {
   }
 });
 
-test("everything an episode owns sits in its own folder, and its narration under renders/", () => {
+test("everything an episode owns sits in its own folder, and its narration and takes under renders/", () => {
   const paths = episodePaths("introduction");
   assert.equal(paths.dir, path.join(episodesDir, "introduction"));
-  for (const file of [paths.brief, paths.script, paths.storyboard, paths.composition, paths.assets]) {
+  for (const file of [paths.brief, paths.script, paths.storyboard, paths.composition, paths.metadata, paths.assets]) {
     assert.equal(path.dirname(file), paths.dir, file);
   }
   assert.equal(path.basename(paths.composition), "composition.html");
   assert.equal(paths.narration, path.join(workspaceRoot, "renders", "narration", "introduction"));
+  assert.equal(paths.takes, path.join(workspaceRoot, "renders", "takes", "introduction"), "takes are output, never committed");
   assert.throws(() => episodePaths("../escape"), /not an episode slug/);
 });
 

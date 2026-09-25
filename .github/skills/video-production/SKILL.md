@@ -122,7 +122,21 @@ introduction is the worked example.
   silence, so the worker pads what it hears, not the clip. When a clip never
   passes, `npm run narrate` lists the cue; listen to it before publishing.
   Chatterbox pauses at a hyphen, so its respellings in `voice/lexicon.json`
-  have none ("Orleens").
+  have none ("Orleens"), and `readingFor` turns a hyphen between two letters
+  into a space ("active-active", "key-value").
+- Recognisers ignore sounds that are not speech, and Chatterbox can add a
+  squeal or burst after its last word when it fails to stop (the first cut of
+  the introduction had one at 1:52). `inspect` in `tools/voice_worker.py` cuts
+  a sound that follows a silence after the last word, and fails a clip with a
+  burst or squeak inside its speech. Only a sound after a silence is cut: an
+  unvoiced last consonant ("fits", "state") follows the vowel with no gap, and
+  a rule based on the last voiced frame alone clipped it.
+- The checks cannot hear stress or intonation: "idempotent" said wrongly and a
+  statement that rose like a question both passed them. Measured pitch did not
+  match what a listener heard as a question either, so don't gate on it.
+  Where a line matters, `npm run audition -- <slug> <cue>` makes takes to pick
+  by ear, and `--pick` installs one as the cue's clip. Takes and picks are
+  never committed (they live under `renders/`); only the published cut is.
 - A clip's name hashes what shapes the voice, including the pinned lines of
   `voice/requirements.txt` (not its comments): changing a setting, the
   reference clip or a pin re-speaks every cue, which takes the better part of
