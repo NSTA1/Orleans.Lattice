@@ -25,7 +25,8 @@
 #      visible version: what it documents, from which ref, and when it was built;
 #   9. writes the site's machine-readable surface for agents and LLM tooling: a
 #      markdown alternate of every page (lib/agent.ps1), llms.txt generated from
-#      the same catalogue as the documentation map, and llms-full.txt.
+#      the same catalogue as the documentation map, llms-full.txt, and each
+#      package's pages in one file of their own.
 #
 # Runs on Windows and Linux; keep it free of platform-specific path literals.
 
@@ -1806,6 +1807,15 @@ function Get-PageNote([string]$Relative, $Package) {
 
 $splitPages = New-Object 'System.Collections.Generic.HashSet[string]'
 foreach ($result in $splits.Values) { foreach ($entry in $result.Pages) { [void]$splitPages.Add($entry.Path) } }
+
+# The file that holds every page of the documentation set a page belongs to - a
+# package's, or the CRDT guide's - written with llms.txt, which lists it with
+# the set.
+function Get-BundlePath([string]$Relative) {
+    if ($Relative -notmatch '^docs/(?<dir>[^/]+)/' -or -not $dirInfo.ContainsKey($Matches.dir)) { return $null }
+    return 'docs/' + $Matches.dir + '/llms-full.txt'
+}
+
 $pageNotes = [ordered]@{}
 foreach ($relative in $stagedPages) {
     $info = $pageInfo[$relative]
@@ -1824,6 +1834,8 @@ foreach ($relative in $stagedPages) {
     $header.Add("documents: $(ConvertTo-QuotedYaml $site.Label)")
     $header.Add("built: $(ConvertTo-QuotedYaml $site.BuiltDate)")
     $header.Add("all-pages: $(ConvertTo-QuotedYaml ($site.Url + 'llms.txt'))")
+    $bundlePath = Get-BundlePath $relative
+    if ($bundlePath) { $header.Add('bundle: ' + (ConvertTo-QuotedYaml ($site.Url + $bundlePath))) }
     $header.Add('---')
     $header.Add('')
 
@@ -1850,10 +1862,17 @@ Write-Host "Wrote $($stagedPages.Count) markdown alternate(s) under $agentRoot, 
 # drift from them. It follows https://llmstxt.org: a title, a summary, then
 # sections of links to each page's markdown alternate, grouped the way the site
 # groups them, with the history and the contributor material under "Optional".
-# Every documentation page is listed, by title; a package's landing page also
-# carries the package's description from PACKAGES.md. A page that is part of
-# another - a release, a sample's source, a section of a split page outside
-# docs/ - is reached from the page it belongs to, which is listed.
+# Every page on the site is listed, by title, and the build fails if one is not.
+# A package's landing page also carries the package's description from
+# PACKAGES.md, and a page that is part of another - a section of a split page, a
+# release, a sample's source - follows the page it belongs to; the release
+# history, the samples' source and the pages beyond the documentation are under
+# "Optional", apart from a sample whose source is its only page.
+#
+# Each documentation set - a package's pages, or the CRDT guide's - is also
+# written to one file of its own, docs/<package>/llms-full.txt, listed with the
+# set, so an agent can take one package's documentation in a fetch or two
+# rather than the whole site's in llms-full.txt.
 function Get-PageDescription([string]$Relative, [int]$Max = 110) {
     $file = Join-Path $Staging $Relative
     if (-not (Test-Path -LiteralPath $file)) { return $null }
@@ -1864,6 +1883,7 @@ function Get-PageDescription([string]$Relative, [int]$Max = 110) {
 
 $llms = New-Object System.Collections.Generic.List[string]
 $listed = New-Object 'System.Collections.Generic.HashSet[string]'
+$bundleSizes = [ordered]@{}
 # A description is taken from the page it describes, so a link in it that is
 # relative to that page would resolve from the site root here; it keeps its text.
 function ConvertTo-LlmsDescription([string]$Text) {
@@ -1880,22 +1900,57 @@ function Add-LlmsLink([string]$Relative, [string]$Name, [string]$Description) {
     if ($Description) { $item += ': ' + (ConvertTo-LlmsDescription $Description) }
     $llms.Add($item)
 }
-# A split page's parts, each with what it holds: a section's first sentence, or,
-# for a run of subsections, their names - its title names only the first and the
-# last, in the page's order, which is not alphabetical.
+# What a part of a split page holds. A run of subsections lists their names:
+# its title names only the first and the last, in the page's order, which is not
+# alphabetical, and a run of one is named by its title already. Any other part
+# gives its first sentence.
+function Get-LlmsPartDescription($Entry) {
+    if ($Entry.Chunk) {
+        if ($Entry.Headings.Count -lt 2) { return $null }
+        $shown = @($Entry.Headings | Select-Object -First 60)
+        $description = 'Sections: ' + ($shown -join ', ')
+        if ($Entry.Headings.Count -gt $shown.Count) { $description += ", and $($Entry.Headings.Count - $shown.Count) more" }
+        return $description + '.'
+    }
+    if ($Entry.Description) { return Get-ShortDescription $Entry.Description 160 }
+    return $null
+}
+# A split page's parts, each named after the page it belongs to.
 function Add-LlmsSplit([string]$Relative, [string]$Prefix) {
     if (-not $splits.ContainsKey($Relative)) { return }
     foreach ($entry in $splits[$Relative].Pages) {
-        $description = $null
-        if ($entry.Chunk -and $entry.Headings.Count -gt 0) {
-            $shown = @($entry.Headings | Select-Object -First 60)
-            $description = 'Sections: ' + ($shown -join ', ')
-            if ($entry.Headings.Count -gt $shown.Count) { $description += ", and $($entry.Headings.Count - $shown.Count) more" }
-            $description += '.'
-        }
-        elseif ($entry.Description) { $description = Get-ShortDescription $entry.Description 160 }
-        Add-LlmsLink $entry.Path "${Prefix}: $($entry.Title)" $description
+        Add-LlmsLink $entry.Path "${Prefix}: $($entry.Title)" (Get-LlmsPartDescription $entry)
     }
+}
+# The page a line of llms.txt links to, site-relative, or $null for any other line.
+function Get-LlmsLinePage([string]$Line) {
+    if ($Line -notmatch '^- \[[^\]]*\]\((?<url>[^)]+)\)') { return $null }
+    $url = $Matches.url
+    if (-not $url.StartsWith($site.Url)) { return $null }
+    $relative = ($url.Substring($site.Url.Length) -split '#')[0]
+    if (-not $pageInfo.ContainsKey($relative)) { return $null }
+    return $relative
+}
+# A file's size as a reader weighs a fetch.
+function Format-FileSize([long]$Bytes) {
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    if ($Bytes -ge 1MB) { return ($Bytes / 1MB).ToString('0.0', $invariant) + ' MB' }
+    return ([Math]::Max(1, [Math]::Round($Bytes / 1KB))).ToString($invariant) + ' KB'
+}
+# Pages one after another in one file, each preceded by its address. Returns the
+# file's size in bytes.
+function Write-LlmsBundle([string]$Path, [string]$Heading, [string]$Intro, [string[]]$Pages) {
+    $text = New-Object System.Text.StringBuilder
+    [void]$text.Append("# $Heading`n`n$Intro`n")
+    foreach ($page in $Pages) {
+        [void]$text.Append("`n" + ('-' * 80) + "`n`n")
+        [void]$text.Append("URL: $($site.Url)$page`n`n")
+        [void]$text.Append($pageInfo[$page].Body)
+    }
+    $target = Join-Path $Staging $Path
+    New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
+    [System.IO.File]::WriteAllText($target, $text.ToString(), $utf8)
+    return (Get-Item -LiteralPath $target).Length
 }
 
 # The README's opening paragraphs are the platform's own summary.
@@ -1917,7 +1972,9 @@ $llms.Add('')
 $llms.Add("> $($summary -join ' ')")
 $llms.Add('')
 $commitNote = if ($site.ShortCommit) { ' at commit `' + $site.ShortCommit + '`' } else { '' }
-$llms.Add("This index lists every page of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``$commitNote. It is generated from the same catalogue as the site's [documentation map]($($site.Url)docs/index.md), so it lists every package and every page. Each link is to a page's markdown; the rendered page is at the same address ending in ``.html``. [llms-full.txt]($($site.Url)llms-full.txt) holds every documentation page in one file, and [sitemap.xml]($($site.Url)sitemap.xml) lists every rendered page.")
+# Written at the end, once the files it describes, and their sizes, exist.
+$llmsIntro = $llms.Count
+$llms.Add('')
 $llms.Add('')
 
 $llms.Add('## Start here')
@@ -1959,6 +2016,7 @@ foreach ($section in $sectionOrder) {
     foreach ($dir in $members) {
         $info = $dirInfo[$dir.Name]
         $name = if ($info.Status) { "$($info.Display) ($($info.Status))" } else { $info.Display }
+        $first = $llms.Count
         if ($info.Landing) {
             $landing = "docs/$($dir.Name)/$($info.Landing)"
             # A package opens with its id and the version these pages document.
@@ -1977,6 +2035,26 @@ foreach ($section in $sectionOrder) {
             Add-LlmsLink $relative "${name}: $($entry.Title)" $null
             Add-LlmsSplit $relative "${name}: $($entry.Title)"
         }
+
+        # The set's pages, in the order just listed, as one file, listed after
+        # its first page. Every page under its directory is in it, or the file
+        # would claim more than it holds.
+        $bundlePages = @($llms.GetRange($first, $llms.Count - $first) | ForEach-Object { Get-LlmsLinePage $_ } | Where-Object { $_ })
+        $prefix = "docs/$($dir.Name)/"
+        $expected = @($stagedPages | Where-Object { $_.StartsWith($prefix) }).Count
+        if ($bundlePages.Count -eq 0 -or $bundlePages.Count -ne $expected) {
+            throw "The one-file copy of $prefix would hold $($bundlePages.Count) of its $expected page(s); every page of a package must be listed in its llms.txt section."
+        }
+        $about = if ($info.Id -and $info.Exact) { "``$($info.Id)``" } elseif ($info.Id) { "the ``$($info.Id).*`` packages" } else { $info.Display }
+        $documented = if ($info.Exact -and -not $info.Status) { Get-DocumentedVersion $info.Id } else { $null }
+        if ($documented) { $about += " $documented" }
+        elseif ($info.Status) { $about += $(if ($info.Exact) { ', which is ' } else { ', which are ' }) + $info.Status }
+        $pageCount = if ($bundlePages.Count -eq 1) { '1 page' } else { "$($bundlePages.Count) pages" }
+        $bundleIntro = "The documentation for ${about}: $pageCount, in the order $($site.Url)llms.txt lists them, each preceded by its address. It is part of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``; llms.txt lists every page of the site."
+        $bundlePath = "${prefix}llms-full.txt"
+        $bundleBytes = Write-LlmsBundle $bundlePath "${name}: every page in one file" $bundleIntro $bundlePages
+        $bundleSizes[$bundlePath] = $bundleBytes
+        $llms.Insert($first + 1, "- [${name}: every page in one file]($($site.Url)$bundlePath): $pageCount, $(Format-FileSize $bundleBytes).")
     }
     $llms.Add('')
 }
@@ -1986,8 +2064,14 @@ if ($sampleEntries.Count -gt 0) {
     $llms.Add('')
     foreach ($sample in $sampleEntries) {
         $sampleDescription = if ($sample.Summary) { Get-ShortDescription $sample.Summary 160 } else { $null }
-        if ($sample.Readme) { Add-LlmsLink "samples/$($sample.Name)/README.md" $sample.Name $sampleDescription }
-        else { Add-LlmsLink "samples/$($sample.Name)/source.md" "$($sample.Name): source" $sampleDescription }
+        if ($sample.Readme) {
+            Add-LlmsLink "samples/$($sample.Name)/README.md" $sample.Name $sampleDescription
+            Add-LlmsSplit "samples/$($sample.Name)/README.md" $sample.Name
+        }
+        else {
+            Add-LlmsLink "samples/$($sample.Name)/source.md" "$($sample.Name): source" $sampleDescription
+            Add-LlmsSplit "samples/$($sample.Name)/source.md" "$($sample.Name): source"
+        }
     }
     $llms.Add('')
 }
@@ -2005,62 +2089,56 @@ if ($episodes.Count -gt 0) {
 $llms.Add('## Optional')
 $llms.Add('')
 Add-LlmsLink 'CHANGELOG.md' 'Changelog' 'Release history for the package family, newest first, with one page per release.'
-# The newest release, which is what "what changed" asks about; the rest are one
-# link away on the changelog's own page.
+# Every release, newest first, each with the versions it shipped, and any part
+# a long release is split into.
 $releases = $splits['CHANGELOG.md']
-if ($releases -and $releases.Children.Count -gt 0) {
-    $newest = $releases.Children[0]
-    $newestDescription = if ($newest.Description) { Get-ShortDescription $newest.Description 200 } else { $null }
-    Add-LlmsLink $newest.Path ('Newest release, ' + ($newest.TocName -replace '^Release\s+', '')) $newestDescription
+if ($releases) {
+    $newest = if ($releases.Children.Count -gt 0) { $releases.Children[0].Path } else { $null }
+    foreach ($entry in $releases.Pages) {
+        $releaseName = if ($entry.Path -eq $newest) { $entry.Title + ' (newest)' } else { $entry.Title }
+        Add-LlmsLink $entry.Path $releaseName (Get-LlmsPartDescription $entry)
+    }
 }
 Add-LlmsLink 'docs/RELEASING.md' 'Releasing' (Get-PageDescription 'docs/RELEASING.md')
-# Anything else on the site - the benchmark and specification pages the
-# documentation links into - so that nothing is left out.
-$partOfListed = @{}
-foreach ($result in $splits.Values) { foreach ($entry in $result.Pages) { $partOfListed[$entry.Path] = $result.Page } }
+# Every sample's source, and the page per file a long listing is split into.
 foreach ($sample in $sampleEntries) {
-    if (-not $sample.Readme) { continue }
-    $partOfListed["samples/$($sample.Name)/source.md"] = "samples/$($sample.Name)/README.md"
+    if (-not $sample.Source) { continue }
+    Add-LlmsLink "samples/$($sample.Name)/source.md" "$($sample.Name): source" $null
+    Add-LlmsSplit "samples/$($sample.Name)/source.md" "$($sample.Name): source"
 }
-foreach ($key in @($partOfListed.Keys)) {
-    # A sample source file's page belongs to the sample, through its listing.
-    $owner = $partOfListed[$key]
-    if ($partOfListed.ContainsKey($owner)) { $partOfListed[$key] = $partOfListed[$owner] }
-}
+# Anything else on the site - the benchmark and specification pages the
+# documentation links into - each followed by its parts, and the parts of any
+# split page listed above whose parts were not.
 foreach ($relative in $stagedPages) {
-    if ($listed.Contains($relative) -or $partOfListed.ContainsKey($relative)) { continue }
+    if ($splitPages.Contains($relative)) { continue }
     Add-LlmsLink $relative $pageInfo[$relative].Title $null
+    Add-LlmsSplit $relative $pageInfo[$relative].Title
 }
 $llms.Add("- [AGENTS.md]($repositoryUrl/blob/$($site.Ref)/AGENTS.md): Build and test commands, conventions, and hygiene gates for agents changing the repository.")
 $llms.Add("- [Repository conventions]($repositoryUrl/blob/$($site.Ref)/.github/copilot-instructions.md): Naming, serialization, branching, and pull-request rules for contributors.")
 
-# Every page is listed, or belongs to a page that is.
-$missing = @($stagedPages | Where-Object { -not $listed.Contains($_) -and -not ($partOfListed.ContainsKey($_) -and $listed.Contains($partOfListed[$_])) })
+# Every page is listed: llms.txt says so.
+$missing = @($stagedPages | Where-Object { -not $listed.Contains($_) })
 if ($missing.Count -gt 0) { throw "llms.txt leaves out $($missing.Count) page(s) the site publishes: $($missing -join ', ')" }
-[System.IO.File]::WriteAllText((Join-Path $Staging 'llms.txt'), ($llms -join "`n") + "`n", $utf8)
 
 # llms-full.txt: every documentation page's markdown, in llms.txt's order. The
 # release history and the samples' source listings are left out - they are the
-# bulk of the site and are one link away in llms.txt.
-$full = New-Object System.Text.StringBuilder
-[void]$full.Append("# Orleans.Lattice documentation, in full`n`n")
-[void]$full.Append("Every documentation page of the site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``. Each page is preceded by its address; the index of every page, including the release history and the samples' source, is $($site.Url)llms.txt.`n")
-$fullPages = 0
+# bulk of the site, and llms.txt lists each of their pages.
+$fullPages = New-Object System.Collections.Generic.List[string]
 $included = New-Object 'System.Collections.Generic.HashSet[string]'
 foreach ($line in $llms) {
-    if ($line -notmatch '^- \[[^\]]*\]\((?<url>[^)]+)\)') { continue }
-    $url = $Matches.url
-    if (-not $url.StartsWith($site.Url)) { continue }
-    $relative = ($url.Substring($site.Url.Length) -split '#')[0]
+    $relative = Get-LlmsLinePage $line
+    if (-not $relative) { continue }
     if ($relative -like 'changelog/*' -or $relative -eq 'CHANGELOG.md' -or $relative -match '^samples/[^/]+/source(/|\.md$)') { continue }
-    if (-not $pageInfo.ContainsKey($relative) -or -not $included.Add($relative)) { continue }
-    [void]$full.Append("`n--------------------------------------------------------------------------------`n`n")
-    [void]$full.Append("URL: $($site.Url)$relative`n`n")
-    [void]$full.Append($pageInfo[$relative].Body)
-    $fullPages++
+    if ($included.Add($relative)) { $fullPages.Add($relative) }
 }
-[System.IO.File]::WriteAllText((Join-Path $Staging 'llms-full.txt'), $full.ToString(), $utf8)
-Write-Host ("Wrote llms.txt ({0} pages, {1:N0} KB) and llms-full.txt ({2} pages, {3:N1} MB)" -f $listed.Count, ((Get-Item (Join-Path $Staging 'llms.txt')).Length / 1KB), $fullPages, ($full.Length / 1MB))
+$fullIntro = "Every documentation page of the site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``, in the order $($site.Url)llms.txt lists them, each preceded by its address. The release history and the samples' source are left out; llms.txt lists each of their pages. Each package's documentation is also in one file of its own, docs/<package>/llms-full.txt, which llms.txt lists with the package."
+$fullBytes = Write-LlmsBundle 'llms-full.txt' 'Orleans.Lattice documentation, in full' $fullIntro $fullPages
+
+$llms[$llmsIntro] = "This index lists every page of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``$commitNote. It is generated from the same catalogue as the site's [documentation map]($($site.Url)docs/index.md), so it lists every package and every page. The release history, the samples' source and the pages beyond the documentation are listed page by page under Optional, apart from a sample whose source is its only page, which is listed under Samples. Each page's link is to its markdown; the rendered page is at the same address ending in ``.html``. Each package's documentation is also in one file, ``docs/<package>/llms-full.txt``, listed with the package below, and [llms-full.txt]($($site.Url)llms-full.txt) holds every documentation page in one file of $(Format-FileSize $fullBytes). [sitemap.xml]($($site.Url)sitemap.xml) lists every rendered page."
+[System.IO.File]::WriteAllText((Join-Path $Staging 'llms.txt'), ($llms -join "`n") + "`n", $utf8)
+$largest = $bundleSizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
+Write-Host ("Wrote llms.txt ({0} pages, {1}), llms-full.txt ({2} pages, {3}), and {4} package file(s), the largest {5} ({6})" -f $listed.Count, (Format-FileSize (Get-Item (Join-Path $Staging 'llms.txt')).Length), $fullPages.Count, (Format-FileSize $fullBytes), $bundleSizes.Count, $largest.Key, (Format-FileSize $largest.Value))
 
 # --- The footer's version line ---
 # docfx.json's footer carries a marker where this goes, and the rendered footer
