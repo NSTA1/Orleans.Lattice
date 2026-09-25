@@ -214,6 +214,13 @@ kebab- or concatenated form. Unset/unknown => `set-many`.
 | `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace of `BENCH_VEHICLE_COUNT` keys is pre-seeded via `ILattice.SetManyAsync` before the measured window: by the silo at startup on the single-VM rig, and by the producer after warm-up in Layer 3 cluster mode (the silo returns early there). The producer logs `[producer] preseed treeId=.. entries=N`, and `performance-report.ps1` refuses a Layer 3 read cohort whose log lacks it, because an unseeded cohort measures only the miss path (#3474). |
 | `get-many` | `ILattice.GetManyAsync` - batched reads. Keyspace pre-seeded as for `get-point`. |
 
+The four atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
+one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
+`inFlight` counts sagas. Before #3581 a producer batch (often 1,000+ sagas) was one unit run as a
+sequential chain: ops stayed at 0 until the chain's last saga returned, a saturation retry
+re-committed the sagas that had landed, and one rolled-back saga booked the whole batch as failed.
+An atomic cohort that reads `ops=0` with a busy cluster on an older checkout is that artefact.
+
 > The `set-point-mv` workload and the multi-account knobs below only exist on a checkout
 > that includes the materialised-views work. On a checkout without it, use the other eight
 > modes and the single-account path.
