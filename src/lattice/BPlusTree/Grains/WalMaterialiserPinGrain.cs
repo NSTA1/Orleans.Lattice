@@ -151,6 +151,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool _dirty;
     private bool _flushInFlight;
 
+    /// <summary>Grain-type label carried on a translated state-write fault.</summary>
+    private const string StateWriteGrainType = "wal-materialiser-pin";
+
+    /// <summary>
+    /// Set once a single-slot pin write loses an optimistic-concurrency (ETag)
+    /// check (issue #3572). The activation has asked to deactivate and fails
+    /// later durable writes fast rather than retrying with a stale ETag.
+    /// </summary>
+    private bool _stateConflicted;
+
     /// <summary>
     /// Optional durable-storage handle used for the bucketed layout. Without it
     /// the grain persists through its injected <see cref="IPersistentState{T}"/>
@@ -562,7 +572,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _state.State = new WalMaterialiserPinState();
         try
         {
-            await _state.WriteStateAsync();
+            await WriteLegacySlotAsync();
             _logger?.LogInformation(
                 "WAL materialiser pin store for {GrainKey} retired its legacy slot; every pin now lives in its {Buckets} buckets.",
                 GrainKey,
@@ -934,7 +944,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     {
         _flushTimer?.Dispose();
         _flushTimer = null;
-        if (!_dirty)
+
+        // A conflicted activation's cached ETag is stale, so a final flush can
+        // only fail again; the next activation reloads the row (issue #3572).
+        if (!_dirty || _stateConflicted)
         {
             return;
         }
@@ -1341,6 +1354,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task PersistAsync(string outcome, PersistScope scope, IReadOnlyList<uint>? scopeHashes = null)
     {
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, GrainKey);
+        }
+
         while (_flushInFlight)
         {
             await Task.Yield();
@@ -1426,7 +1444,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 return wrote;
             }
 
-            await _state.WriteStateAsync();
+            await WriteLegacySlotAsync();
             _dirty = false;
             return true;
         }
@@ -1443,26 +1461,30 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     }
 
     /// <summary>
-    /// Issues the durable write for every pending slot of the current layout.
-    /// <para>
-    /// In the legacy single-slot layout this is exactly the pre-bucketing
-    /// <c>WriteStateAsync</c> on the injected <see cref="IPersistentState{T}"/>.
-    /// Under a bucketed layout only the slots whose contents advanced are
-    /// rewritten, and a flush with none issues no provider traffic at all.
-    /// </para>
+    /// Writes the legacy single slot through the injected
+    /// <see cref="IPersistentState{T}"/>, translating an optimistic-concurrency
+    /// (ETag) conflict (issue #3572). The write may have landed while the cached
+    /// ETag went stale, so every later write here would fail the same way: the
+    /// activation marks itself conflicted, deactivates so the next call reloads
+    /// the row, and fails later persists fast. A lost advance only leaves the
+    /// durable pin staler, which is GC-safe, and a re-sent seed that already
+    /// landed merges as a no-op.
     /// </summary>
-    private async Task WriteDurableAsync()
+    private async Task WriteLegacySlotAsync()
     {
-        if (_bucketCount <= 1 || _pinStorage is null)
+        try
         {
             await _state.WriteStateAsync();
-            return;
         }
-
-        var slots = SelectSlots(PersistScope.All, null);
-        if (slots.Count > 0)
+        catch (Exception ex) when (GrainStateWriteFaults.IsConflict(ex))
         {
-            await WriteSlotsAsync(slots);
+            _stateConflicted = true;
+            _logger?.LogWarning(
+                ex,
+                "WAL materialiser pin write for {GrainKey} lost an optimistic-concurrency check (the write may have landed); deactivating so the next call reloads durable state.",
+                GrainKey);
+            this.DeactivateOnIdle();
+            throw new LatticeStateWriteFailedException(StateWriteGrainType, GrainKey, ex, conflict: true);
         }
     }
 
@@ -1691,7 +1713,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
         if (target == 1)
         {
-            await _state.WriteStateAsync();
+            await WriteLegacySlotAsync();
             var emptyWidth = new Dictionary<int, WalMaterialiserPinState>
             {
                 [0] = new WalMaterialiserPinState { PersistedBucketCount = 1 },

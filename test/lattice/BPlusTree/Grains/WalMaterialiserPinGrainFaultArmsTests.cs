@@ -421,9 +421,13 @@ public sealed class WalMaterialiserPinGrainFaultArmsTests
         Assert.That(Field<HashSet<int>>(h.Grain, "_dirtyBuckets"), Is.Empty,
             "A landed flush leaves no bucket dirty - the precondition this guard covers.");
 
-        var writeDurable = typeof(WalMaterialiserPinGrain)
-            .GetMethod("WriteDurableAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        await (Task)writeDurable.Invoke(h.Grain, null)!;
+        var persistCore = typeof(WalMaterialiserPinGrain)
+            .GetMethod("PersistCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var scopeAll = Enum.Parse(
+            typeof(WalMaterialiserPinGrain).GetNestedType("PersistScope", BindingFlags.NonPublic)!, "All");
+        var wrote = await (Task<bool>)persistCore.Invoke(h.Grain, new[] { scopeAll, null })!;
+
+        Assert.That(wrote, Is.False, "no durable write was issued");
 
         Assert.That(h.Store.WrittenSlots, Is.Empty);
     }

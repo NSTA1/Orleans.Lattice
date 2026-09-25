@@ -283,4 +283,122 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             await faults.StopAsync(CancellationToken.None);
         }
     }
+
+    [Test]
+    public async Task ExecuteAsync_never_charges_or_abandons_a_consumer_whose_drives_are_refused_admission()
+    {
+        // Issue #3575. A refused admission is raised by the leaf's silo before
+        // its drive starts, so it tests nothing about the leaf, and it is the
+        // one outcome excused outright rather than refunded within the cap.
+        // Filed as 'faulted' it spent the budget of consumers the sweep never
+        // managed to drive and ended in a give-up that blamed their snapshot
+        // capture: 89% of one deployment's touches went that way.
+        //
+        // Six hours at the five-minute floor is ample for either wrong class to
+        // show itself: charged, the consumer is abandoned after three touches,
+        // and refunded to the cap after six.
+        const string RefusedTree = "stranded-admission-refused";
+        var time = new VirtualTimeProvider();
+        var (scheduler, recorder) = BlockedTreeProbing(time, AdmissionRefusedProbe, treeId: RefusedTree);
+
+        using (recorder)
+        {
+            await StartAndRunFirstPassAsync(scheduler, time);
+            await AdvanceAtLeastAsync(time, TimeSpan.FromHours(6));
+
+            var attempted = Outcomes(recorder, "attempted");
+            Assert.Multiple(() =>
+            {
+                Assert.That(attempted, Is.GreaterThan(6),
+                    "more touches than a refunded budget could buy, or refusals are still being charged.");
+                Assert.That(Outcomes(recorder, "admission_refused"), Is.EqualTo(attempted),
+                    "every refused touch must land on its own arm.");
+                Assert.That(Outcomes(recorder, "faulted"), Is.Zero,
+                    "a refusal is back-pressure, not a fault, and must not be counted as one.");
+                Assert.That(Outcomes(recorder, "abandoned"), Is.Zero,
+                    "a consumer that was never driven must never be given up on: the give-up claims the block "
+                    + "is not clearable by activation, which a refusal never tested.");
+                Assert.That(attempted, Is.LessThan(40),
+                    "but the retry must escalate: touched at every pass of the six hours the consumer would "
+                    + "take about seventy touches, whereas a delay that doubles to the cooldown takes under thirty.");
+            });
+
+            await scheduler.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_retries_a_consumer_refused_admission_sooner_than_the_retry_cooldown()
+    {
+        // The cooldown's premise is that a touch which ran and did not heal will
+        // not heal if repeated at once. A refused touch never ran, so the
+        // premise does not hold for it (issue #3575): it is retried after a
+        // short jittered delay, which at a five-minute floor is the next pass.
+        const string RetryTree = "stranded-admission-retry";
+        var calls = 0;
+        var time = new VirtualTimeProvider();
+        var (scheduler, recorder) = BlockedTreeProbing(
+            time,
+            () => Interlocked.Increment(ref calls) == 1
+                ? AdmissionRefusedProbe()
+                : Task.FromResult<string?>(RetryTree),
+            treeId: RetryTree);
+
+        using (recorder)
+        {
+            await StartAndRunFirstPassAsync(scheduler, time);
+
+            var guard = 0;
+            while (Outcomes(recorder, "admission_refused") == 0)
+            {
+                await TickAsync(time);
+                Assert.That(++guard, Is.LessThan(100), "the first touch was never made.");
+            }
+
+            var refusedAt = time.GetUtcNow();
+            while (Outcomes(recorder, "attempted") < 2)
+            {
+                await TickAsync(time);
+                Assert.That(++guard, Is.LessThan(100), "the refused consumer was never touched again.");
+            }
+
+            var retriedAfter = time.GetUtcNow() - refusedAt;
+            Assert.Multiple(() =>
+            {
+                Assert.That(retriedAfter, Is.LessThan(TimeSpan.FromMinutes(15)),
+                    "a refused consumer must not wait out the fifteen-minute retry cooldown a touch that ran "
+                    + "has to serve.");
+                Assert.That(Outcomes(recorder, "completed"), Is.EqualTo(1),
+                    "and the early retry must reach the leaf once the refusal clears.");
+            });
+
+            await scheduler.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public void AdmissionRefusedRetryDelay_doubles_per_refusal_is_jittered_upward_and_never_exceeds_the_cooldown()
+    {
+        // The retry cooldown is private to the scheduler; fifteen minutes is its
+        // value, pinned here so a retune of either constant is a visible change.
+        var cooldown = TimeSpan.FromMinutes(15);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(1, 0.0),
+                Is.EqualTo(LatticeWalGcScheduler.AdmissionRefusedRetryBaseDelay));
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(1, 0.999),
+                Is.GreaterThan(TimeSpan.FromMinutes(1)).And.LessThan(TimeSpan.FromMinutes(1.5)),
+                "jitter stretches the delay by up to half again, so refusals from one moment spread out.");
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(2, 0.0), Is.EqualTo(TimeSpan.FromMinutes(2)));
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(3, 0.0), Is.EqualTo(TimeSpan.FromMinutes(4)));
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(4, 0.0), Is.EqualTo(TimeSpan.FromMinutes(8)));
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(4, 0.999), Is.LessThanOrEqualTo(cooldown));
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(5, 0.0), Is.EqualTo(cooldown),
+                "the doubling stops at the cooldown, so a consumer refused on every touch is touched no closer "
+                + "together than a charged one.");
+            Assert.That(LatticeWalGcScheduler.AdmissionRefusedRetryDelay(int.MaxValue, 0.999), Is.EqualTo(cooldown),
+                "however long the run of refusals and whatever the jitter.");
+        });
+    }
 }

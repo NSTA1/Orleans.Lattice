@@ -641,7 +641,12 @@ article h2::before {
 }
 
 article h1 + h2,
-article > h2:first-child {
+article > h2:first-child,
+/* The page note (build.ps1) sits between a page's title and its first section
+   for readers that take the page as text; it is visually hidden, so the
+   section keeps the spacing it has straight under the title. */
+article h1 + .lt-page-note + h2,
+article > .lt-page-note:first-child + h2 {
   margin-top: 1.5rem;
 }
 

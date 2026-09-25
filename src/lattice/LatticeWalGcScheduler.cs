@@ -1009,6 +1009,19 @@ internal sealed class LatticeWalGcScheduler(
     /// gave up on it. Its pin is not retired, so it keeps holding the cursor
     /// floor and nothing is trimmed past it.
     /// </param>
+    /// <param name="AdmissionRefusals">
+    /// Consecutive touches of this consumer whose drive was refused admission to
+    /// the leaf silo's WAL replay gate (issue #3575). It sizes the next
+    /// <see cref="AdmissionRefusedRetryDelay"/> and is reset by any other
+    /// outcome.
+    /// </param>
+    /// <param name="AdmissionRetryAt">
+    /// When a consumer whose latest touch was refused admission may be touched
+    /// again, or <see langword="null"/> when the ordinary
+    /// <see cref="ReactivationRetryCooldown"/> after
+    /// <paramref name="LastAttempt"/> applies (issue #3575). Cleared when the
+    /// next touch is issued.
+    /// </param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -1022,7 +1035,9 @@ internal sealed class LatticeWalGcScheduler(
         bool PinStateClassified = false,
         bool HealCredited = false,
         bool OffsetAdvanceOwed = false,
-        ReactivationTerminal Terminal = ReactivationTerminal.None);
+        ReactivationTerminal Terminal = ReactivationTerminal.None,
+        int AdmissionRefusals = 0,
+        DateTimeOffset? AdmissionRetryAt = null);
 
     /// <summary>
     /// Why the reactivation sweep has stopped driving a blocking consumer for the
@@ -1181,6 +1196,36 @@ internal sealed class LatticeWalGcScheduler(
         /// </para>
         /// </remarks>
         LatchedStale,
+
+        /// <summary>
+        /// The touch reached the leaf's silo, which refused the drive admission
+        /// to its WAL replay gate before anything was replayed (issue #3575): a
+        /// <see cref="LatticeSaturatedException"/> whose source is
+        /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Why this is neither charged nor refunded.</b> Drives never queue
+        /// for a replay permit (issue #3480), so a drive that finds the gate's GC
+        /// share full is refused outright, and a dormant leaf whose activation
+        /// finds the permit queue full is refused in the same way. Either way no
+        /// work was done and nothing was learned about the leaf, which is the
+        /// only thing the budget exists to judge. Charged, it spent the budget of
+        /// consumers the sweep never managed to drive, and they were abandoned
+        /// with advice about their snapshot capture. Refunded, it would still
+        /// have run out, because the refund cap is sized for faults that recur.
+        /// It is therefore excused outright and retried after
+        /// <see cref="AdmissionRefusedRetryDelay"/> instead of the cooldown.
+        /// </para>
+        /// <para>
+        /// <b>Why it is not <see cref="Faulted"/>.</b> Before this arm it was one,
+        /// logged with a stack each time. On one deployment it was 89% of all
+        /// touches, because the leaves' own coverage-lag timer drives were
+        /// taking the share first; a timer drive can no longer take the slot
+        /// this sweep needs.
+        /// </para>
+        /// </remarks>
+        AdmissionRefused,
     }
 
     /// <summary>
@@ -1212,6 +1257,7 @@ internal sealed class LatticeWalGcScheduler(
             ReactivationOutcome.Undelivered => LatticeMetrics.BlockedLeafReactivationUndelivered,
             ReactivationOutcome.Orphaned => LatticeMetrics.BlockedLeafReactivationOrphaned,
             ReactivationOutcome.LatchedStale => LatticeMetrics.BlockedLeafReactivationLatchedStale,
+            ReactivationOutcome.AdmissionRefused => LatticeMetrics.BlockedLeafReactivationAdmissionRefused,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -1247,9 +1293,73 @@ internal sealed class LatticeWalGcScheduler(
     /// silently invalidates that reading, so the classes are pinned by
     /// <c>LatticeWalGcSchedulerCadenceTests.ReactivationRefundClass</c>.
     /// </para>
+    /// <para>
+    /// A third class sits outside that split: an outcome for which
+    /// <see cref="IsUnchargedReactivationOutcome"/> holds is never charged at
+    /// all, so it is not refundable either.
+    /// </para>
     /// </remarks>
     internal static bool IsRefundableReactivationOutcome(ReactivationOutcome outcome) =>
         outcome is ReactivationOutcome.Faulted or ReactivationOutcome.Undelivered;
+
+    /// <summary>
+    /// Whether an outcome is excused from the attempt budget outright rather
+    /// than charged or refunded (issue #3575).
+    /// </summary>
+    /// <remarks>
+    /// Only <see cref="ReactivationOutcome.AdmissionRefused"/>. A refunded fault
+    /// is still evidence the touch was tried against the leaf and failed, so it
+    /// is capped, and a leaf that faults on every touch still reaches
+    /// abandonment. A refused admission is evidence of nothing about the leaf,
+    /// because the drive never started, so the attempt is taken back in full,
+    /// with no cap, and the consumer is retried after
+    /// <see cref="AdmissionRefusedRetryDelay"/> rather than after
+    /// <see cref="ReactivationRetryCooldown"/>. The retry cannot run hot: the
+    /// delay doubles with each consecutive refusal up to the cooldown, so a
+    /// consumer refused on every touch settles at one touch per cooldown, the
+    /// spacing a charged touch already has.
+    /// </remarks>
+    internal static bool IsUnchargedReactivationOutcome(ReactivationOutcome outcome) =>
+        outcome is ReactivationOutcome.AdmissionRefused;
+
+    /// <summary>
+    /// The first delay before a consumer whose drive was refused admission is
+    /// touched again (issue #3575), before jitter.
+    /// </summary>
+    /// <remarks>
+    /// Short, because the refusal is raised before any work and so costs one
+    /// admission test to retry, and because the per-silo GC share it was refused
+    /// by frees a slot as soon as any drive holding one finishes.
+    /// </remarks>
+    internal static readonly TimeSpan AdmissionRefusedRetryBaseDelay = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How long after its <paramref name="consecutiveRefusals"/>'th consecutive
+    /// refused admission a consumer becomes eligible for another touch
+    /// (issue #3575).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AdmissionRefusedRetryBaseDelay"/> doubled per consecutive
+    /// refusal and stretched by up to half again, never more than
+    /// <see cref="ReactivationRetryCooldown"/>. The stretch is jitter: refusals
+    /// are correlated by construction, since every touch refused at one moment
+    /// was refused by the same full share, so identical delays would bring them
+    /// back together. The ceiling keeps a consumer that is refused on every
+    /// attempt at one touch per cooldown - the spacing of a charged touch, never
+    /// closer - so a silo whose gate stays full is not touched more often than
+    /// the sweep already touched it.
+    /// </remarks>
+    /// <param name="consecutiveRefusals">Consecutive refused admissions, at least one.</param>
+    /// <param name="jitter">A sample in <c>[0, 1)</c> that picks the stretch.</param>
+    internal static TimeSpan AdmissionRefusedRetryDelay(int consecutiveRefusals, double jitter)
+    {
+        var doublings = Math.Clamp(consecutiveRefusals - 1, 0, 16);
+        var nominal = Math.Min(
+            ReactivationRetryCooldown.Ticks,
+            AdmissionRefusedRetryBaseDelay.Ticks * (1L << doublings));
+        var stretched = nominal + (long)(nominal * 0.5 * Math.Clamp(jitter, 0.0, 1.0));
+        return TimeSpan.FromTicks(Math.Min(ReactivationRetryCooldown.Ticks, stretched));
+    }
 
     /// <summary>
     /// Every declared terminal outcome, cached once.
@@ -3833,7 +3943,19 @@ internal sealed class LatticeWalGcScheduler(
                 continue;
             }
 
-            if (budget.LastAttempt is { } lastAttempt
+            // A consumer whose latest touch was refused admission waits out its
+            // own short, escalating delay instead of the cooldown (issue #3575):
+            // that touch never reached the drive, so the cooldown's premise - a
+            // touch that ran and did not heal will not heal if repeated at once -
+            // does not apply to it.
+            if (budget.AdmissionRetryAt is { } admissionRetryAt)
+            {
+                if (now < admissionRetryAt)
+                {
+                    continue;
+                }
+            }
+            else if (budget.LastAttempt is { } lastAttempt
                 && now - lastAttempt < ReactivationRetryCooldown)
             {
                 continue;
@@ -3857,6 +3979,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 Attempts = budget.Attempts + 1,
                 LastAttempt = now,
+                AdmissionRetryAt = null,
             };
 
             RecordBlockedLeafReactivation(
@@ -3930,14 +4053,34 @@ internal sealed class LatticeWalGcScheduler(
                 current = current with { OffsetAdvanceOwed = outcomes[i].OffsetAdvanceOwed };
             }
 
-            if (IsRefundableReactivationOutcome(outcomes[i].Outcome)
-                && current.Refunds < MaxReactivationRefunds)
+            if (IsUnchargedReactivationOutcome(outcomes[i].Outcome))
             {
+                // Taken back in full and outside the refund cap (issue #3575):
+                // the drive was refused admission before it started, so the
+                // touch tested nothing about the leaf. The consumer is due again
+                // after a short delay that escalates while refusals continue,
+                // rather than after the cooldown a touch that ran has to serve.
+                var refusals = current.AdmissionRefusals + 1;
                 current = current with
                 {
                     Attempts = current.Attempts - 1,
-                    Refunds = current.Refunds + 1,
+                    AdmissionRefusals = refusals,
+                    AdmissionRetryAt = now + AdmissionRefusedRetryDelay(refusals, Random.Shared.NextDouble()),
                 };
+            }
+            else
+            {
+                current = current with { AdmissionRefusals = 0 };
+
+                if (IsRefundableReactivationOutcome(outcomes[i].Outcome)
+                    && current.Refunds < MaxReactivationRefunds)
+                {
+                    current = current with
+                    {
+                        Attempts = current.Attempts - 1,
+                        Refunds = current.Refunds + 1,
+                    };
+                }
             }
 
             // Latch a terminal verdict on the budget, where the touch loop reads
@@ -4736,6 +4879,27 @@ internal sealed class LatticeWalGcScheduler(
                 ReactivationTerminal.LatchedStale,
                 leafGrainId);
         }
+        catch (Exception ex) when (BPlusTree.Grains.ShardActivationRetry.IsRetryableSaturation(ex))
+        {
+            // The leaf's silo refused the drive admission to its WAL replay
+            // gate before replaying anything (issue #3575): the gate's
+            // non-queueing GC share was full, or the leaf's activation was
+            // refused a place in the permit queue. That is back-pressure, not a
+            // fault, and it says nothing about the leaf, so it must not reach
+            // the Faulted arm below. There it was logged with a stack on every
+            // refusal, spent the budget, and ended in a give-up that blamed the
+            // leaf's snapshot capture, which never ran. Logged without the
+            // exception, at Debug, because it is expected under load and is
+            // counted on its own arm.
+            logger.LogDebug(
+                "WAL GC could not drive leaf {Leaf} on tree {Tree} for blocking pin {Consumer}: the drive was refused admission to the WAL replay gate before anything was replayed ({Refusal}). The touch is not charged against the consumer's attempt budget, and the consumer is retried after a short delay.",
+                leafGrainId,
+                treeId,
+                blockingConsumerId,
+                DescribeSaturation(ex));
+
+            return new ReactivationTouchResult(ReactivationOutcome.AdmissionRefused, requireOffsetAdvance);
+        }
         catch (Exception ex)
         {
             logger.LogWarning(
@@ -4757,7 +4921,8 @@ internal sealed class LatticeWalGcScheduler(
     /// <param name="OffsetAdvanceOwed">
     /// Whether the touch was graded on the offset axis and failed to move the
     /// consumer's own durable pin offset. Always false for a caller that did not
-    /// ask for that grading, and true on a faulted or undelivered touch that did
+    /// ask for that grading, and true on a faulted, undelivered or
+    /// admission-refused touch that did
     /// - the advance was not observed, and not observing it is treated as it not
     /// having happened.
     /// </param>
@@ -4778,6 +4943,25 @@ internal sealed class LatticeWalGcScheduler(
         bool OffsetAdvanceOwed,
         ReactivationTerminal Terminal = ReactivationTerminal.None,
         GrainId Leaf = default);
+
+    /// <summary>
+    /// The message of the outermost <see cref="LatticeSaturatedException"/> in
+    /// <paramref name="refusal"/>'s inner chain, which is the one that says what
+    /// was refused, or the exception's own message when the chain has none.
+    /// </summary>
+    /// <param name="refusal">The exception a refused touch failed with.</param>
+    private static string DescribeSaturation(Exception refusal)
+    {
+        for (var e = refusal; e is not null; e = e.InnerException!)
+        {
+            if (e is LatticeSaturatedException saturated)
+            {
+                return saturated.Message;
+            }
+        }
+
+        return refusal.Message;
+    }
 
     /// <summary>
     /// Reads one materialiser consumer's durable pin offset, on the same axis

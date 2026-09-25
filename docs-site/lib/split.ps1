@@ -20,9 +20,12 @@ function Measure-LineRange([string[]]$Lines, [int]$Start, [int]$End) {
 
 # A description short enough for a list: a sentence that enumerates (" - a, b,
 # c, d") is cut before its list, anything else at a word boundary, never on a
-# dangling "and" or "of".
+# dangling "and" or "of". A sentence that has to be cut loses its links first,
+# keeping their text, so a cut never lands inside one.
 function Get-ShortDescription([string]$Sentence, [int]$Max = 240) {
     if (-not $Sentence -or $Sentence.Length -le $Max) { return $Sentence }
+    $Sentence = ConvertTo-LinkText $Sentence
+    if ($Sentence.Length -le $Max) { return $Sentence }
     $dash = $Sentence.IndexOf(' - ')
     if ($dash -gt 20 -and $dash -lt $Max -and ([regex]::Matches($Sentence.Substring($dash), ', ')).Count -ge 3) {
         return $Sentence.Substring(0, $dash).TrimEnd(' ', ',', ';', ':') + '.'
@@ -68,7 +71,8 @@ $null when the page has no level-2 heading, and otherwise:
   Title     the page's title, as plain text
   Pages     every page split out of it, in reading order, each with a Path,
             Title, TocName, Heading, Description, Parent (the page it belongs
-            under), Start and End (its lines in the staged body) and Children
+            under), Start and End (its lines in the staged body), Children,
+            and, for a run of level-3 subsections, the Headings it holds
   Children  the pages listed on the index, each with its own Children
   Anchors   every old heading id -> @{ Path; Id; IsTop }, for rewriting links
 
@@ -77,6 +81,9 @@ consecutive runs that each fit the budget, under a page for the section itself.
 A section smaller than -InlineBelow stays on the index, listed in its contents
 with the rest, so a page's short overview sections are not scattered across
 pages of a few lines each.
+
+A section's description in the contents is its first sentence; -Describe, given
+(heading, lines, first line, end line), writes it instead.
 
 Links written into the new pages are relative to the ORIGINAL page's directory,
 like the content moved with them, and are rebased together at the end.
@@ -88,6 +95,7 @@ function Split-LargePage {
         [int]$SectionBudget = 60000,
         [string]$Directory,
         [scriptblock]$Title,
+        [scriptblock]$Describe,
         [int]$InlineBelow = 0,
         [string[]]$Keep = @(),
         [string[]]$Drop = @(),
@@ -140,9 +148,10 @@ function Split-LargePage {
         if ($Drop -contains $plain) { continue }
         if ($Keep -contains $plain) { $kept.Add(@{ Start = $start; End = $end }); continue }
         $size = Measure-LineRange $lines $start $end
+        $description = if ($Describe) { & $Describe $plain $lines ($start + 1) $end } else { Get-RangeDescription $lines ($start + 1) $end }
         if ($size -lt $InlineBelow) {
             $kept.Add(@{ Start = $start; End = $end })
-            $contents.Add([pscustomobject]@{ Heading = $heading.Text; Link = "#$($heading.Id)"; Description = (Get-RangeDescription $lines ($start + 1) $end); Children = @() })
+            $contents.Add([pscustomobject]@{ Heading = $heading.Text; Link = "#$($heading.Id)"; Description = $description; Children = @() })
             continue
         }
 
@@ -154,12 +163,13 @@ function Split-LargePage {
             Title       = $name
             TocName     = $name
             Heading     = if ($Title) { $name } else { $heading.Text }
-            Description = Get-RangeDescription $lines ($start + 1) $end
+            Description = $description
             Parent      = $Page
             Start       = $start
             End         = $end
             Children    = New-Object System.Collections.Generic.List[object]
             Chunk       = $false
+            Headings    = @()
         }
         $planned.Add($section)
         $contents.Add([pscustomobject]@{ Heading = $section.Heading; Link = (& $from $section.Path); Description = $section.Description; Children = $section.Children })
@@ -202,6 +212,9 @@ function Split-LargePage {
                 End         = $run[$run.Count - 1].End
                 Children    = New-Object System.Collections.Generic.List[object]
                 Chunk       = $true
+                # What the run holds, in its own order: a title can only name
+                # the run's first and last subsections.
+                Headings    = @($run | ForEach-Object { ConvertTo-LinkText $_.Heading.Text })
             }
             $section.Children.Add($chunk)
             $planned.Add($chunk)
