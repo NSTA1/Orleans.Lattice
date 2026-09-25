@@ -2438,6 +2438,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetNextSiblingAsync(GrainId? siblingId)
     {
+        _warmCacheTopologyChanged = true;
         // U9p step c2-iv-redux: serialise every public PersistAsync
         // site through the per-activation _splitGate. With
         // SetAsync / SetManyAsync / DeleteAsync marked
@@ -2466,6 +2467,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetPrevSiblingAsync(GrainId? siblingId)
     {
+        _warmCacheTopologyChanged = true;
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
@@ -2481,6 +2483,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetTreeIdAsync(string treeId)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         // See SetNextSiblingAsync above for the gate rationale.
@@ -2551,6 +2554,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetShardIndexAsync(int shardIndex)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         // See SetNextSiblingAsync above for the gate rationale.
@@ -2592,6 +2596,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         // See SetNextSiblingAsync above for the gate rationale.
@@ -2673,6 +2678,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
     {
+        _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
         // Batched birth-time seeding for a freshly created split sibling.
