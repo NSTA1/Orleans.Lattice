@@ -97,6 +97,50 @@ public class LatticeSnapshotProviderUnitTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
+    private static async Task<List<string>> ExportAndCaptureRegistryKeysAsync(IOptionsMonitor<LatticeOptions>? latticeOptions)
+    {
+        var (_, factory, cursors, _, _) = Create();
+        var requested = new List<string>();
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ITxRegistryGrain>(Arg.Any<string>())
+            .Returns(ci =>
+            {
+                requested.Add((string)ci[0]);
+                return Substitute.For<Orleans.Lattice.BPlusTree.ITxRegistryGrain>();
+            });
+        cursors.GetCausalStableAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<VersionVector?>(new VersionVector()));
+
+        var provider = new LatticeSnapshotProvider(factory, cursors, TestOptions(), latticeOptions);
+        var snapshot = await provider.ExportAsync(Tree, HybridLogicalClock.Zero);
+        await foreach (var _ in snapshot.Entries)
+        {
+        }
+
+        return requested;
+    }
+
+    [Test]
+    public async Task Entries_freeze_the_saga_decision_view_across_every_configured_registry_shard()
+    {
+        var latticeOptions = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        latticeOptions.Get(Arg.Any<string>()).Returns(new LatticeOptions { TxRegistryShardCount = 3 });
+        latticeOptions.CurrentValue.Returns(new LatticeOptions { TxRegistryShardCount = 3 });
+
+        var requested = await ExportAndCaptureRegistryKeysAsync(latticeOptions);
+
+        Assert.That(requested.Distinct().OrderBy(k => k, StringComparer.Ordinal),
+            Is.EqualTo(new[] { Tree, $"{Tree}~s0", $"{Tree}~s1", $"{Tree}~s2" }),
+            "The export must union the decision view of every shard plus the legacy registry, and nothing beyond the configured count.");
+    }
+
+    [Test]
+    public async Task Entries_assume_the_default_registry_shard_count_without_lattice_options()
+    {
+        var requested = await ExportAndCaptureRegistryKeysAsync(latticeOptions: null);
+
+        Assert.That(requested.Distinct().Count(), Is.EqualTo(LatticeOptions.DefaultTxRegistryShardCount + 1));
+    }
+
     [Test]
     public void Constructor_throws_when_grain_factory_is_null()
     {

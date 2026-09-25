@@ -152,7 +152,7 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 | Soft delete / purge | `TreeDeletionGrain` | `{treeId}` | `TreeDeletionState` - deletion timestamp, retention, purge progress | Yes |
 | Tombstone compaction | `TombstoneCompactionGrain` | `{treeId}` | `TombstoneCompactionState` - per-shard compaction cursor | Yes |
 | Atomic write saga | `AtomicWriteGrain` | `{treeId}/{operationId}` | `AtomicWriteState` - phase (Prepare/Execute/Compensate/Completed), entries, retention | Yes (keepalive + retention) |
-| Per-tree tx registry | `TxRegistryGrain` | `{treeId}` | `TxRegistryState` - per-transaction commit/abort decisions with bounded retention window | No |
+| Per-tree tx registry (sharded) | `TxRegistryGrain` | `{treeId}~s{n}` (`{treeId}` for the legacy, pre-sharding registry) | `TxRegistryState` - per-transaction commit/abort decisions with bounded retention window | No |
 
 ### Durability and transport grains
 

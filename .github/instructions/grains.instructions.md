@@ -40,6 +40,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TreeSnapshotGrain` | `{sourceTreeId}` | `"my-tree"` |
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
+| `TxRegistryGrain` | `{treeId}~s{n}` via `TxRegistryRouting.ShardKey` (sharded), or `{treeId}` for the legacy registry that version-4 txids route to | `"my-tree~s3"` |
 | `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1"` |
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
 | `WalMaterialiserPinGrain` | `{treeId}` (single shard) or `{treeId}~s{shard}` via `ShardKey` | `"my-tree~s3"` |

@@ -190,7 +190,19 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<Guid, HashSet<string>>? _backstoppedTerminals;
 
-    private ITxRegistryGrain? registry;
+    /// <summary>
+    /// Cached saga decision registry shard count (issue #3501), resolved once per
+    /// activation from the activation services. Zero means not yet resolved.
+    /// Every per-txid registry call routes by the shard stamped into the txid,
+    /// so a pre-sharding (version-4) txid keeps resolving against the legacy
+    /// bare-tree-id registry.
+    /// </summary>
+    private int _txRegistryShardCount;
+
+    private int TxRegistryShardCount =>
+        _txRegistryShardCount != 0
+            ? _txRegistryShardCount
+            : _txRegistryShardCount = TxRegistryRouting.ResolveShardCountFromServices(context.ActivationServices);
 
     /// <summary>
     /// Records a prepared-phase per-key mutation in the pending-tx map.
@@ -916,8 +928,9 @@ internal sealed partial class BPlusLeafGrain
 
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-        return await registry.GetStatusAsync(txid);
+        return await TxRegistryRouting
+            .GetRegistry(grainFactory, treeId, txid, TxRegistryShardCount)
+            .GetStatusAsync(txid);
     }
 
     /// <summary>
@@ -1091,8 +1104,9 @@ internal sealed partial class BPlusLeafGrain
         TxStatus recorded;
         try
         {
-            registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-            recorded = await registry.GetRecordedStatusAsync(txid);
+            recorded = await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid, TxRegistryShardCount)
+                .GetRecordedStatusAsync(txid);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1216,8 +1230,8 @@ internal sealed partial class BPlusLeafGrain
             return (hidden, pendingKeys);
         }
 
-        registry ??= grainFactory.GetGrain<ITxRegistryGrain>(treeId);
-        var outcomes = await registry.GetStatusManyAsync(txids);
+        var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
+            grainFactory, treeId, TxRegistryShardCount, txids);
         return (outcomes, pendingKeys);
     }
 

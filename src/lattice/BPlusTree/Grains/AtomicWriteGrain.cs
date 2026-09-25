@@ -567,7 +567,7 @@ internal sealed class AtomicWriteGrain(
             var txid = state.State.TransactionId;
             if (txid != Guid.Empty)
             {
-                var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+                var registry = RegistryFor(state.State.TreeId, txid);
                 await registry.RegisterExternalDecisionAuthorityAsync(txid, coordinatorKey);
             }
 
@@ -738,7 +738,11 @@ internal sealed class AtomicWriteGrain(
         state.State.KeyFingerprint ??= ComputeKeyFingerprint(entries);
         if (state.State.TransactionId == Guid.Empty)
         {
-            state.State.TransactionId = Guid.NewGuid();
+            // Adopt the id admission was granted under, so the saga registers
+            // with the shard that admitted it (issue #3501).
+            state.State.TransactionId = admittedTransactionId != Guid.Empty
+                ? admittedTransactionId
+                : TxRegistryRouting.MintTransactionId(TxRegistryRouting.ResolveShardCount(optionsMonitor));
         }
 
         // Capture caller's ambient author-delta carry once, on the first
@@ -975,7 +979,7 @@ internal sealed class AtomicWriteGrain(
         {
             try
             {
-                var registry = grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+                var registry = RegistryFor(treeId, state.State.TransactionId);
                 await registry.RegisterParticipantsAsync(state.State.TransactionId, touchedSorted);
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG saga-prepare-bulk-register-exit] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count}");
@@ -1002,8 +1006,53 @@ internal sealed class AtomicWriteGrain(
     /// fresh-saga path, before any state is mutated or persisted, so a replay
     /// of an already-admitted saga is never refused.
     /// </summary>
-    private Task EnsureTxRegistryAdmissionAsync(string treeId) =>
-        grainFactory.GetGrain<ITxRegistryGrain>(treeId).EnsureSagaAdmissionAsync();
+    /// <remarks>
+    /// The registry is sharded per tree (issue #3501) and the shard is carried in
+    /// the transaction id, so admission first mints the saga's id and asks the
+    /// shard that id routes to. The minted id is held in the transient
+    /// <see cref="admittedTransactionId"/> rather than in persisted state, so a
+    /// failed Prepare persist still reverts <c>TransactionId</c> exactly;
+    /// <see cref="PrepareAsync"/> adopts it. A refusal clears it so a retry of
+    /// the same saga draws a fresh shard rather than re-knocking on a saturated
+    /// one.
+    /// </remarks>
+    private async Task EnsureTxRegistryAdmissionAsync(string treeId)
+    {
+        if (state.State.TransactionId != Guid.Empty)
+        {
+            await RegistryFor(treeId, state.State.TransactionId).EnsureSagaAdmissionAsync();
+            return;
+        }
+
+        if (admittedTransactionId == Guid.Empty)
+        {
+            admittedTransactionId = TxRegistryRouting.MintTransactionId(TxRegistryRouting.ResolveShardCount(optionsMonitor));
+        }
+
+        try
+        {
+            await RegistryFor(treeId, admittedTransactionId).EnsureSagaAdmissionAsync();
+        }
+        catch
+        {
+            admittedTransactionId = Guid.Empty;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Transaction id minted by <see cref="EnsureTxRegistryAdmissionAsync"/> and
+    /// not yet persisted. Transient by design: a deactivation before Prepare
+    /// persists simply re-runs admission for a fresh id.
+    /// </summary>
+    private Guid admittedTransactionId;
+
+    /// <summary>
+    /// Returns the registry shard owning <paramref name="txid"/> on
+    /// <paramref name="treeId"/> (see <see cref="TxRegistryRouting"/>).
+    /// </summary>
+    private ITxRegistryGrain RegistryFor(string treeId, Guid txid) =>
+        TxRegistryRouting.GetRegistry(grainFactory, treeId, txid, TxRegistryRouting.ResolveShardCount(optionsMonitor));
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
@@ -1374,7 +1423,7 @@ internal sealed class AtomicWriteGrain(
         ITxRegistryGrain? registry = null;
         if (transactionId != Guid.Empty)
         {
-            registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+            registry = RegistryFor(state.State.TreeId, transactionId);
         }
 
         if (state.State.TouchedShards.Count == 0)
@@ -2320,7 +2369,7 @@ internal sealed class AtomicWriteGrain(
     {
         var txid = state.State.TransactionId;
         if (txid == Guid.Empty) return Task.CompletedTask;
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+        var registry = RegistryFor(state.State.TreeId, txid);
         return committed
             ? registry.MarkCommittedAsync(txid)
             : registry.MarkAbortedAsync(txid);
@@ -2986,7 +3035,7 @@ internal sealed class AtomicWriteGrain(
             var txid = state.State.TransactionId;
             if (txid != Guid.Empty)
             {
-                var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+                var registry = RegistryFor(state.State.TreeId, txid);
                 await registry.ForgetAsync(txid);
             }
         }
@@ -3072,7 +3121,7 @@ internal sealed class AtomicWriteGrain(
     {
         if (state.State.TransactionId == Guid.Empty)
         {
-            state.State.TransactionId = Guid.NewGuid();
+            state.State.TransactionId = TxRegistryRouting.MintTransactionId(TxRegistryRouting.ResolveShardCount(optionsMonitor));
         }
         LatticeTransactionContext.Set(state.State.TransactionId);
     }

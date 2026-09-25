@@ -53,7 +53,7 @@ public class LatticeCursorGrainResilienceTests
                 .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
         }
 
-        var opts = new LatticeOptions();
+        var opts = new LatticeOptions { TxRegistryShardCount = 1 };
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);

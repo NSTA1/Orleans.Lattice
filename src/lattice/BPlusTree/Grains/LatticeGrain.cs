@@ -146,6 +146,26 @@ internal sealed partial class LatticeGrain(
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
 
+    // Per-silo registry read coalescer (issue #3501). Resolved lazily so a
+    // directly-constructed grain in a unit test, with no registration, falls
+    // back to an uncoalesced fan-out.
+    private TxRegistryReadCoalescer? _registryReadCoalescer;
+    private bool _registryReadCoalescerResolved;
+
+    private TxRegistryReadCoalescer? RegistryReadCoalescer
+    {
+        get
+        {
+            if (!_registryReadCoalescerResolved)
+            {
+                _registryReadCoalescer = services.GetService(typeof(TxRegistryReadCoalescer)) as TxRegistryReadCoalescer;
+                _registryReadCoalescerResolved = true;
+            }
+
+            return _registryReadCoalescer;
+        }
+    }
+
     // Lazily-resolved, activation-cached replication merge-mode resolver used
     // by the single-shape-per-replicated-tree write guards. The default core
     // registration returns null for every tree, so single-cluster hosts pay a
@@ -4706,7 +4726,6 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private async ValueTask<RegistrySnapshotPair> FetchRegistrySnapshotAsync()
     {
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         try
         {
             // Single atomic RPC returns both the dict and the revision
@@ -4719,7 +4738,17 @@ internal sealed partial class LatticeGrain(
             // produce a snapshot reflecting revision N alongside a
             // probe reading N+1 - a "false stable" hazard the
             // post-fan-out probe cannot detect.
-            var pair = await registry.SnapshotWithRevisionAsync();
+            //
+            // With the registry sharded (issue #3501) the pair is the union of
+            // every shard's self-consistent pair and the sum of their revisions;
+            // concurrent reads on this silo share one round through the
+            // coalescer (a pre-fan-out snapshot may be shared freely, see
+            // TxRegistryReadCoalescer).
+            var coalescer = RegistryReadCoalescer;
+            var pair = coalescer is not null
+                ? await coalescer.GetSnapshotAsync(TreeId)
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(
+                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
             return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
         catch
@@ -4751,11 +4780,17 @@ internal sealed partial class LatticeGrain(
         Dictionary<Guid, TxStatus>? snap1,
         long snap1Revision)
     {
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        // Both the probe and the disambiguating snapshot must be issued after
+        // this reader's fan-out completed; the coalescer's fresh-round rule
+        // guarantees that while still sharing the round with concurrent readers.
+        var coalescer = RegistryReadCoalescer;
         long revision2;
         try
         {
-            revision2 = await registry.GetDecisionsRevisionAsync();
+            revision2 = coalescer is not null
+                ? await coalescer.GetRevisionAsync(TreeId)
+                : await TxRegistryFanOut.GetDecisionsRevisionAsync(
+                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
         }
         catch
         {
@@ -4780,7 +4815,10 @@ internal sealed partial class LatticeGrain(
         Dictionary<Guid, TxStatus>? snap2;
         try
         {
-            var snap2Pair = await registry.SnapshotWithRevisionAsync();
+            var snap2Pair = coalescer is not null
+                ? await coalescer.GetFreshSnapshotAsync(TreeId)
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(
+                    grainFactory, TreeId, TxRegistryRouting.ResolveShardCount(optionsMonitor));
             snap2 = snap2Pair.Decisions;
         }
         catch

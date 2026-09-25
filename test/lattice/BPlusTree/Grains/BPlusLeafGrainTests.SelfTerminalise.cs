@@ -88,7 +88,9 @@ public partial class BPlusLeafGrainTests
         Guid txId,
         ITxRegistryGrain registry,
         out ILeafReplayCoordinatorGrain coordinator,
-        long persistedCheckpoint)
+        long persistedCheckpoint,
+        int? registryShardCount = null,
+        string? registryKey = null)
     {
         var entries = new[]
         {
@@ -109,7 +111,9 @@ public partial class BPlusLeafGrainTests
             // the ceiling. This is the configuration under which the defect
             // reproduces.
             maxDurableUnresolvedReplayWork: 0,
-            registry: registry);
+            registry: registry,
+            registryShardCount: registryShardCount,
+            registryKey: registryKey);
 
         return (grain, state);
     }

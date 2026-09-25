@@ -876,7 +876,7 @@ internal sealed class TreeShardSplitGrain(
         if (leafId is null) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{targetShardIndex}");
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(physicalTreeId);
+        var registryShardCount = TxRegistryRouting.ResolveShardCount(optionsMonitor);
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         long replayed = 0;
 
@@ -942,7 +942,9 @@ internal sealed class TreeShardSplitGrain(
                     // backstop path handles WAL durability and HLC
                     // stamping. Aborted sagas drop the entry without
                     // surfacing.
-                    var preStatus = await registry.GetStatusAsync(snapshot.TransactionId);
+                    var preStatus = await TxRegistryRouting
+                        .GetRegistry(grainFactory, physicalTreeId, snapshot.TransactionId, registryShardCount)
+                        .GetStatusAsync(snapshot.TransactionId);
                     if (preStatus == TxStatus.Committed)
                     {
                         Dictionary<string, byte[]>? committedValues = null;
@@ -1025,7 +1027,8 @@ internal sealed class TreeShardSplitGrain(
             if (perTxSnapshots is { Count: > 0 })
             {
                 var txids = new List<Guid>(perTxSnapshots.Keys);
-                var statuses = await registry.GetStatusManyAsync(txids);
+                var statuses = await TxRegistryFanOut.GetStatusManyAsync(
+                    grainFactory, physicalTreeId, registryShardCount, txids);
                 foreach (var (txid, status) in statuses)
                 {
                     // Only a DECIDED status authorises acting. Anything else -
