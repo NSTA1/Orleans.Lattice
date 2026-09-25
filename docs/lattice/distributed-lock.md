@@ -161,8 +161,9 @@ driven two ways:
 Choose a lease duration longer than the work you do under the lock, and renew
 periodically for work that outlives a single lease. A non-positive
 `LeaseDuration` defaults to
-[`LatticeOptions.DefaultLockLeaseDuration`](configuration.md); every requested
-duration is capped at `LatticeOptions.MaxLockLeaseDuration`.
+[`LatticeOptions.DefaultLockLeaseDuration`](configuration.md) (30 seconds by
+default); every requested or renewed duration is silently capped at
+`LatticeOptions.MaxLockLeaseDuration` (5 minutes by default).
 
 ## Handling timeout and observing status
 
@@ -200,8 +201,11 @@ signal, not a coordination primitive.
 ## Durability and crash-safety
 
 The fencing counter, the current holder token, and the lease expiry are persisted
-after every transition, so a reactivation resumes a consistent view and the
-fencing sequence never rewinds. The in-memory FIFO waiter queue is deliberately
+on every grant, renew, and release. The one transition that is not written is
+reclaiming an expired lease while no waiter is queued: the persisted row still
+records the expired lease, so a reactivation simply reclaims it again. Either way a
+reactivation resumes a consistent view and the fencing sequence never rewinds. The
+in-memory FIFO waiter queue is deliberately
 transient: a queued acquirer's task cannot cross a process boundary, so on
 deactivation the parked callers observe a clean cancellation (or their own
 wait-timeout) and retry, rather than being granted a lease no live process holds.
@@ -227,8 +231,9 @@ The lock's fencing and admission decisions are extracted into a pure,
 deterministic core (`LockAdmissionCore`) that both the production grain and a
 Coyote concurrency model execute, so its safety properties - monotonic fencing,
 stale-token rejection, mutual exclusion, and expired-lease reclamation - are
-machine-checked against every adversarial interleaving, not just asserted by
-integration tests. See [Verified Distributed Lock](verified-lock.md).
+machine-checked on every explored order of the stale-holder race (the reclaim and
+re-grant, the superseded holder's stale release, and its stale renew), not just
+asserted by integration tests. See [Verified Distributed Lock](verified-lock.md).
 
 ## Related
 

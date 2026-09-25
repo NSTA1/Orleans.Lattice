@@ -21,18 +21,18 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 
 | Capability | How it shows up |
 |---|---|
-| **Ordered fact log per entity** | Every domain event (`ProcessStepCompleted`, `InspectionRecorded`, `NonConformanceRaised`, `MRBDisposition`, `ReworkCompleted`, `FinalAcceptance`) is an immutable key in the `mfg-facts` tree, keyed `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` so a forward range scan yields HLC-ascending history. |
+| **Ordered fact log per entity** | Every domain event (`ProcessStepCompleted`, `InspectionRecorded`, `NonConformanceRaised`, `MrbDisposition`, `ReworkCompleted`, `FinalAcceptance`) is an immutable key in the `mfg-facts` tree, keyed `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` so a forward range scan yields HLC-ascending history. |
 | **HLC-ordered fold → convergent state** | `ComplianceFold.Fold` sorts facts by `(WallClockTicks, Counter, FactId)` before applying them, so concurrent producers across sites converge on the same `ComplianceState`. Contrasted live in the UI against a naïve arrival-order baseline running over the same fact stream. |
 | **Divergence visible under chaos** | Two backends (`baseline`, `lattice`) receive the same facts via a fan-out router. Chaos-induced reorder causes the arrival-order baseline to drift; the HLC-ordered lattice fold does not. Divergent rows surface in the dashboard organically - no scripted saga. |
 | **Folded materialised view + read-time join** | The dashboard summary is not a sample-owned read model. A library-maintained folded view (`mfg-compliance`, registered via `AddLatticeViews`/`AddFoldedView`) folds each part's `mfg-facts` in business-HLC order into an accumulator carrying the lattice compliance state, latest process stage, and fact count. The snapshot scans that view and joins each part's arrival-order `BaselineState` from the baseline backend at read time - the divergence between the two independently-maintained halves cannot be reproduced by any fold over `mfg-facts`, so it is joined per part rather than materialised. The library keeps the folded half current directly off the write-ahead log, so no application-side summary tree remains. See [`docs/lattice/materialised-views.md`](../../docs/lattice/materialised-views.md). |
 | **Tag-index secondary view** | `mfg-site-activity` keys facts part-major as `{serial}/{site}` and the built-in `Orleans.Lattice` tag index (opened through the injected `ILatticeTagIndexFactory`, membership tree `tag-mfg-site`) tags each key with its site. `ListAtSiteAsync` answers "parts at site X" via `WithAnyTags(site)` - the site is deliberately *not* a key prefix, so the tag index is the genuine access path. A worked example of the built-in tag index replacing a hand-rolled secondary-index tree. |
-| **Typed CRDT delta shipping** | `mfg-part-labels` is one OR-Set per serial, accessed through `lattice.OrSet(serial)` and replicated cross-cluster as `ReplicationMode.OrSet` - the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. The companion `mfg-part-operator` tree is a per-serial LWW register kept cluster-local - see *Per-tree replication policy* below for the rationale. |
+| **Typed CRDT delta shipping** | `mfg-part-labels` is one OR-Set per serial, accessed through `lattice.OrSet(serial)` and replicated cross-cluster as `LatticeMergeMode.OrSet` - the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. The companion `mfg-part-operator` tree is a per-serial LWW register kept cluster-local - see *Per-tree replication policy* below for the rationale. |
 | **Partition tolerance via shadow prefixes** | During a simulated intra-cluster partition, `PartCrdtStore` writes to a shadow key prefix; `PartitionHealHostedService` promotes shadows back onto the canonical keys on heal. |
 | **Range scans as primitives** | The per-part fact-history fold and the partition-heal sweep are plain half-open range scans over lex-ordered keys - no custom indexing layer. The per-site view instead uses the built-in tag index (see above). |
-| **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the WAL, shipper, applier, and dead-letter handling; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in by `ReplicationMode` (`LwwRegister` for `mfg-facts` and `mfg-site-activity`; `OrFlag` for its `tag-mfg-site` membership tree; `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
+| **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the shipper, applier, and dead-letter handling over the core write-ahead log; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in with a `LatticeMergeMode` on the replicated-tree map (`LwwRegister` for `mfg-facts` and `mfg-site-activity`; `OrFlag` for its `tag-mfg-site` membership tree; `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
 | **Receiver-side applier decoration** | `BaselineReplicationApplier` decorates the package's `IReplicationApplier` singleton; on every cross-cluster apply it mirrors `mfg-facts` writes into the local naive `BaselineFactBackend` and raises `FederationRouter.FactReplicated`, so the side-by-side divergence visualisation and the dashboard activity feed both update without polling. |
-| **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage - restart the host and the system resumes exactly where it left off. The lattice tree write-ahead log persists to the same storage account via `Orleans.Lattice.Storage.AzureTable` (Azurite locally), so tree state survives silo restarts. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
-| **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
+| **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage - restart the host and the system resumes exactly where it left off. The lattice tree write-ahead log persists to the same storage account via `Orleans.Lattice.Storage.AzureTable` (Azurite locally), so tree state survives silo restarts. Replication's per-peer shipping cursors persist to the same storage account. |
+| **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts covering every `ComplianceState` the facts can reach (two `Nominal`, then one each of `FlaggedForReview`, `Rework`, and `Scrap`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
 | **Coordinated multi-cluster restore** | `Orleans.Lattice.Backup` captures the replicated `mfg-facts` tree to a shared external sink that every cluster can read - under `docker compose` a dedicated Azurite blob account (`azurite-backup`) reachable from both clusters. The `CoordinatedRestoreOperator` facade restores it; because `mfg-facts` is a replicated tree, the backup package promotes the restore into an all-or-nothing coordinated saga across the participating clusters. See *Coordinated multi-cluster restore* below. |
 
 ## Per-tree replication policy
@@ -135,9 +135,10 @@ each modelling a distinct real-world failure class:
 
 ## Running
 
-The supported local topology is Docker Compose: two Azurite containers,
-four silos (two per cluster), and a Traefik proxy per cluster - host
-ports `5001` (US) and `5002` (EU).
+The supported local topology is Docker Compose: three Azurite containers
+(one per cluster plus the shared `azurite-backup` account), four silos (two
+per cluster), and a Traefik proxy per cluster - host ports `5001` (US) and
+`5002` (EU).
 
 ```powershell
 ./run.ps1
@@ -150,7 +151,7 @@ shared observability pane:
 |---|---|
 | <http://localhost:5001> | US-cluster Blazor dashboard (sticky-cookie pinned to `silo-us-a` or `silo-us-b`). |
 | <http://localhost:5002> | EU-cluster Blazor dashboard (sticky-cookie pinned to `silo-eu-a` or `silo-eu-b`). |
-| <http://localhost:3000> | Grafana - anonymous Viewer access, or `admin`/`admin` for edit rights. The three Lattice dashboards live under *Dashboards → Orleans.Lattice* (see [Observability](#observability) below). |
+| <http://localhost:3000> | Grafana - anonymous Viewer access, or `admin`/`admin` for edit rights. Every dashboard `Orleans.Lattice.Dashboards` ships lives under *Dashboards -> Orleans.Lattice* (see [Observability](#observability) below). |
 
 See [`architecture.md`](./architecture.md) for the full network and
 port layout and the Tier-5 partition commands.
@@ -163,15 +164,18 @@ giving cross-cluster visibility into both regions:
 | Service | Host port | Purpose |
 |---|---:|---|
 | `prometheus` | - | Scrapes `silo-{us,eu}-{a,b}:8080/metrics` (multi-homed onto both cluster networks). |
-| `grafana` | `3000` | Renders the three dashboards shipped by `Orleans.Lattice.Dashboards`. |
+| `grafana` | `3000` | Renders every dashboard shipped by `Orleans.Lattice.Dashboards`. |
 
 Open <http://localhost:3000> (anonymous Viewer access - admin/admin if
-you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
+you want edit rights). Under *Dashboards -> Orleans.Lattice* you'll find
+every dashboard the package ships (catalogued in
+[`docs/lattice.dashboards/`](../../docs/lattice.dashboards/README.md)); the
+three this sample exercises most are:
 
 - **Orleans.Lattice - Overview** - throughput, leaf-write percentiles,
   cache hit-rate, splits, atomic-write outcomes.
-- **Orleans.Lattice - Commit Path** - WAL-only per-step latency,
-  activation replay duration.
+- **Orleans.Lattice - Commit Path** - WAL-only per-step commit latency,
+  WAL append and writer admission, leaf activation replays.
 - **Orleans.Lattice - Replication** - ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
@@ -205,8 +209,9 @@ so the
 [Orleans.Lattice.Explorer](../../src/lattice.explorer) can browse the running
 cluster's trees, views, metrics, topology, and data with no new host ports. The
 health check probes each silo's `:8080` HTTP port and evicts a stopped silo
-within ~2s, so the explorer transparently fails over to the surviving silo
-instead of flickering. The sticky Blazor `/` router that pins each browser tab's
+within a few seconds (the probe runs every 5s), so the explorer
+transparently fails over to the surviving silo instead of flickering. The
+sticky Blazor `/` router that pins each browser tab's
 SignalR circuit is untouched; the state-API router just has a higher-priority,
 more-specific prefix.
 
@@ -255,21 +260,29 @@ a signed-in one succeeds.
 
 The sample enables a durable **change-history** view (with full-value retention) over
 two CRDT trees on startup and then seeds a multi-revision timeline into them, so the
-Explorer's **History** tab has something non-trivial - and durable - to show out of
-the box (see [`docs/lattice/change-history.md`](../../docs/lattice/change-history.md)):
+Explorer's per-key **History** view has something non-trivial - and durable - to show
+out of the box (see [`docs/lattice/change-history.md`](../../docs/lattice/change-history.md)):
 
 - `mfg-part-operator` (last-writer-wins register) gets a sequence of operator
-  handoffs on one part's key, so the History tab renders successive values plus diffs.
+  handoffs on one part's key, so the History view renders successive values plus diffs.
 - `mfg-part-labels` (process-label OR-Set) gets interleaved label adds and removes on
-  the same part's key, so the History tab renders element-level member changes.
+  the same part's key, so the History view renders element-level member changes.
 
-Both are seeded for part `HPT-BLD-S1-2028-00002`. To see it:
+Both are seeded for part `HPT-BLD-S1-2028-00002`. The History view is not a tab of its
+own: it opens from the **History** button in a selected row's detail panel on the
+**Data** tab. To see it:
 
 1. Start the cluster and explorer: `./run.ps1` then `./run-explorer.ps1`.
-2. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`), select key
-   `HPT-BLD-S1-2028-00002`, and open the **History** tab.
-3. Toggle live-follow, then add or remove a label on that part's detail page in the
-   sample UI and watch the new revision appear at the top of the timeline.
+2. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`) on the
+   **Data** tab, select key `HPT-BLD-S1-2028-00002`, and press **History** in that
+   row's detail panel.
+3. The timeline follows live changes by itself once it has loaded. On that part's
+   detail page in the `us` cluster's sample UI (the cluster `./run-explorer.ps1` opens
+   by default), add a process label (for `mfg-part-labels`) or assign an operator (for
+   `mfg-part-operator`, which is cluster-local) and watch the new revision appear at
+   the top of the timeline; **Newest first** is on by default. A live revision shows
+   its kind, time and origin first and gains its value diff or member changes once
+   the durable view records it.
 
 The durable view is enabled by a small startup activator (`HistoryShowcaseActivator`)
 that sets a value-retaining retention mode and creates a history view on each tree;
@@ -279,22 +292,31 @@ the change-history doc explains the retention modes and the truncation caveats.
 
 ```
 samples/MultiSiteManufacturing/
-├── README.md                         (this document - capabilities)
-├── architecture.md                   (topology, components, grains, trees, replication)
-├── approach.md                       (rationale, semantics, gotchas)
-├── glossary.md                       (domain + technical terms)
-├── run.ps1                           (docker compose wrapper)
-├── src/
-│   ├── MultiSiteManufacturing.Contracts/   (gRPC .proto surface)
-│   └── MultiSiteManufacturing.Host/        (ASP.NET Core + Orleans + Blazor)
-└── test/
-    └── MultiSiteManufacturing.Tests/       (NUnit)
+|-- README.md                         (this document - capabilities)
+|-- architecture.md                   (topology, components, grains, trees, replication)
+|-- approach.md                       (rationale, semantics, gotchas)
+|-- glossary.md                       (domain + technical terms)
+|-- MultiSiteManufacturing.slnx       (Contracts + Host + Tests)
+|-- Dockerfile                        (the one silo image all four silos run)
+|-- docker-compose.yml                (two-cluster topology + Prometheus/Grafana)
+|-- run.ps1                           (docker compose wrapper)
+|-- run-explorer.ps1                  (launches Orleans.Lattice.Explorer at a cluster)
+|-- observability/                    (Prometheus scrape config + Grafana provisioning)
+|-- traefik/                          (per-cluster routing: us.yml, eu.yml)
+|-- src/
+|   |-- MultiSiteManufacturing.Contracts/   (gRPC .proto surface)
+|   `-- MultiSiteManufacturing.Host/        (ASP.NET Core + Orleans + Blazor)
+|-- test/
+|   `-- MultiSiteManufacturing.Tests/       (NUnit)
+`-- tools/
+    `-- SeedParts/                          (dev aid that bulk-inserts synthetic parts; not in the slnx)
 ```
 
 ## Scope
 
 The sample is deliberately narrow: one product family (HPT blade), a
-five-state severity lattice, no authentication, no grpc-web, no
-Kubernetes manifests, no CLI tool. It exists to exercise
-`Orleans.Lattice` under realistic ordering and partition scenarios -
-not to be a production MES.
+five-state severity lattice, no operator sign-in (the only authentication
+is the replication shared secret and the optional state-API credential
+above), no grpc-web, no Kubernetes manifests, no CLI tool. It exists to
+exercise `Orleans.Lattice` under realistic ordering and partition
+scenarios - not to be a production MES.

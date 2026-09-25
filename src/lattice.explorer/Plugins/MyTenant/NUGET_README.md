@@ -19,7 +19,7 @@ control-API contract of its own.
 | Quota | Consumption **against** each ceiling, captioned with the scope the figures were enforced under. |
 | Regions | Residency management against the operator-authorized allowed set, with per-region lifecycle status. |
 | Sharing | This tenant's side of the two-step cross-tenant grant agreement: outbound offers and revocations, and an inbound inbox with approve and reject. |
-| Metrics | A placeholder seam the tenant-metrics issue fills. |
+| Metrics | The tenant's own metrics section: the `IMyTenantMetricsSection` a head registers with `AddExplorerMyTenantMetricsSection<TSection>()` (the Telemetry plugin supplies one through `AddExplorerTelemetryMyTenantSection()`), or a placeholder body when none is registered. |
 
 ## Three things it refuses to flatten
 
@@ -54,5 +54,5 @@ navigation core registers a fail-closed placeholder platform-operator gate with
 `TryAdd`, so a head that calls them the other way round silently loses the real
 one. This plugin detects that and says so rather than degrading in silence.
 
-A head that registers none of it ships no My Tenant area, and a cluster without
+A head that registers none of it ships no My tenant area, and a cluster without
 the tenancy add-on reports the surface unavailable so it renders nothing.

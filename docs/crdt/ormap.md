@@ -12,8 +12,9 @@ the value type's own merge.
 
 `TValue` must implement `ICrdt<TValue>` and have a parameterless constructor;
 use any built-in primitive or your own. Because the wire shape is generic, the
-map's `(TKey, TValue)` pair must be registered on the host once via
-`AddOrMapShape` before the silo starts.
+map's `(TKey, TValue)` pair must be registered on the host via `AddOrMapShape`
+before the silo starts - once for each tree that holds OR-Maps, and every OR-Map
+in that tree shares that one shape.
 
 Use it for: per-user scores, per-shard aggregates, per-item metadata - a keyed
 collection where each entry must converge, not just the key set.
@@ -35,11 +36,13 @@ graph TD
 
 ## Example
 
-First, register the map's shape on the host (once, at startup):
+First, register the map's shape on the host for the tree that will hold it (once,
+at startup):
 
 ```csharp verify
-// One-time host wiring: declare the map's (key, value) shape for this tree.
-siloBuilder.AddOrMapShape<string, PnCounter>("election-2026");
+// One-time host wiring: OR-Maps stored in the "polls" tree map string keys to
+// PN-Counter values.
+siloBuilder.AddOrMapShape<string, PnCounter>("polls");
 ```
 
 If this registration is missing, an OR-Map write to the tree raises
@@ -51,8 +54,10 @@ primitives never need this - they resolve through the global registry fallback.
 Then read and write it through the typed accessor:
 
 ```csharp verify
-// A map of per-candidate vote tallies; each value is itself a PN-Counter.
-var votes = tree.OrMap<string, PnCounter>("election-2026");
+// A map of per-candidate vote tallies, stored under one key of the "polls" tree;
+// each value is itself a PN-Counter.
+var polls = grainFactory.GetGrain<ILattice>("polls");
+var votes = polls.OrMap<string, PnCounter>("election-2026");
 
 // Cluster A records a vote for "alice" by advancing a PN-Counter value.
 var tallyA = new PnCounter();

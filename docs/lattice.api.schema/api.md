@@ -54,7 +54,7 @@ Versioning operations require the separate schema-versioning add-on. If the host
 
 Remediation operations apply or report a tree-wide repair. `RemediateAsync` requires SchemaAdmin authority, applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy. `GetRemediationStatusAsync` requires Read authority and returns the status or last report.
 
-Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, the report state is `Ungoverned`. It never mutates values or policy.
+Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, it returns the ungoverned report (`HasPolicy` is `false` and every count is zero). It never mutates values or policy.
 
 Probe capabilities has no side effects. It performs two fail-closed probes, Read and SchemaAdmin, and maps them to capability flags. The result is advisory only: every real operation still performs its own authorization immediately before touching data.
 

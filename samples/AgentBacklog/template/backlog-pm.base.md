@@ -26,13 +26,12 @@ not claim backlog items, and you do not enqueue your own homework. Your value is
 grounding, explanation, decomposition, and maintenance.
 
 The **data model you operate over is not yours and is not restated here**. It
-lives in [`backlog-protocol.md`](backlog-protocol.md), section
-[`## The agent-operated backlog`](backlog-protocol.md),
+lives in [`backlog-protocol.md`](backlog-protocol.md),
 which is authoritative for the item schema, the attribute tags, the seven-relation
 vocabulary, the ready-set algorithm, the defect conditions, the grouping model,
 branch inheritance, the mirroring split, and entry gating. Read it before you act.
 This file describes **behaviour over that model**. Where the two ever appear to
-disagree, the instructions file wins and you report the discrepancy rather than
+disagree, the protocol wins and you report the discrepancy rather than
 resolving it yourself.
 
 The worker side of the protocol belongs to the `backlog-worker` agent
@@ -216,7 +215,11 @@ flowchart TD
    is rejected rather than ignored), which covers backlog items but is not a
    general property of the store; and a claim is **region-scoped**, so a write from
    a region other than the one the claim was taken in is refused. That is why an
-   item's `homeRegion:` tag is load-bearing rather than informational.
+   item carries a `homeRegion:` tag - but whether the tag is load-bearing or
+   merely informational is a property of the deployment, not of the tag: on a
+   single-region deployment every write is served from the one region and a
+   geographic value is not enforced at all (see the `homeRegion:` row of the
+   protocol's tag table).
 
 8. **Read live claims from the claim surface**, never from the item. Claims, leases
    and fencing tokens deliberately do not live on the item record; a `claims` edge
@@ -606,7 +609,7 @@ Concretely:
    candidate. If the only ready item is live-held, the correct number of workers
    to deploy is **zero**; waiting is not idleness, it is the only safe move.
 
-   This is the one use of `repocontext_claim_status` that principle 8 permits,
+   This is the one use of `repocontext_claim_status` that Phase 0 step 8 permits,
    and it is permitted *because* it can only make you deploy fewer workers. The
    converse never holds: an item that reads as free is not thereby safe to deploy
    onto, because under the lease clamp that is exactly how a live worker's item
@@ -707,6 +710,6 @@ and whenever the human asks for a sweep:
   divergence by picking whichever side is tidier.
 - **Does not push to `main`.** Item work reaches `main` through the epic branch and
   its single gated pull request.
-- **Edits to this agent's own meta file** under `` may be raised
+- **Edits to this agent's own meta file** under `.github/agents/` may be raised
   directly (label `documentation`) when the user explicitly requests it, as they
   are protocol changes rather than backlog work.

@@ -75,11 +75,11 @@ exception. Callers never see `StaleShardRoutingException` or
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `ScanKeysAsync` | **Strongly consistent, strictly ordered, atomic-visible for the lifetime of the enumeration** | Keys are yielded in lexicographic order with no duplicates and no gaps, even when shard splits or rebalances run concurrently. A concurrent `SetManyAtomicAsync` is observed identically across every page: either all of its keys appear or none. Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` if the retry budget is exhausted. Transparently recovers from server-side enumeration aborts up to the wrapper's `maxAttempts` parameter (default 8). |
-| `ScanEntriesAsync` | **Strongly consistent, strictly ordered, atomic-visible for the lifetime of the enumeration** | Same key ordering and atomic-visibility guarantees as `ScanKeysAsync`. Values reflect the authoritative state at the moment each key is yielded. |
-| Durable cursor steps - **live mode** (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent and atomic-visible, cross-step snapshot** | Each step is a strongly consistent scan, atomic-visible tree-wide *within* that step. Across steps, a key updated between two pages is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded. A saga that commits between page *i* and page *i+1* may have its keys split across the two pages - use point-in-time mode (below) for cross-step atomicity. See [Durable Cursors](durable-cursors.md). |
+| `ScanKeysAsync` | **Strongly consistent, strictly ordered, atomic-visible across each uninterrupted enumeration** | Keys are yielded in lexicographic order with no duplicates and no gaps, even when shard splits or rebalances run concurrently. A concurrent `SetManyAtomicAsync` is observed identically across every page: either all of its keys appear or none. Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` if the retry budget is exhausted. Transparently recovers from server-side enumeration aborts up to the wrapper's `maxAttempts` parameter (default 8), but each reconnect reopens the scan under a freshly captured saga-decision view, so a saga that commits between an abort and its reconnect can appear pre-commit for keys yielded before the reconnect and post-commit for keys after it. |
+| `ScanEntriesAsync` | **Strongly consistent, strictly ordered, atomic-visible across each uninterrupted enumeration** | Same key ordering and atomic-visibility guarantees as `ScanKeysAsync`. Values reflect the authoritative state at the moment each key is yielded. |
+| Durable cursor steps - **live mode** (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent (key and entry steps also atomic-visible), cross-step snapshot** | Each key or entry step is a strongly consistent scan, atomic-visible tree-wide *within* that step. A `DeleteRangeStepAsync` step deletes through `DeleteRangeAsync` and so carries its per-key-only visibility. Across steps, a key updated between two pages is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded. A saga that commits between page *i* and page *i+1* may have its keys split across the two pages - use point-in-time mode (below) for cross-step atomicity. See [Durable Cursors](durable-cursors.md). |
 | Durable cursor steps - **point-in-time mode** (opened with `pointInTime: true`) | **Strongly consistent, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reads against the saga-decision view captured at `OpenAsync` time. A `SetManyAtomicAsync` that commits between two pages is observed identically on every page (either all of its keys, or none). A stalled cursor whose pin lifetime is exceeded surfaces `LatticeCursorSnapshotExpiredException` on its next call and must be reopened. Not available for `DeleteRangeStepAsync`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors). |
-| Snapshot cursor steps - **zero-observable-writes mode** (`OpenSnapshotKeyCursorAsync`, `OpenSnapshotEntryCursorAsync`) | **Snapshot-isolated, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reflects the tree state captured at open time. No write committed after open - foreground `SetAsync` / `DeleteAsync`, saga `SetManyAtomicAsync`, `DeleteRangeAsync`, or replication apply - is ever visible to the cursor on any page. The captured `LatticeSnapshotCoordinate` is deterministic across silo failover. Open-time capture cost (the materialised per-shard baseline row count) is bounded by `LatticeOptions.MaxSnapshotReplayEntries`; exceeding the budget throws `LatticeSnapshotReplayBudgetExceededException`. Pages are served from a durable per-cursor frozen baseline captured at open, so a later WAL GC that trims the committed prefix cannot empty or partial-fill the snapshot. Across an adaptive shard split the snapshot pins the `ShardMap` at open and resolves each key's owning shard by virtual slot under that pinned map, so every key is surfaced exactly once at its last-writer-wins value as of the pinned point in time - a donor shard's retained orphan copies of moved keys are not re-surfaced, and post-split writes shadow-forwarded through the donor are still observed. See [Snapshot Cursors](snapshot-cursors.md). |
+| Snapshot cursor steps - **zero-observable-writes mode** (`OpenSnapshotKeyCursorAsync`, `OpenSnapshotEntryCursorAsync`) | **Snapshot-isolated, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reflects the tree state captured at open time. No write committed after open - foreground `SetAsync` / `DeleteAsync`, saga `SetManyAtomicAsync`, `DeleteRangeAsync`, or replication apply - is ever visible to the cursor on any page. The captured `LatticeSnapshotCoordinate` is deterministic across silo failover. Open-time capture cost (the materialised per-shard baseline row count) is bounded by `LatticeOptions.MaxSnapshotReplayEntries`; exceeding the budget throws `LatticeSnapshotReplayBudgetExceededException`. Pages are served from a per-cursor frozen baseline captured at open - held in memory, and persisted durably before the first page that reports more results - so a later WAL GC that trims the committed prefix cannot empty or partial-fill the snapshot. Across an adaptive shard split the snapshot pins the `ShardMap` at open and resolves each key's owning shard by virtual slot under that pinned map, so every key is surfaced exactly once at its last-writer-wins value as of the pinned point in time - a donor shard's retained orphan copies of moved keys are not re-surfaced, and post-split writes shadow-forwarded through the donor are still observed. See [Snapshot Cursors](snapshot-cursors.md). |
 
 ### Retry exhaustion
 
@@ -95,9 +95,12 @@ guidance.
 
 The streaming scan wrappers (`ScanKeysAsync`, `ScanEntriesAsync`)
 additionally recover from mid-scan enumeration aborts (silo failover,
-idle expiry, cold start) up to the wrapper's `maxAttempts` parameter
-(default 8). On reconnect the stream resumes with no duplicates, no
-gaps, and ordering preserved.
+idle expiry, cold start, scale-down, and - in proportion to concurrent load
+rather than to any incident - a page request that reaches a stateless-worker
+activation other than the one holding the enumerator) up to the wrapper's
+`maxAttempts` parameter (default 8). On reconnect the stream resumes with no
+duplicates, no gaps, and ordering preserved, under a freshly captured
+saga-decision view.
 
 ---
 
@@ -106,7 +109,7 @@ gaps, and ordering preserved.
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
 | `BulkLoadAsync` | **Linearizable on an empty tree** | Throws if any shard already has data. After return, all entries are visible under the guarantees above. |
-| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy** | The source tree is locked (reads and writes throw `InvalidOperationException`) for the duration of the copy. The destination is an exact snapshot of the source at the lock instant. |
+| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy** | Every source shard is locked (reads and writes throw `InvalidOperationException`) when the copy starts, and each is unlocked as soon as its own copy completes, so the source becomes available again shard by shard. The destination is an exact snapshot of the source at the lock instant. |
 | `SnapshotAsync(Online)` | **Strongly consistent** | The source tree remains available for linearizable point traffic and strongly-consistent scans throughout. The destination converges to a consistent view of the source at the drain's completion instant regardless of how live writes interleave with the drain. |
 | `ResizeAsync` / `UndoResizeAsync` | **Linearizable (online)** | Point operations and strongly-consistent scans continue throughout. Callers observe at most a single transparent retry at the alias swap. Zero data loss under concurrent load. |
 | `ReshardAsync` | **Linearizable (online)** | Reads and writes remain linearizable across every concurrent shard split. |
@@ -138,10 +141,10 @@ across multiple grain calls:
 |-----------|-------------------|
 | `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's keys are hidden until the saga commits, at which point all of its keys flip atomically. |
 | `GetManyAsync`, `CountAsync`, `CountPerShardAsync` | Tree-wide for the call. |
-| `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for the lifetime of the `IAsyncEnumerable`. |
+| `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for each uninterrupted underlying enumeration; a transparent reconnect after an enumeration abort resumes under a freshly captured saga-decision view. |
 | Durable key/entry cursor (point-in-time mode) | Tree-wide for the lifetime of the cursor. |
 | Snapshot key/entry cursor (zero-observable-writes mode) | Tree-wide for the lifetime of the cursor. Stricter than point-in-time mode: hides every concurrent write, not only sagas. |
-| Durable key/entry/delete-range cursor (live mode) | Tree-wide *within* each step; not preserved across steps. |
+| Durable key/entry cursor (live mode) | Tree-wide *within* each step; not preserved across steps. A delete-range cursor step deletes with the per-key-only visibility of a one-shot `DeleteRangeAsync` (next row). |
 | `DeleteRangeAsync` (one-shot) | Per-key only; a concurrent saga may be observed as committed for some keys and pending for others. Use `SetManyAtomicAsync` to layer atomic deletion semantics on top. |
 
 See [Atomic Writes](atomic-writes.md) for the saga primitive and
@@ -258,7 +261,7 @@ window each one exists to close:
 |---|---|
 | Marking moved-away slots during a shard split | Runs immediately before the source enters Reject phase so no read crosses the Swap boundary observing an unmarked leaf. A partially-marked shard would serve a stale orphan value for a moved key. |
 | Unmarking them during a consolidation | The mirror image: the donor's leaves are unsealed only after it is frozen and drained, so no read crosses the freeze observing an unsealed leaf. |
-| Capturing a snapshot-cursor baseline | The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant. A write landing between two freezes would break the cursor's zero-observable-writes guarantee. |
+| Capturing a snapshot-cursor baseline | A baseline covering only part of the leaf chain is not a baseline, so there is no partial result to bank and resume from. The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant: a write that lands mid-walk precedes that head and is folded into the baseline, and every later write is excluded. The hold is bounded instead by the hard stall ceiling ([`MaxScanPageStallDuration`](configuration.md#maxscanpagestallduration)); abandoning the capture is safe because nothing is observable until the baseline is seeded. |
 | Purging a shard on tree deletion | The tree is already offline, so nothing is waiting on it; the walk is also destructive and cannot be resumed once a leaf's sibling pointer is cleared. |
 
 `DeleteRangeAsync` used to be on this list and is not any more: its per-shard
@@ -273,10 +276,16 @@ time is unavailable to every other caller meanwhile. Each logs a warning naming
 the operation and the number of leaves visited when it exceeds a short internal
 threshold, so a burst of Orleans long-request warnings on a shard can be
 attributed to the walk causing it rather than only to the requests it blocked.
-For the two where the stall is worth removing rather than merely explaining, the
-real fix is a redesign rather than a budget, tracked separately: storing the
-moved-away seal once per shard instead of copying it into every leaf, and
-capturing the snapshot baseline's WAL head before freezing rather than after.
+Three of the four have had their hold shortened rather than removed. Marking and
+unmarking moved-away slots discover the leaf chain sequentially but fan the
+per-leaf writes out with bounded concurrency, so the hold costs roughly the
+chain walk plus the slowest batch rather than the sum of every write. The
+snapshot-baseline capture fans its per-leaf fold pass out
+([`MaxConcurrentSnapshotBaselineFolds`](configuration.md#maxconcurrentsnapshotbaselinefolds))
+and is bounded end to end by the hard stall ceiling. Reading the baseline's WAL
+head before freezing is not a safe way to shorten it further: a leaf whose own
+head had already moved past that point when it froze would bake later writes
+into the baseline, and the folds cannot be rewound.
 
 For a range delete that must be **resumable or crash-safe across a process
 restart**, use `OpenDeleteRangeCursorAsync`; see

@@ -1,6 +1,6 @@
 ---
 name: azure-throughput-rig
-description: Operate the real-Azure azure-throughput benchmark rig in benchmark/azure-throughput/. Use when running throughput experiments against real Azure Storage - provisioning or tearing down the single-silo VM and WAL storage accounts, running a cohort, picking a workload (set-many, atomic, cross-tree, set-point, set-point-mv, get-point, get-many), tuning any BENCH_* configuration knob, or reading the cohort result. Documents every workload option, every BENCH_* env var, and every script parameter.
+description: Operate the real-Azure azure-throughput benchmark rig in benchmark/azure-throughput/. Use when running throughput experiments against real Azure Storage - provisioning or tearing down the single-silo VM and WAL storage accounts or the multi-silo Azure Container Apps rig, running a cohort, picking a workload (set-many, atomic, cross-tree, set-point, set-point-mv, get-point, get-many), tuning any BENCH_* configuration knob, or reading the cohort result. Documents every workload option, every BENCH_* env var, and every script parameter.
 ---
 
 # Operating the azure-throughput rig
@@ -140,6 +140,59 @@ Mandatory positional `-Action`, plus `-NamePrefix` / `-ParametersFile`.
 | `logs` | Tail the silo journal (`journalctl -fu lattice-silo`). |
 | `refresh-ip` | Refresh the cached public IP in `~/.ssh/config`. |
 
+### `deploy-aca.ps1` and `run-cohort-aca.ps1` - Layer 3 (multi-silo, Azure Container Apps)
+
+Layer 3 measures the same workloads against N silos. `deploy-aca.ps1` provisions one
+resource group `rg-<prefix>` - a container registry (images are built remotely with
+`az acr build`, so no local Docker is needed), one storage account for the WAL, the
+Orleans clustering table and grain state, Log Analytics, a Container Apps environment,
+the silo app scaled to exactly N, and the producer as an ACA Job in Orleans-client mode -
+and builds and pushes both images.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-NamePrefix <name>` | (required) | Names and tags every resource. |
+| `-SiloCount <1..30>` | `2` | Silo replicas (exactly; no autoscaling). |
+| `-Location <region>` | `westus3` | Azure region. |
+| `-SiloCpu <1..4>` | `4` | vCPU per silo replica, matching the Layer 2 VM's core count. |
+| `-SiloMemoryGi <1..8>` | `8` | Memory per replica; ACA Consumption caps a replica at 4 vCPU / 8 GiB. |
+| `-ReuseRg` | off | Provision into the resource group an earlier run created. |
+| `-SkipImageBuild` | off | Reuse the images already in the registry. Only valid with `-ReuseRg`. |
+
+`run-cohort-aca.ps1` runs one cohort: it scales the silos to exactly N, waits for
+membership, runs the producer job, harvests the log from Log Analytics, and scales the
+silos back to zero in a `finally`. Its load parameters are **per silo**, so every cell
+offers the same load per silo.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-NamePrefix <name>` | (required) | The rig `deploy-aca.ps1` provisioned. |
+| `-SiloCount <1..30>` | (required) | Silos for this cohort - the independent variable. |
+| `-WorkloadMode <mode>` | `set-many` | Sets `BENCH_WORKLOAD_MODE`. |
+| `-DurationSec <N>` | `45` | Producer run length. |
+| `-VehiclesPerSilo <N>` | `1200` | Per-silo fleet size; the cohort offers `VehiclesPerSilo x SiloCount` keys. |
+| `-TickHz <N>` | `5` | Samples/sec/vehicle. |
+| `-BatchSize <N>` / `-FlushMs <N>` | `4096` / `50` | As `BENCH_BATCH_SIZE` / `BENCH_FLUSH_MS`. |
+| `-FlushConcurrencyPerSilo <N>` | `8` | Multiplied by `SiloCount` into `BENCH_FLUSH_CONCURRENCY`. |
+| `-ShardCount <N>` | `64` | Fixed across the sweep (not per silo), so the fan-out width stays constant. |
+| `-WalPartitions <N>` | `16` | Sets `BENCH_WAL_PARTITIONS`. |
+| `-ClientsPerSilo <N>` | `4` | Sets `BENCH_CLIENT_COUNT` to `min(64, ClientsPerSilo x SiloCount)`. |
+| `-ResponseTimeoutSec <N>` | `420` | Sets `BENCH_RESPONSE_TIMEOUT_SEC` on silos and producer. |
+| `-InFlightTailBudgetSec <N>` | `120` | Sets `BENCH_INFLIGHT_TAIL_BUDGET_SEC`. |
+| `-WalReplayQueueDepth <N>` | `64` | Sets `BENCH_WAL_REPLAY_QUEUE_DEPTH`. |
+| `-WarmUpBudgetSec <N>` | `400` | Sets `BENCH_WARMUP_BUDGET_SEC`. |
+| `-TreeId <id>` | `l3-<mode>-n<N>-<timestamp>` | A fresh tree per cohort; `BENCH_CLUSTER_ID` is derived from it. |
+| `-CohortTag <tag>` | - | Disambiguates the log when the same cell is repeated. |
+| `-WalTable <name>` / `-GrainStateTable <name>` | `OrleansLatticeWal` / `OrleansLatticeGrainState` | Table names. An explicitly supplied name is honoured unchanged. |
+| `-ResetStorage <bool>` | `$true` | Start every cohort against empty storage: delete every table except the clustering table and use freshly-named WAL and grain-state tables (#3458). |
+| `-SetManyFanOutBudgetSec <N>` / `-WalAdmissionCallBudgetSec <N>` | `30` / `15` | Set the two #3348 budgets explicitly; `0` = infinite (the library default). |
+| `-WalAppendCoalescingInFlightThreshold <N>` | `-1` | `-1` leaves the env var unset (library default); `0` is the #3396 control arm. |
+| `-WalBatchedSingleEntryAppends <N>` | `-1` | `-1` leaves it unset (library default, on); `0` / `1` pin the #3408 control / fix arms. |
+| `-WalSaturationRecoveryReleaseBatch <N>` | `-1` | `-1` leaves it unset; `0` is the #3402 release-everything control arm. |
+| `-WalSaturationAcuteOnly <N>` | `-1` | `-1` keeps the rig default (on); `1` / `0` force it on / off. |
+| `-ExtraSiloEnv <string[]>` | `@()` | Extra silo env as `NAME=value` strings, appended last so they win (a string array, not the hashtable `run-cohort.ps1` takes). |
+| `-SettleSec <N>` | `30` | Wait after scaling for cluster membership before the producer starts. |
+
 ---
 
 ## Workload options (`BENCH_WORKLOAD_MODE`)
@@ -186,7 +239,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_STORAGE_URI` | - (required) | `https://{account}.table.core.windows.net` - WAL table endpoint for managed identity. |
 | `BENCH_STORAGE_CONN` | - | Connection-string fallback; overrides `BENCH_STORAGE_URI` when set. |
-| `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. **Set this per cohort (`run-cohort-aca.ps1 -WalTable`) whenever arms are to be compared.** Cohorts sharing one table accumulate each other's rows and produce bursts of 409 `EntityAlreadyExists` failures uncorrelated with anything under test; a distinct table per cohort removes them. Rotating `BENCH_TREE_ID` isolates cohorts logically but does not stop the table growing. |
+| `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. **Use a distinct table per cohort whenever arms are to be compared** (on the VM path pass it through `-ExtraSiloEnv`; on Layer 3, `run-cohort-aca.ps1 -ResetStorage`, on by default, already does). Cohorts sharing one table accumulate each other's rows and produce bursts of 409 `EntityAlreadyExists` failures uncorrelated with anything under test; a distinct table per cohort removes them. Rotating `BENCH_TREE_ID` isolates cohorts logically but does not stop the table growing. |
 | `BENCH_TREE_ID` | rotating `azure-throughput-<utc>` | Tree id. Rotates per silo restart so prior offsets don't bias the run; **pin it to re-use existing rows** (cross-run replay). |
 | `BENCH_TCP_PORT` | 7000 | Silo TCP listen port. |
 
@@ -213,6 +266,8 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. `1` = strict single-in-flight ordering against the provider. |
 | `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` | `LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold` (4) | In-flight flush depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables coalescing and restores the historical unconditional kick - **this is the control arm** when sweeping the threshold. The shipping default was chosen on the fan-out arithmetic (#3396), not measured, so a sweep over `{0, 1, 2, 4, 8}` is the way to pin it. |
 | `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `SetManyAsync` awaits its per-shard fan-out before refusing with `LatticeSaturatedException` (`SetManyFanOut`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): an unbounded fan-out is the #3348 collapse, so the rig opts in to the finite budget. `0` = infinite. |
+| `BENCH_WAL_ADMISSION_CALL_BUDGET_SEC` | `15` | Bounds a call's total WAL-admission saturation back-off (`LatticeOptions.WalAdmissionSaturationCallBudget`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): left infinite, only the per-append wait budget applies and each nested retry layer buys a fresh one (#3348), so the rig opts in to the recommended 3x-per-append value. `0` = infinite. |
+| `BENCH_WAL_REPLAY_QUEUE_DEPTH` | `LatticeOptions.DefaultWalReplayPermitQueueDepthPerPermit` (4) | Replay-admission queue depth per permit. The gate admits depth x permits concurrently replaying activations and the permit count follows the silo's CPU grant, so on a 4-vCPU silo the default refuses a cold warm-up that needs every shard root replaying at once. The bench has no foreground reader for the gate to protect; only Layer 3 raises it (`run-cohort-aca.ps1 -WalReplayQueueDepth`, default 64). |
 | `BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS` | `LatticeOptions.DefaultWalBatchedSingleEntryAppends` (on) | Routes a bulk WAL append carrying exactly **one** entry through the interleaving `AppendBatchAsync` rather than the exclusive-turn `AppendAsync` overload. Under a wide fan-out the per-leaf slice is one entry, so the exclusive turn holds the partition for a whole provider round trip, pinning `wal.append.batch_entries` at 1 and `wal.append.in_flight` at 0 - which also makes `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` unreachable, since reaching it needs the concurrency the exclusive turn removed. `0` is the control arm of the #3408 A/B (historical behaviour), `1` or unset the fix arm. Echoed in the silo banner, so an arm is self-proving against a stale image. |
 | `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts). Clamped to the number actually provisioned (`deploy.ps1 -WalAccountCount`). |
 | `BENCH_WAL_EXTRA_ACCOUNT_URIS` | - (set by `update.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, ...`. Normally you don't set this by hand - `deploy.ps1 -WalAccountCount` + `update.ps1` populate it. |
@@ -249,7 +304,6 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WAL_SATURATION_ACUTE_ONLY` | `1` (matches the library default `LatticeOptions.DefaultWalSaturationAcuteOnly`) | Sets `WalSaturationAcuteOnly` (#3348): an admission semaphore at its cap classifies Throttled instead of Saturated, and a gate-parked append resumes once its partition leaves Saturated. `0` measures the historical classification. `run-cohort-aca.ps1 -WalSaturationAcuteOnly 0|1`. |
 | `BENCH_WAL_SATURATION_RECOVERY_RELEASE_BATCH` | `LatticeOptions.DefaultWalSaturationRecoveryReleaseBatch` (16) | Parked WAL-admission waiters a recovered partition admits per sampler tick. `0` releases the whole parked herd at once (pre-#3402 behaviour) - the control arm for the #3402 comparison. |
 | `BENCH_THROTTLED_LINE_DELAY_MICROS` | library default (1000 = 1 ms) | Per-line delay applied while Throttled, slowing the TCP reader so the producer's socket blocks and the admission gate drains. `0` = no delay. |
-| `BENCH_WAL_APPEND_DISPATCH_TIMEOUT_SEC` | `LatticeOptions.DefaultWalAppendDispatchTimeout` | WAL append dispatch timeout override. |
 
 ### Lifecycle, timeouts, reporting
 
@@ -260,9 +314,28 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_EXPECTED_SILOS` | 0 (off; `run-cohort-aca.ps1` sets the replica count) | Each silo holds its startup warm-up until its cluster manifest lists this many silos. Ungated, warm-up during cluster formation pinned every shard root and WAL partition onto the first silos to join (#3348). |
 | `BENCH_WARMUP_GATE_TIMEOUT_SEC` | 300 | Bound on the `BENCH_EXPECTED_SILOS` wait; the silo fails loudly rather than warming a partial cluster. |
 | `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
+| `BENCH_WARMUP_BUDGET_SEC` | 480 | Producer, Orleans-client mode only: wall-clock ceiling (clamped to 30-3600 s) on the warm-up retry loop, so a warm-up that keeps hitting the response timeout is abandoned rather than billing N silos. `run-cohort-aca.ps1 -WarmUpBudgetSec` sets it (default 400). |
+| `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; it decides whether trailing work is counted in `ops` or in `failed`. The default fits the VM units' systemd stop window; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120). |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
 | `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |
+
+### Multi-silo cluster (Layer 3)
+
+`deploy-aca.ps1` and `run-cohort-aca.ps1` set these; the single-VM path leaves them unset.
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_CLUSTERING` | `localhost` | Silo clustering: `localhost` (single silo) or `azuretable` (Azure Table membership). Any other value is fatal at startup. |
+| `BENCH_CLUSTERING_CONNECTION_STRING` | - | Clustering-table connection string. With `azuretable`, this or `BENCH_CLUSTERING_TABLE_SERVICE_URI` is required; the Orleans-client producer reads it too. |
+| `BENCH_CLUSTERING_TABLE_SERVICE_URI` | - | Clustering-table endpoint, authenticated with `DefaultAzureCredential`; the alternative to the connection string. |
+| `BENCH_CLUSTERING_TABLE` | `OrleansSiloInstances` | Membership table name. |
+| `BENCH_CLUSTER_ID` | `azure-throughput` | Orleans cluster id; silo and producer must match. `run-cohort-aca.ps1` rotates it per cohort (`azure-throughput-<treeId>`) so each cohort gets an empty membership partition. |
+| `BENCH_SILO_CLUSTER_PORT` | 11111 | Silo-to-silo port. |
+| `BENCH_GATEWAY_PORT` | 30000 | Client gateway port. |
+| `BENCH_INGEST_MODE` | `tcp` | Silo: `tcp` (read the producer's lines over TCP) or `cluster` (no TCP listener; the producer drives the cluster as an Orleans client). |
+| `BENCH_PRODUCER_MODE` | `tcp` | Producer: `tcp` (send lines to one silo) or `orleans-client` (drive `ILattice` directly through Orleans clients). |
+| `BENCH_CLIENT_COUNT` | 1 | Producer, Orleans-client mode: clients to build, clamped to 1-64. One client pins to one gateway, so reaching N silos needs several. |
 
 ---
 
@@ -278,6 +351,12 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 > shared by both rather than attributed to one - or redeploy and take the first
 > cohort of each arm. An A/B run as "all controls, then all fix arms" on one
 > deployment will report the decay as an effect of the fix.
+>
+> That caution predates `run-cohort-aca.ps1 -ResetStorage` (on by default since #3458),
+> which starts every Layer 3 cohort against empty storage: on the 91-cohort Layer 3
+> sweep run that way, repeat cohorts of most cells agreed to within a few percent
+> however late in the sweep they ran. It still applies to `run-cohort.ps1` and to
+> `-ResetStorage:$false`.
 
 `run-cohort.ps1` prints a `=== Cohort complete ===` summary and writes the silo journal to
 `benchmark/.run/azure-throughput/silo-<cohort>.log`. Parse the **log file** directly

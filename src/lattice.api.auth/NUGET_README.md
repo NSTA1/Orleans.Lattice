@@ -14,8 +14,8 @@ over it, and it costs nothing until it is registered.
 
 One combined admin surface carries:
 
-- **Membership admin.** CRUD users and groups, add / remove membership edges,
-  and list them.
+- **Membership admin.** CRUD groups, add / remove membership edges, and list
+  them (there is no user CRUD: users are not records this facade manages).
 - **Policy admin.** CRUD authorization rules and list / enumerate them.
 - **`ExplainAsync`.** Returns the authorization verdict for a subject,
   operation, and scope, plus the rules that apply, for debugging policy. The
@@ -24,6 +24,11 @@ One combined admin surface carries:
 - **`EffectivePermissionsAsync`.** Returns the rules currently in effect for a
   subject, for dashboards and UX. It reads the live policy store, so it
   reflects a policy change as soon as the change commits.
+- **Identity directory and access model.** `SearchDirectoryAsync` and
+  `ResolveDirectoryPrincipalAsync` search and resolve principals in the
+  configured identity directory (an explicit unavailable result, not an error,
+  when none is configured), and `GetAccessModelAsync` reports the cluster's
+  best-effort access-model posture.
 
 ## Security
 

@@ -9,16 +9,22 @@ work.
 ## Design
 
 The API facades (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`,
-`.Api.Backup`) each expose a single transport-agnostic service surface that a
-transport binding projects onto a wire protocol. Two families of package
-consume those surfaces: the code-first gRPC bindings and the
-`Orleans.Lattice.Api.Mcp` server.
+`.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`,
+`.Api.TreeAdmin`, and `.Api.TenantAdmin`) each expose a transport-agnostic
+service surface that a transport binding projects onto a wire protocol. Two
+families of package consume those surfaces: the code-first gRPC bindings and
+the `Orleans.Lattice.Api.Mcp` server.
 
 This package is the seam between them. It carries:
 
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`,
   `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`,
-  `ILatticeBackupControl`, and `ILatticeSchemaControl`.
+  `ILatticeBackupControl`, `ILatticeSchemaControl`,
+  `ILatticeReplicationControl`, `ILatticeTelemetry`, `ILatticeTreeAdmin`,
+  `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`,
+  `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`,
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, and the
+  region-discovery `ILatticeRegionCatalog`.
 - **Their request / response models** - the results, pages, records, and
   requests those interfaces exchange, with their stable Orleans serialization
   aliases.
@@ -35,8 +41,11 @@ You do not register anything from this package directly. Register a facade
 (which implements these contracts) and a binding (which consumes them):
 
 ```csharp
-siloBuilder
+builder.Host.UseOrleans(silo => silo
     .AddLattice(/* ... */)
-    .AddLatticeStateApi()      // implements ILatticeStateQuery
-    .AddLatticeStateApiGrpc(); // binds a gRPC surface over it
+    .AddLatticeStateApi());                // implements ILatticeStateQuery
+
+builder.Services.AddLatticeStateApiGrpc(); // binds a gRPC surface over it
+// ... app build ...
+app.MapLatticeStateApiGrpc();
 ```

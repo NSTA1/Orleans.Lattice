@@ -1,23 +1,24 @@
 # Managing backups from the Explorer
 
-The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
-detail tabs. It carries the **Explore** (the tree browser), **Backups** (backup
-and restore management), **Access** (membership and access-control admin), and
-**Schema** (schema-policy management) areas, and is built so a future area can
-join the switcher without reworking the shell.
+The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
+left of the shell. The rail carries **Explore** (the tree browser), **Backups**
+(backup and restore management), **Access** (membership and access-control
+admin), **Tenant administration**, **My tenant**, and **Telemetry**, plus
+**Schema** (schema-policy management) when a head registers it, and a new area
+joins the rail by registering its plugin, without reworking the shell.
 
-## The area switcher
+## The area rail
 
-The switcher is the app-level navigation tier. It is deliberately separate from
-the per-tree detail tabs (Metrics, Topology, Data, History), which live inside
-the Explore area and describe a single tree. Selecting an area swaps the whole
-working surface: Explore shows the navigation rail and the selected view;
-Backups shows the backup catalog and its controls.
+The rail is the app-level navigation tier. It is deliberately separate from the
+per-selection surfaces (Data, Topology, Metrics, Dead-letter), which live inside
+the Explore area and describe the selected tree or view. Selecting an area swaps
+the whole working surface: Explore shows the catalog and the selected tree's
+surfaces; Backups shows the backup catalog and its controls.
 
-Areas are registered in one place, so adding a new area is a single-entry change
-rather than a shell rewrite. Each registered area carries its display label and
-an advisory rule that decides whether the area is currently available to the
-connected user.
+Each area is a plugin registered by its own package, so adding a new area is a
+registration rather than a shell rewrite. Each plugin carries its display label
+and its own advisory access gate, which decides whether the area is currently
+available to the connected user.
 
 ## Area entry: demote, do not hide
 
@@ -59,10 +60,10 @@ restores, or deletes anything.
 
 - List the backups visible to the connected user, with their scope, kind
   (full or incremental), and creation time.
-- Work across two sub-tabs, **New Backup** and **Existing Backups**. The panel
+- Work across two sub-tabs, **New backup** and **Existing backups**. The panel
   remembers which sub-tab was last open (a durable UI preference), so it reopens
   where you left it.
-- **New Backup**: pick the scope by clicking trees in the tree list; each click
+- **New backup**: pick the scope by clicking trees in the tree list; each click
   adds the tree to an *Included in backup* list, one line per tree, with an *x*
   to its left to remove it again. Selecting a single tree is a single-tree
   capture; selecting more than one tree captures a **backup set** - one member
@@ -80,9 +81,9 @@ restores, or deletes anything.
   restarts - and overrides the startup-configured cadence for that kind. An
   interval below the scheduler minimum (one minute) is clamped up. Scheduling
   targets a single tree, so it is unavailable for a multi-tree backup set.
-- On a successful capture the panel switches to **Existing Backups** and
+- On a successful capture the panel switches to **Existing backups** and
   highlights the backup that was just created.
-- **Existing Backups**: click a row to select it; its restore and delete
+- **Existing backups**: click a row to select it; its restore and delete
   controls appear only while the row is selected. A filter row above the list
   narrows it by kind and scope (each a drop-down of just the values actually
   present), and by name and creation time (starts-with text boxes with the same
@@ -106,7 +107,7 @@ restores, or deletes anything.
   schedules, each prefilled with its current cadence. Change the interval and
   click **Save** to update it, or **Remove** to unregister it. (Multi-tree set
   rows have no schedule button, mirroring the single-tree scheduling rule in New
-  Backup.)
+  backup.)
 
 ### Choosing a restore mode
 
@@ -154,7 +155,7 @@ failure to retry.
 
 ## Filtering, sorting, and paging the list
 
-The Existing Backups filters, the newest-first ordering, and the paging are all
+The Existing backups filters, the newest-first ordering, and the paging are all
 evaluated on the server, not by fetching the whole catalog and trimming it in
 the browser. To keep that efficient no matter how many backups have
 accumulated, the backup service maintains a catalog **index** that keeps the
@@ -167,7 +168,7 @@ slower full scan with identical results.
 ## Backup health monitoring
 
 When the configured backup sink is durable and external, the Explorer surfaces an
-optional **health** column in the Existing Backups list. Availability is probed
+optional **health** column in the Existing backups list. Availability is probed
 once against the server; when health monitoring is not available (an in-process or
 non-durable sink, or the probe is denied), the column is hidden entirely.
 

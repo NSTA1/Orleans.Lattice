@@ -3,8 +3,9 @@
 Code-first gRPC transport binding for
 [Orleans.Lattice.Api.Data](https://www.nuget.org/packages/Orleans.Lattice.Api.Data).
 Projects the write-capable external data-plane facade onto a flat set of unary
-gRPC RPCs so non-.NET clients can set, delete, atomically batch (single-tree and
-cross-tree), point-read, and bounded-range-read tree entries.
+gRPC RPCs so non-.NET clients can set, delete, range-delete, bulk-upsert,
+atomically batch (single-tree and cross-tree), point-read, and
+bounded-range-read tree entries, and write or read typed CRDTs.
 
 ## RPCs
 
@@ -16,6 +17,10 @@ cross-tree), point-read, and bounded-range-read tree entries.
 | `SetManyAtomicCrossTree` | `SetManyAtomicCrossTreeAsync` |
 | `Get` | `GetAsync` |
 | `ReadRange` | `ReadRangeAsync` |
+| `DeleteRange` | `DeleteRangeAsync` |
+| `SetMany` | `SetManyAsync` |
+| `CrdtWrite` | the typed CRDT write verbs (`CounterIncrementAsync`, `SetAddAsync`, `MapSetAsync`, ...) |
+| `CrdtRead` | the typed CRDT read verbs (`CounterGetAsync`, `SetGetAsync`, `MapGetAsync`, ...) |
 
 ## Security
 

@@ -61,7 +61,7 @@ The VM is at `$env:BENCH_HISTORY_VM_URL` (default `http://localhost:8428`). Use 
 
 ```powershell
 . ./benchmark/benchmark.ps1   # dot-source for Invoke-PromInstantQuery
-$value = Invoke-PromInstantQuery -Query 'bench_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="51671fa"}'
+$value = Invoke-PromInstantQuery -Query 'bench_replication_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="51671fa"}'
 ```
 
 `Invoke-PromInstantQuery` returns `[double]` or `$null`. It never throws - missing series, `NaN`, `+Inf`, parse failures all become `$null`. **Do not catch exceptions around it; check for `$null` instead.**
@@ -71,7 +71,7 @@ For multi-sample series (a cohort), use the underlying `/api/v1/query_range` or 
 ```powershell
 # All run_ids for a sha:
 $uri = "$env:BENCH_HISTORY_VM_URL/api/v1/series?match%5B%5D=" +
-       [uri]::EscapeDataString('bench_apply_lag_p95_ms{git_sha="51671fa"}')
+       [uri]::EscapeDataString('bench_replication_apply_lag_p95_ms{git_sha="51671fa"}')
 $series = (Invoke-RestMethod -Uri $uri).data
 ```
 
@@ -79,7 +79,7 @@ $series = (Invoke-RestMethod -Uri $uri).data
 
 Every scalar in `results.json.metrics` becomes a VM series named `bench_<key>` (the harness prepends `bench_`). Auto-discovery (`Get-AutoScalarPanel`) means new OTel instruments surface as new series automatically - you do not have to extend the harness when shipping a new meter.
 
-The auto-discovered percentile suffixes for histograms are `_p50`, `_p95`, `_p99` (e.g. `bench_orleans_lattice_replication_apply_duration_milliseconds_p99`). Short aliases (e.g. `bench_apply_lag_p95_ms`) are resolved by `Resolve-ScalarAliases` and **point at the same underlying value as the long-form series** - they are bit-identical by construction, not separate queries.
+The auto-discovered percentile suffixes for histograms are `_p50`, `_p95`, `_p99` (e.g. `bench_orleans_lattice_replication_apply_duration_milliseconds_p99`). Short aliases (e.g. `bench_replication_apply_lag_p95_ms`) are resolved by `Resolve-ScalarAliases` and **point at the same underlying value as the long-form series** - they are bit-identical by construction, not separate queries.
 
 ### Local cohort read (disk)
 
@@ -92,7 +92,7 @@ $latest  = Get-LatestPerScenario       # one row per scenario, freshest only
 ### Cross-scenario delta (built-in)
 
 ```powershell
-./benchmark.ps1 -Compare -Baseline bidirectional-replication
+./benchmark.ps1 -Compare -CompareAgainst bidirectional-replication
 ```
 
 This is markdown-rendering. **It compares scenarios, not commits.** For commit-cohort comparison (the optimisation agent's primary use case), query VM directly grouped by `git_sha`.
@@ -132,7 +132,7 @@ This phase is cheap (seconds) and is the difference between an agent that compou
 
 State, in writing, before doing anything else:
 
-1. **Target metric.** A single primary metric (a series the harness already auto-discovers, or one you will add an OTel instrument for first). Example: `bench_apply_lag_p95_ms`.
+1. **Target metric.** A single primary metric (a series the harness already auto-discovers, or one you will add an OTel instrument for first). Example: `bench_replication_apply_lag_p95_ms`.
 2. **Target scenario.** Which `./benchmark.ps1 -Scenario` invocation will exercise the metric. Example: `bidirectional-replication`.
 3. **Expected direction and magnitude.** "Reduce by `>= 20%`", "increase by `>= 1000`", or similar. Magnitude must be greater than what you can attribute to noise - if you cannot articulate a noise band yet, defer that to Phase 3 but commit to a direction now.
 4. **Code locus.** Which file or hot path you suspect dominates the metric. If you cannot name one - or you have named one but the target metric sits at the noise floor of `-Fidelity dry` (IQR=0 across n>=3 baseline runs) so that no candidate hypothesis can clear the threshold without an empirical pointer - run a per-method profiling pass first (see the "Per-method profiling (microbench tier)" subsection below). The profiler attributes allocations and CPU samples to specific managed methods, so it produces an empirically-grounded code locus instead of a guess.
@@ -346,7 +346,7 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
    . ./benchmark/benchmark.ps1
    $sha = (& git rev-parse --short HEAD).Trim()
    $vmUrl = if ($env:BENCH_HISTORY_VM_URL) { $env:BENCH_HISTORY_VM_URL } else { 'http://localhost:8428' }
-   $q = 'bench_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="' + $sha + '"}'
+   $q = 'bench_replication_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="' + $sha + '"}'
    $uri = "$vmUrl/api/v1/query?query=$([uri]::EscapeDataString($q))"
    $r = (Invoke-RestMethod -Uri $uri).data.result
    $values = $r | ForEach-Object { [double]$_.value[1] } | Sort-Object
@@ -360,7 +360,7 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
 
 ### Phase 4 - Candidate change
 
-1. Branch: `git checkout -b perf/<short-description>`. Branch name prefix is `perf/` for optimisation work, distinct from `feature/` to keep filtering easy.
+1. Branch: `git checkout -b perf/<short-description>`. Branch name prefix is `perf/` for optimisation work, distinct from `feat/` to keep filtering easy.
 2. Implement **one** change targeted at the named code locus. Resist the temptation to bundle.
 3. Commit. The commit need not be polished - this branch may be discarded.
 4. Verify the build is clean (`dotnet build -c Release --nologo /clp:ErrorsOnly`). A red build means the candidate cohort cannot run - fix or revert before continuing.
@@ -375,7 +375,7 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
    $candSha = (& git rev-parse --short HEAD).Trim()
    Write-Host "candidate sha: $candSha"
    $uri = "$env:BENCH_HISTORY_VM_URL/api/v1/series?match%5B%5D=" +
-          [uri]::EscapeDataString('bench_apply_lag_p95_ms{git_sha="' + $candSha + '"}')
+          [uri]::EscapeDataString('bench_replication_apply_lag_p95_ms{git_sha="' + $candSha + '"}')
    (Invoke-RestMethod -Uri $uri).data.Count
    ```
 
@@ -422,7 +422,7 @@ If the change is being kept:
    - The cohort table from Phase 6 verbatim (n, median, IQR for each side).
    - The PromQL queries used.
    - A statement of the noise band and decision threshold that was applied.
-   - A statement of which metrics were checked and confirmed not to regress (e.g. "ship_p95_ms unchanged at gRPC RTT floor").
+   - A statement of which metrics were checked and confirmed not to regress (e.g. "replication_ship_p95_ms unchanged at gRPC RTT floor").
    - Links to the run-ids on the dashboard if applicable.
 
    PR #148 and PR #149 in this repo are good templates - the "Empirical context" section in each is the format.
@@ -435,7 +435,7 @@ The following have all happened in this codebase before. Each one wasted hours.
 
 - **"Quick" 1-run sanity check.** Always becomes the only run, and the delta you report is dominated by run-to-run variance. Run 3, always.
 
-- **Comparing across scenarios.** `bench_apply_lag_p95_ms` from `bidirectional-replication` is not comparable to the same metric from `microbench` - different fleet, different cadence, different code path. Compare cohorts of the **same scenario** at different shas.
+- **Comparing across scenarios.** `bench_replication_apply_lag_p95_ms` from `bidirectional-replication` is not comparable to the same metric from `microbench` - different fleet, different cadence, different code path. Compare cohorts of the **same scenario** at different shas.
 
 - **Comparing across env-var changes.** Changing `BENCH_SHIP_PHASE_TIMER_MS` between baseline and candidate confounds the experiment. If the optimisation **is** an env-var change, the env-var is the candidate; otherwise hold env vars constant and document the values.
 
@@ -456,5 +456,5 @@ The following have all happened in this codebase before. Each one wasted hours.
 
 - **Does not open PRs for optimisation changes.** Hand off to `feature-dev` once the decision is "keep". The single exception is **edits to the agent's own meta files** under `.github/agents/` (the agent's own protocol, prompts, or scopes); those may be PR'd directly by this agent with the `documentation` label when the user explicitly requests it, because they describe the protocol rather than apply it.
 - **Does not modify the harness, the dashboards, or the bench-side code.** Those are `feature-dev`'s territory and would change the measurement substrate mid-experiment. If a missing instrument blocks an optimisation hypothesis, raise the gap to the user, ship the instrument as a separate `feature-dev` flow, then resume optimisation against the now-instrumented metric. **Authoring a new scenario env file** at `benchmark/scenarios/<slug>.env` to exercise a hypothesis is **explicitly in scope** for this agent and is not considered "modifying the harness" - the harness is the `.ps1` and the cluster topology, not the scenario configuration that drives a single run.
-- **Does not run automated profiling.** This is an explicit gap. If you cannot name a hot path from code reading + dashboards alone, ask the user.
+- **Does not run automated profiling beyond the microbench `-Profile` pass.** The EventPipe per-method profiler described under "Per-method profiling (microbench tier)" is the only per-method profiler the harness provides, and it is microbench-only. If you cannot name a hot path from code reading, dashboards, and that pass, ask the user.
 - **Does not run statistical-significance tests.** The 1.5x IQR rule is a deliberately conservative heuristic for the sample sizes (n=3 to n=10) the harness produces in tractable time. For tighter claims, use larger cohorts and a real test (Mann-Whitney is a good fit for non-normal latency tails); both are out of scope for this agent's default workflow.

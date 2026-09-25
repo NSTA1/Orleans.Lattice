@@ -1,8 +1,7 @@
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
-/// The <see cref="LatticeOperation.SchemaAdmin"/>-gated control plane for
-/// background schema remediation: trigger a shadow-build-and-cutover that rewrites
+/// The schema-remediation control plane: trigger a shadow-build-and-cutover that rewrites
 /// a tree's existing values to satisfy a new policy, and observe its status. It is
 /// the operator-facing surface over the internal durable remediation coordinator.
 /// <para>

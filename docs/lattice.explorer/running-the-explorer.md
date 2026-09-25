@@ -2,10 +2,10 @@
 
 The Orleans.Lattice Explorer is a read-only, auth-aware web console for a running
 cluster. It talks to a cluster only through the cluster's gRPC APIs (state, and
-the auth, backup, and schema control bindings), so it never needs to be part of
-the cluster's Orleans membership. This page covers how to run it: as a standalone
-head, or embedded in your own ASP.NET application, and how to deploy it without
-taxing your cluster's scaling behaviour.
+the auth, backup, schema, tenant-administration, and telemetry bindings), so it
+never needs to be part of the cluster's Orleans membership. This page covers how
+to run it: as a standalone head, or embedded in your own ASP.NET application, and
+how to deploy it without taxing your cluster's scaling behaviour.
 
 ## Two ways to run it
 
@@ -24,7 +24,8 @@ share one code path and cannot drift:
   configured base path.
 
 To run a **standalone head**, use the bundled `Orleans.Lattice.Explorer.WebHost`
-process, whose whole `Program` is just those two calls. To **embed** the console
+process, whose `Program` is those two calls plus the standard exception-handler,
+HSTS, HTTPS-redirection, and antiforgery middleware. To **embed** the console
 in an existing ASP.NET app, reference the `Orleans.Lattice.Explorer.Web` package
 and make the same two calls in your own host.
 
@@ -37,10 +38,28 @@ shared explorer libraries it builds on restore transitively:
   static web assets are served automatically at
   `_content/Orleans.Lattice.Explorer.UI/`, with no extra wiring.
 - `Orleans.Lattice.Explorer.Core` - the head-agnostic connection, configuration,
-  session, capability, and navigation services.
+  session, authentication, tenant-scoping, and navigation services, and the
+  catalog, data, dead-letter, history, metrics, and topology readers.
+- `Orleans.Lattice.Explorer.DesignSystem` - the design tokens, the named
+  breakpoints, and the adaptive layout primitives every surface is styled with.
+- `Orleans.Lattice.Explorer.Plugins.Abstractions` - the plugin contract, including
+  the four-state access model every area and surface is gated by.
+- `Orleans.Lattice.Explorer.Plugins.Selection` - the shared kernel of the
+  per-selection surfaces, which ship as `Orleans.Lattice.Explorer.Plugins.Data`,
+  `Orleans.Lattice.Explorer.Plugins.Topology`,
+  `Orleans.Lattice.Explorer.Plugins.Metrics`,
+  `Orleans.Lattice.Explorer.Plugins.DeadLetter`,
+  `Orleans.Lattice.Explorer.Plugins.History`, and
+  `Orleans.Lattice.Explorer.Plugins.TagIndex`.
 - `Orleans.Lattice.Explorer.Backup` - the Backups management area.
 - `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
   management area.
+- `Orleans.Lattice.Explorer.Plugins.Tenancy` - the shared tenant-administration
+  seam behind `Orleans.Lattice.Explorer.Plugins.Tenants` (the Tenant
+  administration area) and `Orleans.Lattice.Explorer.Plugins.MyTenant` (the My
+  tenant area).
+- `Orleans.Lattice.Explorer.Plugins.Telemetry` - the Telemetry area and the My
+  tenant metrics section.
 - `Orleans.Lattice.Explorer.Schema` - the Schema management area. It ships but is
   withheld by default (see the Schema plugin note below).
 
@@ -52,11 +71,15 @@ shared explorer libraries it builds on restore transitively:
 - **`BasePath`** - the mount point for the whole console, default `/`. Set it to
   a subpath such as `/explorer` to host the console alongside other routes. The
   value is normalized into the route prefix and the client base href.
-- **`ConfigFilePath`** - an optional path to a JSON file that seeds the
-  connection configuration (the state-API endpoint and related settings), so a
-  deployment can ship its target without an interactive first-run step.
-- **`UseEnvironmentBootstrap`** - default `true`; when set, the host also reads
-  the connection endpoint from the environment at startup.
+- **`ConfigFilePath`** - an optional path to the JSON configuration document the
+  console reads its connection configuration from (the state-API endpoint and
+  related settings), so a deployment can ship its target without an interactive
+  first-run step. When unset, the `LATTICE_EXPLORER_CONFIG` environment variable
+  and then the per-user app-data default are used.
+- **`UseEnvironmentBootstrap`** - default `true`; when set, the console seeds the
+  connection endpoint from `LATTICE_EXPLORER_ENDPOINT` (and related variables)
+  whenever no configuration is persisted. The seed is held in memory and never
+  written back to the configuration document.
 - **`AllowEnvironmentCredentialSeed`** - default `false`. The environment
   bootstrap can also read a sign-in credential, but the web head's credential
   store is per browser, so a seeded credential would sign every anonymous
@@ -69,6 +92,12 @@ shared explorer libraries it builds on restore transitively:
   the connection-settings affordance is withheld; configure the endpoint with
   `ConfigFilePath` or the environment bootstrap instead. Opt in only for a web
   head that is genuinely configured through its own UI by a trusted operator.
+- **`DataProtectionKeyRingBlobUri`, `DataProtectionKeyRingCredential`,
+  `DataProtectionApplicationName`, and `ConfigureDataProtection`** - opt-in
+  persistence for the ASP.NET Data Protection key ring, so every replica of a
+  multi-replica deployment can decrypt the session cookie another replica issued.
+  Unset, the framework's per-instance ephemeral ring is used. See
+  [Multi-replica and failover hosting](multi-replica-hosting.md).
 - **The Schema plugin** - withheld by default, and no longer an option flag. The
   schema-management area ships as its own plugin package, and registration is the
   whole of the opt-in: call `builder.Services.AddExplorerSchemaPlugin()` to surface
@@ -167,9 +196,11 @@ connection are registered **scoped**, so each circuit signs in and drives its
 own connection independently, keyed on its own credential cookie. One operator's
 credential is never shared with another circuit: the console can serve multiple
 operators from the same process without one operator's sign-in flipping the
-connection another operator sees. The credential-bearing gRPC admin clients (the
-Access, Backup, and Schema areas) are likewise scoped per circuit and act under
-the calling circuit's own authentication.
+connection another operator sees. The credential-bearing gRPC control-plane
+clients (the Access, Backup, and Schema areas, the tenant-administration client
+behind the Tenant administration and My tenant areas, and the telemetry client)
+are likewise scoped per circuit and act under the calling circuit's own
+authentication.
 
 ### Security response headers
 
@@ -185,11 +216,13 @@ assets, and the SignalR negotiate / hub endpoints alike:
 | `Referrer-Policy` | `no-referrer` | Keeps a request URL (which can carry tree, key, or subject context in its path or query) out of the `Referer` header on any outbound navigation to a foreign origin. |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), interest-cohort=()` | Disables browser features the console does not use (empty allow-list for every origin) and opts out of Topics/FLoC cohort computation. |
 
-The middleware is attached by `MapLatticeExplorer` (via `UseWhen` on the
-console's path prefix), so both the standalone head and any host that mounts the
-console under a subpath inherit it, while a subpath host keeps its own unrelated
-routes free of the explorer's policy. Each header is set only when it is not
-already present, so a value legitimately set elsewhere in the pipeline is
+The middleware is attached by `MapLatticeExplorer` - directly on the
+application pipeline for a root mount, and as the first middleware inside the
+isolated branch pipeline for a subpath mount - so both the standalone head and
+any host that mounts the console under a subpath inherit it, while a subpath host
+keeps its own unrelated routes free of the explorer's policy. Each header is set
+only when it is not already present, so a value legitimately set elsewhere in the
+pipeline is
 preserved rather than clobbered; where the interactive Blazor runtime contributes
 its own `frame-ancestors 'self'` Content-Security-Policy, the browser enforces
 the intersection of the policies in force. The header values are cached, so this

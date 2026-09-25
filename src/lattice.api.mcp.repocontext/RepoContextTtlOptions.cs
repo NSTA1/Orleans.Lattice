@@ -4,9 +4,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// Per-repository time-to-live policy for the repository-context surface. Bound
 /// per repository through the named-options convention -
 /// <c>IOptionsMonitor&lt;RepoContextTtlOptions&gt;.Get(repoId)</c> - so each
-/// repository can carry its own memory-entry lifetime while the default
-/// (unnamed) instance supplies the fallback, mirroring how the core resolves
-/// <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c> per tree.
+/// repository can carry its own memory-entry lifetime. The store resolves the
+/// repository name directly; callers that want a fallback should configure that
+/// name explicitly.
 /// <para>
 /// This type only <b>surfaces</b> the per-entry expiry that Orleans.Lattice core
 /// already provides on <see cref="ILattice.SetAsync(string, byte[], System.TimeSpan, System.Threading.CancellationToken)"/>
@@ -30,11 +30,9 @@ public sealed class RepoContextTtlOptions
     public TimeSpan? DefaultMemoryTtl { get; set; }
 
     /// <summary>
-    /// Policy switch guaranteeing that structural records (repo, package, file,
-    /// and symbol nodes) never carry an expiry, so a durable model of the
-    /// codebase is not silently reaped alongside ephemeral notes. Defaults to
-    /// <see langword="true"/>; a consumer that writes a structural record must
-    /// omit any TTL while this is set.
+    /// Policy switch reserved for structural-record TTL handling. It defaults to
+    /// <see langword="true"/>, but the current structural write path does not
+    /// read this flag and omits TTLs unconditionally.
     /// </summary>
     public bool StructuralRecordsNeverExpire { get; set; } = true;
 }

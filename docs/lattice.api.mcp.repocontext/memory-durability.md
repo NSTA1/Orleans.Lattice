@@ -11,7 +11,7 @@ loses nothing. `docker compose down -v` does not, and takes both.
 
 | | Trees | Where it comes from | If it is destroyed |
 |---|---|---|---|
-| **Rebuildable** | `repo-context-structural`, `-content`, `-symbol`, `-xref`, `-session`, and the three `repo-context-vector-*` planes | Derived by walking files on disk | Re-run `repocontext_add_repo`. Back in minutes. |
+| **Rebuildable** | `repo-context-structural`, `-content`, `-symbol`, `-xref`, `-session`, and the five `repo-context-vector-*` trees (membership, payload, metadata, the approximate index, and the coverage digest) | Derived by walking files on disk | Re-run `repocontext_add_repo`. Back in minutes. |
 | **Irreplaceable** | `repo-context-memory` | Authored by agents through `repocontext_remember` | Gone. It derives from nothing. |
 
 The names look separable and are not. A Lattice tree's durable state spans two
@@ -82,12 +82,24 @@ the host will:
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | unset | Directory the archive is written to. **Unset disables the whole mechanism**, so it is opt-in and a host that sets nothing behaves exactly as before. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores only when the store holds no memory at all; `always` restores on every start; `off` never restores and leaves the archive write-only. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores when the store holds no memory at all, or when its restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores and leaves the archive write-only. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60 seconds. It is deliberately a fraction of the container's stop grace period, which the drain also needs. |
 
 `auto` is the useful default because it heals exactly the case this exists for -
 a store that came up empty because its volume was destroyed - and does nothing
 on an ordinary restart where the memory is already there.
+
+A restore also leaves a record of what it did. Before its first record lands it
+writes a restore-state marker into the memory tree reading *partial*, and it stamps
+that marker complete only after the tree has been counted and found to hold at
+least what the snapshot carried. An import that dies part-way therefore leaves the
+marker reading partial, and the next `auto` start heals that tree instead of
+declining because it is non-empty. The marker sits outside every repository's key
+range, so it is never exported into the archive and never counts as memory. Each
+startup attempt's outcome is logged (a partial restore at `Error`) and counted on
+the `lattice.repocontext.memory.restore` counter as `restored`, `partial`,
+`nothingtorestore`, `notattempted`, or `failed`; see
+[Emitted instruments](retrieval-economics.md#emitted-instruments).
 
 ### Files on disk
 

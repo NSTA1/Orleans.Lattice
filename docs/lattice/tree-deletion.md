@@ -86,7 +86,7 @@ Step 3's routed-leaf sweep matters on a **retried** purge. A purge that fails pa
 
 `ClearGrainStateAsync()` deletes the grain's storage record - the provider reports no state for it afterwards - and retires the leaf's WAL replay barrier and unregisters its materialiser pins before it does, so a cleared leaf no longer holds the WAL trim floor down. The WAL itself is trimmed separately: each GC pass re-computes the trim floor from the pins that remain and re-issues the trim, which is idempotent, so a trim that fails is retried on the next pass rather than lost. Deleting a record and reclaiming the storage behind it are distinct: a provider may keep the freed space until its own compaction runs.
 
-After all shards are purged, the deletion grain marks `PurgeComplete = true`, unregisters all reminders, and deactivates itself.
+After all shards are purged, the deletion grain records the purge as complete, removes the tree from the registry (so `TreeExistsAsync` returns `false` from then on), unregisters all reminders, and deactivates itself.
 
 ## Recovery
 
@@ -109,7 +109,7 @@ After all shards are purged, the deletion grain marks `PurgeComplete = true`, un
 
 `LeafCacheGrain` is a `[StatelessWorker]` that holds an in-memory copy of leaf data. It is **not** notified when a tree is deleted - doing so would require traversing every leaf in the tree to set a flag, which is prohibitively expensive and defeats the purpose of the shard-root-level guard.
 
-This is safe because the cache is not publicly addressable. The only path to it is through `ShardRootGrain.TraverseForReadAsync`, which calls `ThrowIfDeleted()` before reaching the cache layer. No external caller can obtain a `LeafCacheGrain` reference - its key is an internal `GrainId` string derived from the primary leaf's identity, not exposed through `ILattice`.
+This is safe because the cache is not publicly addressable. The only path to it is the shard root's read traversal, and every shard-root operation runs its deleted-tree check before it traverses at all, so a read of a deleted tree is refused before it reaches the cache layer. No external caller can obtain a reference to a leaf cache - its key is an internal `GrainId` string derived from the primary leaf's identity, not exposed through `ILattice`.
 
 After deletion, existing cache activations may still hold stale data in memory, but no requests can reach them. Orleans will deactivate idle `StatelessWorker` activations on its normal schedule, at which point the in-memory data is garbage-collected. No persistent state is involved - the cache is purely in-memory.
 
@@ -121,7 +121,7 @@ The soft-delete window is controlled by `SoftDeleteDuration` in `LatticeOptions`
 // Global default - 72 hours
 siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromHours(72));
 
-// Per-tree override - immediate purge
+// Per-tree override - purge on the first reminder tick (the period is clamped to 1 minute)
 siloBuilder.ConfigureLattice("ephemeral-tree", o => o.SoftDeleteDuration = TimeSpan.Zero);
 ```
 

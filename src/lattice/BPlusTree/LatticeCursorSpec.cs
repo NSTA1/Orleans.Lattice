@@ -60,13 +60,14 @@ public readonly record struct LatticeCursorSpec
 
     /// <summary>
     /// When <c>true</c>, the cursor is opened in zero-observable-writes
-    /// snapshot mode: every page is served by replaying each shard's
-    /// WAL up to the offset captured at open time, so foreground
-    /// non-saga writes that append after capture are invisible. Pairs
-    /// with <see cref="PointInTime"/> (which freezes saga decisions)
-    /// to deliver strict tree-wide snapshot isolation against every
-    /// dimension the live read path is subject to (foreground writes,
-    /// saga decisions, replication apply, topology changes).
+    /// snapshot mode: every page is served from per-shard baselines
+    /// frozen at open time (each shard's projection captured at a
+    /// uniform WAL head), so writes that append after capture are
+    /// invisible and a later WAL trim cannot perturb the view. Pairs
+    /// with <see cref="PointInTime"/> to deliver strict tree-wide
+    /// snapshot isolation against every dimension the live read path
+    /// is subject to (foreground writes, saga decisions, replication
+    /// apply, topology changes).
     /// <para>
     /// Set internally by
     /// <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /

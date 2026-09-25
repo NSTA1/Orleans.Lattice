@@ -62,7 +62,7 @@ See [Transport](../lattice.replication/transport.md) and [Wire Format](../lattic
 | `ReplicationBatchEnvelope` | The decoded transport envelope written onto the gRPC call body. |
 | `ReplicationAck` | Receiver acknowledgement containing acceptance, high-water mark, and optional flow-control hints. |
 | `IReplicationApplier` | Receiver-side seam invoked after the endpoint decodes a batch. |
-| `IChangeFeed` | Producer-side feed read by the replication shipper before transport dispatch. |
+| `IChangeFeed` | In-process pull feed over the locally-authored WAL for custom consumers. The replication shipper does not read it; it tails the WAL partitions directly before transport dispatch. |
 
 The transport does not interpret application payloads. It moves encoded replication envelopes between clusters and relies on the receiver apply path for idempotency, causal buffering, and CRDT-aware merge semantics.
 
@@ -72,7 +72,7 @@ See [Configuration](configuration.md).
 
 | Member | Type | Purpose |
 |---|---|---|
-| `Peers` | `IDictionary<string, Uri>` | Maps remote cluster ids to the endpoint URI used for outbound live push, bootstrap, and probe traffic. |
+| `Peers` | `IDictionary<string, Uri>` | Maps remote cluster ids to the endpoint URI used for outbound live push, bootstrap, anti-entropy probe, and saga control traffic. |
 | `AllowPlaintextEndpoints` | `bool` | Allows `http://` peer endpoints for loopback or diagnostic use. Default is `false`. |
 | `ConfigureChannel` | `Action<string, GrpcChannelOptions>?` | Lets the host customize each peer channel after package defaults are applied. |
 | `LocalClusterId` | `string?` | Overrides the outbound origin header. When unset, `LatticeReplicationOptions.ClusterId` is used. |
@@ -87,4 +87,6 @@ The binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled
 
 ## Observability
 
-Successful and failed sends are observed through the replication metrics surface. Per-peer lag, consecutive errors, entries behind, and last contact are owned by the replication shipper; the gRPC binding contributes the send outcome and duration at the `IReplicationTransport` boundary. See [Observability](../lattice.replication/observability.md).
+Successful and failed sends are observed through the replication metrics surface. Per-peer lag, consecutive errors, entries behind, and last contact are owned by the replication shipper; the gRPC binding contributes the send outcome and duration (`orleans.lattice.replication.ship.duration`, tagged `outcome` = `ok` / `error`) and the shipped-entry count (`orleans.lattice.replication.wal.entries_shipped`) at the `IReplicationTransport` boundary. See [Observability](../lattice.replication/observability.md).
+
+The package also publishes its own meter, `orleans.lattice.replication.grpc`, with one instrument: the `orleans.lattice.replication.grpc.insecure_channel` counter (unit `{channel}`, tagged `peer`, `transport` = `push` / `snapshot` / `saga_control`, and `tenant` = `_platform_`), incremented - alongside a warning log - whenever `AllowPlaintextEndpoints` causes a channel to be built against a non-`https` endpoint. Subscribe to it with `AddMeter("orleans.lattice.replication.grpc")`; the bundled Replication Transport (gRPC) dashboard charts it.

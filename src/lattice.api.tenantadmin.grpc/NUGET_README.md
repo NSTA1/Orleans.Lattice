@@ -8,9 +8,11 @@ It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 strongly-typed clients. `LatticeTenantAdminApiGrpcClient` binds the
 administrative surface: the tenant lifecycle operations - **create**,
 **suspend**, **resume**, and **delete** (which cascades the tenant's trees) -
-plus **set quotas**, and the per-tenant region-residency operations
-(**authorize allowed regions**, **set residency**, and **get region status**),
-alongside the unauthenticated auth-scheme discovery RPC. A read-only
+plus **set quotas** and the **quota-usage** read, the per-tenant region-residency
+operations (**authorize allowed regions**, **set residency**, and **get region
+status**), the tenant-admin subject operations (**list**, **add**, and **remove**),
+and the cross-tenant grant operations (**list**, **offer**, **approve**,
+**reject**, and **revoke**), alongside the unauthenticated auth-scheme discovery RPC. A read-only
 `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted self-service reads -
 **current tenant**, **list accessible tenants**, and **get tenant** - which any
 authenticated caller may invoke and which the facade scopes fail-closed to that
@@ -26,9 +28,10 @@ app.MapLatticeTenantAdminApiGrpc();
 
 The binding is **default-deny**: until the host registers a permissive
 `ILatticeTenantAdminApiAuthorizer` (or turns enforcement off behind an outer
-authentication boundary), every call is rejected. The unauthenticated
-`GetAuthScheme` discovery RPC is the single exemption, so a client can learn how
-to sign in before it holds a credential. The facade itself re-derives and
+authentication boundary), every administrative call is rejected. The
+unauthenticated `GetAuthScheme` discovery RPC is exempt, so a client can learn how
+to sign in before it holds a credential, and so are the three read-only
+self-service RPCs, which the facade scopes fail-closed to the caller instead. The facade itself re-derives and
 authorizes the caller server-side, so the surface fails closed for an
 unauthenticated caller even when the transport gate is disabled.
 

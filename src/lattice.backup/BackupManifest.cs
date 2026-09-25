@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Backup;
 /// integrity-checked and applied faithfully without consulting the source cluster:
 /// the scope captured, the point-in-time consistency cut, the shard topology and
 /// structural digest, each key's declared shape / merge mode, per-origin
-/// provenance, the content-addressed artifact descriptors, and a reference to any
+/// provenance, the manifest-declared artifact descriptors, and a reference to any
 /// compression dictionary in force. The descriptor granularity follows the backup
 /// definition (scope and <see cref="Kind"/>) rather than a fixed per-shard shape.
 /// </summary>
@@ -30,7 +30,7 @@ public sealed record BackupManifest
     /// <param name="topology">The shard topology snapshot of the captured tree. Must not be <c>null</c>.</param>
     /// <param name="structuralDigest">The aggregated shard-root structural / projection digest. Must not be <c>null</c> or empty.</param>
     /// <param name="keyDescriptors">The per-key shape / merge-mode descriptors. Must not be <c>null</c>.</param>
-    /// <param name="contentDescriptors">The content-addressed artifact descriptors. Must not be <c>null</c>.</param>
+    /// <param name="contentDescriptors">The manifest-declared artifact descriptors. Must not be <c>null</c>.</param>
     /// <param name="provenance">The per-origin high-water provenance. Must not be <c>null</c>.</param>
     /// <param name="baseBackupId">
     /// The base backup id this incremental is layered on, or <c>null</c> for a full
@@ -146,7 +146,7 @@ public sealed record BackupManifest
     [Id(8)]
     public IReadOnlyList<BackupKeyDescriptor> KeyDescriptors { get; init; }
 
-    /// <summary>The content-addressed artifact descriptors.</summary>
+    /// <summary>The manifest-declared artifact descriptors.</summary>
     [Id(9)]
     public IReadOnlyList<BackupContentDescriptor> ContentDescriptors { get; init; }
 

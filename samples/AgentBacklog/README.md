@@ -64,7 +64,7 @@ repocontext_remember(
   title: "Batch the shipper poll against the new seam",
   body: "Spec: https://github.com/NSTA1/Orleans.Lattice/issues/2101",
   tags: ["backlog", "priority:P1", "phase:implementation",
-         "homeRegion:uksouth", "baseBranch:feat/epic/wal-batching"])
+         "homeRegion:local", "baseBranch:feat/epic/wal-batching"])
 
 repocontext_claim(key: "repo/lattice/mem/backlog/issue-2101",
                   owner: "worker-a", leaseSeconds: 60)

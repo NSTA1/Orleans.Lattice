@@ -67,8 +67,9 @@ all-at-once convenience template" pattern.
 - Its peer endpoint is `https://<siloStateApiFqdn>` (the silo's external gRPC
   ingress, which carries state, auth, and replication).
 - For every region the script builds the peer list from **every other region**,
-  so enrollment is fully reciprocal across all N regions. Asymmetry dead-letters
-  cross-region traffic, so completeness matters.
+  so enrollment is fully reciprocal across all N regions. A region ships only to
+  the peers it lists, so a missing peer leaves that direction without
+  replication; completeness matters.
 - The wire merge mode (`-ReplicationTrees`, for example
   `orders=LwwRegister,inventory=OrSet`) is applied identically estate-wide.
 - The replication key is byte-identical across regions (one Key Vault secret per
@@ -171,18 +172,21 @@ $gpw = Read-Host -AsSecureString 'Grafana admin password'
     -EntraEnabled -EntraTenantId <tenant-guid>
 ```
 
-Running it with **no arguments** drops into PowerShell's per-parameter prompt,
-which can only supply **strings** - it cannot build the `-Regions` hashtables. For
-an interactive run, give each region in the compact `regionCode=location` form, one
-per line, and a blank line to finish; and type a non-empty `-ImageTag` (a blank
-entry is rejected):
+Running it with **no arguments** drops into PowerShell's per-parameter prompt for
+the mandatory parameters (`-SubscriptionId`, `-ResourceGroup`, `-Location`,
+`-BaseName`, `-Regions`, and the `-GrafanaAdminPassword` `SecureString`). The
+prompt cannot build the `-Regions` hashtables, so give each region in the compact
+`regionCode=location` form, one per line, and a blank line to finish:
 
 ```text
 Regions[0]: uks=uksouth
 Regions[1]: wus=westus3
 Regions[2]:
-ImageTag: 2025.07.29
 ```
+
+`-ImageTag` and `-ReplicationKey` are not prompted for: pass them on the command
+line (for example `-ImageTag 2025.07.29 -ReplicationKey $key`), or the run stops
+with an actionable error before it touches Azure.
 
 Add `-WhatIf` to preview every action without mutating Azure.
 
@@ -222,17 +226,26 @@ skip the confirmation prompt, or `-WhatIf` to preview. For any other topology
 | `-BaseName` | yes | 3-16 lowercase alphanumerics, shared estate-wide. |
 | `-Regions` | yes | One or more regions. Each entry is a hashtable `@{ regionCode = '<2-8 chars>'; location = '<azure region>' }` or the compact string `'regionCode=location'` (for example `'use=eastus'`); the string form is what the interactive prompt accepts. |
 | `-ImageTag` | yes | Non-empty tag applied to all three built images (silo / MCP / Explorer). |
+| `-SiloImageRepository` / `-McpImageRepository` / `-ExplorerImageRepository` | no | Registry repository names for the three built images (defaults `lattice-silo` / `lattice-mcp` / `lattice-explorer`). |
 | `-DeploymentOption` | no | `public` (default, external ingress + replication key over public ingress) or `private` (internal ingress + VNet peering, replication key layered on as defense in depth). Both are VNet-injected + zone-redundant, and both provision the per-region replication Key Vault. |
 | `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute for both options. |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
-| `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
+| `-IngressAllowedCidrs` | no | Ingress allow-list seam (public option). Currently only echoed as a `networking` module output; no ingress applies it yet. |
+| `-SiloMinReplicas` / `-SiloMaxReplicas` | no | Silo scale floor (default 1) and ceiling (default 3), each 1-100. |
+| `-AuthDefaultEffect` | no | `Deny` (default) or `Allow` (throwaway dev only). |
+| `-RequireApiAuthorization` | no | Default `$true`: the silo facades and the MCP endpoint require authorization. |
 | `-ReplicationKey` | yes | `SecureString`, stable across runs. Required by both options. |
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable and target tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra.bicep`. |
+| `-ExplorerWebClientId` | no | Explorer console web-app (client) id, used only with `-EntraClientId`; otherwise read from the `entra.bicep` `explorerClientId` output. |
+| `-EntraAudiences` | no | Extra accepted token audiences. |
 | `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). Object id (GUID) or UPN / email (resolved to an object id). Defaults to the deploying user when Entra is enabled; add further administrators at runtime via the Explorer Access tab. |
 | `-EnableDataApi` | no | `$true` (default) exposes the read-write Data API; `-EnableDataApi:$false` withholds the write surface. |
+| `-EnableReplicationControl` | no | `$true` (default) co-hosts the runtime per-tree replication control plane (silo control binding plus the MCP `lattice_replication_*` tools), fail-closed behind an authored Replication grant; `-EnableReplicationControl:$false` withholds it. |
+| `-EnableBackupControl` | no | `$true` (default) makes the MCP head advertise the backup tool group, fail-closed behind an authored Backup grant; `-EnableBackupControl:$false` withholds it. |
+| `-EnableDigestAntiEntropy` / `-DigestProbeIntervalSeconds` | no | `$false` / `0` (defaults). Cross-cluster anti-entropy applied to every region; the interval optionally shortens the probe cadence. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
 | `-WhatIf` | no | Preview every action without mutating Azure. |
@@ -249,8 +262,9 @@ Every step converges:
 - Federated identity credentials and app registrations are keyed by stable names,
   so a re-run updates in place.
 
-Supply the **same** `-ReplicationKey` on every run; rotating it dead-letters
-in-flight cross-region traffic until all regions converge on the new key.
+Supply the **same** `-ReplicationKey` on every run; rotating it stalls cross-region
+replication - a receiver refuses the mismatched key, and the shipper holds its
+place and retries - until every region runs with the new key.
 
 ## Static validation (no Azure required)
 

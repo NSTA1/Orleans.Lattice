@@ -47,6 +47,6 @@ other.Tick("replica-C");
 bool seenEverythingInOther = current.DominatesOrEquals(other); // false: C:1 unseen
 ```
 
-See also: [MV-Register](mvregister.md), which uses per-value dot contexts for the
-same concurrency-detection idea at the single-value level, and the
-[CRDT overview](readme.md).
+See also: [MV-Register](mvregister.md), which tags each value with a causal dot
+and remembers the dots each write has observed - the same concurrency-detection
+idea at the single-value level - and the [CRDT overview](readme.md).

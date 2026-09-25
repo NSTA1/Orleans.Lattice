@@ -1,8 +1,10 @@
 # Replication wire format (`IReplicationBatchEncoder`)
 
-`IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes that an outbound shipper stuffs into [`ReplicationBatch.Payload`](transport.md). It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.
+`IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes of a replication batch. It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.
 
-The default registration is a binary encoder that uses the Orleans serializer applied to a versioned envelope. Hosts that need a different framing - JSON for HTTP-transport debuggability, a custom envelope for compatibility with an external pipeline, content-hash-prefixed framing for deduplication - replace the registration via standard DI.
+The seam covers two payload shapes. The **typed envelope** (`Encode` / `Decode`) is the versioned `ReplicationBatchEnvelope`, carried in [`ReplicationBatch.Payload`](transport.md) or `ReplicationBatch.Envelope`. The **framing layout** (`EncodeFraming` / `TryDecodeFraming`), carried in `ReplicationBatch.EncodedEnvelope`, is a fixed 32-byte `EncodedBatchHeader`, the length-prefixed tree name and origin cluster id, and then one length-prefixed, pre-encoded `WalRecord` segment per entry. The built-in shipper always ships the framing layout and leaves `Payload` empty; the gRPC receiver recognises a framing payload by its magic prefix and falls back to the typed decode for anything else.
+
+The default registration is a binary encoder that uses the Orleans serializer for the typed envelope and writes the framing layout itself, with optional tail compression. Hosts that need a different framing - JSON for HTTP-transport debuggability, a custom envelope for compatibility with an external pipeline, content-hash-prefixed framing for deduplication - replace the registration via standard DI.
 
 ## API
 
@@ -15,6 +17,21 @@ public interface IReplicationBatchEncoder
     int CurrentWireVersion { get; }
     void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer);
     ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload);
+
+    // Default interface methods: the framing-only fast path.
+    void EncodeFraming(
+        in EncodedBatchHeader header,
+        string treeName,
+        string originClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> entries,
+        IBufferWriter<byte> writer);
+
+    bool TryDecodeFraming(
+        ReadOnlyMemory<byte> payload,
+        out EncodedBatchHeader header,
+        out string treeName,
+        out string originClusterId,
+        out ReadOnlyMemory<ArraySegment<byte>> entries);
 }
 
 public readonly record struct ReplicationBatchEnvelope
@@ -36,7 +53,9 @@ public readonly record struct ReplicationBatchEnvelope
 | `OriginClusterId` | Stable identifier of the originating cluster. Mirrors `ReplicationBatch.OriginClusterId` on the surrounding call envelope; receivers use it to attribute origin and break replication cycles. |
 | `Entries` | The captured `WalRecord` records, in commit order. May be empty (heartbeat / keep-alive batch). Never `null` on a value produced by the canonical encoder; hand-constructed envelopes that leave this default decode as an empty list because the canonical decoder normalises `null` to `Array.Empty<WalRecord>()`. |
 
-The envelope is Orleans-serialisable (alias `olr.be`); the call-shape `ReplicationBatch` is intentionally not. Wire-format hardening - versioned envelopes, content framing, compression - happens *inside* `ReplicationBatch.Payload`, and the envelope is the canonical shape that lives there.
+The envelope is Orleans-serialisable (alias `olr.be`); the call-shape `ReplicationBatch` is intentionally not. Wire-format hardening - versioned envelopes, content framing, compression - lives inside the two payload shapes described above, never on the call-shape struct.
+
+`TryDecodeFraming` returns `false` rather than throwing when the payload is shorter than the fixed header or its magic prefix does not match, so a caller can fall back to `Decode`; it throws `NotSupportedException` for a framing wire version newer than `EncodedBatchHeader.CurrentWireVersion`, and `ArgumentException` for a negative, impossible, or truncated entry layout. The two version numbers are independent: `ReplicationBatchEnvelope.CurrentVersion` (currently `1`) versions the typed envelope only, while the framing header carries its own `EncodedBatchHeader.WireVersion` (`EncodedBatchHeader.CurrentWireVersion`, currently `5`) - the version that [wire-version capability negotiation](#wire-version-capability-negotiation) reasons about.
 
 ## Why a versioned envelope
 
@@ -90,7 +109,7 @@ And two on decode:
 
 ## Allocation contract
 
-The encode signature is deliberately `void Encode(envelope, IBufferWriter<byte> writer)` rather than the more obvious `byte[] Encode(envelope)` or `ReadOnlyMemory<byte> Encode(envelope)`. Returning a freshly-allocated buffer per batch would force a per-call heap allocation on the canonical hot path - exactly the path the streaming push transport drives at sub-second cadence - and there is no way for callers to "opt out" of the allocation once it is baked into the signature.
+The encode signature is deliberately `void Encode(envelope, IBufferWriter<byte> writer)` rather than the more obvious `byte[] Encode(envelope)` or `ReadOnlyMemory<byte> Encode(envelope)`. Returning a freshly-allocated buffer per batch would force a per-call heap allocation on the canonical hot path - exactly the path the gRPC push transport drives, one unary `Push` call per batch, at sub-second cadence - and there is no way for callers to "opt out" of the allocation once it is baked into the signature.
 
 Forcing the writer-supplied shape pushes buffer ownership to the caller, who can choose:
 
@@ -135,7 +154,7 @@ The encoder is a singleton so the underlying `Serializer<ReplicationBatchEnvelop
 
 A JSON encoder for HTTP-transport debuggability is a future option - JSON's per-field-name framing trades bandwidth for inspectability, which is the right trade for a debugging-only flag on a bootstrap / low-frequency HTTP path. Such an encoder plugs in via the same DI seam without changes to the transport layer or the envelope shape.
 
-A content-hash-prefixed encoder layered on top of the binary format is the natural home for receiver-pull-only-missing-content-hashes deduplication; the seam is intentionally narrow enough that such an encoder can wrap the binary one without re-implementing the framing.
+Receiver-pull-missing content-hash deduplication did not need an encoder after all: it ships as the opt-in content-manifest exchange (`LatticeReplicationOptions.ContentHashDedupElisionEnabled`), a separate RPC on the digest-probe transport that elides payloads the receiver already holds before the batch is framed (see [Content-manifest payload elision](observability.md#content-manifest-payload-elision)). A content-hash-prefixed encoder layered on top of the binary format remains possible; the seam is intentionally narrow enough that such an encoder can wrap the binary one without re-implementing the framing.
 
 ## Caveats
 
@@ -147,7 +166,7 @@ The framing layer (``EncodeFraming`` / ``TryDecodeFraming``) carries an optional
 
 Dict-less Zstandard (``LatticeCompression.Zstd``) is the **default** framing algorithm: a stock ``AddLatticeReplication`` cluster compresses its framing tail out of the box. The ``Zstd`` compressor is registered unconditionally, so every current-wire-version receiver already decodes the default frame with no extra wiring. The per-batch ``FramingCompressionMinBatchBytes`` threshold (512 bytes) still stamps ``None`` on a tail too small to recoup the fixed compression overhead, and **shared dictionaries** (``ZstdDictionary``) remain opt-in. A host that wants the historical uncompressed framing sets ``FramingCompression = LatticeCompression.None``.
 
-This means **no wire-version bump**: a receiver that does not know how to decompress a given algorithm tag fails fast with ``NotSupportedException`` rather than silently dropping data. The encoder''s internal dispatch is keyed on the raw compression byte (not on named ``LatticeCompression`` enum members), so a host-defined algorithm whose tag is in the reserved ``[0x80, 0xFF]`` range round-trips through encode/decode without any core enum churn.
+This means **no wire-version bump**: a receiver that does not know how to decompress a given algorithm tag fails fast with ``NotSupportedException`` rather than silently dropping data. The encoder's internal dispatch is keyed on the raw compression byte (not on named ``LatticeCompression`` enum members), so a host-defined algorithm whose tag is in the reserved ``[0x80, 0xFF]`` range round-trips through encode/decode without any core enum churn.
 
 The replication options ``FramingCompression``, ``FramingCompressionLevel`` and ``FramingCompressionMinBatchBytes``, the public DI seam (``ILatticeCompressor`` and ``AddLatticeCompressor``), the tag-space partitioning, the worked example for plugging in a new algorithm, and the testing surface are all documented in **[`docs/lattice/compression.md`](../lattice/compression.md)** - that page is the source of truth for everything compression-related across Orleans.Lattice.
 
@@ -191,8 +210,8 @@ if (result.DowngradeActive)
 
 `WireVersionDownEncoder` is the consumer of the negotiated target. It prepares the outbound batch's fixed `EncodedBatchHeader` for a target version older than the sender's current build so a current-build sender can ship a frame a not-yet-upgraded receiver decodes **and** applies. The mechanism is deliberately **header-only** - no entry segment is re-serialised - which is correct because every prior framing version *elided* a per-entry field rather than adding one, so the entry-segment bytes the current build produces are already a strict subset of what an older receiver expects:
 
-- **Wire version 4** elided the per-entry `WalRecord.TreeId` slot. The current build also elides it, and a version-4 receiver re-stamps the tree id from the framing tail's `TreeName`. The entry segments are therefore byte-identical between version 4 and version 5.
-- **Wire version 5** hoisted the per-entry merge mode into the header's packed slot. `WalRecord.Mode` carries no Orleans `[Id]` tag, so it is never serialised onto an entry segment in any version; a version-4 producer's per-entry mode was uniformly the `LwwRegister` enum default, so a version-4 receiver reads `LwwRegister` for every entry.
+- **Wire version 4** elided the per-entry `WalRecord.TreeId` slot. The current build also elides it, and a version-4 receiver re-stamps the tree id from the framing tail's `TreeName`, so neither version carries a tree id on an entry segment.
+- **Wire version 5** hoisted the per-entry merge mode into the header's packed slot. `WalRecord.Mode` has since been re-tagged `[Id(26)]` so that the durable WAL replay path, which has no framing header, can recover a CRDT record's mode; it therefore does travel on the entry segment. A receiver built before that tag skips the unknown field id on decode and reads the `LwwRegister` enum default for every entry, which is correct for the last-writer-wins batches that are the only down-stampable shape.
 
 Down-stamping to version 4 is consequently exact when - and only when - the batch's merge mode is `LwwRegister` and the framing tail is uncompressed. A version-4 receiver reading the version-5 header's trailing packed 32-bit slot interprets bits 16-23 as part of its 24-bit `AtomicBatchSpanCount`; those bits are zero precisely when `Mode` is the `LwwRegister` default, so the header bytes are then fully version-4-compatible.
 

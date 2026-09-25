@@ -15,11 +15,15 @@ head and the shared UI library takes no dependency on it.
 - The plugin's **controlled domain model** (`IBackupsDomain`), which is the whole
   of what the host resolves for the Backups panel: the panel receives no cluster
   connection, no gRPC channel, and no other plugin's services.
-- An **access gate** that files the plugin-level decision and the per-tree
-  capture / incremental / restore / delete decisions into the Explorer's keyed
-  plugin access store, so the area and its per-scope actions grey out when the
-  connected cluster does not expose the backup control facade or the caller may
-  not use it. The gate is advisory; the server stays the sole enforcement point.
+- An **access gate** for the area entry. Its plugin-level decision reads the
+  backup control API's own capability probe (list access), so the entry is
+  withheld when the connected cluster does not serve the backup control facade,
+  demoted when the caller may not use it, and an invitation to sign in when the
+  caller is anonymous. The gate can also file per-tree list / capture /
+  incremental / restore / delete decisions under scoped keys in the Explorer's
+  keyed plugin access store, but the shipped panel does not pre-check them: its
+  actions submit, and a server denial is reported inline. The gate is advisory;
+  the server stays the sole enforcement point.
 - A plugin-scoped stylesheet served at
   `_content/Orleans.Lattice.Explorer.Backup/lattice-backups.css`,
   written against the Explorer design-system tokens.

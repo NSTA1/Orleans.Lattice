@@ -1,15 +1,41 @@
 # WAL Design - Causal+ Ready (with Performance Notes)
 
-> **Status:** partially shipped - the entry-schema seam is live as of the
-> first causal-plus delivery; receiver-side dep-check, GC predicate, and
-> snapshot cut-point remain forward-looking. The shipped pieces are the
-> two additive `[Id]` slots on `WalRecord` (`VectorClock`,
-> `DependencySummary`), the producer-side stamping at the commit-time
-> mutation observer, the internal `VectorClockCodec`
-> (`EncodeAbsolute` / `EncodeDelta` / `DecodeDelta`), and a diagnostic
-> minor-version bump on `ReplicationBatchEnvelope` (alias and
-> `WireVersion` unchanged so legacy peers continue to decode the new
-> entries with both slots flowing through as `null`). Companion to
+> **Status:** partially shipped, and not everywhere in the shape sections 3-8
+> sketch. Read those sections as the design rationale; what ships today is:
+>
+> - **Entry schema (section 1)** - live. `WalRecord` carries the two additive
+>   `[Id]` slots `VectorClock` and `DependencySummary` (today both hold the same
+>   frontier), stamped on the commit path from the ambient
+>   `LatticeVectorClockContext`, plus a diagnostic minor-version bump on
+>   `ReplicationBatchEnvelope` (alias and `WireVersion` unchanged, so legacy
+>   peers decode both slots as `null`). Records carry the absolute frontier: an
+>   internal delta codec for vector clocks ships, but no shipped write or wire
+>   path uses it.
+> - **Receiver-side dependency check (sections 3-6)** - shipped in the
+>   replication apply pipeline, per tree rather than per shard. An entry whose
+>   frontier names a clock the receiver's local vector clock has not reached
+>   (ignoring the entry's own origin and the receiver's own cluster) is parked in
+>   a bounded per-tree buffer (`CausalBufferMaxEntries` /
+>   `CausalBufferMaxBytes`, overflow routed to the dead-letter queue) and retried
+>   as later applies advance the local clock. Unlike section 6, the per-origin
+>   high-water mark is not a duplicate-drop gate for steady-state writes:
+>   re-delivery is filtered by a snapshot-pinned causal floor, a shadow-forward
+>   identity cache, and per-key last-writer-wins idempotence. See
+>   [Replication apply](../lattice.replication/replication-apply.md).
+> - **Causal-stable GC clause (section 7)** - implemented in the core WAL GC:
+>   once any consumer reports a vector frontier through the vector overload of
+>   `IWalCursorRegistry.ReportCursorAsync`, an entry is trimmed only if the
+>   pointwise-minimum frontier dominates its `VectorClock`. The clause is AND-ed
+>   with an entitlement clause (the consumer HLC cursor, the retention TTL, or
+>   the durable materialiser offset floor) and a blocked-floor clause. No shipped
+>   consumer reports a vector frontier today, so in a default deployment the
+>   clause is inert.
+> - **Snapshot cut-point (section 8)** - the replication snapshot provider cuts
+>   at the causal-stable frontier when one exists and otherwise at the
+>   producer's local vector clock; the receiver pins that frontier during the
+>   bootstrap handoff.
+>
+> Companion to
 > [`../lattice.replication/wal.md`](../lattice.replication/wal.md) (the
 > replication-side per-shard WAL overlay) and [`wal.md`](wal.md) (the
 > cross-cutting WAL contract).
@@ -34,7 +60,7 @@ Each WAL entry is extended to carry causal metadata required for causal+ consist
 - `TreeId`
 - `ShardIndex`
 - `Key`
-- `Op` (`MutationKind`: Set / Delete / DeleteRange)
+- `Op` (`MutationKind`: Set / Delete / DeleteRange, plus the `TxCommit` / `TxAbort` saga terminal marks and the `Tombstone` compaction reap mark)
 - `Value` **and** `Delta` - two distinct slots, not one combined field: `Value` carries a full value, `Delta` carries a typed CRDT delta, and a given entry populates whichever its merge mode calls for.
 - `OriginClusterId`
 - `Timestamp` (Hybrid Logical Clock)
@@ -49,8 +75,8 @@ The per-shard monotonic offset is **not** a field on the entry. It is assigned b
 A per-origin vector clock representing the full causal frontier at commit time.
 
 - Sparse map: `{ origin → hlc }`.
-- Encoded compactly (delta-encoded relative to the previous entry on the same shard).
-- Backwards compatible: missing field decodes to an empty map.
+- Designed to be encoded compactly (delta-encoded relative to the previous entry on the same shard); the shipped record carries the absolute frontier (see the status note above).
+- Backwards compatible: a missing field decodes as `null`, which receivers treat as the empty frontier.
 
 **Performance note (avoid Mistake 1 - full VC bloat):**
 
@@ -75,11 +101,10 @@ A compact representation of the causal predecessors of this entry.
 
 Two purely additive `[Id]` slots on `WalRecord` (and the corresponding `LatticeMutation` slots on the observer-side surface) that carry the size and zero-based index of the enclosing atomic transaction.
 
-- `AtomicBatchSize` - total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key emit produced by a `SetManyAtomicAsync` saga of size `N`, including compensation rolls.
-- `AtomicBatchIndex` - zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
-- Sibling membership is keyed by the existing `TransactionId` slot. The receiver detects a complete batch by counting siblings that share an `(originClusterId, transactionId)` against the declared `Size`.
-- There is deliberately **no** separate "commit marker" entry. A partially-shipped batch that loses a sibling surfaces as the orphan-timeout case the receiver-side staging buffer already handles, not an indefinite stall waiting on a commit row that never arrives.
-- Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`. The slots remain on `WalRecord` as additive metadata; no shipped receiver-side path consumes them today.
+- `AtomicBatchSize` - total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key prepared emit produced by a `SetManyAtomicAsync` saga of size `N`. An aborted saga emits no per-key rollback writes, so there are no compensation emits to stamp (see [Atomic writes](atomic-writes.md)).
+- `AtomicBatchIndex` - zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, taken from the entry's position in the batch the saga was given, whichever shard the entry routes to.
+- Sibling membership is keyed by the existing `TransactionId` slot, but batch completeness is not detected by counting siblings. The saga appends a separate per-shard `TxCommit` / `TxAbort` terminal record after its prepared writes, and a receiver tallies those terminals against the stamped `AtomicShardCount` before it flips the batch visible - see [Atomic writes: Multi-shard receiver gate](atomic-writes.md#multi-shard-receiver-gate).
+- Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`. Shipped paths do consume them: the replication receiver (a prepared write with a non-zero batch size bypasses the snapshot-floor dedup and the causal-dependency park, and a range delete carrying batch metadata is rejected), the replication anti-entropy leaf re-replay (which ships a batch as one unit), and the materialised-view maintainer (which flushes a staged batch only once its prepares reach the declared size and its terminals have arrived).
 
 **Performance note:**
 
@@ -262,6 +287,16 @@ An entry is GC-eligible when:
 
 The predicate must consult **every** change-feed consumer's VC - including any future local materialiser - not just remote peers. A lagging consumer must pin the log identically regardless of whether it is remote or in-process.
 
+### 7.3 Shipped form
+
+The shipped GC implements the causal-stable clause, but not the peer-offset predicate of 7.1: replication peers pin the log by HLC cursor, and the only offset floor it applies is the durable materialiser (leaf checkpoint) floor. It walks each WAL partition from the head and trims the longest prefix whose entries are all eligible, where an entry is eligible only when it passes three independent clauses:
+
+- **Entitlement** - the minimum consumer HLC cursor has passed the entry, or the entry is older than the configured retention TTL, or the durable materialiser offset floor admits it (that floor can also refuse an entry only the in-memory cursor would admit). Separately, the scan stops at the first entry above the partition's durable materialiser offset floor.
+- **Causal-stable** - when any consumer has reported a vector frontier, the pointwise minimum of the reported frontiers dominates the entry's `VectorClock` (an entry with a `null` frontier always passes). Consumers that report only an HLC cursor still pin the log through the entitlement clause but are left out of the frontier minimum, and no shipped consumer reports a frontier today, so this clause is inert in a default deployment.
+- **Blocked floor** - the entry's HLC is strictly below the lowest buffer pin any consumer reports.
+
+The cursor registry caches the frontier and the blocked floor and recomputes them only after a consumer's report changes the registry or a consumer unregisters; each GC pass samples them once rather than per entry.
+
 ---
 
 ## 8. Snapshot semantics
@@ -314,7 +349,7 @@ The transport only needs to:
 **Performance note:**
 
 - Keep transport logic **dumb and fast**; all causal reasoning stays in the apply pipeline.
-- Use **one long-lived stream per peer** (as the gRPC push transport already does) to minimise per-batch overhead.
+- Use **one long-lived connection per peer** to minimise per-batch overhead. The shipped gRPC push transport keeps one long-lived, HTTP/2-multiplexed channel per peer cluster and sends each batch over it as a unary `Push` RPC - not a stream.
 
 ---
 
@@ -382,15 +417,15 @@ Sections 1–11 cover the point-write, single-tree, single-shard-per-mutation pa
 
 Every item in the completeness wave is constrained by the same rules that bound sections 1–10:
 
-- **No commit-path change.** VC capture happens at the leaf commit-log writer on the existing commit path, where each WAL record is stamped. The atomic-transaction boundary is a metadata signal on `LatticeMutation`, not a new commit phase.
+- **No commit-path change for point writes.** VC capture happens on the leaf's existing commit path, where each WAL record is stamped. Atomic writes are the exception: their prepared writes are appended invisibly, the saga appends a separate per-shard `TxCommit` / `TxAbort` terminal record after them, and the batch becomes visible at the tree's transaction-registry decision rather than at each entry's append (see [Atomic writes](atomic-writes.md)).
 - **Append-only, monotonic, durable.** No item rewrites a WAL entry, no item changes offset semantics, no item changes the commit point.
-- **Per-shard apply.** The shadow-forward receiver-side dedupe cache is per-shard; no cross-shard locks. The producer ships the causal frontier straight from the per-shard leaf WAL, so there is no separate in-memory producer-side cache to coordinate.
-- **Wire-additive only.** The new structural-rewrite and shadow-forward `[Id]` slots have decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode and behave identically to today's per-origin-only HWM check.
-- **Idempotent under re-delivery.** The shadow-forward `RecentApplyCache<(origin, hlc, key, op)>` LRU is a fast-path optimisation; correctness is still bounded by the per-origin HWM plus the dependency check.
+- **No cross-shard locks in apply.** The shadow-forward receiver-side dedupe cache is held per tree, and nothing in the apply path takes a cross-shard lock. The producer ships the causal frontier straight from the per-shard leaf WAL, so there is no separate in-memory producer-side cache to coordinate.
+- **Wire-additive only.** The new structural-rewrite and shadow-forward `[Id]` slots have decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode, and apply exactly as entries whose slots are empty.
+- **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf, and entries at or below a snapshot-pinned causal floor are dropped up front. The per-origin high-water mark is not a drop criterion for steady-state writes.
 
 ### 12.2.1 Atomic multi-key write shipped mechanism
 
-The atomic-transaction boundary (`TransactionId`) is the per-emit signal a future causal+ consumer reads to detect that several entries belong to the same enclosing batch. The producer-side VC capture is the **batch-wide consistency** half: a new `[Id(11)] AtomicWriteState.VectorClock` slot persists the caller's ambient frontier on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `Delta` precedent - wire-compatible, missing field on legacy persisted state decodes to `null`); the saga grain re-stamps the persisted slot onto `LatticeVectorClockContext.Current` at the head of every `RunSagaAsync` so every per-key `SetAsync` issued during `Execute` reads the identical ambient and the leaf grain stamps it onto the freshly-constructed `LwwValue`. The saga-wide stamp survives crash recovery because the persisted slot is the single source of truth. Compensation rolls override the saga-wide stamp per-key with each `AtomicPreValue.VectorClock` so a rolled-back key re-lands with its original frontier.
+The atomic-transaction boundary (`TransactionId`) is the per-emit signal a causal+ consumer reads to detect that several entries belong to the same enclosing batch. The producer-side VC capture is the **batch-wide consistency** half: the saga persists the caller's ambient frontier once, on its first prepare, in a wire-compatible slot of its own state (a legacy persisted saga decodes it as `null`), and re-establishes it on `LatticeVectorClockContext.Current` every time it resumes driving, so the single batched dispatch that stages the batch's prepared writes reads the identical ambient and each leaf stamps it onto the entry it stages. The saga-wide stamp survives crash recovery because the persisted slot is the single source of truth. There is no per-key compensation stamp: an aborted saga issues no rollback writes - it records the abort and its terminal marks discard the staged prepares - so no rolled-back key ever re-lands (see [Atomic writes](atomic-writes.md)).
 
 ### 12.2.2 Intra-cluster snapshot/restore shipped mechanism
 

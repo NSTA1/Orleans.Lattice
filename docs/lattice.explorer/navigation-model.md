@@ -9,15 +9,15 @@ adjacent tiers.
 
 | Tier | What it selects | How it renders |
 | --- | --- | --- |
-| Areas | The top-level capability you are working in (Explore, Backups, Access, Tenant administration, My tenant, Telemetry) | A stable vertical rail down the left of the shell |
+| Areas | The top-level capability you are working in (Explore, Backups, Access, Tenant administration, My tenant, Telemetry, and Schema when a head registers it) | A stable vertical rail down the left of the shell |
 | Catalog kind | Whether the catalog lists trees, views or tag indexes | A segmented control above the catalog |
-| Selection surfaces | Which aspect of the selected tree or view you are looking at (Data, Topology, Metrics, Dead-letter) | An underlined tab strip above the detail panel |
+| Selection surfaces | Which aspect of the selected tree or view you are looking at (Data, Topology, Metrics, Dead-letter), or, for a selected tag index, its tag-index browser | An underlined tab strip above the detail panel |
 | Plugin sub-surfaces | A section within one area, such as the surfaces of Tenant administration | A visibly subordinate segmented control, quieter than the selection tabs |
 
 No two adjacent tiers share a shape, and no two adjacent tiers may share a
 label. Where a plugin declares a sub-surface whose label matches its own area
-label, the shell relabels that sub-surface to `Overview` rather than render the
-same word twice. That relabelling is a backstop; plugins should name their
+label, the shell relabels the first such sub-surface to `Overview` rather than
+render the same word twice. That relabelling is a backstop; plugins should name their
 surfaces so it never fires.
 
 ## Why primary navigation is a rail

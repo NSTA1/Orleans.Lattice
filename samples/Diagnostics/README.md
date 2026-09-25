@@ -7,8 +7,9 @@ touching application data paths. The report exposes the shard count, total live 
 total tombstones, recent split activity, and a per-shard breakdown (B+ tree depth,
 live keys, tombstones, tombstone ratio, read/write counts, and current ops/second).
 This sample writes ten keys, deletes three (leaving tombstones), then prints a deep
-snapshot. A deep report walks each shard's leaf chain so tombstone counts are exact;
-a shallow report skips that walk and reports zero tombstones.
+snapshot. Both report depths walk each shard's leaf chain: a deep report reads each
+leaf's full statistics, so tombstone counts are exact, while a shallow report counts
+only live keys and reports zero tombstones.
 
 ## Run it
 
@@ -50,14 +51,16 @@ Per-shard breakdown (shards with activity only):
 ## When to use
 
 - Health probes and dashboards: poll `DiagnoseAsync(deep: false, ...)` at a low rate
-  to track live-key growth, tombstone ratio, and per-shard hotness cheaply.
+  to track live-key growth and per-shard hotness cheaply. A shallow report counts no
+  tombstones, so tombstone counts and the tombstone ratio need `deep: true`.
 - Post-mortem investigation: run `DiagnoseAsync(deep: true, ...)` to get exact
   tombstone counts and B+ tree depth when diagnosing compaction or split behaviour.
 
 ## When not to use
 
 - Do not call `DiagnoseAsync` on the hot path or per request. It is an admin-rate
-  API; a deep report walks leaf chains and is comparatively expensive.
+  API; every report walks each shard's leaf chain, and a deep report also reads full
+  statistics from every leaf, so it is comparatively expensive.
 - Do not rely on `ops/s` as a precise benchmark - it is a short-window hotness hint,
   not a load-test measurement.
 

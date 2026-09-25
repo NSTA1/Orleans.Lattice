@@ -59,9 +59,10 @@ These override or extend the base for Orleans.Lattice only.
    `403`.
 
 2. **Text hygiene is gated in CI.** No em-dash (U+2014) and no non-ASCII bytes in
-   any tracked text file. Both are enforced by tests in the required
-   `build-and-test` check, so a violation fails the build rather than merely
-   reading badly.
+   any tracked text file. The em-dash, and the mojibake a mangled non-ASCII byte
+   turns into, are enforced by tests in the required `build-and-test` check, so
+   either fails the build rather than merely reading badly; other non-ASCII is
+   not gated, so keep to plain ASCII by discipline.
 
 3. **The hygiene gates enumerate tracked files.** Running them before committing
    a **new** file is a false green, because an untracked file is not enumerated.

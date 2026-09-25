@@ -43,9 +43,9 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="enableWrites">
-    /// Whether the mutating repository-context tools (the <c>repocontext_bootstrap</c>
-    /// onboarding tool and the <c>repocontext_remember</c>, <c>repocontext_update</c>,
-    /// and <c>repocontext_forget</c> capture and maintenance tools) are contributed.
+    /// Whether the mutating repository-context tools (repository onboarding/removal,
+    /// memory capture and maintenance, claim management, and workspace-mode index
+    /// reset) are contributed.
     /// Defaults to <see langword="false"/> so a data-permitted caller is offered the
     /// read-only surface only until the host explicitly opts writes in.
     /// </param>

@@ -5,12 +5,14 @@ Optional, opt-in **gRPC transport binding** for
 transport-agnostic backup / restore control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
-a strongly-typed `LatticeBackupApiGrpcClient` that re-exposes the whole control
-surface over the wire: capturing full and incremental backups, listing the
-catalog (paged unary and bounded-memory server-streaming), describing a restore
-chain, deleting a backup, restoring and reverting, and streaming a backup's
-artifacts back chunk-wise. Every wire message rides the Orleans serializer, so
-the contract stays versioned and additive-only.
+a strongly-typed `LatticeBackupApiGrpcClient` that re-exposes the remote-safe
+subset of the control surface over the wire: capturing full, incremental, and
+backup-set backups, listing the catalog (paged unary and bounded-memory
+server-streaming), describing a restore chain, deleting a backup, restoring and
+reverting, streaming a backup's artifacts back chunk-wise, scheduling, scope
+status, capability probing, and backup health. Inventory, catalog rebuild /
+scrub, and cold restore stay in-process only. Every wire message rides the
+Orleans serializer, so the contract stays versioned and additive-only.
 
 Wiring is two calls on the co-hosting silo:
 

@@ -43,8 +43,8 @@ Goals:
 - **Durable and disaster-recoverable.** A durable Azure Table WAL per region and
   one shared Azure Blob backup sink that is the single source of truth for
   cold-restore.
-- **Elastic and cheap at rest.** The silo scales on real WAL pressure; the MCP,
-  Explorer, and Grafana heads scale to zero when idle.
+- **Elastic and cheap at rest.** The silo scales on real compute pressure (WAL
+  dispatch included); the MCP, Explorer, and Grafana heads scale to zero when idle.
 - **Secure by default.** Entra-backed auth on every client-facing surface,
   secrets in Key Vault reached through managed identity, least-privilege RBAC,
   non-root distroless containers, and origins locked to the global front door.
@@ -145,12 +145,13 @@ global resources shared by every region.
 
 ## Container heads and scaling profile
 
-Three built images plus one stock image, deployed as four container apps per
-region with deliberately different scaling profiles:
+Three built images plus one stock image, deployed as four client-facing container
+apps per region with deliberately different scaling profiles (a fifth, the
+always-resident metrics collector, is described under [Observability](#observability)):
 
 | Head | Image | Min | Max | Rationale |
 |---|---|---|---|---|
-| Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on WAL pressure. |
+| Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure. |
 | MCP | built (MCP host) | 0 | N | Stateless remote MCP server; cold-starts on demand, idle at zero. |
 | Explorer | built (Explorer host) | 0 | N | Stateless operator console; a small admin tool, idle at zero. |
 | Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
@@ -218,15 +219,19 @@ flowchart LR
 ## Cross-region replication and data flow
 
 Replication uses the `Orleans.Lattice.Replication` engine over its gRPC transport.
-Every region runs both a **shipper** (streams local WAL mutations to peers) and a
-**receiver** (applies peer mutations into the local tree).
+Every region runs both a **shipper** (pushes local WAL mutations to peers in
+batches, one unary gRPC call per batch) and a **receiver** (applies peer mutations
+into the local tree).
 
 Two invariants must hold **symmetrically across every region**, or cross-region
-traffic dead-letters:
+traffic does not converge:
 
-- **Receiver-enrollment gating.** Each region enrolls the peers it accepts
-  replication from; enrollment must be reciprocal.
-- **Wire-merge-mode.** The wire merge mode must match on both ends of every link.
+- **Enrollment.** Each region enrolls every other region as a peer - the set of
+  clusters it ships to - and enrolls every replicated tree; both must be
+  reciprocal, because a region ships only to its enrolled peers and a receiver
+  drops entries for a tree it has not enrolled.
+- **Wire-merge-mode.** The wire merge mode must match on both ends of every link;
+  a receiver dead-letters an entry whose mode disagrees with its own.
 
 ```mermaid
 flowchart LR
@@ -266,12 +271,14 @@ backup sink is shared:
 ## Autoscaling via the lattice.scaling KEDA bridge
 
 The silo's replica count is driven by the `Orleans.Lattice.Scaling`
-**compute-axis** signal (`scaleValue`, a replica-demand scalar derived from WAL
-pressure), exposed as an HTTP/health endpoint and scraped into Prometheus.
+**compute-axis** signal (`scaleValue`, a replica-demand scalar driven by the
+dominant compute pressure - grain activations, host CPU and memory, or WAL
+dispatch), published on the silo's `/metrics` endpoint (and also served as JSON at
+`/lattice/scale`) and scraped into Prometheus.
 
 ```mermaid
 flowchart LR
-    WAL["Per-silo WAL pressure"] --> SIG["lattice.scaling signal<br/>scaleValue (compute axis)"]
+    WAL["Per-silo compute pressure<br/>(activations, CPU / memory, WAL dispatch)"] --> SIG["lattice.scaling signal<br/>scaleValue (compute axis)"]
     SIG --> PROM["Managed Prometheus"]
     PROM --> KEDA["KEDA Prometheus scaler<br/>(ACA scale rule)"]
     KEDA --> REPL["Silo replica count<br/>min 1 / max 3"]
@@ -309,8 +316,9 @@ ingress FQDN:
 - Endpoint authentication is **Lattice's per-cluster replication key/secret**,
   stored in each region's **Key Vault**, referenced by the silo via **managed
   identity**, and matched across all regions.
-- Ingress is locked down (allow-listing parameterised); the global front door
-  fronts the client-facing heads.
+- The global front door fronts the client-facing heads, and every head enforces
+  the Front Door origin lock. An ingress IP allow-list is a parameterised seam
+  (`ingressAllowedCidrs`) that the kit does not yet apply to any ingress.
 
 **Private option** - internal-only ingress, replication over private address
 space:
@@ -393,9 +401,10 @@ every region:
 - **One origin group per client-facing endpoint** (Explorer, MCP, State API). The
   read-write Data API shares the State API's silo gRPC origin, so it needs no
   separate origin.
-- **Custom domain(s) with AFD-managed TLS.**
+- **AFD-managed TLS on the default `*.azurefd.net` endpoints.** A custom domain is
+  a seam the kit does not provision; one added later must keep the TLS 1.2 minimum.
 - **Origins locked to the front door**: each origin accepts traffic only via the
-  Front Door (AFD id header / access restriction), so no one bypasses the global
+  Front Door (each head checks the AFD id header), so no one bypasses the global
   ingress. See **Origin lock and its limits** below for exactly how strong this
   guarantee is.
 
@@ -415,13 +424,14 @@ MCP/Explorer origins would keep those heads from ever reaching zero. The baselin
 resolves this by using an infrequent probe and accepting that the front door may
 keep at most one warm replica of each fronted head, consistent with the
 scale-to-zero intent (the heads still scale in the rest of their replicas). The
-deploy/config docs record the probe interval and the alternative of a cheaper TCP
-probe.
+interval is the Front Door module's `probeIntervalSeconds` parameter (default 240
+seconds, in `bicep/modules/frontdoor.bicep`), and each head is probed with a
+lightweight `HEAD /health` request.
 
 **Origin lock and its limits.** The origin lock is a **header assertion, not a
 network lock**. Front Door stamps `X-Azure-FDID: <frontDoorId>` on every forwarded
-request and each region's ACA ingress is configured to reject any request whose
-header does not carry this estate's Front Door id. This is the **recommended origin
+request and each region's heads are configured (`LATTICE_FRONT_DOOR_ID`) to reject
+any request whose header does not carry this estate's Front Door id. This is the **recommended origin
 lock for AFD Standard** and stops casual direct hits on the ACA FQDN. It is not,
 however, unspoofable: ACA ingress `ipSecurityRestrictions` accepts only IPv4 CIDR
 ranges - it **cannot filter by the `AzureFrontDoor.Backend` service tag**, and
@@ -444,8 +454,11 @@ Every client-facing surface is protected by **Microsoft Entra ID**. Provisioning
 is **Bicep-native** via the Microsoft Graph extension (GA 2025-07-29): app
 registrations, service principals, and **federated identity credentials**
 (preferred over client secrets) are declared in Bicep and deployed idempotently
-alongside the Azure resources. The only residual imperative step is tenant admin
-consent where a permission demands it, which the PowerShell deployer performs.
+alongside the Azure resources. Even tenant admin consent for the silo's Microsoft
+Graph application permission is declared in the same Bicep (an app-role
+assignment), so no imperative consent step runs; the deploying identity only needs
+a privileged directory role (for example Privileged Role Administrator) for that
+grant to succeed.
 
 ```mermaid
 sequenceDiagram
@@ -460,15 +473,16 @@ sequenceDiagram
     AFD->>Head: forward (origin locked to AFD)
     Head->>Entra: validate token (authority, audience, tenant)
     Entra-->>Head: token valid
-    Head->>Silo: authorized gRPC call (federated identity)
+    Head->>Silo: authorized gRPC call (carrying the user's identity)
     Silo-->>Head: result (read-visibility filtered)
     Head-->>User: response
 ```
 
 - The **silo** validates Entra bearer tokens for its exposed facades and applies
   the fail-closed read-visibility filter, so a caller only sees trees it may read.
-- The **MCP** head authenticates users against Entra and calls the silo app-only
-  with its federated workload identity, not a stored secret.
+- The **MCP** head validates each caller's Entra token and forwards that same
+  token to the silo, which re-validates it and authorizes the call as the caller -
+  no stored secret.
 - The **Explorer** head signs operators in with a hosted-web OpenID Connect flow
   (auth-code + PKCE) and calls the silo *on-behalf-of* the signed-in operator (a
   delegated token carrying the user's identity), using its federated workload
@@ -504,10 +518,12 @@ sequenceDiagram
 
 Security is a first-class property of this architecture, not an afterthought:
 
-- **No secrets in images or source.** The container images are secretless; the
-  only secret in the estate (the per-cluster replication key) lives in Key Vault
-  and is reached by managed identity. Prefer federated identity credentials over
-  client secrets for Entra.
+- **No secrets in images or source.** The container images are secretless. The
+  per-cluster replication key lives in Key Vault and is reached by managed
+  identity; the per-region Grafana admin password is held as a Container Apps
+  secret; and the Log Analytics shared key the environment's log binding needs is
+  read at deploy time rather than passed as a parameter. Prefer federated identity
+  credentials over client secrets for Entra.
 - **Managed identity everywhere.** ACR pull, storage/table access, Key Vault
   reads, and the blob sink all use user-assigned managed identity with
   least-privilege RBAC scoped to the specific resource. No account keys, no
@@ -560,16 +576,17 @@ The three built images use the **most compact base that is practical**:
   build. Non-root, shell-less, distroless.
 - **NativeAOT and aggressive trimming are ruled out**: Orleans depends on
   reflection, source-generated serializers, and dynamic grain activation.
-- An **`InvariantGlobalization` (ICU-less)** compaction is a candidate for further
-  shrinkage, **gated on an ordinal-only audit** of the culture-sensitive
-  comparison sites in the core. The hosts sub-issue records the audit result and
-  whether the flag was flipped.
+- **`InvariantGlobalization` (ICU-less)** is enabled in all three hosts, after an
+  **ordinal-only audit** of the culture-sensitive comparison sites; the audit and
+  its result are recorded in
+  [`reference-architecture/hosts/README.md`](reference-architecture/hosts/README.md).
 
 ## Cost
 
-The baseline is designed to be cheap at rest: only the silo is always-on (min 1),
-and the MCP, Explorer, and Grafana heads sit at zero when idle. The dominant fixed
-costs are the always-on silo replica per region, the single AFD Standard profile,
+The baseline is designed to be cheap at rest: only the silo (min 1) and the small
+per-region metrics collector (one resident replica) are always-on, and the MCP,
+Explorer, and Grafana heads sit at zero when idle. The dominant fixed costs are
+the always-on silo replica per region, the single AFD Standard profile,
 the container registry, and the managed Prometheus / Log Analytics (the latter
 capped at 1 GB/day). Self-hosting Grafana instead of Azure Managed Grafana removes
 a material fixed monthly cost. A concrete, validated cost note for a specific

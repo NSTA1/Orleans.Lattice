@@ -4,20 +4,23 @@
 
 `SnapshotAsync` makes a **point-in-time copy of an entire tree** into a new
 destination tree - useful for backups, read-only analytics forks, or cloning a
-dataset for experimentation. This sample uses `SnapshotMode.Offline`: the source
-is locked shard by shard during the copy, producing a strictly consistent image.
+dataset for experimentation. This sample uses `SnapshotMode.Offline`: every source
+shard is locked when the copy starts and each is unlocked again once its own
+entries have been copied, producing a strictly consistent image.
 It then verifies the copy matches the source and shows the two trees are fully
 independent (editing one never affects the other).
 
 Switching to `SnapshotMode.Online` is a one-line change (`SnapshotMode.Online`):
 the source then stays readable **and writable** throughout the copy, with live
-mutations mirrored to the destination. Offline trades brief per-shard
-unavailability for the simplest consistency story; online keeps the source hot.
+mutations mirrored to the destination. Offline trades source availability (a
+shard stays locked until its own copy completes) for the simplest consistency
+story; online keeps the source hot.
 
-> **Runtime note:** `SnapshotAsync` runs a crash-safe coordinator that copies
-> one shard per timer tick. A tree defaults to 64 physical shards, so this
-> sample takes a few minutes to complete even though it only holds 12 keys -
-> snapshot cost scales with **shard count, not key count**.
+> **Runtime note:** `SnapshotAsync` runs a crash-safe coordinator that advances
+> one shard step per two-second timer tick, and an offline copy spends two ticks
+> on each shard (copy it, then unlock it). A tree defaults to 64 physical shards,
+> so this sample takes a few minutes to complete even though it only holds 12
+> keys - snapshot cost scales with **shard count, not key count**.
 
 ## Run it
 

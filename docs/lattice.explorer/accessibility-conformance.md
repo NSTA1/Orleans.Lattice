@@ -24,10 +24,11 @@ modes need different tools.
 
 **The token layer is checked without a browser, in the required build.** Colour
 contrast is arithmetic over the design tokens, so it does not need a rendering
-engine. A hygiene test parses the shipped stylesheet and asserts every text
+engine. Two hygiene fixtures parse the shipped stylesheet and assert every text
 pairing and every non-text pairing (borders, focus rings, state indicators)
-against its floor, in both palettes, plus the ordering of the elevation levels.
-Because it is browserless it runs in the required `build-and-test` check, so a
+against its floor, in both palettes and in each palette's high-contrast overlay
+(held to a raised floor), plus the ordering of the elevation levels.
+Because they are browserless they run in the required `build-and-test` check, so a
 contrast regression fails the pull request rather than a nightly job.
 
 **Rendered conformance is checked in a browser lane.** An axe sweep runs the
@@ -51,9 +52,10 @@ Two disciplines make those results mean something:
   from the standard one, and the identity is genuinely the one rendered, before
   asserting anything is clean. The rule set is checked for vacuity too:
   `target-size`, the only rule carrying the `wcag22aa` tag in the bundled
-  axe-core, ships disabled,
-  so requesting the tag without enabling the rule would have reported a
-  meaningless clean WCAG 2.2 AA pass.
+  axe-core, ships disabled, and `label-content-name-mismatch`, the only
+  `wcag21a` rule, is tagged experimental, so requesting either tag without
+  enabling its rule would have reported a meaningless clean pass. Both rules are
+  force-enabled by id.
 
 ## Known limitations
 

@@ -5,9 +5,13 @@ deployment, the canonical durable record of every leaf mutation. Each leaf
 grain materialises that log into a per-activation in-memory projection
 (the entry cache - a sorted dictionary owned by the leaf grain for the
 lifetime of the activation, not persisted). The persisted leaf state row
-carries only topology, the checkpoint offset, and a 16-byte projection-digest
-XOR fold; the cache is rebuilt from the WAL strictly after that offset on
-every activation. Two operational concerns naturally arise:
+carries no entries: it holds topology, the per-partition projection
+checkpoint offsets, the HLC clock and version vectors, a 16-byte
+projection-digest XOR fold, and a little replay bookkeeping. On every
+activation the cache is rebuilt from the WAL strictly after the persisted
+checkpoints, seeded first from the leaf's snapshot when that is newer (see
+[Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net)). Two
+operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
    WAL prefix it claims to have applied - a cosmic-ray bit flip, a
@@ -32,17 +36,22 @@ LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
 
 // digest.Hash             - 16-byte XxHash128 fingerprint of the shard's projection
 // digest.EntryCount       - entries (live + tombstoned) folded into the hash
-// digest.CheckpointOffset - sum of per-leaf projection-checkpoint offsets
+// digest.CheckpointOffset - highest per-leaf projection-checkpoint offset
 ```
 
 `GetLeafProjectionDigestAsync` reads the requested **physical shard**'s
 root and returns a pre-folded digest in `O(1)` grain hops at the shard
 level. The shard's internal-node root maintains a running
-**XOR-fold** over every descendant leaf's running per-leaf hash; each
-internal node tracks its subtree aggregate (`SubtreeProjectionHash`,
-`SubtreeEntryCount`, max-reduced `SubtreeHighestCheckpointOffset`),
-updated incrementally as each leaf publishes its
-`ChildDigestSnapshot` upward on every mutation. The public shard hash
+**XOR-fold** over every descendant leaf's running per-leaf hash. Each
+internal node persists the latest digest snapshot (hash, entry count,
+checkpoint offset) of each of its children and re-derives its subtree
+aggregate from that table - the XOR of the child hashes, the sum of
+their entry counts, and the maximum of their checkpoint offsets -
+whenever a child publishes a fresh snapshot upward. A leaf publishes
+after its mutations persist, and mutations that land within
+[`DigestCoalescingWindowMs`](configuration.md#digestcoalescingwindowms)
+(default 5 ms) share one publish; structural changes such as splits and
+tombstone reaps publish immediately. The public shard hash
 is
 
 ```text
@@ -58,9 +67,11 @@ equality is the strongest possible cross-silo state-equivalence check
 the library provides.
 
 When the shard's root is a single leaf (flat-tree case, no internal
-node yet exists), the digest is read directly from the root leaf. When
-the shard is empty, the public hash is the XxHash128 over an empty
-input with both counters at zero.
+node yet exists), the digest is read directly from the root leaf. A
+never-written shard is no exception: the read first materialises its
+root leaf, so an empty shard reports `EntryCount = 0` and
+`CheckpointOffset = 0` with a hash equal to the XxHash128 of 32 zero
+bytes (the all-zero 16-byte fold followed by the two zero counters).
 
 XxHash128 is a non-cryptographic hash: it is chosen for ~10x lower CPU
 cost than SHA-256 on the per-mutation hot path and for its uniformly
@@ -145,12 +156,16 @@ The split path preserves the one-parent invariant in two steps:
    publishing the corrected aggregate upward. The XOR fold's
    self-inverse algebra makes the recompute exact - the moved rows
    cancel cleanly out of the running hash.
-2. **Reject stale publishes.** Each internal node folds a
-   `ChildDigestSnapshot` only from a child it currently owns. A
+2. **Reject stale publishes.** Each internal node folds a child's
+   digest snapshot only from a child it currently owns. A
    snapshot arriving from a child that has already been re-parented to
    the new sibling is rejected and its stale row (if any) dropped, so a
    moved child that races a publish against its re-parenting cannot
-   reintroduce a double count. A donor likewise re-seeds a child's
+   reintroduce a double count. Every publisher also stamps a
+   monotonic sequence, and a snapshot older than the one already folded
+   for that child is dropped, so a late coalesced publish carrying a
+   pre-split count cannot overwrite a fresher one. A donor likewise
+   re-seeds a child's
    parent pointer only for children it still owns, so a moved child is
    never pointed back at the node it left.
 
@@ -159,19 +174,26 @@ of distinct entries (live plus tombstoned) under the shard across an
 arbitrary sequence of internal-node splits, with no transient
 over- or under-count visible to a quiescent digest read.
 
-The upward `ChildDigestSnapshot` publish that maintains the aggregate
-is a cross-grain RPC awaited while the publishing node holds its
-non-reentrant split gate, and it recurses up the internal-node chain.
-A parent that is itself mid-mutation could leave that await neither
-completing nor faulting, pinning the gate with no ceiling. The publish
-is therefore bounded by `LatticeOptions.DigestPublishTimeout` (default
-15 s): a parked publish is abandoned and the holding turn faults with a
-`TimeoutException` so the gate releases, with no count drift (the
-abandoned publish never partially applied at the parent and the next
-mutation's publish re-drives convergence). Set the option to
+The upward publish that maintains the aggregate is a cross-grain RPC
+that recurses up the internal-node chain. An internal node never makes
+it while holding its own non-reentrant split gate, and a parent whose
+gate is busy - for example mid-split - parks the incoming snapshot,
+keeping only the freshest one per child, and folds it before it
+releases the gate, so a publish never waits on its parent's split
+(issue #3523). A parent that is itself mid-mutation can still leave the
+await neither completing nor faulting, so every upward publish, from a
+leaf or an internal node, is bounded by
+`LatticeOptions.DigestPublishTimeout` (default 15 s): on the deadline
+the publish is abandoned and a `TimeoutException` is raised, with no
+count drift - the abandoned publish never partially applied at the
+parent, the publisher keeps its snapshot marked pending, and the next
+mutation's publish re-drives convergence. Where an internal node has
+already made its own change durable - accepting a split, or removing a
+reclaimed child - the timeout is logged and contained rather than
+surfaced, so that change is not lost. Set the option to
 `InfiniteTimeSpan` to restore the historical unbounded await. A
 non-zero `orleans.lattice.internal.digest_publish.timeouts` counter
-surfaces the condition.
+surfaces the condition; it counts internal-node publishes only.
 
 ### Cost and where to call it
 
@@ -181,11 +203,12 @@ leaf's entry cache on each call - the running hash is already on the
 leaf's persisted state, so the per-leaf computation collapses to a
 single fixed-size XxHash128 over `(running_xor || entryCount ||
 checkpointOffset)`. The shard root delegates to the root internal
-node, which returns its persisted `SubtreeProjectionHash` aggregate in
-a single grain hop without re-visiting any descendant. The leaves
-themselves are not activated by the digest poll: each leaf already
-published its contribution upward when its last mutation persisted,
-and the internal-node aggregate is the source of truth at read time.
+node, which returns its persisted subtree aggregate in a single grain
+hop without re-visiting any descendant. The leaves themselves are not
+activated by the digest poll: each leaf published its contribution
+upward after its last mutation persisted (within one
+`DigestCoalescingWindowMs`), and the internal-node aggregate is the
+source of truth at read time.
 A whole-tree poll therefore costs `O(shardCount)` grain hops,
 regardless of how many leaves each shard owns or how many entries
 each leaf holds.
@@ -199,9 +222,10 @@ Heap allocations on the hot path are bounded:
 
 | Allocation                              | Per call    |
 |-----------------------------------------|-------------|
-| `XxHash128` (one per internal-node aggregator, plus one cached per leaf grain activation) | reused via `TryGetHashAndReset` |
+| `XxHash128` for per-entry contributions (one cached per leaf grain activation) | reused via `TryGetHashAndReset` |
+| `XxHash128` for the outer digest framing | one per digest read, at the leaf or the internal-node root |
 | `byte[16]` XxHash128 hash from `GetHashAndReset()` | unavoidable (the result) |
-| `byte[16]` `ChildDigestSnapshot.Hash` clone published upward on each leaf mutation | bounded by tree height; cloned so subsequent XOR updates do not retroactively mutate the parent's captured bytes |
+| `byte[16]` hash clone carried by each upward digest publish | bounded by tree height; cloned so subsequent XOR updates do not retroactively mutate the parent's captured bytes |
 | String / VC scratch buffers             | pooled (`stackalloc 256` fast path; `ArrayPool<byte>.Shared` and `ArrayPool<string>.Shared` for the rare overflow) |
 
 The `O(shardCount)` per-tree cost makes the digest cheap enough for
@@ -212,7 +236,9 @@ without taking any kind of consistency freeze. The result is
 necessarily a snapshot at one wall-clock instant, however, so two
 calls under sustained writes will report different digests; equality
 is meaningful only between **quiescent observations** (no in-flight
-writes to the shard between the two reads being compared).
+writes to the shard between the two reads being compared, and at least
+one `DigestCoalescingWindowMs` elapsed since the last write so every
+coalesced publish has landed).
 
 ### Cross-silo divergence example
 
@@ -239,6 +265,7 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 | The activation's tree id starts with the reserved system prefix | `InvalidOperationException`     |
 | `cancellationToken` was already cancelled                    | `OperationCanceledException`       |
 | Tree has `LatticeOptions.MaintainProjectionDigest = false`   | `InvalidOperationException`        |
+| An access gate is configured and does not authorise the caller to read the whole shard (a per-key partial allow is refused too) | `LatticeAuthorizationDeniedException` |
 
 ### Opting out of digest maintenance
 
@@ -385,9 +412,10 @@ the first is fatal:
 1. **WAL trimmed past checkpoint.** Partition `p`'s per-shard WAL
    has GC'd entries the leaf still considers unapplied. A tail
    replay would skip those entries and converge to the wrong state.
-   Skipped when the partition's checkpoint is the -1 "nothing
-   applied" sentinel, because a leaf with no in-memory state has
-   nothing to lose to a trimmed prefix on that partition.
+   Skipped unless the partition's checkpoint is positive: the -1
+   "nothing applied" sentinel means the leaf has no in-memory state
+   to lose to a trimmed prefix on that partition, and a checkpoint of
+   `0` is skipped as well.
    **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
    The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
    the checkpoint is already applied, so trimming it loses nothing.
@@ -473,9 +501,9 @@ the first is fatal:
 > goes unreported once the condition resolves or the leaf deactivates; the
 > counter below is the exact census for that case. The
 > `orleans.lattice.leaf.activation_replays_over_budget` counter is tagged
-> `tree` and `partition` only - leaf count is unbounded, so it cannot be a
-> metric dimension - which means the counter measures the rate and the log
-> makes the per-leaf call.
+> `tree`, `partition`, and the derived `tenant`, never by leaf - leaf count
+> is unbounded, so it cannot be a metric dimension - which means the counter
+> measures the rate and the log makes the per-leaf call.
 
 > **What the warning reports, and the stall fault (issue #2149).** The cost
 > warning now carries the quantities it actually compared: the leaf's
@@ -540,9 +568,16 @@ persisted checkpoints are unchanged:
 
 - the timer skips the drive entirely, so a stale leaf no longer takes
   a replay permit or raises a timer fault once per stall window;
-- a direct drive from the WAL GC sweep still receives
-  `LeafProjectionStaleException`, without another replay, so the sweep
-  classifies the leaf exactly as before.
+- a drive from the WAL GC's blocked-leaf sweep still receives
+  `LeafProjectionStaleException`, without another replay. The sweep
+  treats that verdict as terminal (issue #3478): it records it once as
+  `outcome=latched_stale` on
+  `orleans.lattice.wal.gc.blocked_leaf_reactivations`, logs it at
+  `Information`, and stops driving the leaf for the rest of the tree's
+  blocked episode. The leaf's pins stay in the WAL GC cursor floor, so
+  no WAL it still needs is trimmed, and the tree is reported once per
+  sweep pass with a `Warning` naming how many latched stale leaves hold
+  it.
 
 Any change a genuine apply or an operator reset makes to a persisted
 checkpoint clears the latch, and a new activation starts without it. A
@@ -593,26 +628,33 @@ approaches that partition's persisted checkpoint. On the next
 activation, if the snapshot's per-partition offsets are strictly
 newer than the persisted `ProjectionCheckpointOffsetsByPartition`,
 the leaf rehydrates its cache from the blob rows and tail-replays
-each partition forward from its captured offset.
-proceeds without ever needing to fail back into
+each partition forward from its captured offset. Activation then
+proceeds without ever needing to fall back into
 `SnapshotThenWal` / `FullRebuildFromWal` / `Fail` recovery, even
 when the WAL has been trimmed past the original checkpoint.
 
 The capture path is **leaf-driven**, not maintenance-driven:
 
 - At activation, the leaf runs the fall-off-log detector once per
-  partition. When no hard trigger has fired but any partition's gap
-  `walHead[p] - checkpoint[p]` is within `LeafSnapshotMargin`
-  (default `0.30`) of that partition's WAL tail, the detector
-  returns the non-fatal `SnapshotPending` advisory. The leaf
-  latches the advisory, finishes its tail replay across every
-  partition, and then fires a single `CaptureSnapshotAsync` call
+  partition. When no trigger has fired - not even one of the two cost
+  signals - but a partition's persisted checkpoint sits within the
+  oldest `LeafSnapshotMargin` fraction (default `0.30`) of that
+  partition's readable WAL window, the detector returns a non-fatal
+  snapshot advisory. The leaf latches the advisory, finishes its tail
+  replay across every partition, and then captures a single snapshot
   before yielding the activation turn.
 - While the leaf remains hot, every
   `LeafSnapshotReClassifyEveryNCheckpoints` (default `64`)
   successful checkpoint persist re-runs the classifier and drives
   another capture on advisory. Pass `0` to disable the periodic
   recheck entirely.
+- Independently of the advisory and of that setting, a leaf holding a
+  checkpointed partition that no snapshot covers yet captures one at
+  activation and on its later checkpoint persists and coverage-lag
+  checks, until a capture succeeds, within a per-activation attempt
+  budget that re-arms after a backoff (issue #2692). This is what gives
+  a tree that has stopped taking writes snapshot coverage on its next
+  activation.
 - A single-flight guard suppresses overlapping captures: a slow
   `SaveAsync` does not pin a follow-on capture behind it; the
   follow-on is dropped and the next cadence tick re-evaluates.
@@ -656,17 +698,25 @@ snapshot and resumes from the last durable offset instead of replaying
 from zero, and the now snapshot-covered prefix becomes trimmable so
 retention stays bounded.
 
-The incremental advance is clamped so it can never license a
-checkpoint (or the materialiser pin) past a not-yet-durably-applied
-offset:
+The incremental advance can never license a checkpoint (or the
+materialiser pin) past work that is not yet durable. The replay defers
+two kinds of record:
 
-- below the lowest **deferred** saga terminal (`TxCommit` / `TxAbort`)
-  or `DeleteRange` in the partition, since those mutations are applied
-  only in the replay's second pass; and
-- below any **unresolved saga prepare** in the partition, because the
-  matching terminal is itself deferred, so the pending-transaction
-  bucket must be reconstructed by a resumed replay that re-reads the
-  prepare.
+- a **deferred** saga terminal (`TxCommit` / `TxAbort`) or
+  `DeleteRange`, which is applied only in the replay's second pass; and
+- an **unresolved saga prepare**, whose pending-transaction bucket no
+  snapshot captures because the matching terminal is itself deferred.
+
+Since issue #2165 the leaf writes each such record verbatim into a
+ledger on its persisted state row before the flush that advances past
+it, so the record and the checkpoint it licenses land in the same state
+write, and a resumed activation reconstructs the work from the ledger
+instead of re-reading it from the WAL. For deferred terminals the ledger
+is bounded by `MaxDurableUnresolvedReplayWork` (default `1 024`); past
+that bound the flush falls back to holding the checkpoint below the
+deferred entry until the second pass applies it. An unresolved prepare
+is always recorded (issue #2183), because nothing drains a prepare whose
+saga never terminates.
 
 Steady-state activations are unaffected: a single-slice replay with no
 deferred terminals still flushes exactly once at the end of the first
@@ -694,6 +744,9 @@ siloBuilder.ConfigureLattice(o =>
 ## Related surfaces
 
 - `ILattice.GetLeafProjectionDigestAsync` - the public surface.
+- `ILattice.GetLeafProjectionDigestForRangeAsync` - the range-scoped
+  analogue (`null` bounds give the whole-shard digest) that backs the
+  cross-cluster [Merkle-walk localisation](../lattice.replication/anti-entropy-merkle-walk.md).
 - `LeafProjectionDigest` - the returned `readonly record struct`.
 - `LatticeOptions.MaintainProjectionDigest` - opt out of the
   per-mutation XOR fold and upward publication for digest-indifferent
@@ -704,9 +757,10 @@ siloBuilder.ConfigureLattice(o =>
   `LatticeOptions.MaterialiserCheckpointEntries`,
   `LatticeOptions.LeafSnapshotMargin`,
   `LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints` - see [Configuration](configuration.md).
-- `LeafProjectionStaleException` - thrown by `ProjectionRebuildPolicy.Fail`
-  and by `ProjectionRebuildPolicy.FullRebuildFromWal` when the WAL has
-  been trimmed.
+- `LeafProjectionStaleException` - surfaced on genuine loss under every
+  `ProjectionRebuildPolicy`, including the default `SnapshotThenWal`,
+  whose post-rehydrate recovery is not yet integrated; also rethrown by
+  a starvation drive against a leaf latched stale.
 - `ILattice.RebuildLeafProjectionAsync` and `ILattice.GetMaterialiserLagAsync` -
   see [Operator tooling: rebuild and lag](#operator-tooling-rebuild-and-lag).
 
@@ -720,12 +774,12 @@ health without waiting for an activation:
 - `ILattice.RebuildLeafProjectionAsync(int shardIndex, CancellationToken)`
 - `ILattice.GetMaterialiserLagAsync(CancellationToken)`
 
-### Rebuild a shard''s projection from the WAL
+### Rebuild a shard's projection from the WAL
 
 ```csharp verify
 // Drift was detected via GetLeafProjectionDigestAsync, or an
-// integrity check flagged a leaf''s projection as suspect. Force a
-// full re-materialisation of the shard''s projection from the WAL.
+// integrity check flagged a leaf's projection as suspect. Force a
+// full re-materialisation of the shard's projection from the WAL.
 await tree.RebuildLeafProjectionAsync(shardIndex: 0, cancellationToken);
 ```
 
@@ -736,28 +790,30 @@ projection-state slots** that the materialiser owns:
 - The per-activation entry cache is dropped when the grain
   deactivates (the cache is never persisted, so there is nothing to
   clear on the state row itself).
-- `LeafNodeState.ProjectionCheckpointOffset` is reset to the `-1`
-  "nothing applied" sentinel (matching the WAL reader's
-  `fromOffsetExclusive = -1` start-of-log convention), so the next
-  activation replays the WAL from offset `0` inclusive. Setting `0`
-  instead would cause the materialiser to skip offset `0`, because
-  replay reads strictly past the persisted checkpoint.
-- `LeafNodeState.ProjectionHash` is cleared.
+- The persisted projection checkpoint is reset to the `-1` "nothing
+  applied" sentinel (matching the WAL reader's
+  `fromOffsetExclusive = -1` start-of-log convention) and the
+  per-partition checkpoints are dropped, so the next activation replays
+  every WAL partition from offset `0` inclusive. Setting `0` instead
+  would cause the materialiser to skip offset `0`, because replay reads
+  strictly past the persisted checkpoint.
+- The persisted running projection hash is cleared.
 - In-memory pending-saga, pending-tx-offset, recently-terminal, and
-  backstopped-terminal dedup buffers are dropped.
+  backstopped-terminal dedup buffers are dropped, together with the
+  destination-side shadow markers.
 - The leaf grain is deactivated. The next activation re-materialises
   the projection from the WAL through the standard activation-time
   replay path, including snapshot-then-WAL recovery when the
   configured `ProjectionRebuildPolicy` is `SnapshotThenWal`.
 
 **Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
-leaf''s key range, and the sibling pointers stay intact. The rebuild
+leaf's key range, and the sibling pointers stay intact. The rebuild
 does not re-shape the tree - it only re-derives the materialised
 projection from the WAL prefix the leaf already claims to own.
 
 `RebuildLeafProjectionAsync` does **not** take a tree-wide
 consistency lock. Readers and writers continue to land on the shard
-during the rebuild; in-flight writes hit the leaf''s standard write
+during the rebuild; in-flight writes hit the leaf's standard write
 path (which goes through the WAL) and will be visible after the
 next activation re-replays them. Operators rebuilding under load
 should expect a brief window during which reads against the rebuilt
@@ -773,27 +829,34 @@ Error surface:
 | `shardIndex` is not a physical shard of the per-tree map | `ArgumentOutOfRangeException` |
 | Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
+| An access gate is configured and does not authorise the caller for whole-tree admin | `LatticeAuthorizationDeniedException` |
 
 ### Observe materialiser lag
 
 ```csharp verify
 long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
 // 0 -> fully caught up across every shard.
-// > 0 -> the materialiser has at least `lag` WAL entries it has
+// > 0 -> the materialiser has an estimated `lag` WAL entries it has
 //        not yet folded into the leaf projection for some shard.
 ```
 
 `GetMaterialiserLagAsync` returns the **maximum lag across all
-physical shards** of the tree. For each shard the lag is computed as
+physical shards** of the tree. For each shard the lag is the sum, over
+the tree's WAL partitions, of
 
 ```text
-walHead - min(checkpointOffset across leaves in the shard)
+walHead[p] - min(checkpointOffset across leaves in the shard)
 ```
 
-clamped at zero so a checkpoint that has temporarily raced ahead of
-the head observation (e.g. between the head fetch and the per-leaf
-checkpoint fetch) cannot return a negative value. The result is the
-worst-shard lag because a single slow shard is the SLO-relevant
+with each term clamped at zero so a checkpoint that has temporarily
+raced ahead of the head observation (e.g. between the head fetch and
+the per-leaf checkpoint fetch) cannot contribute a negative value. The
+per-leaf checkpoint read is each leaf's partition-0 checkpoint, which
+the reduction applies to every partition's head as an approximation, so
+on a multi-partition tree the figure is an estimate rather than an exact
+count of unapplied entries; a shard with no leaves reports the sum of
+its partition heads. The result is the worst-shard lag because a single
+slow shard is the SLO-relevant
 signal - averaging it would mask the actual problem.
 
 The intended monitoring shape is a periodic poll (e.g. every
@@ -828,12 +891,13 @@ Error surface:
 |---|---|
 | Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
+| An access gate is configured and does not authorise the caller to read the whole tree | `LatticeAuthorizationDeniedException` |
 
 ### When to use rebuild vs. activation-time recovery
 
 | Scenario | Surface |
 |---|---|
-| Leaf cold-starts and the WAL has been trimmed past its checkpoint with no covering snapshot (genuine loss) | `ProjectionRebuildPolicy` (automatic, activation-time) |
+| Leaf cold-starts and the WAL has been trimmed past its checkpoint with no covering snapshot (genuine loss) | Activation refuses the leaf with `LeafProjectionStaleException` under every `ProjectionRebuildPolicy` (the automatic recovery paths are not yet integrated): restore the tree from a backup, or accept the loss of the trimmed range and run `RebuildLeafProjectionAsync` |
 | Leaf cold-starts past `MaxLeafReplayEntries` or older than `LeafProjectionRetention` with the WAL intact | Non-fatal: the leaf tail-replays and warns (`TailReplayOverBudget`); no operator action needed |
 | Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a bug fix to `ILeafProjection.Apply` requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live) |
 | Operator wants a steady-state gauge to know whether the materialiser is keeping up | `GetMaterialiserLagAsync` |

@@ -4,9 +4,11 @@ Optional, opt-in **backup / restore control facade** add-on for
 [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a single
 transport-agnostic admin surface that drives the
 [`Orleans.Lattice.Backup`](https://www.nuget.org/packages/Orleans.Lattice.Backup)
-engine - capture, incremental, list, stream, describe, delete, restore, revert,
-artifact export, inventory, and scope status - from one place. A sibling package
-projects this facade onto a code-first gRPC surface.
+engine - capture, incremental, backup-set capture, list, stream, describe,
+delete, restore, cold restore, revert, artifact export, inventory, catalog
+rebuild / scrub, scheduling, backup health, capability probe, and scope status -
+from one place. A sibling package projects this facade onto a code-first gRPC
+surface.
 
 ## Design
 
@@ -23,11 +25,12 @@ transports bind over it, and it costs nothing until it is registered.
 
 ## Security
 
-Every operation authorizes its scope through the same backup access gate the
-engine uses, before touching data. A capture / incremental / restore authorizes
-its target scope; a list / describe / delete authorizes the scope carried by each
-manifest, and a manifest whose scope the caller may not read is hidden from list
-and inventory results.
+Every operation that touches backup data authorizes its scope through the same
+backup access gate the engine uses, before touching data (the capability probe
+and the health-monitoring availability flag are advisory and never refuse). A
+capture / incremental / restore authorizes its target scope; a list / describe /
+delete authorizes the scope carried by each manifest, and a manifest whose scope
+the caller may not read is hidden from list and inventory results.
 
 - **Opt-in and absent by default.** Nothing is registered unless the host calls
   `AddLatticeBackupApi()`, and once added the facade does no background work until

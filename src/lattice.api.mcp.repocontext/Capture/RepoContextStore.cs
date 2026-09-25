@@ -1806,8 +1806,8 @@ internal sealed partial class RepoContextStore
     /// <summary>
     /// Reads the durable count of sources with a live embedding for a repository: the
     /// number of live presence keys in the vector-membership tree that the vector
-    /// writer maintains as embeddings land. A source is a file or a captured symbol, so
-    /// this counts embedded files plus embedded symbols. It is read from the store of
+    /// writer maintains as embeddings land. A source is a file, a captured symbol, or a memory entry, so
+    /// this counts embedded files plus embedded symbols and memory entries. It is read from the store of
     /// record (the vector-membership tree), never from a run's in-flight progress, so
     /// it is a restart-durable diagnostic.
     /// <para>

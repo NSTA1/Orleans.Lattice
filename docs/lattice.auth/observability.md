@@ -20,7 +20,7 @@ Recording is guarded by each instrument's `Enabled` flag: when no listener is at
 | Decision duration | `orleans.lattice.auth.decision.duration` | Histogram (ms) | Yes | Gate-entry-to-decision latency. |
 | Snapshot rebuilds | `orleans.lattice.auth.snapshot.rebuilds` | Counter | Yes | One per successful compiled-policy snapshot rebuild. |
 | Snapshot epoch | `orleans.lattice.auth.snapshot.epoch` | Observable gauge | Yes (on scrape) | The current compiled-policy epoch. |
-| Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge | Yes (on scrape) | Age of the current compiled snapshot. |
+| Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge (s) | Yes (on scrape) | Seconds since the current compiled snapshot was last rebuilt. Reports no measurement until the first rebuild. |
 | Snapshot subjects | `orleans.lattice.auth.snapshot.subjects` | Observable gauge | Yes (on scrape) | Distinct members (users and groups) for which a policy is configured. |
 
 ### Policy-coverage gauge
@@ -33,10 +33,12 @@ The decision counter and the decision-latency histogram carry four tags:
 
 | Tag | Constant | Values |
 |---|---|---|
-| `operation` | `LatticeAuthMetrics.TagOperation` | The authorized `LatticeOperation`. |
+| `operation` | `LatticeAuthMetrics.TagOperation` | The authorized `LatticeOperation`, as its flag name (for example `Read`); a composite mask renders as the enum's comma-separated `ToString()` form. |
 | `tree` | `LatticeAuthMetrics.TagTree` | The target tree id. |
 | `tenant` | `LatticeTenantLabel.TagTenant` | The owning tenant derived from `tree`. Always emitted, on tenancy-on and tenancy-off clusters alike. |
 | `effect` | `LatticeAuthMetrics.TagEffect` | `allow` or `deny`. |
+
+The snapshot-rebuild counter and the three snapshot gauges carry only the `tenant` tag, fixed to the platform sentinel `_platform_` (`LatticeTenantLabel.PlatformTenant`): the compiled snapshot is silo-wide and belongs to no tenant.
 
 ### Zero-primed effect arms
 
@@ -62,7 +64,10 @@ that pair at all. Alert on the absence, not only on the value.
 **The boundary.** Priming is per `operation`/`tree` pair and starts at that pair's
 first decision, not at silo start: the cross product of operations and trees is not
 knowable before traffic arrives. A pair that has never been decided has no series of
-either arm, which is the correct reading of it.
+either arm, which is the correct reading of it. Priming is also bounded: each silo's
+gate primes at most 4,096 distinct `operation`/`tree` pairs, and a pair first decided
+after that bound is reached falls back to the unprimed behaviour, where its `deny`
+arm appears only at its first denial.
 
 **The latency histogram is deliberately not primed.**
 `orleans.lattice.auth.decision.duration` carries the same tags and has the same
@@ -124,5 +129,5 @@ The per-silo subject-resolution cache is owned by `Orleans.Lattice.Membership`, 
 ## See also
 
 - [Membership observability](../lattice.membership/observability.md) - the subject-resolution cache hit / miss counters on the `orleans.lattice.membership` meter.
-- [Security posture](security-posture.md) - includes the measured enforcement cost per operation.
+- [Security posture](security-posture.md) - the threat model, fail-closed guarantees, and trust boundary of the gate these instruments observe.
 - [`Orleans.Lattice.Auth`](README.md) - the authorization concepts these instruments observe.

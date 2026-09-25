@@ -74,6 +74,26 @@ A write refused by admission control - a per-tree ceiling ([`LatticeOptions.MaxL
 
 The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No tenant id is echoed back: the caller asserted its own active tenant, so returning a server-side attribution adds nothing it did not already send. As with every trailer this binding emits, a key and a value are never disclosed.
 
+## Options
+
+`LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, has four properties: `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).
+
+## Public surface
+
+| Type | Role |
+|------|------|
+| `LatticeDataApiGrpcClient` | Public typed client; one method per RPC over a caller-supplied `CallInvoker`. |
+| `LatticeDataApiGrpcOptions` | Server-side options (see [Options](#options)). |
+| `ILatticeDataApiAuthorizer` | Transport meta-authorization seam: `Task<bool> IsAuthorizedAsync(LatticeDataApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)`. |
+| `DenyAllDataApiAuthorizer` | Default-deny authorizer (registered automatically via `TryAdd`). |
+| `AllowAllDataApiAuthorizer` | Opt-in permissive authorizer for trusted-network use. |
+| `LatticeDataApiAuthorizationContext` | Per-call description handed to the authorizer: `Operation`, `TargetTreeId` (`null` for the cross-tree batch, which spans several trees), and the underlying `ServerCallContext`. |
+| `LatticeDataApiOperation` | The operation behind each RPC: `SetPoint`, `DeletePoint`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `GetPoint`, `ReadRange`, `DeleteRange`, `SetMany`, `CrdtWrite`, `CrdtRead`, and `Unknown` for an unmapped method. |
+| `ILatticeDataApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context; the default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix. |
+| `ILatticeDataApiActiveTenantBridge` | Active-tenant seam (`TenantId? Resolve(ServerCallContext context)`) that lifts the caller's asserted tenant onto the ambient scope; the default reads `ActiveTenantHeaderName`. |
+| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs, with their stable aliases in `GrpcDataTypeAliases`. |
+| `AddLatticeDataApiGrpc` / `MapLatticeDataApiGrpc` | Registration and endpoint-routing extensions. |
+
 ## Reference
 
 - [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the write-capable data-API facade this binding projects, including the operation set and the fail-closed access gate.

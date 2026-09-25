@@ -96,8 +96,9 @@ internal sealed partial class ShardRootGrain
         // after the current grain turn completes, so the caller must poll or
         // briefly wait before observing the fresh activation; blocking here
         // would deadlock, because OnDeactivateAsync can only run once this
-        // turn ends. Point writes are fenced first (#812): see
-        // RequestDeactivationFencingPointWrites.
+        // turn ends. The serial guard drains point writes, but not SetManyAsync:
+        // fence both and defer the runtime request until batch writes drain too.
+        // With no writes in flight the runtime request is still synchronous.
         RequestDeactivationFencingPointWrites();
         return Task.CompletedTask;
     }

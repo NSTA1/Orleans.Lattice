@@ -74,7 +74,8 @@ public sealed record RepoContextHealthResult
 
     /// <summary>
     /// The canonical readiness phase: <c>serving</c>, <c>keyword_only</c>,
-    /// <c>nothing_registered</c>, or <c>building</c>. It discriminates the two
+    /// <c>nothing_registered</c>, <c>building</c>, or
+    /// <c>saturated_unavailable</c>. It discriminates the two
     /// reasons a host answers keyword recall: <c>keyword_only</c> is an intended
     /// keyword-only deployment and is ready, while <c>building</c> is a plane that
     /// cannot serve and is not.

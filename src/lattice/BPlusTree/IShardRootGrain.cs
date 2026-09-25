@@ -313,6 +313,13 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// split ordering is still serialised at the parent grain even under
     /// interleaved shard-root turns.
     /// </para>
+    /// <para>
+    /// This method and <see cref="SetManyWherePredicateAsync"/> count admitted
+    /// batches until completion so grain-requested deactivation waits for them
+    /// to drain. New batches are refused with a retriable fault before leaf
+    /// dispatch once deactivation is requested. Ordinary serial turns do not
+    /// wait for these batches.
+    /// </para>
     /// </summary>
     [AlwaysInterleave]
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
@@ -327,7 +334,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// writes that replicate without re-evaluating the predicate.
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason as
-    /// <see cref="SetManyAsync"/>.
+    /// <see cref="SetManyAsync"/> and uses the same deactivation admission fence
+    /// and batch-drain accounting, without blocking ordinary serial turns.
     /// </para>
     /// </summary>
     [AlwaysInterleave]

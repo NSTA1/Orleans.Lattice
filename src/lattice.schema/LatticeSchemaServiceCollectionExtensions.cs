@@ -5,12 +5,11 @@ using Orleans.Hosting;
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
-/// Registration extensions for the <c>Orleans.Lattice.Schema</c> DI escape hatch.
-/// They register host-supplied <see cref="ILatticeValueTransform"/> instances and
+/// Registration extensions for the <c>Orleans.Lattice.Schema</c> add-on. They
+/// register host-supplied <see cref="ILatticeValueTransform"/> instances and
 /// ensure the <see cref="ILatticeValueTransformRegistry"/> that resolves them by
-/// id is present. A full <c>AddLatticeSchema(...)</c> registrar arrives with the
-/// schema-enforcement / versioning layers; this foundation intentionally exposes
-/// only the transform seam.
+/// id is present; companion registrars wire the enforcement, versioning, and
+/// remediation services.
 /// </summary>
 public static class LatticeSchemaServiceCollectionExtensions
 {

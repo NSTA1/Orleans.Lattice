@@ -181,8 +181,8 @@ of the benchmark stack README for the full dashboard catalogue.
 ## The `microbench` scenario
 
 `microbench` is the in-process tier - no Docker, no Orleans cluster boot. It
-hand-instantiates the full lattice grain vertical (tree root, shard root, and
-leaf)
+hand-instantiates the full lattice grain vertical (the tree's entry grain,
+shard root, leaf, and leaf cache)
 and routes `IGrainFactory` calls through NSubstitute mocks, then
 exercises a fixed set of `[Benchmark]` methods (point reads/writes, bulk
 loads, mixed workloads, atomic-write sagas) via
@@ -222,10 +222,13 @@ microbenchmarks (`Ship_TypedEnvelope`, `Ship_FramingOnly`).
 
 #### Opt-in suites
 
-The default run drives the cluster-shaped tree workloads above. A handful of
-narrower, cluster-free suites live in the same harness and are selected with
+The default run drives the cluster-shaped tree workloads above. The same
+harness also carries fifty-three narrower, cluster-free suites, selected with
 `BENCH_MICROBENCH_SUITE` (or `--suite`); each one replaces the default suite
-for that run rather than adding to it.
+for that run rather than adding to it. Most isolate one optimisation, running
+the prior shape against the shipped one so the delta is measurable without a
+silo, a transport or a storage provider in the loop. The dispatch in
+`benchmark/host/Bench.Microbench/Program.cs` is the authoritative list.
 
 | Suite | Covers |
 |---|---|
@@ -236,6 +239,52 @@ for that run rather than adding to it.
 | `ordedup` | OR-set / CRDT reconcile de-duplication. |
 | `mergefold` | The CRDT merge fold: folding an incoming dot delta into an accumulated dot list. |
 | `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
+| `rowcodec` | The aggregation-view row codec's encode and decode paths on the projection write and read path. |
+| `replayadmission` | The WAL replay-permit admission decision every replaying leaf passes on activation, including the freshness test on its smoothed-wait arm. |
+| `fanout` | Three read sites that replaced N sequential awaited grain reads with one batched multi-get. Prints a host-independent round-trip census first, also written to a `fanout-roundtrips.json` sidecar; set `BENCH_FANOUT_ROUNDTRIPS_ONLY=true` to skip the latency pass. |
+| `crosstree` | The allocation trim to the string sets the cross-tree and view coordination barriers canonicalise on every call. |
+| `alloctrims` | Three steady-state allocation trims on warm dictionary and set maintenance paths. |
+| `viewdrain` | The view-maintenance drain-classification trims: classifying a drained batch without extra passes over its buffer. |
+| `aggiter` | The aggregation applier's direct iteration over freshly materialised dictionaries. |
+| `viewmaint` | Three allocation trims on the materialised-view maintainer's warm cross-tree and batch-coalesce paths. |
+| `queryproj` | Three allocation trims in the grain-index query executor and the state API's metrics observer. |
+| `readpathtrims` | Three steady-state read-path allocation trims (view listing, live-entry reads, snapshot reads). |
+| `readpathpresize` | Three steady-state read-path result-list presize trims. |
+| `draintrims` | Three allocation trims on the view-maintainer drain path and the replication receiver's causal-apply buffer. |
+| `fusiontrims` | Three optimisations to the view-maintainer drain fold and the shared metrics sampler's per-tick work. |
+| `slotfolds` | Three hash-probe reductions on slot routing, view-maintainer staging and CRDT delta combining. |
+| `reshardfolds` | Three hash-probe reductions - the reshard coordinator's slot histogram, the tenancy record's CRDT merge, the WAL GC's durable-pin union - plus the allocation floor of the WAL GC's offset-plane census. |
+| `batchfolds` | Three batch-path reductions: per-shard fan-out bucketing for multi-key reads and writes, the cross-leaf snapshot baseline union, and WAL batch-append partition grouping. |
+| `slotgroupfolds` | Three remaining physical-shard partitioning paths (slot grouping, owned-slot lists, bulk fan-out), each "after" lane calling the real production method. |
+| `fanoutslots` | Three physical-shard fan-out sites the dense-partitioning sweep had not reached: saga prepare, bulk load and restore. |
+| `replicationtrims` | Three allocation reductions on the replication ship-to-apply pipeline (vector-clock encode and decode, the content manifest, the receiver's LRU). |
+| `replicationapplytrims` | Three reductions on the replication batch-apply path. |
+| `authcompiletrims` | The authorization policy compile path: the whole-ruleset snapshot rebuild the warm decision reads. |
+| `tenancycompiletrims` | The tenancy snapshot rebuild over every tenant record. |
+| `ingestapplytrims` | Three reductions on the steady-state reconcile planning and sequential replication-apply paths. |
+| `crdtcoalescetrims` | Three allocation reductions on the replication shipper's pre-ship CRDT delta coalescing. |
+| `crdtrunfolds` | The complexity of folding a key's run of same-key deltas in the pre-ship CRDT coalescer; read it as a curve. |
+| `coalescedefertrims` | Deferred typed-delta deserialisation in the coalescer's first pass, and the grain-index predicate lowering's single-conjunction fast path. |
+| `grainindexquerytrims` | Three allocation reductions on the grain-index query path: the AND-intersect pass, the per-property accumulators, and the interval algebra. |
+| `grainindexplanfolds` | Three output-identical folds on the grain-index plan-and-execute path. |
+| `applymergefanout` | Three physical-shard fan-out sites that partition a batch into a richer-than-list per-shard slot (replication apply merge, tree merge, saga backstop). |
+| `terminalpendingtrim` | Two core accumulator trims: the saga terminal fan-out's per-leaf grouping, and the leaf's per-read pending-key union while a saga is in flight. |
+| `statetrims` | Allocation trims on the state API's catalog ordering and metrics delta tick, and on the shard root's raw batch-read bucketing. |
+| `stateorder` | The state API's bounded catalog page selection and remaining catalog sort, plus the shard-summary ordering the shared metrics sampler runs on every tick. |
+| `applygatetrims` | Three allocation reductions on per-operation paths: the receiver's parallel-apply plan, durable-pin bucketing, and the tag-index tag-set reconcile on every tag-carrying write. |
+| `alloctrio` | Three allocation reductions on repeatedly executed paths, starting with the shared metrics sampler's per-tick aggregate map. |
+| `tagrowtrims` | Tag-index membership-row parsing and the aggregation applier's per-shard gathers. |
+| `tagindexbatching` | Three tag-index round-trip reductions: batched membership-row adds, overlapped removals, and a windowed intersection probe. |
+| `viewrebuildfanout` | Three corpus-sized round-trip reductions: the view-generation clear, the shard purge's internal-node sweep, and the view rebuild's source read. |
+| `bulkloadfanout` | Three structural round-trip reductions where a loop awaited one grain call before issuing the next: the bulk-load leaf chain and the write-fence fan-out. |
+| `fanoutcollapse` | Three serial grain-call chains collapsed so a batch no longer pays one round-trip per item. |
+| `roundtripwaves` | Three serial grain-call chains: per-partition WAL head probes, the backup-restore per-shard drain, and the group-atomic set cutover. |
+| `partitionwaves` | The three remaining serial per-target waves: the per-partition source-head HLC scan, the producer-designation probe, and the orphan-shadow purge. |
+| `batchhoisttrims` | Three per-entry costs a batched write or read wave paid for a batch-invariant result: batch event publication, the WAL route task shape, and a leaf-cache double probe. |
+| `condsetmanyadmission` | The declared-span admission step at the front of the conditional batch write path. |
+| `orphanedsurvey` | A shard's orphaned-leaf audit against its opt-in full survey, on one 128-key orphan. |
+| `blockedcensus` | WAL GC on a blocked tree holding more pins than the diagnostic's eight-id cap: the residual scan the uncapped census needs. |
+| `detachedtransfer` | Detached-leaf split transfer planning, dictionary construction and donor removal. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'
@@ -326,9 +375,15 @@ are emitted as empty arrays so consumers can rely on a stable schema.
   the harness refuses to start the profiler in that mode and writes a warning
   to stderr. Use `-Fidelity dry` or `-Fidelity quick` (both use the in-process
   toolchain).
-- **Attribution is to the deepest named managed frame**, not the leaf
-  allocator. This surfaces lattice-level callsites instead of generic
-  `System.Buffers.ArrayPool` / `System.Threading.Tasks` framework frames.
+- **Attribution is to the deepest named managed frame that is not
+  measurement-substrate noise.** By default the symbolicator skips
+  NSubstitute / Castle mock thunks, BenchmarkDotNet engine frames and
+  async-builder plumbing and climbs to the nearest remaining frame, so the
+  table names lattice callsites rather than the harness. Framework frames
+  such as `System.Buffers.ArrayPool` are not filtered and can still be
+  attributed. Set `BENCH_MICROBENCH_PROFILE_FILTER_NOISE=false` to attribute
+  to the deepest named managed frame regardless, which is useful when
+  diagnosing the harness itself.
 - **Pre-seed allocations are excluded** by design. The profiler starts at the
   end of `[GlobalSetup]`, after the multi-thousand pre-seed writes complete,
   so the top-N table reflects in-loop benchmark allocations only.
@@ -352,8 +407,11 @@ model Azure Tables partition-server behaviour or throttling - so any
 throughput claim that needs to back a public number, or any WAL hot-
 path optimisation that needs realistic Azure-side latency, runs here.
 
-The harness deploys a single Linux VM (Standard_D4as_v5 by default,
-with accelerated networking) into Azure. The producer and silo run
+The harness deploys a single Linux VM with accelerated networking into
+Azure. Its committed parameters file defaults to Standard_D2as_v5, the
+smallest D-family SKU that supports accelerated networking, and
+recommends Standard_D4as_v5 for the 4,000-vehicle rung, which is the size
+`benchmark/performance-report.ps1` provisions. The producer and silo run
 as co-located systemd units; the silo authenticates to a real Azure
 Tables WAL via the VM's system-assigned managed identity. A cohort
 runner script applies env-var drop-ins, restarts the silo, runs the
@@ -380,9 +438,15 @@ Entry points:
 ./benchmark/azure-throughput/scripts/vm.ps1 stop
 ```
 
+The same harness also has a multi-silo tier on Azure Container Apps:
+`scripts/deploy-aca.ps1` provisions the rig and `scripts/run-cohort-aca.ps1`
+runs one cohort at a given silo count. It is normally driven end to end by
+`benchmark/performance-report.ps1 -Layer3`; see
+[Performance: multi-silo scaling guide](performance-multi-silo.md).
+
 The harness is **not** driven through `./benchmark.ps1` and does not
 push to the local history VictoriaMetrics stack - the result is the
-`[silo] FINAL written=... failed=... elapsed=...` line in the silo
+`[silo] FINAL ops=... failed=... elapsed=...` line in the silo
 journal plus the headline summary block `run-cohort.ps1` prints to
 stdout. Cohort sampling methodology, the full `BENCH_*` saturation-
 knobs catalogue, the A/B procedure for WAL optimisations, the VM-SKU

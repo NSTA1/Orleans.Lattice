@@ -21,8 +21,9 @@ non-interactive flow:
    showing `enabled=True mode=OrSet ambiguous=False`.
 3. **Reject an in-place mode change.** Re-enabling `orders` under a different
    mode throws `LatticeReplicationModeChangeRejectedException`. The sanctioned
-   path to change a tree's merge mode is disable-then-re-enable, which
-   re-bootstraps peers.
+   path to change a tree's merge mode is disable, then re-enable under the new
+   mode (naming a bootstrap source cluster on that enable re-seeds a tree that
+   already holds data).
 4. **Disable** the tree. Shipping stops without purging data already replicated
    to peers.
 5. **Report** the config again, showing `enabled=False`.

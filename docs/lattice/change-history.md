@@ -17,7 +17,7 @@ revision timeline:
 |-------|---------|-----------|
 | Core read path | `ILattice.ScanEntryHistoryAsync` | In-cluster code that wants a key's timeline directly. |
 | State API | `GetEntryHistoryAsync` (and its gRPC client) | Out-of-cluster read-only tools and dashboards. |
-| Explorer | the **History** tab, with live-follow | Interactive, point-and-click inspection of a key's timeline. |
+| Explorer | the **History** timeline behind an entry's **History** button on the **Data** tab, with live-follow | Interactive, point-and-click inspection of a key's timeline. |
 
 ## Where a timeline comes from
 
@@ -27,8 +27,9 @@ live stream lets a reader follow new revisions as they happen:
 1. **Durable per-key history view (opt-in, preferred).** When a tree has a
    [history view](history-views.md) enabled, the timeline is read from a durable,
    append-only view that re-keys every source mutation into its own revision row.
-   This survives source write-ahead-log (WAL) garbage collection and is bounded
-   only by the view's configured retention age. This is the source you enable when
+   This survives source write-ahead-log (WAL) garbage collection and is bounded by
+   the view's configured retention age (a rebuild of the view also collapses it to
+   current source state). This is the source you enable when
    a complete, retention-bounded audit timeline is required.
 2. **Retained WAL-window fallback (best-effort, no setup).** When a tree has *not*
    opted into a history view, the same read falls back to the surviving entries in
@@ -38,8 +39,8 @@ live stream lets a reader follow new revisions as they happen:
 3. **Live feed (forward-only).** Independently of either stored source, a reader
    can subscribe to a tree's live mutation stream (`ObserveChangesAsync` on the
    State API) to be notified of new revisions in real time. The Explorer's History
-   tab uses this for its live-follow mode: it renders the stored timeline once,
-   then appends new revisions as they arrive without re-polling.
+   timeline uses this for its live-follow mode: it renders the stored revisions once,
+   then appends new revisions as they arrive rather than polling for them.
 
 ## The core read path
 
@@ -92,8 +93,10 @@ the delta *is* the history. An anti-entropy or bootstrap resync is the exception
 ships the full CRDT state with no delta, so its revision is a CRDT-mode `Set`. The
 explorer decodes that full state into a current-membership snapshot (visually
 distinct from a per-write member diff) rather than rendering the raw serialized blob.
-An optional **age bound** expires revision rows after a
-window; a window of zero means revisions never expire. Set both per tree:
+An optional **age bound** expires revision rows after a positive
+window; with no age bound revisions never expire. Clear the bound by passing `null`
+(a zero or negative window is rejected); `GetHistoryRetentionAsync` reports an
+unbounded policy as a window of `TimeSpan.Zero`. Set both per tree:
 
 ```csharp verify
 // Keep the last 30 days of full-value revisions for this tree.
@@ -110,8 +113,10 @@ HistoryRetentionSettings policy = await tree.GetHistoryRetentionAsync(cancellati
 The page's bound tells a reader how complete the timeline is:
 
 - **Bounded by age (durable view).** On the history-view path the timeline is never
-  cut off below; it is bounded only by the configured retention age. `page.Truncated`
-  is always `false`.
+  cut off below by WAL garbage collection; it is bounded by the configured retention
+  age, and by any rebuild of the view, which collapses it to current source state
+  (see [the accumulative guard](history-views.md#the-accumulative-guard)).
+  `page.Truncated` is always `false`.
 - **Truncated (WAL-window fallback).** On the fallback path, when WAL garbage
   collection has already trimmed older entries, `page.Truncated` is `true` and
   `page.EarliestAvailable` names the oldest hybrid-logical-clock still readable. A
@@ -159,32 +164,39 @@ a durable history view) from a `Truncated` WAL window (with `EarliestAvailable`)
 `WalWindowFallback` read taken when no view is enabled. Set `Reverse` on the request to
 page newest-first.
 
-## The Explorer History tab
+## The Explorer History timeline
 
 [Orleans.Lattice.Explorer](../../src/lattice.explorer) renders the timeline
-interactively. Select a tree and a key, open the **History** tab, and the Explorer
-pages the key's revisions through the State API: each row shows the revision's clock,
-kind, and origin cluster, with LWW value diffs between adjacent revisions and decoded
-member changes for CRDT revisions. The tab is retention-aware - it labels whether a
-row's value bytes were retained and shows when a timeline is truncated rather than
-durably bounded.
+interactively. The timeline is not a tab of its own: select a tree, open its
+**Data** tab, select a key, and press the **History** button in that entry's
+detail panel, which opens the timeline inline in the same panel (the button reads
+**Hide history** while it is open). The Explorer pages the key's revisions through
+the State API: each row shows the revision's kind, time, and origin cluster, with
+LWW value diffs between adjacent revisions and decoded member changes for CRDT
+revisions. The timeline is retention-aware - it labels whether a row's value bytes
+were retained and shows when a timeline is truncated rather than durably bounded -
+and a **Newest first** toggle (on by default) sets the row order.
 
-**Live-follow** toggles the tab into streaming mode: it renders the stored timeline
-once, then subscribes to the tree's live change feed and appends new revisions to the
-top as they arrive, so an operator watching a key sees writes land without reloading.
+**Live-follow** needs no toggle: once the first page of the stored timeline has
+loaded, the Explorer subscribes to the tree's live change feed and appends each new
+revision as it arrives - at the top under the default newest-first order - so an
+operator watching a key sees writes land without reloading. A live row starts as a
+metadata-only marker and is upgraded in place, by a debounced refetch of the first
+page, once the durable history view has recorded the revision (the refetch is
+skipped after older pages have been loaded).
 
 ## Try it in the sample
 
 The [MultiSiteManufacturing sample](../../samples/MultiSiteManufacturing) enables a
 durable history view (with `FullValue` retention) over two CRDT trees on startup and
-then seeds change history into them, so the History tab has a non-trivial, durable
-timeline to show out of the box:
+then seeds change history into them, so the Explorer's History timeline has a
+non-trivial, durable history to show out of the box:
 
 - `mfg-part-operator` - a last-writer-wins register. The seeder writes a sequence of
-  operator handoffs to one part's key, so the History tab shows successive values plus
-  diffs.
+  operator handoffs to one part's key, so the History timeline shows successive values
+  plus diffs.
 - `mfg-part-labels` - a process-label OR-Set. The seeder interleaves label adds and
-  removes on the same part's key, so the History tab shows element-level member
+  removes on the same part's key, so the History timeline shows element-level member
   changes.
 
 Both timelines are seeded for part `HPT-BLD-S1-2028-00002`. To reproduce:
@@ -192,9 +204,10 @@ Both timelines are seeded for part `HPT-BLD-S1-2028-00002`. To reproduce:
 1. Start the cluster: `./samples/MultiSiteManufacturing/run.ps1`.
 2. Launch the explorer: `./samples/MultiSiteManufacturing/run-explorer.ps1`.
 3. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`), select key
-   `HPT-BLD-S1-2028-00002`, and open the **History** tab.
-4. Toggle live-follow, then add or remove a label from the part-detail page in the
-   sample UI and watch the new revision appear at the top of the timeline.
+   `HPT-BLD-S1-2028-00002` on the **Data** tab, and press its **History** button.
+4. Live-follow starts on its own once the timeline has loaded: add or remove a label
+   from the part-detail page in the sample UI and watch the new revision appear at
+   the top of the timeline.
 
 The sample enables the durable history view through a small startup activator that
 calls `SetHistoryRetentionAsync` and `ILatticeViewFactory.Create` for each tree; see

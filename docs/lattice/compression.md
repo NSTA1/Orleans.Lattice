@@ -246,7 +246,7 @@ The helper registers the auto-training provider, the dictionary-aware Zstandard 
 - **Activation.** The provider implements `ILatticeActiveCompressionDictionary`, exposing the freshest trained id as `ActiveDictionaryId`. When the feature is on the shipper auto-selects that id for framing and per-peer negotiation - there is no `FramingCompressionDictionaryId` to hand-set, and the active id tracks each roll-over automatically.
 - **Byte distribution.** A receiver that does not yet hold an advertised dictionary id **pulls** the bytes from the advertising peer over the `IReplicationDigestProbeTransport.PullCompressionDictionaryAsync` transport seam (carried by `CompressionDictionaryPullRequest` / `CompressionDictionaryPullResponse`). The pulled bytes are re-verified against the advertised content fingerprint and installed through the content-addressed, idempotent `ILatticeCompressionDictionarySink.TryInstall` before they are ever used: an id already resolving to byte-identical bytes is a no-op success, and the same id with *different* bytes is rejected, so a pulled payload can never overwrite an in-use dictionary. The convergence walk lives in `CompressionDictionaryConvergence.ConvergeAsync` and runs automatically before each negotiation.
 
-The pull seam defaults to a no-op that reports "not supported", so an un-upgraded peer or an unbound transport simply falls back to dictionary-less `Zstd` and stays wire-identical - the feature is rolling-upgrade safe. Because dictionary ids stay locally assigned (never content-derived), the same-id/different-bytes collision two auto-training clusters would otherwise hit is caught by the fingerprint guard and resolved by pulling the peer's bytes rather than by a brittle global id scheme. Convergence pulls are observable on the `ship.dictionary_convergence` counter (tagged `tree`/`peer`/`outcome`) and its Replication-dashboard panel.
+The pull seam defaults to a no-op that reports "not supported", so an un-upgraded peer or an unbound transport simply falls back to dictionary-less `Zstd` and stays wire-identical - the feature is rolling-upgrade safe. Because dictionary ids stay locally assigned (never content-derived), the same-id/different-bytes collision two auto-training clusters would otherwise hit is caught by the fingerprint guard and resolved by pulling the peer's bytes rather than by a brittle global id scheme. Convergence pulls are observable on the `orleans.lattice.replication.ship.dictionary_convergence` counter (tagged `tree`/`peer`/`outcome`/`tenant`) and its Replication-dashboard panel.
 
 ### Scope
 
@@ -284,13 +284,13 @@ Both encode paths compress (`AppendBatchAsync` and the shipper's pre-encoded `Ap
 
 ### Observability: compression-savings metrics
 
-Each append batch a compressing WAL provider commits emits three monotonic counters on the `orleans.lattice` meter - two byte counters tagged by `tree`, and a row counter tagged by `tree` and `reason` - so a dashboard can chart the realised savings per tree and attribute a shortfall to its skip cause:
+Each append batch a compressing WAL provider commits emits three monotonic counters on the `orleans.lattice` meter - two byte counters tagged by `tree` and `tenant`, and a row counter tagged by `tree`, `reason`, and `tenant` - so a dashboard can chart the realised savings per tree and attribute a shortfall to its skip cause:
 
 | Metric | Unit | Tags | Meaning |
 |---|---|---|---|
-| `orleans.lattice.storage.wal.uncompressed_bytes` | `By` | `tree` | Pre-compression encoded payload bytes the batch attempted to store. |
-| `orleans.lattice.storage.wal.stored_bytes` | `By` | `tree` | Post-compression payload bytes the batch actually stored. |
-| `orleans.lattice.storage.wal.compression_skipped` | `{row}` | `tree`, `reason` | Rows stored verbatim instead of compressed, attributed by `reason`. |
+| `orleans.lattice.storage.wal.uncompressed_bytes` | `By` | `tree`, `tenant` | Pre-compression encoded payload bytes the batch attempted to store. |
+| `orleans.lattice.storage.wal.stored_bytes` | `By` | `tree`, `tenant` | Post-compression payload bytes the batch actually stored. |
+| `orleans.lattice.storage.wal.compression_skipped` | `{row}` | `tree`, `reason`, `tenant` | Rows stored verbatim instead of compressed, attributed by `reason`. |
 
 The **savings ratio** for a tree is `1 - stored_bytes / uncompressed_bytes` (a PromQL `rate()` ratio of the two counters). They are plain counters rather than an observable savings gauge so the totals need no staleness-horizon handling and survive activation churn; a row that skips compression counts its verbatim length into *both* byte totals, so a tree with no realised savings reports an equal pair rather than a gap.
 
@@ -373,6 +373,7 @@ The public registration surface is pinned by:
 Run the relevant suites with:
 
 ```powershell
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Compression|FullyQualifiedName~PublicApiContractTests.Compression"
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Compression|FullyQualifiedName~PublicApiContract_AddLatticeCompressor"
 dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~Compress"
+dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "FullyQualifiedName~Compress"
 ```

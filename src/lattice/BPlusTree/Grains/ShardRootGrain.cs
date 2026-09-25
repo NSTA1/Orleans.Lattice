@@ -301,7 +301,8 @@ internal sealed partial class ShardRootGrain(
             // re-enters. Wrapped because a unit test with a substituted
             // IGrainContext has no runtime to schedule against, and the suspension
             // path must stay exercisable there - matching how both flush timers are
-            // armed. Point writes are fenced first (#812).
+            // armed. Fence immediately, but keep callbacks runnable until all
+            // admitted point and batch writes have drained (#3546).
             RequestDeactivationFencingPointWrites();
         }
         catch (Exception deactivateFailure)
@@ -1089,62 +1090,70 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
-        // Reject-check up-front so the batch fails fast rather than partially applying.
-        ThrowIfRejectedForAnyKey(entries);
-        RecordWrite(entries.Count);
-
-        if (entries.Count == 0) return;
-
-        // Online-resize shadow-forward: forward the whole batch once in parallel
-        // with the local apply. Without batched forward, a single SetManyAsync
-        // of N entries would pay N sequential shadow-forward RTTs. Mirrors
-        // MergeManyAsync's pattern. LWW on the destination absorbs any
-        // interleaving with the drain reader.
-        var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
-
-        // Preserve the local exception as the primary diagnostic. The
-        // older shape (try { local } finally { await forwardTask; }) would
-        // replace a local failure with a forward-path failure if both
-        // happened to fail on the same call. The tracker's fault-logger
-        // continuation already observes any forward fault asynchronously,
-        // so when the local loop throws we rethrow its exception and let
-        // the continuation log the forward side separately.
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
-        var localApplyTs = Stopwatch.GetTimestamp();
+        BeginBatchWrite();
         try
         {
-            await SetManyLocalOnlyAsync(entries);
-        }
-        catch (Exception ex)
-        {
-            localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
-        }
-        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
-            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            LatticeTenantLabel.ForTree(TreeId));
+            await PrepareForOperationAsync();
+            // Reject-check up-front so the batch fails fast rather than partially applying.
+            ThrowIfRejectedForAnyKey(entries);
+            RecordWrite(entries.Count);
 
-        if (localFailure is null)
-        {
-            // Local succeeded - surface any forward failure to the caller.
-            var forwardTs = Stopwatch.GetTimestamp();
+            if (entries.Count == 0) return;
+
+            // Online-resize shadow-forward: forward the whole batch once in parallel
+            // with the local apply. Without batched forward, a single SetManyAsync
+            // of N entries would pay N sequential shadow-forward RTTs. Mirrors
+            // MergeManyAsync's pattern. LWW on the destination absorbs any
+            // interleaving with the drain reader.
+            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
+
+            // Preserve the local exception as the primary diagnostic. The
+            // older shape (try { local } finally { await forwardTask; }) would
+            // replace a local failure with a forward-path failure if both
+            // happened to fail on the same call. The tracker's fault-logger
+            // continuation already observes any forward fault asynchronously,
+            // so when the local loop throws we rethrow its exception and let
+            // the continuation log the forward side separately.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+            var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                await forwardTask;
+                await SetManyLocalOnlyAsync(entries);
             }
-            finally
+            catch (Exception ex)
             {
-                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
-                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    LatticeTenantLabel.ForTree(TreeId));
+                localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
             }
-            return;
-        }
+            LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+                Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
 
-        // Local failed - the continuation will observe / log any forward fault.
-        localFailure.Throw();
+            if (localFailure is null)
+            {
+                // Local succeeded - surface any forward failure to the caller.
+                var forwardTs = Stopwatch.GetTimestamp();
+                try
+                {
+                    await forwardTask;
+                }
+                finally
+                {
+                    LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                        Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        LatticeTenantLabel.ForTree(TreeId));
+                }
+                return;
+            }
+
+            // Local failed - the continuation will observe / log any forward fault.
+            localFailure.Throw();
+        }
+        finally
+        {
+            EndBatchWrite();
+        }
     }
 
     /// <summary>
@@ -1543,60 +1552,68 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
-        ThrowIfRejectedForAnyKey(entries);
-        // The affected-record count is the guard-passing subset, known only once
-        // the local apply completes, so the operation is counted here and the
-        // record count published on the success path below.
-        RecordWrite(records: 0);
-
-        if (entries.Count == 0) return Array.Empty<string>();
-
-        // Online-resize shadow-forward of the whole conditional batch in
-        // parallel with the local apply. The destination shard re-evaluates
-        // the guard against its own copy; LWW reconciles any interleaving with
-        // the drain reader. The forwarded written set is discarded - this
-        // shard's local apply is authoritative for the returned set.
-        var forwardTask = TrackShadowForward(
-            (entries, predicate),
-            static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
-
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
-        IReadOnlyList<string> written = Array.Empty<string>();
-        var localApplyTs = Stopwatch.GetTimestamp();
+        BeginBatchWrite();
         try
         {
-            written = await SetManyWhereLocalOnlyAsync(entries, predicate);
-        }
-        catch (Exception ex)
-        {
-            localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
-        }
-        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
-            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            LatticeTenantLabel.ForTree(TreeId));
+            await PrepareForOperationAsync();
+            ThrowIfRejectedForAnyKey(entries);
+            // The affected-record count is the guard-passing subset, known only once
+            // the local apply completes, so the operation is counted here and the
+            // record count published on the success path below.
+            RecordWrite(records: 0);
 
-        if (localFailure is null)
-        {
-            var forwardTs = Stopwatch.GetTimestamp();
+            if (entries.Count == 0) return Array.Empty<string>();
+
+            // Online-resize shadow-forward of the whole conditional batch in
+            // parallel with the local apply. The destination shard re-evaluates
+            // the guard against its own copy; LWW reconciles any interleaving with
+            // the drain reader. The forwarded written set is discarded - this
+            // shard's local apply is authoritative for the returned set.
+            var forwardTask = TrackShadowForward(
+                (entries, predicate),
+                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
+
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+            IReadOnlyList<string> written = Array.Empty<string>();
+            var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                await forwardTask;
+                written = await SetManyWhereLocalOnlyAsync(entries, predicate);
             }
-            finally
+            catch (Exception ex)
             {
-                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
-                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    LatticeTenantLabel.ForTree(TreeId));
+                localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
             }
-            RecordRecordsWritten(written.Count);
-            return written;
-        }
+            LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+                Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
 
-        localFailure.Throw();
-        return written; // unreachable - Throw() always throws.
+            if (localFailure is null)
+            {
+                var forwardTs = Stopwatch.GetTimestamp();
+                try
+                {
+                    await forwardTask;
+                }
+                finally
+                {
+                    LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                        Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        LatticeTenantLabel.ForTree(TreeId));
+                }
+                RecordRecordsWritten(written.Count);
+                return written;
+            }
+
+            localFailure.Throw();
+            return written; // unreachable - Throw() always throws.
+        }
+        finally
+        {
+            EndBatchWrite();
+        }
     }
 
     /// <summary>
@@ -2658,7 +2675,7 @@ internal sealed partial class ShardRootGrain(
     /// stalls behind it, the lattice grain's per-shard fan-out saturates at
     /// its in-flight limit, and the whole write pipeline wedges with no
     /// fault and no activation recycle until the caller-side Orleans
-    /// response deadline (default 3 minutes) expires. The deadline abandons
+    /// response deadline (30 seconds by default) expires. The deadline abandons
     /// the parked seed (its eventual completion is harmlessly unobserved)
     /// and faults the turn with a <see cref="TimeoutException"/>, which the
     /// existing transient-exception retry envelope on every mutation path

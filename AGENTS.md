@@ -87,12 +87,14 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   method or fixture, never the whole suite. Before raising a PR, run the
   non-chaos tests covering the fixtures your change can plausibly break, within
   the test project(s) for the packages you changed - not the whole solution, and
-  not reflexively a whole project. CI re-runs the full per-package and
-  cross-solution non-chaos sweep on every PR, so repeating it locally buys only
-  wall-clock; widen the local scope only when the blast radius is genuinely
+  not reflexively a whole project. On every PR, CI re-runs the suites of every
+  package the change can reach - the changed packages, every package that
+  project-references them, and `lattice.dashboards` - so repeating that locally
+  buys only wall-clock; widen the local scope only when the blast radius is genuinely
   unpredictable.
-- **The full non-chaos sweep is CI's job, not the local dev loop's.** CI shards
-  it across parallel legs on every PR, so running the whole suite locally
+- **The wide non-chaos sweep is CI's job, not the local dev loop's.** CI shards
+  the reachable packages' suites across parallel legs on every PR (a shared or
+  root change fans out to every package), so running the whole suite locally
   re-proves what the required check is about to prove anyway, at hours of
   serial wall-clock, and holds the working tree for all of them. Raise the PR
   and read the legs; when one goes red, run **that leg's filter** - the CI log

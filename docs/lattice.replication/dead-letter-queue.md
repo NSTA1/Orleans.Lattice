@@ -1,11 +1,11 @@
 # Dead-letter queue (DLQ)
 
-When the inbound apply pipeline cannot install a `WalRecord` after exhausting `LatticeReplicationOptions.MaxApplyRetries` consecutive attempts, the entry is *parked* on a per-tree dead-letter queue. Parking unblocks the apply stream so a single poison entry cannot stall the pipeline forever, while preserving the failed entry plus diagnostic context for an operator to triage, replay, or discard.
+When the inbound apply pipeline cannot install a `WalRecord` after exhausting `LatticeReplicationOptions.MaxApplyRetries` consecutive attempts, the entry is *parked* on a per-tree dead-letter queue. Parking unblocks the apply stream so a single poison entry cannot stall the pipeline forever, while preserving the failed entry plus diagnostic context for an operator to triage, replay, or discard. Several other paths park entries on the same per-tree queue with no retry budget (`RetryCount = 0`): a blocked entry evicted from a full causal-apply buffer, a buffered entry whose drained apply throws, an inbound entry rejected by the receiver's merge-mode or tenant-isolation gate, and a batch the sender cannot encode. The `reason` tag on `dead_letter.enqueued` tells them apart - see [Metrics](#metrics).
 
 ## Topology
 
 ```text
-   transport.PushAsync(batch)
+   inbound batch (gRPC Push RPC)
             |
             v
    IReplicationApplier -- dead-letter-tracking decorator
@@ -79,9 +79,9 @@ if (parked.Count > 0)
 
 ## High-water-mark interaction
 
-Parking advances the per-origin HWM (`{treeId}/{originClusterId}`) past the parked entrys HLC for *point* operations (`Set` / `Delete`). The canonical appliers HWM filter then dedupes future re-deliveries from the transport, so a transport that re-ships the parked entry observes `Applied=false` at the canonical applier layer without re-engaging the failure tracker.
+Parking advances the tree's per-origin HWM (the entry for the parked entry's `OriginClusterId`) past the parked entry's HLC for every operation except `DeleteRange` and the saga terminal records (`TxCommit` / `TxAbort`). The canonical appliers HWM filter then dedupes future re-deliveries from the transport, so a transport that re-ships the parked entry observes `Applied=false` at the canonical applier layer without re-engaging the failure tracker.
 
-`DeleteRange` entries skip HWM advance because the canonical applier does not consult the HWM for range deletes (range applies are naturally idempotent at the leaf layer). The entry is still parked.
+`DeleteRange` entries skip HWM advance because the canonical applier does not consult the HWM for range deletes (range applies are naturally idempotent at the leaf layer). `TxCommit` / `TxAbort` skip it too: saga terminal records are deduplicated through the per-tree transaction registry, and advancing the HWM past a terminal's HLC would silently dedupe a legitimate same-origin point write at or below it. The entry is still parked.
 
 ## Replay semantics
 
@@ -95,12 +95,12 @@ A throwing replay leaves the entry parked. The operator can re-attempt or `Disca
 
 ## Metrics
 
-Counters on the `orleans.lattice.replication` meter, both tagged with `tree` and `reason`:
+Counters on the `orleans.lattice.replication` meter, both tagged with `tree`, `reason`, and `tenant`:
 
 | Instrument | Tags | Meaning |
 |---|---|---|
-| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `reason in { schema, hlc_skew, oversized, unknown }` | Replog entry parked. The dead-letter-tracking decorator classifies the terminal failure exception: `ArgumentException` and `InvalidOperationException` are tagged `schema` (malformed entry, missing field, unrecognised `LatticeMergeMode`, CAS-budget exhaustion); every other exception type lands on `unknown`. The `hlc_skew` and `oversized` reason values are reserved for future receiver decorators that surface size / clock-skew violations as classified exceptions. |
-| `orleans.lattice.replication.dead_letter.removed` | `tree`, `reason in { discarded, replayed, evicted }` | Entry removed. `discarded` = explicit operator call; `replayed` = removed after `ReplayAsync` completed; `evicted` = FIFO capacity eviction during a later enqueue. |
+| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `tenant`, `reason in { schema, unknown, hlc_skew, mode_mismatch, foreign_tenant, tenant_offline, tenant_suspended, oversized }` | Replog entry parked. `schema` / `unknown`: the dead-letter-tracking decorator (and the causal-buffer drain) classify a terminal apply exception - `ArgumentException` and `InvalidOperationException` are `schema` (malformed entry, missing field, unrecognised `LatticeMergeMode`, CAS-budget exhaustion), every other exception type is `unknown`; the sender also parks a batch it cannot encode as `schema`. `hlc_skew`: a blocked entry evicted from a full causal-apply buffer (see [Bootstrap under concurrent load](#bootstrap-under-concurrent-load)). `mode_mismatch`: the entry's wire merge mode disagrees with the receiver's resolved mode for the tree. `foreign_tenant` / `tenant_offline` / `tenant_suspended`: the tenant-isolation gate refused the write (unknown tenant / tenant not resident in this region / tenant not active). `oversized` is reserved and has no emitter today. An entry with an empty tree id cannot be parked per tree: it is dropped and still counted as `schema` with an empty `tree` tag. |
+| `orleans.lattice.replication.dead_letter.removed` | `tree`, `tenant`, `reason in { discarded, replayed, evicted }` | Entry removed. `discarded` = explicit operator call; `replayed` = removed after `ReplayAsync` completed; `evicted` = FIFO capacity eviction during a later enqueue. |
 
 ## Persistence and rehydration
 

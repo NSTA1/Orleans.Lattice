@@ -19,9 +19,9 @@ The package fails closed on all three by default. Custom secret sources, plainte
 | Variable | Purpose |
 |---|---|
 | `LATTICE_REPLICATION_SECRET` | Cluster-wide outbound shared secret. Stamped on every batch the local cluster ships, except where a per-peer override is set. |
-| `LATTICE_REPLICATION_ACCEPTED_SECRETS` | Comma- or semicolon-separated list of secrets accepted on inbound batches. Operators publish the next-generation secret here alongside the current one before flipping `LATTICE_REPLICATION_SECRET` on every silo, so the rotation is zero-downtime. |
+| `LATTICE_REPLICATION_ACCEPTED_SECRETS` | Comma- or semicolon-separated list of secrets accepted on inbound batches, in addition to the local `LATTICE_REPLICATION_SECRET`, which is always accepted. Operators publish the next-generation secret here alongside the current one before flipping `LATTICE_REPLICATION_SECRET` on every silo, so the rotation is zero-downtime. |
 | `LATTICE_REPLICATION_PEER_SECRET__<CLUSTERID>` | Per-peer outbound override. The cluster id is upper-snake-cased; the double-underscore separator avoids ambiguity when the id itself contains an underscore (e.g. `LATTICE_REPLICATION_PEER_SECRET__US_WEST_2` for `cluster=us-west-2`). |
-| `LATTICE_REPLICATION_ALLOW_SOURCE_TREE_SECRETS` | Escape hatch that disables the startup hostile-config scan. Set to `1`, `true`, `yes`, or `on` to opt out. See [Hostile-config scan](#hostile-config-scan) below. |
+| `LATTICE_REPLICATION_ALLOW_SOURCE_TREE_SECRETS` | Escape hatch that disables the startup hostile-config scan. Set to `1`, `true`, or `yes` (case-insensitive) to opt out. See [Hostile-config scan](#hostile-config-scan) below. |
 
 Secret material itself is **not** an option. `LatticeReplicationSecurityOptions` exposes only policy (authenticator on/off, refresh interval, scan toggle); the secret strings flow through the `ILatticeReplicationSecretSource` seam.
 
@@ -62,11 +62,11 @@ siloBuilder.AddLatticeReplicationSecretsFromConfiguration(
     configuration.GetSection("LatticeReplication:Secrets"));
 ```
 
-The configuration section binds to a record with `Secret`, `AcceptedSecrets`, and `PeerSecrets` keys. The hostile-config scan still runs, so a configuration section that bottoms out in `appsettings.json` is still rejected at startup.
+The configuration section binds to a record with `Secret`, `AcceptedSecrets`, and `PeerSecrets` keys. The hostile-config scan still runs, so a section at the conventional `LatticeReplication:Secrets` path that bottoms out in `appsettings.json` is still rejected at startup.
 
 ## Hostile-config scan
 
-A hosted startup validator runs as an `IHostedService` and inspects every registered `IConfigurationProvider` at startup. If it finds a key whose name matches the secret-shaped pattern (`*Secret*`, `*Password*`, `*Token*`) **and** that key resolves through a file-backed provider rooted under the application directory, startup fails with a diagnostic that names the offending key and file path.
+A hosted startup validator runs as an `IHostedService` and inspects every registered `IConfigurationProvider` at startup. It checks the replication secret keys specifically - the flat `LatticeReplication:Secret` and `LatticeReplication:AcceptedSecrets` spellings and the nested `LatticeReplication:Secrets:Secret`, `LatticeReplication:Secrets:AcceptedSecrets`, and `LatticeReplication:Secrets:PeerSecrets:*` shape - and if a populated one resolves through a file-backed provider whose file lies under the application directory, startup fails with a diagnostic that names the offending key and file path. The .NET user-secrets store lives outside the application directory and does not trip it.
 
 The check exists because the most common path to a leaked secret is a developer pasting it into `appsettings.json` (or its `Development` / `Production` variants), committing the file to source control, and discovering the leak weeks later. The scan does not inspect values; only the (key name, provider type, file path) tuple, so it cannot itself surface a secret.
 
@@ -106,6 +106,8 @@ The receiver-side auth interceptor is registered globally on the gRPC service, s
 - **Calls without the `x-lattice-replication-secret` header** with `StatusCode.Unauthenticated`.
 - **Calls whose secret is not in the accepted-set snapshot** with `StatusCode.PermissionDenied`.
 
+Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The saga control RPCs additionally pass an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`.
+
 The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to keep comparison time independent of how close the candidate secret is to a real one.
 
 ## Headers on the wire
@@ -113,7 +115,7 @@ The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to 
 | Header | Direction | Purpose |
 |---|---|---|
 | `x-lattice-replication-secret` | sender to receiver | Authenticator material. Compared against the accepted-set snapshot in constant time. |
-| `x-lattice-replication-origin` | sender to receiver | Local cluster id, used for diagnostic logging and metric tagging. Not authoritative for the apply path; the canonical origin id lives inside the envelope. |
+| `x-lattice-replication-origin` | sender to receiver | Local cluster id. Not authoritative for the apply path - the canonical origin id lives inside the envelope - but the saga control service authorizes the caller by it (falling back to the request's coordinator id when absent), and the content-manifest exchange refuses a request whose body-declared origin disagrees with a present header. |
 
 The legacy sample header `X-Replication-Token` is retired. Hosts that depended on it should migrate to `x-lattice-replication-secret` via the env-var or custom secret source paths above.
 
@@ -136,6 +138,6 @@ Custom secret sources implement the same protocol: the `GetAcceptedSecretsAsync`
 
 ## Caveats
 
-- **The hostile-config scan inspects key names, not values.** A secret stored under a non-secret-shaped key name (e.g. `Setting42`) is not flagged. The right answer is to route secret material through `ILatticeReplicationSecretSource`, not to disguise it in configuration.
+- **The hostile-config scan inspects a fixed set of key paths, not values.** Only the replication secret keys listed under [Hostile-config scan](#hostile-config-scan) are checked; a secret stored under any other key (e.g. `Setting42`, or a section bound from a non-conventional path) is not flagged. The right answer is to route secret material through `ILatticeReplicationSecretSource`, not to disguise it in configuration.
 - **`AllowPlaintextEndpoints` is a per-transport opt-out.** Setting it on the gRPC sender does not affect any other transport that may be registered alongside.
 - **`RequireAuthentication = false` is the only loopback escape hatch on the receiver.** It disables the interceptor entirely for that host; do not use it in production.

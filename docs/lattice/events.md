@@ -23,12 +23,12 @@ DateTimeOffset at = evt.AtUtc;                // silo-side timestamp
 
 | Kind | `Key` | `ShardIndex` | Emitted by |
 |---|---|---|---|
-| `Set` | key written | routing shard | `ILattice.SetAsync`, `SetAsync` + TTL, `GetOrSetAsync` (only when newly written), `SetIfVersionAsync` (only when applied), `SetManyAsync` (per entry), `SetManyAtomicAsync` (per entry, stamped with the saga's `OperationId`; emitted as the prepare-phase `SetAsync` calls return - see [the rollback note below](#rollback-emits-prepared-set-events-but-no-terminal-event)) |
-| `Delete` | key deleted | routing shard | `ILattice.DeleteAsync` (only when the key existed) |
-| `DeleteRange` | `"{start}..{end}"` | `null` | `ILattice.DeleteRangeAsync` (one event when >= 1 key was deleted) |
+| `Set` | key written | `null` | `ILattice.SetAsync`, `SetAsync` + TTL, `GetOrSetAsync` (only when newly written), `SetIfVersionAsync` (only when applied), `SetManyAsync` (per entry), `SetManyWherePredicateAsync` (per key actually written), `ApplyCrdtDeltaAsync` with or without TTL and `ApplyCrdtDeltaManyAsync` (per entry) - the path the typed CRDT accessors write through - and `SetManyAtomicAsync` / `SetManyAtomicWhereAsync` (per staged entry, stamped with the saga's `OperationId`; emitted as the saga's execute phase stages each batch, before the commit decision - see [the rollback note below](#rollback-emits-prepared-set-events-but-no-terminal-event); a guarded batch whose precondition fails stages nothing and emits nothing) |
+| `Delete` | key deleted | `null` | `ILattice.DeleteAsync` (only when the key existed) |
+| `DeleteRange` | `"{start}..{end}"` | `null` | `ILattice.DeleteRangeAsync` and `DeleteRangeWherePredicateAsync` (one event when >= 1 key was deleted), and each `DeleteRangeStepAsync` step of a delete-range cursor that deleted >= 1 key (keyed by that step's sub-range) |
 | `AtomicWriteCompleted` | `null` | `null` | The atomic-write coordinator on terminal success only. `OperationId` is the saga's idempotency key. Rolled-back sagas do **not** publish a completion event. |
 | `SplitCommitted` | `null` | source shard | The shard-split coordinator after the finalise phase. |
-| `CompactionCompleted` | `null` | compacted shard | The tombstone-compaction pass after a successful run. |
+| `CompactionCompleted` | `null` | `null` | The tombstone-compaction pass after a successful run - one event per pass, however many shards it covered. |
 | `CompactionTriggered` | `null` | affected shard | Reserved / not yet emitted. A declared kind for a leaf asking the tree's compaction grain to schedule an out-of-cycle pass; no producer currently publishes it. |
 | `SnapshotCompleted` | `null` | `null` | The snapshot coordinator on terminal success. |
 | `ResizeCompleted` | `null` | `null` | The tree-resize coordinator on terminal success. |
@@ -45,7 +45,7 @@ Non-saga writes leave `OperationId` as `null`.
 
 ### Rollback emits prepared-set events but no terminal event
 
-`SetManyAtomicAsync` writes each entry through `ILattice.SetAsync` during its prepare/execute phase, so a per-key `Set` event with the saga's `OperationId` fires for every entry the saga successfully prepared. These writes are stamped as prepared and routed into the receiving leaf's per-transaction pending bucket; they are **not** visible to readers until the saga's terminal commit broadcast arrives. If the saga later aborts, the leaf's terminal-abort handler drops the pending bucket - no compensating `Set` / `Delete` writes are issued, so subscribers see the prepared-side events with **no** matching `AtomicWriteCompleted`. The absence of the terminal event is the signal that the saga rolled back; a `GetAsync` on any of those keys after the abort terminal lands returns the pre-saga value.
+`SetManyAtomicAsync` stages its entries through batched `ILattice.SetManyAsync` calls during its execute phase, so a per-key `Set` event with the saga's `OperationId` fires for every entry of each batch the saga successfully staged. These writes are stamped as prepared and routed into the receiving leaf's per-transaction pending bucket; they are **not** visible to readers until the saga's terminal commit broadcast arrives. If the saga later aborts, the leaf's terminal-abort handler drops the pending bucket - no compensating `Set` / `Delete` writes are issued, so subscribers see the prepared-side events with **no** matching `AtomicWriteCompleted`. The absence of the terminal event is the signal that the saga rolled back; a `GetAsync` on any of those keys after the abort terminal lands returns the pre-saga value.
 
 The strict atomic-visibility cleanup avoids the older pattern of emitting reverse compensating writes - which would have generated additional `Set` / `Delete` events tagged with the same `OperationId` - because compensation writes would themselves become visible and reorder against concurrent reads. Subscribers that need stronger durability semantics (e.g. "only act on events for sagas that actually committed") should buffer per-key events keyed by `OperationId` and discard the buffer if `AtomicWriteCompleted` does not arrive within a bounded window.
 
@@ -54,9 +54,12 @@ The strict atomic-visibility cleanup avoids the older pattern of emitting revers
 The following APIs intentionally skip event publication to keep their bulk I/O profile predictable:
 
 - `ILattice.BulkLoadAsync` - bulk-import path is optimised for throughput and assumes the importer already knows the full keyset.
-- `ILattice.DeleteRangeStepAsync` - stateful cursor-driven range delete advances one batch at a time. The unbounded `ILattice.DeleteRangeAsync` (executed as a single logical range operation) is the only range-delete API that emits a `DeleteRange` event.
 - Cursor-page reads (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `NextKeysAsync` / `NextEntriesAsync` / `CloseCursorAsync`) - read-only, never emit events.
-- Receiver-side replication apply seam (`IReplicationApplyGrain.ApplySetAsync` / `ApplyDeleteAsync` / `ApplyDeleteRangeAsync` / `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` / `ApplyMergeManyAsync`) - inbound writes from a peer cluster are merged directly into the owning shard via the LWW apply path and do **not** publish events at the receiving silo. Each cluster only emits events for writes that originated locally; subscribers that need a cluster-of-record view should attach at every cluster.
+- Inbound replicated last-writer-wins applies - a set, delete, range delete, or merged batch arriving from a peer cluster is merged directly into the owning shard and does **not** publish events at the receiving silo.
+
+Two inbound replication shapes are the exception and **do** publish at the receiving silo when publication is enabled there: a replicated atomic batch's prepared writes are re-applied through the local set / delete path, and a replicated CRDT delta is folded through the local CRDT apply path, so both emit the same per-key events a local write on that path would. A subscriber that needs every write should therefore still attach at every cluster - each cluster emits the writes it originated - and treat a replicated atomic batch or CRDT delta that it also observes on a receiving cluster as a duplicate.
+
+A delete-range cursor is **not** event-silent: each `DeleteRangeStepAsync` step issues a range delete on the tree and so emits a `DeleteRange` event for its sub-range whenever it deleted at least one key.
 
 ## Delivery semantics
 
@@ -64,7 +67,7 @@ The following APIs intentionally skip event publication to keep their bulk I/O p
 - **Metadata-only.** Values are never included. Subscribers that need the new bytes must issue a follow-up `ILattice.GetAsync(evt.Key)`.
 - **Best-effort.** Publication happens after the write is durable but is not part of the write commit. The underlying Orleans stream provider determines redelivery and ordering guarantees (e.g. MemoryStreams is at-most-once per activation; EventHub/AzureQueue streams are at-least-once with ordering per partition).
 - **Fail-silent.** Missing provider, serialization failures, and downstream queue exceptions are logged and discarded. The write-path return value is unchanged.
-- **No default provider.** Lattice does not register a stream provider on your behalf. You must add one explicitly (e.g. `siloBuilder.AddMemoryStreams("Default")` plus `AddMemoryGrainStorage("PubSubStore")`) and name it in `LatticeOptions.EventStreamProviderName`.
+- **No default provider.** Lattice does not register a stream provider on your behalf. You must add one explicitly (e.g. `siloBuilder.AddMemoryStreams("Default")` plus `AddMemoryGrainStorage("PubSubStore")`) under the name set in `LatticeOptions.EventStreamProviderName` (default `"Default"`).
 
 ## Setup
 
@@ -111,8 +114,8 @@ The publish pipeline emits two counters under the `orleans.lattice` meter:
 
 | Instrument | Type | Unit | Tags | Meaning |
 |---|---|---|---|---|
-| `orleans.lattice.events.published` | `Counter<long>` | `{event}` | `kind` = the event kind name (e.g. `Set`, `SnapshotCompleted`) | Incremented once per `LatticeTreeEvent` successfully dispatched to the configured stream provider. |
-| `orleans.lattice.events.dropped` | `Counter<long>` | `{event}` | `reason` = `missing_provider` (no stream provider by the configured name) or `publish_error` (the stream provider threw during dispatch) | Incremented once per event drop. |
+| `orleans.lattice.events.published` | `Counter<long>` | `{event}` | `tree`, `kind` = the event kind name (e.g. `Set`, `SnapshotCompleted`), `tenant` | Incremented once per `LatticeTreeEvent` successfully dispatched to the configured stream provider. |
+| `orleans.lattice.events.dropped` | `Counter<long>` | `{event}` | `tree`, `reason` = `missing_provider` (no stream provider by the configured name) or `publish_error` (the stream provider threw during dispatch), `tenant` | Incremented once per event drop. |
 
 ## Per-tree override
 
@@ -129,10 +132,10 @@ await tree.SetPublishEventsEnabledAsync(false, cancellationToken);
 await tree.SetPublishEventsEnabledAsync(null, cancellationToken);
 ```
 
-The override is persisted on the tree's registry entry (`TreeRegistryEntry.PublishEvents`) and survives silo restarts. Resolution order on every publish site:
+The override is persisted on the tree's registry entry and survives silo restarts. Resolution order on every publish site:
 
 1. Per-tree override if set.
-2. Otherwise `LatticeOptions.PublishEvents`.
+2. Otherwise `LatticeOptions.PublishEvents` - also used whenever the registry cannot be read, so a registry outage never blocks a write.
 
 **Propagation.** The activation that handled the call observes the change immediately. Other activations (on other silos, or other stateless-worker instances on the same silo) refresh their cached value within ~5 seconds, so writes landing on a different silo may emit under the previous setting for a brief window. This is intentional: the per-site cache keeps publication latency negligible and avoids a registry round-trip on every write.
 
@@ -142,7 +145,7 @@ The override is persisted on the tree's registry entry (`TreeRegistryEntry.Publi
 
 - **Not a change log.** `LatticeTreeEvent` is not persisted; a silo restart without subscribers attached loses any in-flight events. For durable audit trails use a durable stream provider (EventHubs, AzureQueue) or maintain a secondary projection tree.
 - **Not transactional.** Events are published after the write is durable, not as part of the same commit. A silo crash between the write and the publish loses the event; the write survives.
-- **Not totally ordered across shards.** Events for the same key are ordered by the originating shard root's single-activation serialisation. Events for different keys (or different shards) may be interleaved by the stream provider.
+- **Not totally ordered, even per key.** Events are published by the tree's stateless-worker front end after each write returns, not by the shard that serialised the write, so the events of concurrent writes - even to the same key - can be published in a different order from the one the shard applied them in. A caller that awaits each write before issuing the next publishes its own events in write order; delivery order from there on is up to the stream provider. Consumers that need causal order should re-read with `GetWithVersionAsync`.
 
 ## See also
 

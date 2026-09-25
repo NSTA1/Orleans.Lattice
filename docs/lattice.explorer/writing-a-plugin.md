@@ -103,9 +103,10 @@ the next one is 700. Pick an unused one: `Assembled_area_plugins_all_declare_a_d
 composes every area a head can register at once and fails on a collision.
 
 On the selection surface the constraint is narrower, because two selection
-plugins only compete when they apply to the same selection kind - Metrics and
-the tag-index browser both sit at 100 and never render together. Share an
-`Order` only when the `SelectionKinds` are disjoint.
+plugins only compete when they apply to the same selection kind - the Data
+surface and the tag-index browser both sit at 100 and never render together
+(the tree-and-view surfaces are Data 100, Topology 200, Metrics 300 and
+Dead-letter 400). Share an `Order` only when the `SelectionKinds` are disjoint.
 
 ### An access gate
 
@@ -172,9 +173,9 @@ subordinate variant rather than hand-rolling a strip; a hand-rolled
 `role="tablist"` will not carry the roving tabindex, the arrow-key handling or
 the `aria-controls` binding the shell guarantees everywhere else.
 
-Do not give a sub-surface the same label as its own area. The shell relabels a
-colliding first sub-surface to `Overview` as a backstop, but a plugin should
-name its surfaces so that never fires.
+Do not give a sub-surface the same label as its own area. The shell relabels the
+first sub-surface whose label collides to `Overview` as a backstop, but a plugin
+should name its surfaces so that never fires.
 
 ### Vocabulary, explanations and empty states
 

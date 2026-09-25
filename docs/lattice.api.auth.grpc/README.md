@@ -116,7 +116,7 @@ var app = builder.Build();
 app.MapLatticeAuthApiGrpc();
 ```
 
-The host must expose `ILatticeAuthAdmin` in the same service provider - typically by co-hosting Orleans with `AddLattice(...).AddLatticeAuth(...).AddLatticeAuthApi()` on the same host.
+The host must expose `ILatticeAuthAdmin` in the same service provider - typically by co-hosting Orleans with `AddLattice(...).AddLatticeMembership().AddLatticeAuth(...).AddLatticeAuthApi()` on the same host (`AddLatticeAuth` fails fast unless membership is registered first).
 
 ## Client
 

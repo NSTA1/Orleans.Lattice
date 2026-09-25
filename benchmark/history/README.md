@@ -38,8 +38,9 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 
 ## Data model
 
-Each `.run/<scenario>/<run_id>/results.json` contributes ~18 scalar samples to
-VM. Every sample is tagged:
+Each `.run/<scenario>/<run_id>/results.json` contributes one scalar sample to VM
+per non-null key in its `metrics` block - the curated `$ScalarPanelExtra` entries
+plus every auto-discovered key. Every sample is tagged:
 
 | Label      | Example                | Source                                         |
 |------------|------------------------|------------------------------------------------|
@@ -59,20 +60,22 @@ The push helper in `benchmark.ps1` translates every key in `results.json`'s
 `metrics` block into a Prometheus gauge named `bench_<key>`. Two ingest paths
 feed it:
 
-1. **Explicit `$ScalarPanel` entries** in `benchmark.ps1` - one row per headline
+1. **Explicit `$ScalarPanelExtra` entries** in `benchmark.ps1` - one row per headline
    metric with its source PromQL.
-2. **Auto-discovered prefixes** (`vehicle_fleet_simulator_*`, `orleans_lattice_*`,
-   `dotnet_*`) - every counter / histogram emitted under those OpenTelemetry
-   meters is synthesised into `bench_<sanitised>_per_second` /
-   `_p50` / `_p95` / `_p99` keys without harness edits. Adding a new
+2. **Auto-discovered prefixes** (`vehicle_fleet_simulator_*` and `orleans_lattice_*`,
+   plus a curated `dotnet_*` allow-list) - every instrument emitted under those
+   OpenTelemetry meters is synthesised, by instrument type, into
+   `bench_<sanitised>_per_second` / `_increase` / `_max` / `_avg` / `_p50` /
+   `_p95` / `_p99` keys without harness edits. Adding a new
    instrumentation site (e.g. the read-driver in `Bench.Sink`) just needs the
    meter registered with `WithMetrics(b => b.AddMeter(...))` in the silo and a
    matching `__name__=~"bench_<prefix>_.*"` regex in a dashboard family.
 
 ## Dashboards
 
-The history Grafana hosts an **Overview dashboard** plus **seven persona
-dashboards**. The Overview is a single-page roll-up showing every persona's
+The history Grafana hosts an **Overview dashboard** plus **seven generated persona
+dashboards**, and one hand-maintained atomic-writes dashboard. The Overview is a
+single-page roll-up showing every persona's
 headline KPIs in one view (one row per persona, scoped to that persona's
 scenarios) - use it as the landing page to spot the workload class that has
 regressed, then click into the matching persona dashboard for trend strips
@@ -88,6 +91,7 @@ and per-run barcharts.
 | `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
 | `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write tile is retained for backwards comparison and reads zero on every recent run. |
+| `lat-hist-atomic-writes`             | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | `SetManyAtomicAsync` saga cost and saga health. Hand-maintained; `Generate-Dashboards.ps1` does not produce it. |
 
 ### Per-persona-dashboard layout (3 bands, top-to-bottom)
 
@@ -103,7 +107,9 @@ persona's scenarios).
 
 The dashboards are regenerated from `benchmark/history/Generate-Dashboards.ps1`.
 The script wipes `BenchmarkHistory*.json` first so deleted personas don't leak,
-then emits one JSON per persona under `grafana/dashboards/`. Adding or moving a
+then emits one JSON per persona under `grafana/dashboards/`. The wipe also removes
+the hand-maintained `BenchmarkHistory.atomic-writes.json`; restore it from git
+after regenerating. Adding or moving a
 scenario between personas is a one-line edit to the `$Personas` table at the
 top of the script - re-run, wait ~30 s for Grafana's file-provider rescan,
 done.

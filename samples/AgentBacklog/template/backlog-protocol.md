@@ -392,9 +392,11 @@ reasoning that produced it.
 **Never set a TTL on a backlog item.** Expiry is silent and unlogged, so a
 lapsed item that other items declare `blockedBy` starves its dependents
 invisibly, with no event anywhere to explain it. Retire an item deliberately
-with `forget`. This is a hard exception to the "coordination state is time-boxed"
-rule in [Coordination](../../../.github/instructions/repocontext.instructions.md#coordination---memory-as-a-cross-session-bus): a backlog
-item is a ledger entry, not a handoff.
+with `forget`. This is no longer an exception to the coordination rule: the
+[Coordination](../../../.github/instructions/repocontext.instructions.md#coordination---memory-as-a-cross-session-bus)
+section now forbids a TTL on coordination entries generally, on the same
+reasoning. A backlog item - a ledger entry, not a handoff - is simply the case
+where the harm is most concrete.
 
 **Recording `baseBranch:` on the item is what makes a retry land correctly.**
 Leaving it to worker convention means a resumed or reassigned attempt targets
@@ -433,7 +435,7 @@ A sweep never reports `attempts = 0` for an item whose token is above zero.
 These extend the small, stable
 [knowledge-linking vocabulary](../../../.github/instructions/repocontext.instructions.md#knowledge-linking---typed-edges-between-memory-entries)
 rather than competing with it. `partOf` and `related` are the documented
-relations used unchanged, and the four additions follow the same discipline:
+relations used unchanged, and the five additions follow the same discipline:
 few, stable, one direction authored, named for what they assert.
 
 They are documented here so tooling that audits memory - the daily Memory
@@ -1229,7 +1231,7 @@ remember(repoId: "{repoId}", topic: "backlog", id: "issue-2100",
                 "homeRegion:{homeRegion}", "baseBranch:feat/epic/wal-batching"],
          addLinks: {
            "partOf":     ["repo/{repoId}/mem/backlog/issue-2099"],
-           "anchoredTo": ["repo/{repoId}/file/src/lattice/BPlusTree/Wal/IWalShardGrain.cs"]
+           "anchoredTo": ["repo/{repoId}/file/src/lattice/BPlusTree/Grains/IWalShardGrain.cs"]
          })
 
 # 2. The dependent. blockedBy is authored on the DEPENDENT, pointing back.
@@ -1242,7 +1244,7 @@ remember(repoId: "{repoId}", topic: "backlog", id: "issue-2101",
          addLinks: {
            "partOf":     ["repo/{repoId}/mem/backlog/issue-2099"],
            "blockedBy":  ["repo/{repoId}/mem/backlog/issue-2100"],
-           "anchoredTo": ["repo/{repoId}/file/src/lattice/BPlusTree/Wal/IWalShardGrain.cs"]
+           "anchoredTo": ["repo/{repoId}/file/src/lattice/BPlusTree/Grains/IWalShardGrain.cs"]
          })
 ```
 

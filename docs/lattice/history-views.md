@@ -7,8 +7,13 @@ view tails the source tree's write-ahead log and re-keys each mutation into a
 durable revision row, so the full timeline survives independently of source
 WAL garbage collection.
 
-History is **forward-only**: it begins at view creation and there is no
-retroactive backfill, matching the semantics of an immutable audit log.
+History starts from what the source still holds when the view is created. If no
+source write-ahead-log entry has been garbage-collected yet, the maintainer's
+first drain replays the log from its beginning, so earlier revisions are
+recorded with their original clocks; once garbage collection has trimmed the
+start of the log, the maintainer instead seeds one revision per live key from
+current source state and tails forward from there. Revisions trimmed from the
+log before the view existed are never reconstructed.
 
 ## How it works
 
@@ -59,7 +64,7 @@ rebuilds existing rows.
 
 | Mode | LWW value bytes | Use when |
 |------|-----------------|----------|
-| `MetadataOnly` (default) | Stripped to a content hash and length. | The timeline and change-detection matter; full bytes can be fetched lazily from the TTL-pinned source WAL while still retained. |
+| `MetadataOnly` (default) | Stripped to a content hash and length. | The timeline and change detection matter, not past values: history reads never return the stripped bytes (the write-ahead-log fallback read applies the same rule). |
 | `FullValue` | Stored verbatim per revision. | Point-in-time values must be served directly from the history view. |
 | `Hybrid` | Stored verbatim for recent revisions, stripped to metadata beyond a short window. | A recent full-value tail is needed, with an unbounded metadata-only timeline behind it. |
 
@@ -68,10 +73,12 @@ CRDT revisions are always stored as their delta regardless of mode - the delta
 
 Under `Hybrid` the "short window" is set by `LatticeViewOptions.HistoryHybridFullValueWindow` (default 5 minutes): a revision keeps its full value bytes only while its apply-time age is within this window, and older revisions are shaped to metadata.
 
-An optional **age bound** (a non-zero retention window) stamps each revision row
+An optional **age bound** (a positive retention window) stamps each revision row
 with an absolute expiry of `now + window`; the normal entry-expiry path reaps old
-rows, so no separate reaper is needed. A window of `TimeSpan.Zero` means revisions
-do not expire.
+rows, so no separate reaper is needed. Without an age bound revisions do not
+expire: pass `null` as the window to clear it (`SetHistoryRetentionAsync` rejects
+a zero or negative window), and `GetHistoryRetentionAsync` reports that state as a
+window of `TimeSpan.Zero`.
 
 Both the mode and the window are live-tunable per tree:
 
@@ -131,8 +138,8 @@ data came from and whether it is complete:
 
 | Field | Meaning |
 |-------|---------|
-| `Source` | `View` when read from the durable history view, `WalWindow` for the best-effort write-ahead-log fallback, or `None` when neither is available. |
-| `Truncated` | Always `false` on the `View` path - the timeline is bounded only by the configured retention age, never cut off below. `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
+| `Source` | `View` when read from the durable history view, `WalWindow` for the best-effort write-ahead-log fallback, or `None` when neither is available - and also when the access gate denies a point read of the key, which returns an empty page rather than throwing. |
+| `Truncated` | Always `false` on the `View` path - the timeline is never cut off below by WAL garbage collection; it is bounded by the configured retention age and by any rebuild that collapsed it (see [the accumulative guard](#the-accumulative-guard)). `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
 | `EarliestAvailable` | On a truncated `WalWindow` read, the oldest hybrid-logical-clock still readable; `HybridLogicalClock.Zero` otherwise. |
 
 ### Fallback without a history view
@@ -164,14 +171,23 @@ carries an **accumulative** flag that changes exactly those two behaviours:
 
 An explicit, operator-triggered rebuild remains the only intentional clear: it
 knowingly re-derives the view from current source state (collapsing prior
-revisions) and is the escape hatch for genuine view-tree corruption. Retention
+revisions) and is the escape hatch for genuine view-tree corruption. The flag does
+not suppress the maintainer's other rebuild triggers, and each of them collapses
+the timeline the same way: falling off the source write-ahead log (the view
+lagged past garbage collection), the atomic-staging backstop, a source-identity
+rebind after a restore or failover repoints the source, lag-budget eviction, and
+`ReconcileAsync`, whose re-derivation from current source state differs from any
+timeline that still holds earlier revisions. Retention
 mode and window are deliberately kept out of the projection version: they encode
 live-tunable policy, not code identity, so changing them never trips a rebuild.
 
 ## Limitations
 
-- **Forward-only.** History begins at view creation; there is no retroactive
-  backfill of revisions that predate it.
+- **No reconstruction of trimmed history.** The timeline begins with whatever the
+  source still holds at creation - its untrimmed write-ahead log, or a
+  one-revision-per-key seed from current state once garbage collection has
+  trimmed that log; revisions trimmed before the view existed cannot be
+  recovered.
 - **Count-based retention ("keep last N per key") is not expressible** in a pure
   per-mutation projection and is out of scope for this substrate.
 - **The read path is built in.** `ILattice.ScanEntryHistoryAsync` queries a key's

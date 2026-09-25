@@ -26,6 +26,7 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 | Facade outcome | Status |
 |---|---|
 | `LatticeAuthorizationDeniedException` (interceptor or gate) | `PermissionDenied` |
+| `LatticeTenantAccessDeniedException` (no valid active tenant, or the caller may not act as the asserted one) | `PermissionDenied` |
 | `LatticeReplicationPreconditionFailedException` | `FailedPrecondition` |
 | `LatticeReplicationModeChangeRejectedException` | `FailedPrecondition` |
 | `ArgumentException` (null / empty tree id, unrecognized mode) | `InvalidArgument` |

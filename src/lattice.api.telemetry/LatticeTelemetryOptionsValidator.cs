@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
-/// Validates <see cref="LatticeTelemetryOptions"/> at host start: requires
+/// Validates <see cref="LatticeTelemetryOptions"/> when options are first resolved: requires
 /// an absolute backend address, a defined auth mode with the credential material
 /// its mode needs, strictly positive request-timeout and range guardrails, a
 /// defined metric-access mode, and - in deny-all mode - a non-empty allow-list

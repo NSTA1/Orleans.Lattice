@@ -18,7 +18,7 @@ A metrics subscription emits the initial full snapshot, then only the **changes*
 
 ## Reads do not stall writes
 
-The read surfaces run alongside the write path without contending with it. Entry scans use the core library's snapshot-isolated cursors rather than locking the foreground, and metrics sampling reads aggregate counters rather than walking live state. A cluster under write load with many readers and subscribers attached keeps its writes prompt - this is asserted directly by the package's efficiency guardrail tests.
+The read surfaces run alongside the write path without contending with it. Entry scans use the core library's cursors (snapshot-isolated by default, or baseline-free live cursors) rather than locking the foreground, and metrics sampling reads aggregate counters rather than walking live state. A cluster under write load with many readers and subscribers attached keeps its writes prompt - this is asserted directly by the package's efficiency guardrail tests.
 
 ## One per-shard walk backs both tiles and hotness
 

@@ -13,7 +13,7 @@ int depth = await queue.CountAsync(cancellationToken);
 LatticeQueueEntry<string>? head = await queue.TryDequeueAsync(cancellationToken);
 ```
 
-Values are serialized with an injectable `ILatticeSerializer<T>`, defaulting to `JsonLatticeSerializer<T>.Default`. Pass your own serializer as the optional third argument to `GetLatticeQueue<T>` for custom wire formats. Because serialization happens client-side, `T` does not need to be Orleans-serializable.
+Values are serialized with an injectable `ILatticeSerializer<T>`, defaulting to `JsonLatticeSerializer<T>.Default`. Pass your own serializer as the optional `serializer` argument of `GetLatticeQueue<T>` for custom wire formats. Because serialization happens client-side, `T` does not need to be Orleans-serializable.
 
 ## Surface
 
@@ -39,6 +39,6 @@ A few properties follow from the FIFO contract and the hash-partitioned backing 
 
 - **The single coordinator grain is the throughput ceiling.** One activation per logical queue serializes all operations to preserve FIFO order. Sharding cannot relieve this - ordering is the contract. Applications needing higher throughput should fan work across several independently-named queues (partitioned lanes) and hash a producer key to a lane.
 - **Head, tail, and count are served from memory.** The grain bulk-loads on activation and serves `Count` / `Peek` from the in-memory cache, so the hot path never range-scans the backing tree. A head-cursor row is persisted so steady-state dequeue and cold start skip already-dequeued ids rather than re-walking from the head of the prefix.
-- **`ListAsync` is an O(shards) fan-out.** Because the backing store hashes monotonic entry keys uniformly across every physical shard, an ascending-id snapshot is a k-way merge across all shards. It is intended for diagnostic / control-plane use, not the hot path - prefer `CountAsync` and `PeekAsync` there.
+- **`ListAsync` copies the whole in-memory queue.** It returns every parked entry in ascending-id order from the activation's cache - no range scan - so its cost grows with the queue's depth rather than with the shard count; the ordered scan across the backing tree's shards is paid once, when the grain bulk-loads on activation. Because it materialises every parked entry, it is intended for diagnostic / control-plane use, not the hot path - prefer `CountAsync` and `PeekAsync` there.
 
 Scope queue throughput to diagnostic / control-plane workloads rather than primary data-plane traffic, or partition across lanes as above.

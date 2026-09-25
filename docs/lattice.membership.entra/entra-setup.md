@@ -146,7 +146,8 @@ az rest --method PATCH `
 ```
 
 Large group memberships overflow the token; that case is resolved out of band by
-the separate [Graph group resolver](../lattice.membership.entra.graph/README.md).
+the separate [Graph group resolver](../lattice.membership.entra.graph/README.md),
+once the authenticator's `GroupResolutionMode` is set to `ResolveOnOverage`.
 
 ## Step 7 - Export the ids for the sample
 

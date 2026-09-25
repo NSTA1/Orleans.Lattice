@@ -247,7 +247,7 @@ public static class TypedLatticeExtensions
     /// <summary>
     /// Serializes and atomically writes multiple key-value pairs via the
     /// saga. See <see cref="ILattice.SetManyAtomicAsync"/> for full semantics
-    /// (all-or-nothing commit, partial-visibility window, compensation on failure).
+    /// (all-or-nothing commit, atomic visibility, abort with no per-key rollback writes).
     /// </summary>
     public static Task SetManyAtomicAsync<T>(
         this ILattice lattice,
