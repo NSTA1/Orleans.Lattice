@@ -16,13 +16,17 @@ internal static class TestOptionsResolver
     /// <summary>
     /// Creates a <see cref="LatticeOptionsResolver"/> seeded with the given
     /// structural pin. The same pin is returned for every tree id queried.
+    /// <paramref name="shardMap"/>, when supplied, is the routing map the same
+    /// registry publishes for every tree, which is what a replaying leaf resolves
+    /// shard ownership through (and pushes down to storage, issue #3565).
     /// </summary>
     public static LatticeOptionsResolver Create(
         LatticeOptions? baseOptions = null,
         int maxLeafKeys = 128,
         int maxInternalChildren = 128,
         int shardCount = 1,
-        IGrainFactory? factory = null)
+        IGrainFactory? factory = null,
+        ShardMap? shardMap = null)
     {
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(baseOptions ?? new LatticeOptions());
@@ -37,6 +41,10 @@ internal static class TestOptionsResolver
                 MaxInternalChildren = maxInternalChildren,
                 ShardCount = shardCount,
             }));
+        if (shardMap is not null)
+        {
+            registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(shardMap));
+        }
 
         return new LatticeOptionsResolver(factory, optionsMonitor);
     }

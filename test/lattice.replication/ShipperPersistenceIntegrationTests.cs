@@ -179,6 +179,9 @@ public class ShipperPersistenceIntegrationTests
         public ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
             => throw new NotSupportedException("ReadAsync is not exercised by the framing-only shipper path.");
 
+        public ValueTask<WalShardPage> ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken cancellationToken)
+            => throw new NotSupportedException("The leaf replay read is not exercised by the framing-only shipper path.");
+
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 

@@ -95,6 +95,8 @@ When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both
 
 Reads enumerate committed batch metadata in offset order, then stream entry rows lazily from each overlapping batch. `GetHighestOffsetAsync` reads the stored tail and folds over it the contiguous run of already-durable batches the shard's live completion worker has accepted, so it never lags behind a completed append. `GetLowestOffsetAsync` finds the first retained batch after trim.
 
+The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metadata, and bounds each batch query above by the window's last row key as well. It classifies each row from the routing prefix of its payload before decoding it: a compressed row is inflated into a pooled buffer rather than a new array, and a row the reader's filter excludes is neither decoded nor retained. The table service still returns every row in the window - the key lives inside the payload, so the service cannot select on it - which makes the saving the per-row decode and its allocations, not the transfer. The classification needs the routing reader `AddAzureTableWalStorage` supplies; a provider built through a public constructor decodes every row it examines, and returns the same rows.
+
 Trim deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order. A crash during trim can leave a stale retained prefix, but not a gap in the live tail; a later trim can resume cleanup.
 
 Capacity planning is shared with core WAL tuning:

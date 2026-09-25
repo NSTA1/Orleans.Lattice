@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the slice cache, and the read-failure arms can each be driven in isolation.
 /// </summary>
 [TestFixture]
-public class LeafReplayCoordinatorGrainTests
+public partial class LeafReplayCoordinatorGrainTests
 {
     private const string TreeId = "orders";
 

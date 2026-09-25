@@ -115,6 +115,28 @@ internal sealed class WalStorageProviderContractProbe : IWalStorageProviderContr
         return new WalContractEncodedPage(entries, page.HighestOffsetInclusive);
     }
 
+    public async Task<IReadOnlyList<WalContractEntry>> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        string? lowKeyInclusive,
+        string? highKeyExclusive,
+        CancellationToken cancellationToken)
+    {
+        var filter = new WalKeyFilter(lowKeyInclusive, highKeyExclusive);
+        var read = new List<WalContractEntry>();
+        await foreach (var entry in _provider
+            .ReadFilteredAsync(treeId, shardIndex, fromOffsetExclusive, toOffsetInclusive, maxEntries, filter, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            read.Add(new WalContractEntry(entry.Offset, entry.Mutation.Key, entry.Mutation.Value ?? []));
+        }
+
+        return read;
+    }
+
     public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken) =>
         _provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
 
