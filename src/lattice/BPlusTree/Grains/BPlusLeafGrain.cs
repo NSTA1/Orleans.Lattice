@@ -1903,10 +1903,14 @@ internal sealed partial class BPlusLeafGrain(
         // interrupted division otherwise sends a key at or above the pre-split
         // bound to OldNextSibling, and once the new sibling is initialised a
         // reclaim can fold that successor into it and retire it (issue #3583).
-        // The recovered split is reported on the tracked shape only; the
-        // untracked shape carries no split, as its own forward already shows.
+        // The untracked shape does not recover: it has no way to report a split,
+        // and a recovered split that is not reported leaves the new sibling
+        // chained but unreachable by descent, since no later write sees the
+        // split as interrupted (see Split.cs). It keeps the OldNextSibling
+        // forward and leaves the split for a tracked write to complete and
+        // report; it is reached only from a rolling-upgrade caller.
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (tracked && HasInterruptedSplit)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
@@ -2025,7 +2029,8 @@ internal sealed partial class BPlusLeafGrain(
             StoreAdmittedEntry(key, tombstone, ref stranded);
             if (stranded is not null)
             {
-                relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+                relocatedSplit = await RelocateStrandedAsync(
+                    stranded, isCrossShardMigration: false, completeInterruptedSplit: tracked);
             }
         }
         RecordCommitStep("apply", applyStartTicks);

@@ -218,7 +218,9 @@ public partial class BPlusLeafGrainTests
     //
     // Perturbation: remove the HasInterruptedSplit recovery from either
     // DeleteCoreAsync or SetManyWherePredicateAsync and the matching test
-    // below fails, because the key goes to the retired successor.
+    // below fails, because the key goes to the retired successor. Run the
+    // recovery on the untracked DeleteAsync shape as well and the two
+    // DeleteAsync tests fail, because that shape drops the recovered split.
 
     /// <summary>
     /// A leaf holding an interrupted division at <c>"m"</c> whose new sibling
@@ -285,14 +287,43 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task DeleteAsync_completes_an_interrupted_split_before_forwarding_past_the_pre_split_bound()
+    public async Task DeleteAsync_leaves_an_interrupted_split_for_a_tracked_write_to_report()
     {
-        var (grain, sibling, retired) = await CreateInterruptedSplitWithRetiredSuccessorGrainAsync();
+        // The untracked shape cannot report a split. Completing the recovery
+        // there would drop the only SplitResult that links the new sibling, and
+        // no later write would see the split as interrupted, so the sibling
+        // would stay chained but unreachable by descent.
+        var (grain, _, _) = await CreateInterruptedSplitWithRetiredSuccessorGrainAsync();
 
-        await grain.DeleteAsync("zz");
+        var deleted = await grain.DeleteAsync("b");
+        var result = await grain.DeleteTrackedAsync("c");
 
-        await sibling.Received(1).DeleteAsync("zz");
-        await retired.DidNotReceiveWithAnyArgs().DeleteAsync(default!);
+        Assert.Multiple(() =>
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(result.Split, Is.Not.Null,
+                "The split the untracked delete left interrupted is completed and reported by the next tracked write.");
+        });
+    }
+
+    [Test]
+    public async Task DeleteAsync_relocation_leaves_an_interrupted_split_for_a_tracked_write_to_report()
+    {
+        var (grain, _, successor, siblingCalls, arm) = CreateSplitStartingDuringAppendGrain();
+        successor.MergeManyAsync(default!, default).ReturnsForAnyArgs((SplitResult?)null);
+        await grain.SetAsync("p", Utf8("old"));
+        arm();
+
+        var deleted = await grain.DeleteAsync("p");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(siblingCalls, Is.Empty, "The untracked delete must not complete a split it cannot report.");
+        });
+        await successor.Received(1).MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.Count == 1 && d["p"].IsTombstone),
+            false);
     }
 
     [Test]

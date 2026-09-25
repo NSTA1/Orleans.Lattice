@@ -493,12 +493,18 @@ internal sealed partial class BPlusLeafGrain
     /// span. No caller holds <c>_splitGate</c> here: relocation runs in the
     /// commit path, which takes no gate, and a split never waits on a commit.
     /// </para>
+    /// <para>
+    /// <paramref name="completeInterruptedSplit"/> is false only for a caller
+    /// that cannot report the returned split (the untracked delete). A split
+    /// completed there and dropped would leave the new sibling unreachable by
+    /// descent, so such a caller leaves the split for a tracked write.
+    /// </para>
     /// </summary>
     private async Task<SplitResult?> RelocateStrandedAsync(
-        Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration)
+        Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration, bool completeInterruptedSplit = true)
     {
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (completeInterruptedSplit && HasInterruptedSplit)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
