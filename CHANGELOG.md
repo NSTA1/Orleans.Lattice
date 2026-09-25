@@ -59,6 +59,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Benchmark - Atomic cohorts wedged at ops=0.** The ingest engine ran every saga in a producer batch as one sequential chain on a single flush slot and counted the batch only when its last saga returned. At N=4 a 2,000-entry batch was about 1,000 sagas, so `set-many-atomic-2` and `cross-tree-atomic-2` read ops=0 for 160 s while the silos decided 400 sagas/s. A saturation retry also re-committed sagas that had landed, and one rolled-back saga booked the whole batch as failed. Each saga is now its own flush unit. ([#3581](https://github.com/NSTA1/Orleans.Lattice/issues/3581)) (`repository-wide`)
+
 - **Shard root - Deactivation after a suspended flush loop drains in-flight writes.** ([#3546](https://github.com/NSTA1/Orleans.Lattice/issues/3546)) (`Orleans.Lattice`)
 
 - **Azure Table WAL - An abandoned phase-two submit raced post-failure resync.** A phase-two commit that hit its deadline cancelled the in-flight submit and resynced immediately, while the storage call could still land. The resync then read a TAIL that moved underneath it, surfacing as overlap-guard rejections, `retry.exhausted` and shard deactivations. The deadline now bounds only the wait. An abandoned submit is fenced until it settles (60 s cap), a late success folds its TAIL via CAS-max, and reconcile and highest-offset reads await the fence. At N=6 set-many: 35.5k/s with 0 failed, against 26.4k/s with 261k failed. ([#3458](https://github.com/NSTA1/Orleans.Lattice/issues/3458)) (`Orleans.Lattice.Storage.AzureTable`)
