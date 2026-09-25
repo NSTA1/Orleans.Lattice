@@ -301,8 +301,8 @@ internal sealed partial class ShardRootGrain(
             // re-enters. Wrapped because a unit test with a substituted
             // IGrainContext has no runtime to schedule against, and the suspension
             // path must stay exercisable there - matching how both flush timers are
-            // armed.
-            this.DeactivateOnIdle();
+            // armed. Point writes are fenced first (#812).
+            RequestDeactivationFencingPointWrites();
         }
         catch (Exception deactivateFailure)
         {

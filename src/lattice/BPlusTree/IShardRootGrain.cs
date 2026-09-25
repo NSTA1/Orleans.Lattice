@@ -115,7 +115,64 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 
-    /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
+    /// <summary>
+    /// Inserts or updates the value for <paramref name="key"/>.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so point writes aimed
+    /// at one shard pipeline instead of queueing behind the write in flight
+    /// (issue #812). Without it the call held the activation's non-reentrant
+    /// turn across the whole leaf and write-ahead-log round trip, so per-shard
+    /// point-write concurrency was one. On the set-point rig (two silos, 4,000
+    /// keys/s offered) the shard stage accounted for 257 ms of a 258 ms mean
+    /// set, against a 20 ms leaf commit, and quadrupling the shard count raised
+    /// throughput by 59%.
+    /// </para>
+    /// <para>
+    /// The write runs the same guards as <see cref="SetManyAsync"/>, which has
+    /// interleaved since U9g, and relies on the same invariants listed there:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>The reject check runs before the traversal, and the post-apply
+    ///   split shadow-forward re-reads the split state after the leaf write
+    ///   lands. A split phase that advances mid-write is therefore forwarded,
+    ///   not lost.</item>
+    ///   <item>A leaf split is linked through the per-shard split-link gate with
+    ///   a fresh descent (#3523), never against the path captured before the
+    ///   leaf call, so concurrent splits cannot orphan a sibling.</item>
+    ///   <item>A routing table fetched on a cache miss is published only when
+    ///   the routing generation is unchanged since the fetch began.</item>
+    ///   <item>Every shard-root state write goes through the per-activation
+    ///   write semaphore.</item>
+    ///   <item>The optimistic-read call filter still counts this method as a
+    ///   routing mutation, so an interleaved read that overlaps it falls back to
+    ///   the serial path.</item>
+    ///   <item>Point writes do not straddle serial turns. The shard root's call filter
+    ///   holds a point write back while a non-interleaved turn is active, and makes
+    ///   that turn wait for point writes already in flight, so split and fold phase
+    ///   transitions and their authoritative drains still see no write mid-flight.
+    ///   Point writes do not wait on each other.</item>
+    ///   <item>A point write that reaches an activation which has requested its own
+    ///   deactivation is refused with a retriable fault before it touches a leaf.
+    ///   Dispatched, it would stall on the leaf's footprint callback into the
+    ///   deactivating activation and lose any split carried back on the timed-out
+    ///   reply.</item>
+    /// </list>
+    /// <para>
+    /// The U9h-C lesson recorded on <see cref="GetAsync"/> does not carry over.
+    /// That defect was a read acting on routing fields it had read at different
+    /// times. A write does not act on its routing snapshot beyond delivering the
+    /// value to a leaf: the leaf decides the split, the fresh descent decides the
+    /// link, and the post-apply forward re-reads the split state.
+    /// </para>
+    /// <para>
+    /// Two concurrent writes to one key, or a point write racing a
+    /// non-interleaved single-key call such as <see cref="GetOrSetAsync"/> on the
+    /// same key, apply in either order. The owning leaf stamps each write with
+    /// its own HLC, so last-writer-wins resolves the race exactly as it does for
+    /// two callers racing on different activations.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
@@ -123,7 +180,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// expiry. The entry is treated as tombstoned on reads once the
     /// current UTC wall clock passes <paramref name="expiresAtTicks"/>.
     /// Pass <c>0</c> for no expiry (equivalent to <see cref="SetAsync(string, byte[])"/>).
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the reasons, and
+    /// under the invariants, documented on <see cref="SetAsync(string, byte[])"/>.
+    /// The expiry travels with the value to the leaf and through the post-apply
+    /// split shadow-forward, so interleaving does not change how it is applied.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task SetAsync(string key, byte[] value, long expiresAtTicks);
 
     /// <summary>

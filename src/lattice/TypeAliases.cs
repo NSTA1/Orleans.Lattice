@@ -132,6 +132,7 @@ internal static class TypeAliases
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
+    internal const string ShardRootDeactivating = "ol.sdx";
 
     // Range-scan page-fill stall surface. Thrown by ShardRootGrain when a
     // single page fill exceeds MaxScanPageStallDuration end to end, so the
