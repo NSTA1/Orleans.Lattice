@@ -182,7 +182,9 @@ internal sealed partial class ShardRootGrain
             // of any routing flips between prepare and broadcast.
             var registry = TxRegistryRouting.GetRegistry(
                 grainFactory, TreeId, txid);
-            await registry.RegisterParticipantAsync(txid, MyShardIndex);
+            await TxRegistryWriteRetry.RunAsync(
+                (registry, txid, shard: MyShardIndex),
+                static s => s.registry.RegisterParticipantAsync(s.txid, s.shard));
         }
         catch
         {

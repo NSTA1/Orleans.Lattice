@@ -86,4 +86,31 @@ public class TxRegistryHighWaterGrainTests
         Assert.That(await grain.GetShardHighWaterAsync(), Is.EqualTo(2));
         Assert.That(await grain.RaiseShardHighWaterAsync(5), Is.EqualTo(5), "The next raise retries the write.");
     }
+
+    [Test]
+    public void RaiseShardHighWaterAsync_deactivates_on_a_write_conflict_and_rethrows()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var state = new FakePersistentState<TxRegistryHighWaterState>();
+        var grain = new TxRegistryHighWaterGrain(context, state);
+        state.ThrowOnWrite = new Orleans.Storage.InconsistentStateException("etag mismatch");
+
+        Assert.ThrowsAsync<Orleans.Storage.InconsistentStateException>(() => grain.RaiseShardHighWaterAsync(3));
+
+        Assert.That(state.State.ShardHighWater, Is.Zero);
+        context.ReceivedWithAnyArgs().Deactivate(default!);
+    }
+
+    [Test]
+    public void RaiseShardHighWaterAsync_does_not_deactivate_on_a_non_conflict_failure()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var state = new FakePersistentState<TxRegistryHighWaterState>();
+        var grain = new TxRegistryHighWaterGrain(context, state);
+        state.ThrowOnWrite = new InvalidOperationException("storage down");
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RaiseShardHighWaterAsync(3));
+
+        context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+    }
 }

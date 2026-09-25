@@ -345,6 +345,21 @@ caller joins the round already in flight, while a caller that needs a
 revision at least as fresh as its own arrival waits for the next round
 rather than joining one that started before it.
 
+**Write failures.** A registry shard commits its mutations as one group
+per state write, and a failed write fails every caller in the group with
+an internal `TxRegistryWriteFailedException` that names the registry key
+and the provider's fault type. Nothing that write carried is durable, so
+the caller may retry. The raw provider exception is never propagated,
+because a storage-specific exception type (an Azure Table ETag conflict,
+say) need not be loadable on the calling silo. When the fault is an
+optimistic-concurrency conflict, which means a second activation of the
+same shard has written the row, the shard deactivates itself so that the
+next call reloads the current row rather than failing forever against a
+stale ETag. The same applies to the high-water grain. The saga
+coordinator, the shard root's participant registration and the
+replication receiver retry a failed registry write up to four times, with
+a short doubling backoff, before surfacing it.
+
 **Upgrade compatibility.** Transaction ids minted before sharding, or
 while `TxRegistryShardCount` is `1`, are ordinary version-4 UUIDs and
 route to the legacy registry keyed by the bare tree id. Tree-wide reads

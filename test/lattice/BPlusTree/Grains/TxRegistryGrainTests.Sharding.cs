@@ -105,7 +105,7 @@ public partial class TxRegistryGrainTests
         var (grain, state) = CreateGrain(treeId: "tree-x~s2", grainFactory: factory);
         var first = Guid.NewGuid();
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.MarkCommittedAsync(first));
+        Assert.ThrowsAsync<TxRegistryWriteFailedException>(() => grain.MarkCommittedAsync(first));
 
         Assert.Multiple(() =>
         {

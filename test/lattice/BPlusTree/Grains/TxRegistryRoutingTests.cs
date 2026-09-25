@@ -47,12 +47,17 @@ public class TxRegistryRoutingTests
         }
     }
 
-    [Test]
-    public void MintTransactionId_spreads_ids_across_every_shard()
+    [TestCase(8)]
+    [TestCase(64)]
+    [TestCase(128)]
+    [TestCase(255)]
+    [TestCase(256)]
+    public void MintTransactionId_spreads_ids_across_every_shard(int count)
     {
-        const int count = 8;
+        // The index must come from bytes with no fixed bits: drawing it from the
+        // RFC variant byte reached only 64 distinct shards at counts above 64.
         var seen = new HashSet<int>();
-        for (var i = 0; i < 2000 && seen.Count < count; i++)
+        for (var i = 0; i < 100_000 && seen.Count < count; i++)
         {
             seen.Add(TxRegistryRouting.ShardOf(TxRegistryRouting.MintTransactionId(count)));
         }

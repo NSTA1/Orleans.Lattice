@@ -35,9 +35,16 @@ internal sealed class TxRegistryHighWaterGrain(
         {
             await state.WriteStateAsync();
         }
-        catch
+        catch (Exception ex)
         {
             state.State.ShardHighWater = previous;
+            if (TxRegistryGrain.IsWriteConflict(ex))
+            {
+                // Storage holds a mark this activation never read; reload it on
+                // the next call rather than fail every later raise on a stale ETag.
+                this.DeactivateOnIdle();
+            }
+
             throw;
         }
 

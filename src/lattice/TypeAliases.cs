@@ -307,6 +307,7 @@ internal static class TypeAliases
     internal const string AtomicWriteOutcome = "ol.awo";
     internal const string TxRegistryState = "ol.txr";
     internal const string TxRegistryHighWaterState = "ol.txh";
+    internal const string TxRegistryWriteFailed = "ol.txf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";
     internal const string SnapshotPin = "ol.sp";

@@ -114,11 +114,11 @@ public partial class TxRegistryGrainTests
         await DrainAsync(turn);
         gate.SetResult();
 
-        var thrown = Assert.ThrowsAsync<InvalidOperationException>(async () => await mark);
+        var thrown = Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await mark);
         var status = await read;
         Assert.Multiple(() =>
         {
-            Assert.That(thrown, Is.SameAs(failure), "The storage exception must reach the caller unwrapped.");
+            Assert.That(thrown!.Message, Does.Contain(failure.Message), "The storage fault must reach the caller, translated to the registry's own exception.");
             Assert.That(status, Is.EqualTo(TxStatus.InFlight),
                 "A reader must never report a commit whose write failed.");
             Assert.That(state.State.Decisions, Does.Not.ContainKey(txid));
@@ -160,11 +160,11 @@ public partial class TxRegistryGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await inFlight), Is.SameAs(failure));
-            Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await queuedCommit), Is.SameAs(failure),
+            Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await inFlight)!.Message, Does.Contain(failure.Message));
+            Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await queuedCommit)!.Message, Does.Contain(failure.Message),
                 "A mutation queued behind a failed write was applied on non-durable state and must fail too.");
-            Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await queuedAbort), Is.SameAs(failure));
-            Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await queuedParticipants), Is.SameAs(failure));
+            Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await queuedAbort)!.Message, Does.Contain(failure.Message));
+            Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await queuedParticipants)!.Message, Does.Contain(failure.Message));
             Assert.That(state.State.Decisions.Keys, Is.EquivalentTo(new[] { durable }));
             Assert.That(state.State.Participants, Is.Empty);
             Assert.That(state.State.DecisionsRevision, Is.EqualTo(baseline));
@@ -208,7 +208,7 @@ public partial class TxRegistryGrainTests
         await DrainAsync(turn);
         gate.SetResult();
 
-        Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await first), Is.SameAs(failure));
+        Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await first)!.Message, Does.Contain(failure.Message));
         await repeat;
         Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Committed));
     }
@@ -227,7 +227,7 @@ public partial class TxRegistryGrainTests
         await DrainAsync(turn);
         gate.SetResult();
 
-        Assert.That(Assert.ThrowsAsync<InvalidOperationException>(async () => await commit), Is.SameAs(failure));
+        Assert.That(Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await commit)!.Message, Does.Contain(failure.Message));
         await abort;
         Assert.That(state.State.Decisions[txid], Is.EqualTo(TxStatus.Aborted),
             "A conflict against a verdict that never became durable is not a real conflict.");

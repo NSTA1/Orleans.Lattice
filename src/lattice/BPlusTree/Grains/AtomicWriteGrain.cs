@@ -570,7 +570,9 @@ internal sealed class AtomicWriteGrain(
             if (txid != Guid.Empty)
             {
                 var registry = RegistryFor(state.State.TreeId, txid);
-                await registry.RegisterExternalDecisionAuthorityAsync(txid, coordinatorKey);
+                await TxRegistryWriteRetry.RunAsync(
+                    (registry, txid, coordinatorKey),
+                    static s => s.registry.RegisterExternalDecisionAuthorityAsync(s.txid, s.coordinatorKey));
             }
 
             var prevPhase = state.State.Phase;
@@ -2372,9 +2374,7 @@ internal sealed class AtomicWriteGrain(
         var txid = state.State.TransactionId;
         if (txid == Guid.Empty) return Task.CompletedTask;
         var registry = RegistryFor(state.State.TreeId, txid);
-        return committed
-            ? registry.MarkCommittedAsync(txid)
-            : registry.MarkAbortedAsync(txid);
+        return TxRegistryWriteRetry.MarkDecisionAsync(registry, txid, committed);
     }
 
     /// <summary>

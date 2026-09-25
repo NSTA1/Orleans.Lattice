@@ -48,7 +48,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkCommittedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
         state.ThrowOnWrite = null;
 
         Assert.Multiple(() =>
@@ -74,7 +74,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkAbortedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
         state.ThrowOnWrite = null;
 
         Assert.That(state.State.ExternalAuthorities.ContainsKey(txid), Is.True);
@@ -94,7 +94,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkCommittedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var key), Is.True);
         Assert.That(key, Is.EqualTo("xop-recv"));
@@ -109,7 +109,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkAbortedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var key), Is.True);
         Assert.That(key, Is.EqualTo("xop-recv-b"));
@@ -136,7 +136,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkCommittedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
         state.ThrowOnWrite = null;
 
         var after = await grain.ObserveCrossTreeInFlightAsync();
@@ -160,7 +160,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkAbortedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
         state.ThrowOnWrite = null;
 
         var after = await grain.ObserveCrossTreeInFlightAsync();
@@ -186,7 +186,7 @@ public partial class TxRegistryGrainTests
 
         state.ThrowOnWrite = new InvalidOperationException("write boom");
         Assert.That(async () => await grain.MarkCommittedAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {

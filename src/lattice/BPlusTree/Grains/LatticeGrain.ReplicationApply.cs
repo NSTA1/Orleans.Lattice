@@ -676,14 +676,7 @@ internal sealed partial class LatticeGrain
             // Legacy single-tree path: the per-shard gate is the only
             // barrier, so mark the per-tree linearization point and fan
             // the terminal out as soon as the gate completes.
-            if (committed)
-            {
-                await registry.MarkCommittedAsync(transactionId);
-            }
-            else
-            {
-                await registry.MarkAbortedAsync(transactionId);
-            }
+            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
 
             await ApplyTerminalPostGateAsync(
                 transactionId, committed, tally.ObservedSourceShards,
@@ -793,14 +786,7 @@ internal sealed partial class LatticeGrain
     {
         var registry = TxRegistryRouting.GetRegistry(
             grainFactory, TreeId, transactionId);
-        if (committed)
-        {
-            await registry.MarkCommittedAsync(transactionId);
-        }
-        else
-        {
-            await registry.MarkAbortedAsync(transactionId);
-        }
+        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
 
         await ApplyTerminalPostGateAsync(
             transactionId, committed, observedSourceShards,

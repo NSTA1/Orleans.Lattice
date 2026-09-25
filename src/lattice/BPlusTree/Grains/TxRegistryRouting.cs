@@ -102,7 +102,10 @@ internal static class TxRegistryRouting
         // Version nibble lives in the high half of byte 7 of the little-endian
         // layout; the RFC variant bits (byte 8) are already set by NewGuid.
         bytes[VersionByteIndex] = (byte)((bytes[VersionByteIndex] & 0x0F) | (ShardedTransactionIdVersion << 4));
-        bytes[ShardByteIndex] = (byte)(BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(8, 4)) % count);
+        // Draw the index from bytes 11-14, which carry no fixed bits. Byte 8
+        // holds the RFC 4122 variant bits (10xxxxxx), so a draw that included
+        // it would reach only 64 distinct shards at counts above 64.
+        bytes[ShardByteIndex] = (byte)(BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(11, 4)) % count);
         return new Guid(bytes);
     }
 

@@ -72,7 +72,7 @@ public partial class TxRegistryGrainTests
                     await OnTurnAsync(turn, call);
                     return;
                 }
-                catch (IOException) when (attempt < 200)
+                catch (TxRegistryWriteFailedException) when (attempt < 200)
                 {
                     // Callers retry a failed registry write; so does the saga.
                 }
@@ -122,7 +122,7 @@ public partial class TxRegistryGrainTests
                         await OnTurnAsync(turn, () => grain.UnpinSnapshotAsync(pin));
                     }
                 }
-                catch (IOException)
+                catch (TxRegistryWriteFailedException)
                 {
                     // A reader that mutates (pins) sees the same injected faults.
                 }

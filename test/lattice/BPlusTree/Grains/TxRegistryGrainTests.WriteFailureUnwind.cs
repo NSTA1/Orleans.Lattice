@@ -114,7 +114,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterExternalDecisionAuthorityAsync(txid, "op-a"),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.Multiple(() =>
         {
@@ -136,7 +136,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterExternalDecisionAuthorityAsync(txid, "op-second"),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -155,7 +155,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterExternalDecisionAuthorityAsync(txid, "op-a"),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         // ThrowOnWrite is one-shot: the retry must not hit the idempotency
         // short-circuit, so it reaches the persist and records the delegation.
@@ -181,7 +181,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterReceiverDecisionAuthorityAsync(txid, "rop-a"),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.Multiple(() =>
         {
@@ -201,7 +201,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterReceiverDecisionAuthorityAsync(txid, "rop-second"),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -321,7 +321,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterParticipantsAsync(txid, [4, 5]),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.Participants.ContainsKey(txid), Is.False,
             "a set created solely by the failed call must not linger in memory");
@@ -337,7 +337,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterParticipantsAsync(txid, [1, 2, 3]),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.That(state.State.Participants[txid], Is.EquivalentTo(new[] { 1 }),
             "the pre-existing index must survive; only the newly added ones unwind");
@@ -351,7 +351,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RegisterParticipantsAsync(txid, [7, 8]),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         await grain.RegisterParticipantsAsync(txid, [7, 8]);
 
@@ -374,7 +374,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RecordTerminalArrivalAsync(txid, sourceShardIndex: 0, committed: true, expectedShardCount: 2),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.Multiple(() =>
         {
@@ -395,7 +395,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RecordTerminalArrivalAsync(txid, sourceShardIndex: 1, committed: true, expectedShardCount: 3),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -419,7 +419,7 @@ public partial class TxRegistryGrainTests
         // A duplicate source shard contributes no arrival, so the expected-count
         // merge is the only mutation - and it must unwind on its own.
         Assert.That(async () => await grain.RecordTerminalArrivalAsync(txid, sourceShardIndex: 0, committed: true, expectedShardCount: 5),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -437,7 +437,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RecordTerminalArrivalAsync(txid, sourceShardIndex: 2, committed: true, expectedShardCount: 1),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         var result = await grain.RecordTerminalArrivalAsync(txid, sourceShardIndex: 2, committed: true, expectedShardCount: 1);
 
@@ -462,7 +462,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.PinSnapshotAsync(pinId, [Guid.NewGuid()], TimeSpan.FromMinutes(1)),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.SnapshotPins.ContainsKey(pinId), Is.False,
             "a pin whose persist failed must not be observable in memory");
@@ -480,7 +480,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.PinSnapshotAsync(pinId, [Guid.NewGuid()], TimeSpan.FromMinutes(2)),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -502,7 +502,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.RefreshPinAsync(pinId, TimeSpan.FromMinutes(5)),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.That(state.State.SnapshotPins[pinId].ExpiresAt, Is.EqualTo(priorExpiry),
             "a failed refresh must leave the pin on its persisted expiry");
@@ -552,7 +552,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.UnpinSnapshotAsync(pinId),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.That(state.State.SnapshotPins[pinId], Is.SameAs(priorPin),
             "a failed unpin must leave the pin holding its decisions back");
@@ -633,7 +633,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.ForgetAsync(newTxid),
-            Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo("write boom"));
+            Throws.TypeOf<TxRegistryWriteFailedException>().With.Message.Contains("write boom"));
 
         Assert.Multiple(() =>
         {
@@ -666,7 +666,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.ForgetAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.That(state.State.SnapshotPins[pinId], Is.SameAs(priorPin),
             "a pin evicted by the failed prune pass must be restored");
@@ -684,7 +684,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.ForgetAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.Multiple(() =>
         {
@@ -705,7 +705,7 @@ public partial class TxRegistryGrainTests
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.ForgetAsync(txid),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<TxRegistryWriteFailedException>());
 
         Assert.That(state.State.ReceiverDecisionAuthorities[txid], Is.EqualTo("rop-forget"));
     }
