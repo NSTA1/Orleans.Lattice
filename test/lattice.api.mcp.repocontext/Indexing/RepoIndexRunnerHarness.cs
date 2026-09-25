@@ -84,13 +84,27 @@ internal sealed class RepoIndexRunnerHarness : IDisposable
     /// <summary>Builds the runner under test with an indexing pacer registered alongside it.</summary>
     /// <param name="pacer">The pacer whose live snapshot the runner overlays, or <see langword="null"/>.</param>
     /// <returns>A freshly constructed runner.</returns>
-    internal RepoIndexRunner CreateRunner(RepoContextIndexingPacer? pacer) => new(
+    internal RepoIndexRunner CreateRunner(RepoContextIndexingPacer? pacer) => CreateRunner(pacer, ingestReporter: null);
+
+    /// <summary>Builds the runner under test with an ingest reporter accounting every pass.</summary>
+    /// <param name="pacer">The pacer whose live snapshot the runner overlays, or <see langword="null"/>.</param>
+    /// <param name="ingestReporter">The ingest instrument family, or <see langword="null"/>.</param>
+    /// <returns>A freshly constructed runner.</returns>
+    internal RepoIndexRunner CreateRunner(
+        RepoContextIndexingPacer? pacer, RepoContextIngestReporter? ingestReporter) => new(
         CreateBootstrapService(),
         GrainFactory,
         Lifetime,
         RunAuthority,
         NullLogger<RepoIndexRunner>.Instance,
-        pacer);
+        pacer,
+        ingestReporter);
+
+    /// <summary>Writes a file into this harness's working tree, so a pass has something to scan.</summary>
+    /// <param name="relativePath">The file's path under the working tree.</param>
+    /// <param name="content">The file's text.</param>
+    internal void WriteFile(string relativePath, string content) =>
+        File.WriteAllText(Path.Combine(_repoRoot, relativePath), content);
 
     /// <summary>A well-formed job request pointing at this harness's empty working tree.</summary>
     /// <returns>The request a run is enqueued with.</returns>

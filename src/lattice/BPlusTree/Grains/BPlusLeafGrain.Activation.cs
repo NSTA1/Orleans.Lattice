@@ -145,6 +145,7 @@ internal sealed partial class BPlusLeafGrain
     /// expressed relative to it.
     /// </summary>
     private static int _replayConcurrencyCeiling;
+    private static int _starvationReplayPermits;
 
     /// <summary>
     /// Count of activations that have <b>entered</b> the wait on
@@ -538,6 +539,7 @@ internal sealed partial class BPlusLeafGrain
         {
             _replayConcurrencyGate = null;
             _replayConcurrencyCeiling = 0;
+            Volatile.Write(ref _starvationReplayPermits, 0);
             Volatile.Write(ref _withheldReplayPermits, 0);
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
@@ -1399,16 +1401,14 @@ internal sealed partial class BPlusLeafGrain
         => await AcquireReplayPermitAsync(enforceAdmissionBound: true, cancellationToken);
 
     /// <summary>
-    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with the
-    /// admission bound of issue #3284 optionally suppressed.
+    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with
+    /// non-queueing admission for background starvation drives.
     /// </summary>
     /// <param name="enforceAdmissionBound">
-    /// <see langword="false"/> for the WAL GC starvation drive, which is
-    /// <b>exempt</b>. The drive is already bounded upstream - one in flight per
-    /// activation, and a handful of touches per GC pass - so it cannot be the
-    /// source of an unbounded queue, and in the incident that produced issue
-    /// #3284 the GC drives were what <i>cleared</i> the wedge. Refusing them
-    /// would throttle the remedy rather than the load.
+    /// <see langword="false"/> for a starvation drive. Drives share the replay
+    /// gate but never queue, and hold at most half its configured permits
+    /// (rounded down, with a floor of one). Per-tree GC touch limits do not
+    /// bound their aggregate demand on this process-wide gate (issue #3480).
     /// </param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
@@ -1428,6 +1428,24 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        if (!enforceAdmissionBound)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryAcquireStarvationReplayPermit(gate))
+            {
+                _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+                throw new LatticeSaturatedException(
+                    "The per-silo WAL replay gate has no immediate starvation-drive capacity. "
+                    + "GC drives never queue and share at most half the configured replay permits "
+                    + "(at least one); retry after the GC cooldown.",
+                    state.State.TreeId,
+                    LatticeSaturationSource.ReplayPermitAdmission);
+            }
+
+            _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
+            return gate;
+        }
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is
@@ -1451,8 +1469,7 @@ internal sealed partial class BPlusLeafGrain
         // to drain, which is the only half that carries a latency term and the
         // only half that distinguishes a wide fan-out from a wedged one.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        if (enforceAdmissionBound
-            && !TryAdmitReplayPermitWaiter(
+        if (!TryAdmitReplayPermitWaiter(
                 options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
             && IsReplayPermitQueueNotDraining(options.WalReplayPermitMaxQueueWait))
         {
@@ -1551,6 +1568,42 @@ internal sealed partial class BPlusLeafGrain
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;
+    }
+
+    /// <summary>
+    /// Reserves a process-wide GC slot and an immediately available shared
+    /// replay permit. A failed attempt retains neither and never joins a queue.
+    /// </summary>
+    internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate)
+    {
+        var limit = Math.Max(1, Volatile.Read(ref _replayConcurrencyCeiling) / 2);
+        while (true)
+        {
+            var held = Volatile.Read(ref _starvationReplayPermits);
+            if (held >= limit)
+                return false;
+            if (Interlocked.CompareExchange(ref _starvationReplayPermits, held + 1, held) == held)
+                break;
+        }
+
+        var acquired = false;
+        try
+        {
+            acquired = gate.Wait(0);
+            return acquired;
+        }
+        finally
+        {
+            if (!acquired)
+                Interlocked.Decrement(ref _starvationReplayPermits);
+        }
+    }
+
+    /// <summary>Returns both the shared replay permit and its GC reservation.</summary>
+    internal static void ReleaseStarvationReplayPermit(SemaphoreSlim gate)
+    {
+        gate.Release();
+        Interlocked.Decrement(ref _starvationReplayPermits);
     }
 
     /// <summary>
@@ -1781,7 +1834,7 @@ internal sealed partial class BPlusLeafGrain
         // await into a method that previously had none before this point, so the
         // pair is re-tested HERE rather than above the resolve. Testing it above
         // and setting it below would span an await and could admit two drives.
-        if (_starvationDriveInFlight)
+        if (_starvationDriveInFlight || _warmRescueInFlight)
         {
             return LeafStarvationDriveOutcome.AlreadyDriving;
         }
@@ -1790,6 +1843,16 @@ internal sealed partial class BPlusLeafGrain
         _lastStaleReplayPartition = -1;
 
         var startedAt = Stopwatch.GetTimestamp();
+        var acquiredAt = startedAt;
+        var permitAcquired = false;
+
+        // Issue #3479. Sampled so that an abandoned drive can report whether its
+        // replay banked anything. Summed across partitions because the log reports
+        // one leaf-wide advance, and read here instead of from a counter inside the
+        // replay loop, which only accumulates at a partition boundary and so would
+        // read zero for a drive abandoned mid-partition.
+        var checkpointAtStart = SumCheckpointOffsets(partitionCount, persistedOnly: false);
+        var persistedCheckpointAtStart = SumCheckpointOffsets(partitionCount, persistedOnly: true);
         var driveCts = new CancellationTokenSource(budget);
         SemaphoreSlim? replayPermit = null;
         Task<LeafStarvationDriveOutcome>? driveTask = null;
@@ -1802,16 +1865,13 @@ internal sealed partial class BPlusLeafGrain
             // exempt: a sweep that bypassed the gate would reintroduce the
             // unbounded-replay pathology of issue #2862 through a side door.
             //
-            // The token is passed but NOT belted with WaitAsync, unlike the work
-            // below, and the asymmetry is deliberate. The gate is an in-repo
-            // SemaphoreSlim, so its WaitAsync is guaranteed to honour the token
-            // and a belt would add nothing. It would also actively harm: a belt
-            // that abandoned this await could do so after the semaphore had been
-            // entered but before the assignment completed, producing a permit
-            // that is held by nobody and released by nothing. That is this very
-            // defect recreated in a narrower window, which is why the belt stops
-            // at the line below.
+            // Drives never enqueue behind that gate and have a process-wide
+            // concurrency cap, because per-tree touch limits do not bound their
+            // aggregate demand. Acquisition must stay in this frame so a timeout
+            // cannot abandon a successfully acquired permit before assignment.
             replayPermit = await AcquireReplayPermitAsync(enforceAdmissionBound: false, driveCts.Token);
+            acquiredAt = Stopwatch.GetTimestamp();
+            permitAcquired = true;
 
             // The permit is acquired and released in THIS frame, and the work
             // runs in an inner task. That split is the fix.
@@ -1855,16 +1915,50 @@ internal sealed partial class BPlusLeafGrain
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 
-            // Logged with the measured elapsed rather than the budget alone, so
-            // a drive abandoned while queued for a permit and one abandoned deep
-            // in replay separate numerically in the log as well as on the arm
-            // above.
-            ResolveLogger()?.LogWarning(
-                "WAL GC starvation drive on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned; the replay permit was {PermitState} and the in-flight latch has been cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment on this tree means storage is not answering inside the budget - look at the provider, not at the leaf.",
-                state.State.TreeId,
-                budget,
-                Stopwatch.GetElapsedTime(startedAt),
-                replayPermit is null ? "never acquired" : "released");
+            // Logged with the measured elapsed rather than the budget alone, and
+            // split at the moment the permit was acquired (issue #3479). One
+            // template with a single piece of storage advice was given whatever
+            // the drive had been doing, and could not say how the budget divided
+            // between admission and replay. A drive that holds a permit spent its
+            // budget replaying, which is the case where storage or the size of
+            // the WAL gap is the question, so it reports that split and how far
+            // the replay moved the checkpoint. A drive that never took one never
+            // read storage, so it must not be sent there.
+            //
+            // Keyed on whether the acquire returned rather than on
+            // `replayPermit is null`: the acquire also returns null, without
+            // gating, for a leaf with no tree id, and that drive did replay.
+            var abandonedAt = Stopwatch.GetTimestamp();
+            if (!permitAcquired)
+            {
+                // Reachable only when the budget expires during admission itself.
+                // GC drives never queue for a permit (issue #3480): a drive that
+                // finds no capacity is refused with a typed saturation instead,
+                // and never reaches this arm. Admission does no I/O, but it is not
+                // free - the first drive in a process sizes the process-wide
+                // replay gate, which reads the container CPU grant and the heap
+                // ceiling and logs the result - so a budget shorter than that, or
+                // a thread stall inside it, expires before the admission check.
+                ResolveLogger()?.LogWarning(
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after {Elapsed}, before it was admitted to the per-silo WAL replay gate: its {Budget} budget expired before a replay permit was taken, so the replay never started, storage was never read and the leaf's checkpoint did not move. GC drives never queue for a replay permit - a drive that finds no capacity is refused at once with a ReplayPermitAdmission saturation rather than abandoned - so this is neither storage latency nor replay-permit contention: admission itself outlasted the budget, which means the budget is far too small or this drive's thread stalled while it was being admitted (the first drive in a process also sizes the replay gate). Raise StarvationDriveBudget. The in-flight latch has been cleared.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    Stopwatch.GetElapsedTime(startedAt, abandonedAt),
+                    budget);
+            }
+            else
+            {
+                ResolveLogger()?.LogWarning(
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned while replaying: it spent {PermitWait} being admitted to the replay gate and then replayed for {Replaying} without finishing. Before it was abandoned the replay advanced the leaf's checkpoint by {CheckpointAdvanced} offset(s) in memory, of which {CheckpointPersisted} are persisted; an in-memory advance is persisted by the leaf's next checkpoint flush. The permit has been released and the in-flight latch cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment of this form means the replay itself cannot finish inside the budget, either because storage is slow to answer or because the leaf's WAL gap is too large: investigate the storage provider and this leaf's replay gap, not the replay gate.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    budget,
+                    Stopwatch.GetElapsedTime(startedAt, abandonedAt),
+                    Stopwatch.GetElapsedTime(startedAt, acquiredAt),
+                    Stopwatch.GetElapsedTime(acquiredAt, abandonedAt),
+                    SumCheckpointOffsets(partitionCount, persistedOnly: false) - checkpointAtStart,
+                    SumCheckpointOffsets(partitionCount, persistedOnly: true) - persistedCheckpointAtStart);
+            }
 
             return LeafStarvationDriveOutcome.TimedOut;
         }
@@ -1884,7 +1978,8 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            replayPermit?.Release();
+            if (replayPermit is not null)
+                ReleaseStarvationReplayPermit(replayPermit);
             _starvationDriveInFlight = false;
 
             // Disposing the source while detached work can still read its token
@@ -1916,6 +2011,35 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Sums this leaf's checkpoint offsets over its WAL partitions, so that a
+    /// starvation drive can report how far its replay advanced (issue #3479).
+    /// </summary>
+    /// <param name="partitionCount">The number of WAL partitions to sum over.</param>
+    /// <param name="persistedOnly">
+    /// <see langword="true"/> to sum only the persisted checkpoints;
+    /// <see langword="false"/> to sum the current view, which also counts an
+    /// advance recorded in memory and not yet flushed.
+    /// </param>
+    /// <remarks>
+    /// Only the difference between two samples is meaningful. A single sum mixes
+    /// independent offset spaces and the <c>-1</c> sentinel, but both cancel in a
+    /// difference, and both the current and the persisted views only move forward
+    /// during a drive.
+    /// </remarks>
+    private long SumCheckpointOffsets(int partitionCount, bool persistedOnly)
+    {
+        var sum = 0L;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            sum += persistedOnly
+                ? GetPersistedCheckpointForPartition(partition)
+                : GetCurrentCheckpointForPartition(partition);
+        }
+
+        return sum;
+    }
+
+    /// <summary>
     /// The permit-guarded body of <see cref="DriveStarvedCheckpointAsync"/>,
     /// split out so the permit can be owned by the caller's frame (issue #3065).
     /// </summary>
@@ -1930,7 +2054,17 @@ internal sealed partial class BPlusLeafGrain
         int partitionCount,
         CancellationToken cancellationToken)
     {
-        var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
+        bool advanced;
+        try
+        {
+            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
+        }
+        catch (LeafProjectionStaleException)
+        {
+            if (await TryRescueWarmStaleLeafAsync(partitionCount, cancellationToken))
+                return LeafStarvationDriveOutcome.Lifted;
+            throw;
+        }
 
         // Issue #3476: make the replay's advance DURABLE before anything below
         // republishes the pin. The replay advances the checkpoint through
@@ -3087,12 +3221,16 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
+        _warmCacheReplaysInFlight++;
+        if (_warmCacheReplaysInFlight != 1)
+            _warmCacheReplayFailed = true;
         try
         {
             return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
         }
         catch (OperationCanceledException)
         {
+            _warmCacheReplayFailed = true;
             // Bank whatever this replay absorbed before it was cut short. This
             // is the ONLY reachable banking point on this path: Orleans does not
             // run OnDeactivateAsync when OnActivateAsync throws, and a cancelled
@@ -3140,6 +3278,15 @@ internal sealed partial class BPlusLeafGrain
             }
 
             throw;
+        }
+        catch (Exception fault) when (fault is not LeafProjectionStaleException)
+        {
+            _warmCacheReplayFailed = true;
+            throw;
+        }
+        finally
+        {
+            _warmCacheReplaysInFlight--;
         }
     }
 
@@ -3271,6 +3418,7 @@ internal sealed partial class BPlusLeafGrain
         var deferredOffsets = new DeferredOffsetLedger(partitionCount);
         var perPartitionMaxApplied = new long[partitionCount];
         for (var p = 0; p < partitionCount; p++) perPartitionMaxApplied[p] = -1L;
+        var warmReplayProven = true;
 
         // Pass-1 absorb frontier. A deferred terminal is only safe to apply in
         // place while pass 1 is still running once every OTHER partition has
@@ -3331,6 +3479,8 @@ internal sealed partial class BPlusLeafGrain
             // window of every partition.
             long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
             var checkpoint = checkpointOverride ?? persistedCheckpoint;
+            warmReplayProven &= CanProveWarmReplayStart(partition, checkpoint);
+            perPartitionMaxApplied[partition] = checkpoint;
 
             // Durable-frontier fall-off guard (issue #945: silent durable data
             // loss). The cold-cache-reset override (checkpointOverride = -1, set
@@ -3587,6 +3737,9 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        if (warmReplayProven && !_warmCacheTopologyChanged && _warmCacheHydrations == 1
+            && !_warmCacheReplayFailed && _warmCacheReplaysInFlight == 1)
+            _warmCacheProvenOffsets = perPartitionMaxApplied;
         return anyAdvanced;
     }
 
@@ -6083,6 +6236,10 @@ internal sealed partial class BPlusLeafGrain
             foreach (var entry in slice)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // Maxima alone cannot certify the cache: a provider may return a
+                // surviving suffix after trimming between classification and read.
+                if (entry.Offset != maxApplied + 1)
+                    _warmCacheReplayFailed = true;
 
                 if (ShouldApplyDuringReplay(
                     entry.Mutation,
