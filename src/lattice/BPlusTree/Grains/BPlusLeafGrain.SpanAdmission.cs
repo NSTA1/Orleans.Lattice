@@ -483,17 +483,33 @@ internal sealed partial class BPlusLeafGrain
     /// resolvable forward target are stored here, which is the documented
     /// fail-open rule. Returns every split the receiving leaves report, for the
     /// shard root to link.
+    /// <para>
+    /// An interrupted split is completed first, for the reason the write
+    /// entry points give: forwarding while it is interrupted sends a key at or
+    /// above the pre-split bound to <c>OldNextSibling</c>, and once the new
+    /// sibling is initialised a reclaim can fold that successor into it and
+    /// retire it (issue #3583). When another turn is still running the split,
+    /// this waits for it on <c>_splitGate</c> and then routes by the narrowed
+    /// span. No caller holds <c>_splitGate</c> here: relocation runs in the
+    /// commit path, which takes no gate, and a split never waits on a commit.
+    /// </para>
     /// </summary>
     private async Task<SplitResult?> RelocateStrandedAsync(
         Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration)
     {
+        SplitResult? recovered = null;
+        if (HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         var (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
         foreach (var (key, lww) in local)
         {
             StoreEntry(key, lww);
         }
 
-        return forwardedSplit;
+        return SplitResult.Combine(recovered, forwardedSplit);
     }
 
     /// <summary>

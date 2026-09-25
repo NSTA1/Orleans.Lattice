@@ -1372,18 +1372,31 @@ internal sealed partial class BPlusLeafGrain(
             return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
         }
 
+        // Recovery: complete an interrupted split before admission, as
+        // SetManyAdmittingSpanAsync does, so an out-of-span entry is forwarded
+        // by the narrowed span rather than to OldNextSibling, which a reclaim
+        // may have folded into the initialised new sibling and retired
+        // (issue #3583). The recovered split rides on the result for the shard
+        // root to link.
+        SplitResult? recovered = null;
+        if (HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         // Admission precedes the guard: see the remarks above. On a leaf with
         // no declared span - the steady state - this returns on its first line,
         // so the common path pays nothing.
-        if (ContainsOutOfSpanKey(entries))
-        {
-            return await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate);
-        }
+        var result = ContainsOutOfSpanKey(entries)
+            ? await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate)
+            // Every entry is in span, so the guard's "absent means non-matching"
+            // inference is sound for all of them and the matched set cannot
+            // straddle the span either.
+            : await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
 
-        // Every entry is in span, so the guard's "absent means non-matching"
-        // inference is sound for all of them and the matched set cannot
-        // straddle the span either.
-        return await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
+        return recovered is null
+            ? result
+            : result with { Split = SplitResult.Combine(recovered, result.Split) };
     }
 
     /// <summary>
@@ -1885,6 +1898,19 @@ internal sealed partial class BPlusLeafGrain(
         using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
 
+        // Recovery: complete an interrupted split before routing, as SetCoreAsync
+        // does, so the forward below is resolved against the narrowed span. An
+        // interrupted division otherwise sends a key at or above the pre-split
+        // bound to OldNextSibling, and once the new sibling is initialised a
+        // reclaim can fold that successor into it and retire it (issue #3583).
+        // The recovered split is reported on the tracked shape only; the
+        // untracked shape carries no split, as its own forward already shows.
+        SplitResult? recovered = null;
+        if (HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs). This
         // runs ahead of the absent-row short-circuit below: the row this delete
         // targets lives on the leaf that declares the key, so short-circuiting
@@ -1900,7 +1926,7 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             var forwarded = await sibling.DeleteTrackedAsync(key);
-            return forwarded with { Split = SplitResult.Forward(forwarded.Split) };
+            return forwarded with { Split = SplitResult.Combine(recovered, SplitResult.Forward(forwarded.Split)) };
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1916,7 +1942,7 @@ internal sealed partial class BPlusLeafGrain(
         // captured separately by the saga coordinator).
         if (!isPrepared && (!Cache.TryGetRow(key, out var existing) || existing.IsTombstone))
         {
-            return default;
+            return new LeafDeleteResult { Split = recovered };
         }
 
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
@@ -2031,7 +2057,7 @@ internal sealed partial class BPlusLeafGrain(
         // both knobs hold their defaults.
         EvaluateCompactionTrigger();
 
-        return new LeafDeleteResult { Deleted = true, Split = relocatedSplit };
+        return new LeafDeleteResult { Deleted = true, Split = SplitResult.Combine(recovered, relocatedSplit) };
     }
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
