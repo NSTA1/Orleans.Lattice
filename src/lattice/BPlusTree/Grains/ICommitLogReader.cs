@@ -40,6 +40,48 @@ internal interface ICommitLogReader
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Filtered counterpart of <see cref="ReadAsync"/> for a reader that owns
+    /// <paramref name="filter"/> and discards every key-scoped record outside it
+    /// - the leaf replay read path (issue #3565). Examines at most
+    /// <paramref name="maxExamined"/> entries of the window
+    /// <c>(<paramref name="fromOffsetExclusive"/>, <paramref name="toOffsetInclusive"/>]</c>
+    /// and yields the ones the reader needs under the rule
+    /// <see cref="IWalStorageProvider.ReadFilteredAsync"/> documents: every
+    /// entry the filter does not exclude in full, no excluded entry, and the
+    /// window's last examined entry routing-only when it is excluded, so a
+    /// reader that advances by the last offset it receives still passes
+    /// everything the filter dropped.
+    /// <para>
+    /// The bound is on entries examined, not yielded, which is what keeps a
+    /// filtered slice's work equal to an unfiltered slice of the same width.
+    /// The default implementation filters <see cref="ReadAsync"/>, which yields
+    /// the same entries at the cost of decoding every payload; the WAL-backed
+    /// reader overrides it to push the filter down to storage.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The logical tree id whose WAL is being read. Must not be null or empty.</param>
+    /// <param name="shardIndex">The WAL shard (partition) index. Must be non-negative.</param>
+    /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the WAL.</param>
+    /// <param name="toOffsetInclusive">Inclusive upper bound of the window.</param>
+    /// <param name="maxExamined">Maximum entries to examine; must be at least 1.</param>
+    /// <param name="filter">The reader's ownership. An unbounded filter excludes nothing.</param>
+    /// <param name="cancellationToken">Cancellation token observed between every page read and every yielded entry.</param>
+    IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxExamined,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken = default) =>
+        WalFilteredRead.ApplyAsync(
+            ReadAsync(treeId, shardIndex, fromOffsetExclusive, cancellationToken),
+            toOffsetInclusive,
+            maxExamined,
+            filter,
+            cancellationToken);
+
+    /// <summary>
     /// Returns the next offset that <see cref="ICommitLogWriter.AppendAsync"/>
     /// will assign for <c>(treeId, shardIndex)</c>. Equal to the number
     /// of entries currently persisted on the WAL shard. <c>0</c> when

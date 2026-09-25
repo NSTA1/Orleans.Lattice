@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// </summary>
 [TestFixture]
 [Category("AzureStorageEmulator")]
-public class CompressedAzureTableWalIntegrationTests
+public partial class CompressedAzureTableWalIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
     private const string TreeId = "tree-compressed";

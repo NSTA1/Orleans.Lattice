@@ -2,9 +2,11 @@ using Azure;
 using Azure.Data.Tables;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.ContractProbes;
 using Orleans.Serialization;
+using Orleans.Serialization.Session;
 
 namespace Orleans.Lattice.Storage.AzureTable.Tests;
 
@@ -79,6 +81,11 @@ public sealed class AzureTableWalStorageProviderContractTests : WalStorageProvid
     {
         var tableName = _tableName;
         var serializer = _serializer;
+        var routing = new WalRecordRoutingReader(_services.GetRequiredService<SerializerSessionPool>());
+
+        // The shape AddAzureTableWalStorage registers, routing reader included,
+        // so the suite exercises the filtered read's prefix classification
+        // (issue #3565) rather than only its full-decode fallback.
         return Task.FromResult<IWalStorageProviderContractProbe>(
             new WalStorageProviderContractProbe(
                 () => new AzureTableWalStorageProvider(
@@ -88,7 +95,10 @@ public sealed class AzureTableWalStorageProviderContractTests : WalStorageProvid
                         TableName = tableName,
                         Compression = LatticeCompression.None,
                     }),
-                    serializer),
+                    serializer,
+                    saturationSignal: null,
+                    compressors: null,
+                    routing),
                 serializer,
                 durable: true,
                 durabilityBarrier: static (provider, ct) =>

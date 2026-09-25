@@ -170,6 +170,7 @@ replication change feed.
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
 | `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1`; out-of-range reads return `WalShardPage.Empty(fromSequence)`. |
+| `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
@@ -602,6 +603,37 @@ the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
 In all three cases, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated (or
 empty, for a freshly-created leaf).
+
+### Replay reads are filtered at the source
+
+A WAL partition is shared by every leaf whose keys hash to it, so a leaf
+replaying a partition would otherwise read its neighbours' records as well as
+its own. The leaf therefore passes its ownership - its key range and, when the
+tree's shard map is known, the slots of its shard - down the read path as a
+`WalKeyFilter`: the slice reader hands it to `ILeafReplayCoordinatorGrain`,
+which reads through `IWalShardGrain.ReadFilteredAsync` and, beneath that,
+`IWalStorageProvider.ReadFilteredAsync`. A provider that can classify a record
+before decoding it skips every record the leaf does not own, so a replay
+allocates in proportion to the leaf's own records rather than to the partition
+(issue #3565). See
+[`wal-storage-providers.md`](wal-storage-providers.md#filtered-replay-read-readfilteredasync)
+for the read's exact contract.
+
+The filter and the leaf's own apply check (`ShouldApplyDuringReplay`) are
+built from one capture of the leaf's state, so the filter never drops a record
+the leaf would have applied, and the leaf still runs that check on everything
+it receives. Each read bounds the entries it examines rather than the entries
+it returns, and delivers the last examined entry routing-only when it is
+excluded, so the projection checkpoint still advances past a window that held
+only other leaves' records. A leaf whose ownership excludes nothing - an
+unbounded key range with no shard constraint - reads unfiltered, exactly as
+before.
+
+The coordinator's five-second slice cache is keyed by the filter as well as
+the window, because a filtered slice is missing every other owner's records.
+Leaves with different ownership therefore no longer share one slice read when
+they replay the same window back to back. Each makes its own storage read
+instead, and decodes only its own records in it.
 
 ## Projection checkpoint
 

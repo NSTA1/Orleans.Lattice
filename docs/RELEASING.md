@@ -204,6 +204,12 @@ No tag is involved: the site is a whole-repository artifact with no version of i
 
 This is enforced twice rather than merely documented. First, the guard in `docs.yml` publishes a dispatch only from a `release/<X.Y>` branch: dispatched on any other ref, `main` included, it logs `SKIP: refusing to publish the site from '<ref>'`, and the run is green with a skipped `deploy` job. Behind it, the `github-pages` environment's deployment branch policy admits the tag pattern `lattice-v*` and the branch pattern `release/*`, and deliberately does **not** admit `main`; a deploy the policy refuses presents as the zero-step `deploy` failure described in step 7 below. `docs.yml` has no push trigger for `main`, so nothing legitimate needs it.
 
+### What a published build records
+
+Each build states which release it documents, because nothing else on a page can tell a reader - or an agent - whether it describes the version they installed. `docs-site/stage.ps1` reads it from the ref that triggered the run: a `lattice-v<X.Y.Z>` tag push documents `X.Y.Z`, and a dispatch on `release/<X.Y>` documents the newest `lattice-v<X.Y>.*` tag on that line. The footer of every page names that version, the ref and commit it was built from, and the build date; every page's source link, and every link from the site into the repository, points at the same ref rather than at `main`; and the NuGet badges on the Packages page carry each package's newest published version as text, read from its newest `<package>-v<X.Y.Z>` tag when the site is built. The badge image itself stays live, so the two differ only after a wave that pushes no core tag: such a wave does not redeploy the site, and its versions reach the text at the next deploy.
+
+The build also publishes the site's surface for agents and LLM tooling, generated afresh from the tree it builds: `llms.txt`, listing every page from the same catalogue as the documentation map, `llms-full.txt`, `sitemap.xml`, and a markdown alternate of every page at the same address ending in `.md`. The repository's own `llms.txt` points at the published one rather than duplicating it, so the index a reader finds always matches the release the site documents.
+
 ### Only the newest release line publishes the site
 
 GitHub Pages serves one site, and every deploy replaces it wholesale, so the published site is whichever deploy ran **last** - which is not the same thing as the newest release. That distinction matters because the `lattice-v*` trigger also matches a **core hotfix on an older line**. The family has cut exactly such tags before (`lattice-v9.4.1`, `lattice-v9.4.2`, `lattice-v9.4.3`, `lattice-v9.5.1`), so patching the core package on `release/9.5` after `9.6.0` has shipped would, unguarded, silently regress the public documentation to the older version. A dispatch on an older `release/<X.Y>` branch would do the same.
@@ -275,7 +281,7 @@ One known limitation: the site is a single artifact built from one commit, so wh
 
    Two consequences worth internalising:
 
-   - **The site's content does not depend on when the core tag is pushed.** `Docs` builds from that tag's tree, which is the wave's commit either way, so deferring the core tag changes *when* the site goes live and nothing about what it says. There is no content cost to this rule.
+   - **Deferring the core tag costs the site nothing, and keeps its versions current.** `Docs` builds from that tag's tree, which is the wave's commit either way, so deferring the core tag changes *when* the site goes live, not what its pages say. Apart from the build date, the one input the build takes from outside that tree is the set of package tags, from which it writes each package's published version as text (see [What a published build records](#what-a-published-build-records)). With the core tag pushed last, every other tag in the wave already exists, so every version the site states is the one the wave shipped.
    - **A core-only wave has nothing to order.** A patch that ships only `Orleans.Lattice` (as `9.5.1` did) pushes one tag, and this rule costs it nothing.
 
 7. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.

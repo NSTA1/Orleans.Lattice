@@ -250,6 +250,95 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The window is copied out under the shard gate into a pooled buffer - a
+    /// struct copy per entry, no payload is duplicated - and filtered after the
+    /// gate is released, so appends never wait on the filter's hashing. The
+    /// kept entries are compacted in place and yielded straight from the pooled
+    /// buffer, which is returned when the enumeration completes: a page that
+    /// keeps little of its window allocates nothing but the enumerator.
+    /// </remarks>
+    public async IAsyncEnumerable<WalEntry> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        WalKeyFilter filter,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per read.");
+        }
+
+        if (fromOffsetExclusive == long.MaxValue
+            || toOffsetInclusive <= fromOffsetExclusive
+            || !_shards.TryGetValue(Key(treeId, shardIndex), out var shard))
+        {
+            yield break;
+        }
+
+        WalEntry[]? window = null;
+        var examined = 0;
+        lock (shard.Gate)
+        {
+            var entries = shard.Entries;
+            var startIndex = LowerBound(entries, fromOffsetExclusive + 1);
+            var available = Math.Min(entries.Count - startIndex, maxEntries);
+            if (available > 0)
+            {
+                window = System.Buffers.ArrayPool<WalEntry>.Shared.Rent(available);
+                while (examined < available && entries[startIndex + examined].Offset <= toOffsetInclusive)
+                {
+                    window[examined] = entries[startIndex + examined];
+                    examined++;
+                }
+            }
+        }
+
+        if (window is null)
+        {
+            yield break;
+        }
+
+        try
+        {
+            var kept = 0;
+            for (var i = 0; i < examined; i++)
+            {
+                var entry = window[i];
+                if (!filter.Excludes(entry.Mutation.Kind, entry.Mutation.Key))
+                {
+                    window[kept++] = entry;
+                }
+                else if (i == examined - 1)
+                {
+                    // The last examined entry is delivered routing-only when
+                    // excluded, so the reader still advances past the window.
+                    window[kept++] = entry with { Mutation = BPlusTree.WalFilteredRead.RoutingOnly(entry.Mutation) };
+                }
+            }
+
+            for (var i = 0; i < kept; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return window[i];
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<WalEntry>.Shared.Return(window, clearArray: true);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public Task<long> GetHighestOffsetAsync(
         string treeId,
         int shardIndex,

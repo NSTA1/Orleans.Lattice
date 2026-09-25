@@ -39,6 +39,21 @@ public interface IWalStorageProviderContractProbe : IAsyncDisposable
     /// <summary>The provider's bytes-shaped read, decoded.</summary>
     Task<WalContractEncodedPage> ReadEncodedAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The provider's filtered read (issue #3565) with a key-range filter owning
+    /// <c>[lowKeyInclusive, highKeyExclusive)</c>, fully enumerated. A
+    /// routing-only entry maps to an empty <see cref="WalContractEntry.Value"/>.
+    /// </summary>
+    Task<IReadOnlyList<WalContractEntry>> ReadFilteredAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        string? lowKeyInclusive,
+        string? highKeyExclusive,
+        CancellationToken cancellationToken);
+
     /// <summary>Provider's <c>GetHighestOffsetAsync</c>.</summary>
     Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 
