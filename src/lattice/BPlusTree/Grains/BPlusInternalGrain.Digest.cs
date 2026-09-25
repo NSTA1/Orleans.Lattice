@@ -69,6 +69,14 @@ internal sealed partial class BPlusInternalGrain
     /// </summary>
     private CancellationTokenSource? _publishDeadline;
 
+    /// <summary>
+    /// Child publishes that arrived while <c>_splitGate</c> was held, keyed by
+    /// child and keeping only the freshest snapshot per child. Folded by the
+    /// holder in <see cref="ReleaseSplitGateAsync"/>. Allocated on first
+    /// contention only.
+    /// </summary>
+    private Dictionary<GrainId, ChildDigestSnapshot>? _deferredChildSnapshots;
+
     /// <summary>Set by <see cref="MarkUpwardPublishPending"/>; cleared by a flush.</summary>
     private bool _upwardPublishPending;
 
@@ -114,8 +122,13 @@ internal sealed partial class BPlusInternalGrain
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
+
+        // Parked child publishes folded on release leave an upward publish
+        // pending. It is deliberately not sent from here: the re-parenting
+        // caller pulls GetChildDigestSnapshotAsync next, which reads the
+        // post-fold aggregate, and the next mutation's flush sends the rest.
     }
 
     /// <inheritdoc />
@@ -134,14 +147,27 @@ internal sealed partial class BPlusInternalGrain
         // (which already holds the gate), so we do NOT push the gate
         // down into the helper - we acquire it here at the public entry
         // point only.
-        await _splitGate.WaitAsync().ConfigureAwait(true);
+        //
+        // Never WAITS for the gate, though (issue #3523). A holder of the gate
+        // can be blocked on this very publisher: AcceptSplitAsync and the
+        // InitializeAsync seeding call SetParentAsync on a child, which queues
+        // behind the child's current turn, and that turn can be the one
+        // publishing here. Waiting closed the cycle until the publish deadline
+        // faulted, stalling every write routed through the child. A contended
+        // publish is instead parked for the holder, which folds it before it
+        // releases the gate - see ReleaseSplitGateAsync.
+        if (!_splitGate.Wait(0))
+        {
+            DeferChildSnapshot(childId, newSnapshot);
+            return;
+        }
         try
         {
             await ApplyChildSnapshotAsync(childId, newSnapshot);
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
 
         // Onward publish outside the gate (issue #3523). Faults propagate:
@@ -286,6 +312,73 @@ internal sealed partial class BPlusInternalGrain
     /// only ever held across calls made downward, which cannot cycle.
     /// </remarks>
     private void MarkUpwardPublishPending() => _upwardPublishPending = true;
+
+    /// <summary>
+    /// Parks a child publish that found <c>_splitGate</c> held, keeping only the
+    /// freshest snapshot per child. The current holder folds it before
+    /// releasing the gate (<see cref="ReleaseSplitGateAsync"/>).
+    /// </summary>
+    private void DeferChildSnapshot(GrainId childId, ChildDigestSnapshot snapshot)
+    {
+        var deferred = _deferredChildSnapshots ??= [];
+        if (deferred.TryGetValue(childId, out var parked)
+            && snapshot.PublishSequence < parked.PublishSequence)
+        {
+            return;
+        }
+
+        deferred[childId] = snapshot;
+    }
+
+    /// <summary>
+    /// Releases <c>_splitGate</c>, first folding every child publish parked by
+    /// <see cref="OnChildDigestPublishedAsync"/> while the gate was held. Every
+    /// holder releases through here, so a parked publish is never stranded.
+    /// </summary>
+    /// <remarks>
+    /// Grain turns are single-threaded, so the emptiness check and the release
+    /// run with no await between them: a publish either parks before the check,
+    /// and is folded here, or arrives after the release and takes the gate
+    /// itself. A fold that faults is re-parked and logged rather than thrown,
+    /// because the caller's own mutation is already durable and the digest is
+    /// staleness-tolerant - the next holder folds it again.
+    /// </remarks>
+    private async Task ReleaseSplitGateAsync()
+    {
+        try
+        {
+            while (_deferredChildSnapshots is { Count: > 0 } deferred)
+            {
+                GrainId childId = default;
+                ChildDigestSnapshot snapshot = default;
+                foreach (var kvp in deferred)
+                {
+                    (childId, snapshot) = (kvp.Key, kvp.Value);
+                    break;
+                }
+
+                deferred.Remove(childId);
+                try
+                {
+                    await ApplyChildSnapshotAsync(childId, snapshot);
+                }
+                catch (Exception ex)
+                {
+                    DeferChildSnapshot(childId, snapshot);
+                    ResolveLogger()?.LogWarning(
+                        ex,
+                        "Internal node {GrainId} of tree {TreeId}: folding a parked child digest publish failed; "
+                        + "it stays parked and the next gate holder re-drives it.",
+                        context.GrainId, state.State.TreeId ?? "<unknown>");
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
 
     /// <summary>
     /// Sends the pending upward publish recorded by

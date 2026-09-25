@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the next operation when it faults.
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainSplitLinkTests
+public sealed partial class ShardRootGrainSplitLinkTests
 {
     private const string ShardKey = "split-link-tree/0";
 
