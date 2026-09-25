@@ -1,9 +1,24 @@
 {
-  "$comment": "The series narration voice, chosen by audition (npm run voice:samples). Generated locally with Kokoro-82M, so narration needs no account, key or network, and is reproducible from the script. See series.md, 'Voice'. The timing settings lay the cues out (tools/lib/narration.js): silence before the first cue, between cues in a scene, and between scenes; and how long before its first cue a scene's pictures arrive.",
-  "provider": "kokoro",
-  "voice": "bf_emma",
-  "lang": "en-gb",
-  "speed": 1.0,
+  "$comment": "The series narration voice. 'provider' picks the engine; its settings are under its own name. Chatterbox (the series voice since the introduction's second cut) is cloned from voice/reference.wav, 12 s of the first voice, Kokoro's Emma, reading the introduction's opening, so it keeps her timbre and accent while reading with the stress and intonation Kokoro cannot give. It runs locally with no account or key (voice/requirements.txt, tools/voice_worker.py), with its model pinned to one revision, and each clip is heard back by local speech recognisers and made again with the next seed when it does not match the script (tools/lib/verify.js). The timing settings lay the cues out (tools/lib/narration.js): silence before the first cue, between cues in a scene, and between scenes; and how long before its first cue a scene's pictures arrive. See series.md, 'Voice'.",
+  "provider": "chatterbox",
+  "chatterbox": {
+    "model": "ResembleAI/chatterbox",
+    "revision": "5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18",
+    "reference": "voice/reference.wav",
+    "exaggeration": 0.75,
+    "cfgWeight": 0.35,
+    "temperature": 0.8,
+    "trim": { "thresholdDb": -50, "padBeforeSeconds": 0.05, "padAfterSeconds": 0.15 },
+    "attempts": 4,
+    "recognisers": ["base.en", "small.en"],
+    "hotwords": "Orleans Lattice ILattice idempotent",
+    "secondsPerWord": { "min": 0.18, "max": 0.75 }
+  },
+  "kokoro": {
+    "voice": "bf_emma",
+    "lang": "en-gb",
+    "speed": 1.0
+  },
   "leadInSeconds": 0.5,
   "cueGapSeconds": 0.35,
   "sceneGapSeconds": 1.0,

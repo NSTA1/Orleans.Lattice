@@ -5,6 +5,8 @@
 //   renders/narration/<slug>/clips/<hash>.wav one clip per cue, named by what it
 //                                           says and how, so a re-run speaks only
 //                                           the cues that changed
+//   renders/narration/<slug>/clips/<hash>.json how a Chatterbox clip was checked:
+//                                           its attempt, seed and transcripts
 //   renders/narration/<slug>/cues.json      the timeline: each cue's window, each
 //                                           scene's window and beats, the loudness
 //   renders/narration/<slug>/narration.vtt  WebVTT captions in the written form
@@ -14,20 +16,32 @@
 //
 // Usage: npm run narrate -- <episode-slug>     (reads episodes/<slug>/SCRIPT.md)
 // Then:  npm run timeline -- <episode-slug>    (stamps the timeline into the composition)
-// Needs Python with Kokoro: pip install kokoro-onnx soundfile
+//
+// The engine is voice.json's "provider":
+//   chatterbox  the series voice. Chatterbox, cloned from voice/reference.wav,
+//               run by tools/voice_worker.py in the Python environment that
+//               VIDEOS_VOICE_PYTHON names (voice/requirements.txt). A generative
+//               voice can slip, so every clip is transcribed by local speech
+//               recognisers and compared with the script; one that is not heard
+//               exactly is made again with the next seed (tools/lib/verify.js).
+//   kokoro      the first series voice, Kokoro through the HyperFrames CLI
+//               (pip install kokoro-onnx soundfile; HYPERFRAMES_PYTHON).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { workspaceRoot } from "./lib/hyperframes.js";
 import { episodePaths } from "./lib/layout.js";
 import { applyLexicon, loadLexicon } from "./lib/lexicon.js";
 import { DELIVERED_AS, gainFor, LIMITER_CEILING_DB, LOUDNESS_TARGET, masteringFilter, onTarget, parseEbur128 } from "./lib/loudness.js";
 import { buildScenes, buildTimeline, captionCues, parseScript, sceneId, toWebVtt } from "./lib/narration.js";
+import { fileDigest } from "./lib/publication.js";
 import { speak } from "./lib/tts.js";
+import { bestAttempt, judgeAttempt, seedFor } from "./lib/verify.js";
+import { startVoiceWorker } from "./lib/voice-worker.js";
 import { wavDuration } from "./lib/wav.js";
 
-// Kokoro-82M writes 24 kHz mono; the joined track and its silences match it.
+// Both engines write 24 kHz mono; the joined track and its silences match it.
 const SAMPLE_RATE = 24000;
 
 let paths;
@@ -45,46 +59,70 @@ if (!existsSync(paths.script)) {
 }
 
 const voice = JSON.parse(readFileSync(path.join(workspaceRoot, "voice", "voice.json"), "utf8"));
-if (!voice.voice) {
-  console.error("narrate: no series voice is set in voice/voice.json; audition with 'npm run voice:samples' and record the choice");
+const engine = voice.provider;
+if (engine !== "chatterbox" && engine !== "kokoro") {
+  console.error(`narrate: voice/voice.json names the provider '${engine}'; it must be 'chatterbox' or 'kokoro'`);
   process.exit(2);
 }
 const lexicon = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
 const { cues, tail } = parseScript(readFileSync(paths.script, "utf8"), `episodes/${slug}/SCRIPT.md`);
 const cli = JSON.parse(readFileSync(path.join(workspaceRoot, "package.json"), "utf8")).devDependencies.hyperframes;
+const started = Date.now();
 
 // Everything but the clips is rebuilt on every run. A clip is named by a hash
-// of what it says and how - the spoken text, the voice settings and the pinned
-// CLI that runs Kokoro - so an unchanged cue reuses its clip, and a changed
-// one gets a new clip instead of overwriting one the timeline still names.
+// of what it says and how - the spoken text and everything that shapes the
+// voice - so an unchanged cue reuses its clip, and a changed one gets a new
+// clip instead of overwriting one the timeline still names.
 const outDir = paths.narration;
 const clipsDir = path.join(outDir, "clips");
 mkdirSync(clipsDir, { recursive: true });
 for (const entry of readdirSync(outDir)) {
   if (entry !== "clips") rmSync(path.join(outDir, entry), { recursive: true, force: true });
 }
-const clipHash = (spoken) =>
-  createHash("sha256")
-    .update(JSON.stringify({ spoken, voice: voice.voice, lang: voice.lang, speed: voice.speed, cli }))
-    .digest("hex")
-    .slice(0, 16);
+const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 
-const files = [];
-const durations = [];
-let reused = 0;
-for (const [index, cue] of cues.entries()) {
-  const spoken = applyLexicon(cue.text, lexicon);
-  const file = `clips/${clipHash(spoken)}.wav`;
-  const target = path.join(outDir, file);
-  const cached = existsSync(target);
-  if (cached) {
-    reused++;
-  } else {
+const kokoro = voice.kokoro ?? {};
+const chatterbox = voice.chatterbox ?? {};
+// The packages the voice's environment pins, without its comments, so that
+// only a change of version renames the clips.
+const pins = (file) =>
+  readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*/, "").trim())
+    .filter(Boolean)
+    .sort();
+// The Kokoro name is what it has always been, so earlier Kokoro clips stay valid.
+const clipHash =
+  engine === "kokoro"
+    ? (spoken) => hash({ spoken, voice: kokoro.voice, lang: kokoro.lang, speed: kokoro.speed, cli })
+    : (() => {
+        const identity = {
+          engine,
+          model: chatterbox.model,
+          revision: chatterbox.revision,
+          reference: fileDigest(path.join(workspaceRoot, chatterbox.reference)),
+          exaggeration: chatterbox.exaggeration,
+          cfgWeight: chatterbox.cfgWeight,
+          temperature: chatterbox.temperature,
+          trim: chatterbox.trim,
+          requirements: pins(path.join(workspaceRoot, "voice", "requirements.txt")),
+        };
+        return (spoken) => hash({ spoken, ...identity });
+      })();
+
+const spokenCues = cues.map((cue) => applyLexicon(cue.text, lexicon, engine));
+const files = spokenCues.map((spoken) => `clips/${clipHash(spoken)}.wav`);
+const checks = new Array(cues.length).fill(null);
+const missing = files.map((file, index) => (existsSync(path.join(outDir, file)) ? -1 : index)).filter((index) => index >= 0);
+
+if (engine === "kokoro") {
+  for (const index of missing) {
     // Spoken to a partial file first, so an interrupted run never leaves a
     // truncated clip that a later run would take for a finished one.
+    const target = path.join(outDir, files[index]);
     const partial = target.replace(/\.wav$/, ".partial.wav");
     try {
-      await speak(spoken, { ...voice, output: partial });
+      await speak(spokenCues[index], { ...kokoro, output: partial });
     } catch (error) {
       console.error(`narrate: text-to-speech failed on cue ${index + 1}: ${error.message}`);
       console.error("narrate: is Kokoro installed (pip install kokoro-onnx soundfile)? For a virtual environment, set HYPERFRAMES_PYTHON to its interpreter.");
@@ -92,12 +130,104 @@ for (const [index, cue] of cues.entries()) {
       process.exit(1);
     }
     renameSync(partial, target);
+    console.log(`cue ${index + 1}/${cues.length}: ${wavDuration(readFileSync(target)).toFixed(2)}s`);
   }
-  files.push(file);
-  durations.push(wavDuration(readFileSync(target)));
-  console.log(`cue ${index + 1}/${cues.length}: ${durations.at(-1).toFixed(2)}s${cached ? " (unchanged, reused)" : ""}`);
+} else if (missing.length > 0) {
+  const python = process.env.VIDEOS_VOICE_PYTHON;
+  if (!python) {
+    console.error("narrate: set VIDEOS_VOICE_PYTHON to the Python 3.11 interpreter of an environment with voice/requirements.txt installed (README.md, 'The series voice')");
+    process.exit(2);
+  }
+  const trim = chatterbox.trim ?? {};
+  const args = [
+    path.join(workspaceRoot, "tools", "voice_worker.py"),
+    "--model", chatterbox.model,
+    "--revision", chatterbox.revision,
+    "--reference", path.join(workspaceRoot, chatterbox.reference),
+    "--exaggeration", String(chatterbox.exaggeration),
+    "--cfg-weight", String(chatterbox.cfgWeight),
+    "--temperature", String(chatterbox.temperature),
+    "--trim-threshold-db", String(trim.thresholdDb ?? -50),
+    "--trim-pad-before", String(trim.padBeforeSeconds ?? 0.05),
+    "--trim-pad-after", String(trim.padAfterSeconds ?? 0.15),
+    "--recognisers", (chatterbox.recognisers ?? []).join(","),
+    "--hotwords", chatterbox.hotwords ?? "",
+    "--threads", process.env.VIDEOS_VOICE_THREADS ?? "8",
+  ];
+  const log = createWriteStream(path.join(outDir, "voice.log"));
+  const worker = startVoiceWorker(python, args, { log });
+  try {
+    const ready = await worker.ready;
+    const versions = Object.entries(ready.versions ?? {}).map(([name, version]) => `${name} ${version}`).join(", ");
+    console.log(`voice: Chatterbox ready in ${ready.loadSeconds}s (${versions}); ${missing.length} of ${cues.length} cue(s) to speak`);
+    for (const index of missing) {
+      const target = path.join(outDir, files[index]);
+      const name = path.basename(target, ".wav");
+      const attempts = [];
+      for (let attempt = 0; attempt < (chatterbox.attempts ?? 1); attempt++) {
+        const seed = seedFor(name, attempt);
+        const output = path.join(clipsDir, `${name}.attempt${attempt}.partial.wav`);
+        const reply = await worker.request({ text: spokenCues[index], seed, output });
+        const judgement = judgeAttempt(cues[index].text, reply, { secondsPerWord: chatterbox.secondsPerWord });
+        attempts.push({ attempt, seed, output, reply, judgement });
+        const heard = Object.entries(judgement.differences)
+          .filter(([, differences]) => differences.length > 0)
+          .map(([recogniser, differences]) => `${recogniser}: ${differences.join(", ")}`);
+        const verdict = judgement.passed ? "heard exactly" : [...heard, ...judgement.problems].join("; ");
+        console.log(
+          `cue ${index + 1}/${cues.length}, attempt ${attempt + 1}: ${reply.seconds.toFixed(2)}s in ${reply.generateSeconds}s, ${verdict}`,
+        );
+        if (judgement.passed) break;
+      }
+      const kept = attempts[bestAttempt(attempts.map((a) => a.judgement))];
+      renameSync(kept.output, target);
+      for (const { output } of attempts) rmSync(output, { force: true });
+      const check = {
+        attempt: kept.attempt + 1,
+        seed: kept.seed,
+        verified: kept.judgement.passed,
+        differences: kept.judgement.differences,
+        problems: kept.judgement.problems,
+        transcripts: kept.reply.transcripts,
+        seconds: kept.reply.seconds,
+        rawSeconds: kept.reply.rawSeconds,
+      };
+      writeFileSync(target.replace(/\.wav$/, ".json"), `${JSON.stringify(check, null, 2)}\n`);
+      if (!check.verified) {
+        console.log(`cue ${index + 1}/${cues.length}: kept attempt ${check.attempt}, which no recogniser heard exactly; listen to it`);
+      }
+    }
+  } catch (error) {
+    console.error(`narrate: the voice failed: ${error.message}`);
+    console.error("narrate: the cues spoken so far are kept; run the command again to carry on.");
+    await worker.close().catch(() => {});
+    process.exit(1);
+  }
+  await worker.close();
+  log.end();
 }
-const current = new Set(files.map((file) => path.basename(file)));
+
+// What each Chatterbox clip's check found, whether it was made now or before:
+// judged again from its stored transcripts, so the verdict follows the rules
+// as they are now.
+if (engine === "chatterbox") {
+  files.forEach((file, index) => {
+    const sidecar = path.join(outDir, file.replace(/\.wav$/, ".json"));
+    if (!existsSync(sidecar)) return;
+    const check = JSON.parse(readFileSync(sidecar, "utf8"));
+    const judgement = judgeAttempt(cues[index].text, check, { secondsPerWord: chatterbox.secondsPerWord });
+    checks[index] = { ...check, verified: judgement.passed, differences: judgement.differences, problems: judgement.problems };
+  });
+}
+
+const durations = files.map((file) => wavDuration(readFileSync(path.join(outDir, file))));
+const reused = cues.length - missing.length;
+if (engine === "kokoro") {
+  files.forEach((_, index) => {
+    if (!missing.includes(index)) console.log(`cue ${index + 1}/${cues.length}: ${durations[index].toFixed(2)}s (unchanged, reused)`);
+  });
+}
+const current = new Set(files.flatMap((file) => [path.basename(file), path.basename(file).replace(/\.wav$/, ".json")]));
 for (const entry of readdirSync(clipsDir)) {
   if (!current.has(entry)) rmSync(path.join(clipsDir, entry), { force: true });
 }
@@ -187,8 +317,17 @@ if (ffmpeg(["-version"]).status !== 0) {
 
 const manifest = {
   episode: slug,
-  voice: voice.voice,
-  speed: voice.speed,
+  engine,
+  voice:
+    engine === "kokoro"
+      ? { voice: kokoro.voice, lang: kokoro.lang, speed: kokoro.speed }
+      : {
+          model: `${chatterbox.model}@${chatterbox.revision}`,
+          reference: chatterbox.reference,
+          exaggeration: chatterbox.exaggeration,
+          cfgWeight: chatterbox.cfgWeight,
+          temperature: chatterbox.temperature,
+        },
   duration,
   narration: loudness ? "narration.wav" : null,
   loudness,
@@ -207,6 +346,7 @@ const manifest = {
     start: timeline[i].start,
     end: timeline[i].end,
     text: cue.text,
+    ...(checks[i] ? { check: { attempt: checks[i].attempt, verified: checks[i].verified, differences: checks[i].differences, problems: checks[i].problems } } : {}),
   })),
 };
 writeFileSync(path.join(outDir, "cues.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -216,7 +356,12 @@ const clock = `${Math.floor(duration / 60)}:${(duration % 60).toFixed(1).padStar
 const level = loudness
   ? `; mastered to ${loudness.mastered.integrated} LUFS, true peak ${loudness.mastered.truePeak} dBTP (raw ${loudness.raw.integrated} LUFS, gain ${loudness.gainDb >= 0 ? "+" : ""}${loudness.gainDb} dB)`
   : "";
+const minutes = ((Date.now() - started) / 60000).toFixed(1);
 console.log(
   `narrate: ${cues.length} cue(s) in ${scenes.length} scene(s) (${cues.length - reused} spoken, ${reused} unchanged), ` +
-    `${clock}${level}, in renders/narration/${slug}/`,
+    `${clock}${level}, in renders/narration/${slug}/, in ${minutes} min`,
 );
+const unverified = checks.map((check, index) => (check && !check.verified ? index + 1 : null)).filter(Boolean);
+if (unverified.length > 0) {
+  console.log(`narrate: no recogniser heard cue(s) ${unverified.join(", ")} exactly; cues.json has what they heard. Listen before publishing.`);
+}

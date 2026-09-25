@@ -7,8 +7,9 @@ tags: the technical half first, then the plain-language opening. Its fixes are
 applied to both.
 
 Written form, in the series voice (Emma, British English). The pronunciation
-lexicon (`voice/lexicon.json`) handles "Orleans", "ILattice", "Cluster A",
-"idempotent" and "lives"; captions keep the text exactly as written here.
+lexicon (`voice/lexicon.json`) handles "Orleans" and "ILattice", and, for the
+Kokoro engine, "Cluster A", "idempotent" and "lives"; captions keep the text
+exactly as written here.
 
 The first minute is for everyone, and uses no technical terms: what state is,
 why keeping it in many places at once is hard, and what Orleans.Lattice does

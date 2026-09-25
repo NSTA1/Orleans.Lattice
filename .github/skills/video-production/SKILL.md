@@ -109,15 +109,29 @@ introduction is the worked example.
   templates.
 - `hyperframes snapshot` sends frames to Gemini whenever `GEMINI_API_KEY` is
   set. `tools/hf.js` adds `--describe false` unless you pass `--describe`.
-- Narration needs Python with `kokoro-onnx` and `soundfile`; the first run
-  downloads the Kokoro model (about 340 MB). The CLI's own interpreter probe
-  can miss a virtual environment, or time out on a loaded machine, and report
-  Kokoro as not installed: set `HYPERFRAMES_PYTHON` to the interpreter.
-- The phonemizer reads a word with two readings one way whatever the sentence:
-  it said "lives" as the plural of life in "the store lives in the cluster",
-  until the lexicon respelt the verb "livs". Run `npm run phonemes -- <slug>`
-  before narrating; it flags every word in `voice/heteronyms.json` with the
-  phonemes the voice will actually receive.
+- Narration is Chatterbox, cloned from `voice/reference.wav`, in a Python 3.11
+  environment of its own (`voice/requirements.txt`); set `VIDEOS_VOICE_PYTHON`
+  to its interpreter. `tools/voice_worker.py` loads the model once per run and
+  prints its protocol on stdout behind a `@@voice ` mark, with everything else
+  on stderr (in `renders/narration/<slug>/voice.log`). Never name a Python file
+  after a package it imports: the worker was once `chatterbox.py`, and Python
+  imported it in place of the `chatterbox` package.
+- A generative voice slips ("Neither awaits its turn"), so every clip is heard
+  back by two recognisers and remade until it matches the script. A
+  recogniser tends to miss the first word of audio that starts with no
+  silence, so the worker pads what it hears, not the clip. When a clip never
+  passes, `npm run narrate` lists the cue; listen to it before publishing.
+  Chatterbox pauses at a hyphen, so its respellings in `voice/lexicon.json`
+  have none ("Orleens").
+- A clip's name hashes what shapes the voice, including the pinned lines of
+  `voice/requirements.txt` (not its comments): changing a setting, the
+  reference clip or a pin re-speaks every cue, which takes the better part of
+  an hour per episode.
+- The Kokoro engine (`"provider": "kokoro"`) needs Python with `kokoro-onnx`
+  and `soundfile`; set `HYPERFRAMES_PYTHON` when the CLI's probe cannot find
+  it. Its phonemizer reads a word with two readings one way whatever the
+  sentence ("lives" as the plural of life), which is why its lexicon forms
+  exist; `npm run phonemes -- <slug>` shows what it will receive.
 - `check` fails on WCAG contrast. On paper the marker yellow is never a text
   colour; set text on it in `--lt-marker-ink`, and ring a marker node in ink.
 - The design system is read from `docs-site/` (`template/public/`,

@@ -1,0 +1,11 @@
+# The Python environment for the series voice (voice/voice.json, provider
+# "chatterbox"): Chatterbox speaks the narration, and faster-whisper transcribes
+# each clip so tools/narrate.js can check it. Python 3.11 (chatterbox-tts pins
+# torch 2.6.0, which has no wheels for newer Pythons). See README.md, "The
+# series voice".
+#
+#   python3.11 -m venv ~/.venvs/lattice-voice          (outside the repository)
+#   ~/.venvs/lattice-voice/bin/python -m pip install -r voice/requirements.txt
+#   export VIDEOS_VOICE_PYTHON=~/.venvs/lattice-voice/bin/python
+chatterbox-tts==0.1.7
+faster-whisper==1.2.1

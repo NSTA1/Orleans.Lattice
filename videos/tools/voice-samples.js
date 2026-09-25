@@ -25,7 +25,7 @@ if (selected.length === 0) {
 }
 
 const script = readFileSync(path.join(voiceDir, "sample-script.txt"), "utf8").trim();
-const spoken = applyLexicon(script, loadLexicon(path.join(voiceDir, "lexicon.json")));
+const spoken = applyLexicon(script, loadLexicon(path.join(voiceDir, "lexicon.json")), "kokoro");
 const outDir = path.join(workspaceRoot, "renders", "voice-samples");
 mkdirSync(outDir, { recursive: true });
 
