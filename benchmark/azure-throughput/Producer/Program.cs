@@ -224,6 +224,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     var batchSize = ReadInt("BENCH_BATCH_SIZE", 4096);
     var flushMs = ReadInt("BENCH_FLUSH_MS", 50);
     var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
+    var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
     var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
     var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
     var walExtraAccountUris = (Environment.GetEnvironmentVariable("BENCH_WAL_EXTRA_ACCOUNT_URIS") ?? string.Empty)
@@ -266,10 +267,13 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         responseTimeoutSec,
         walPartitions,
         walAccounts,
-        "orleans-client");
+        "orleans-client")
+    {
+        PointFanOut = pointFanOut,
+    };
 
     Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s clients={clientCount}");
-    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
+    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} pointFanOut={settings.EffectivePointFanOut} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
 
     // One IClusterClient reaches exactly one silo for this workload. Orleans
     // buckets client-to-grain traffic by TargetGrain hash to preserve per-grain
@@ -375,6 +379,25 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         await WarmUpWithRetryAsync(lattice, settings.TreeId, ct).ConfigureAwait(false);
         warmSw.Stop();
         Console.WriteLine($"[producer] warmup treeId={settings.TreeId} complete elapsedMs={warmSw.Elapsed.TotalMilliseconds:F0}");
+
+        // Read-mode keyspace pre-seed, before the measured window opens. On
+        // the single-VM path the silo seeds during startup, but the Layer 3
+        // silo returns early in cluster mode and never reaches that step, so
+        // until #3474 every Layer 3 get-point / get-many cohort read an EMPTY
+        // tree: every call was a miss, and a miss always takes the serial
+        // shard-root turn rather than the optimistic read, so the curve
+        // measured the miss path instead of the read ceiling. This producer
+        // process owns every client for the cohort, so seeding once through
+        // the first client is race-free. A failed seed fails the cohort: the
+        // report refuses read cells whose log has no preseed line.
+        if (BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount))
+        {
+            await PreseedWithRetryAsync(lattice, settings, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} skipped workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} preseedKeyCount={settings.PreseedKeyCount}");
+        }
 
         var generator = CreateChannelGenerator(vehicleCount);
         var engine = new BenchIngestEngine(
@@ -523,6 +546,43 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
         lastException);
 }
 
+static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, CancellationToken ct)
+{
+    // Every seeded entry is deterministic, so re-writing a slice that already
+    // landed is idempotent and a transient failure can simply retry the whole
+    // seed. The attempt cap keeps a persistently failing seed loud.
+    const int MaxPreseedAttempts = 5;
+    var sliceSize = Math.Max(1, settings.BatchSize);
+    var sw = Stopwatch.StartNew();
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            var written = await BenchPreseed.SeedAsync(lattice, settings.PreseedKeyCount, sliceSize, ct).ConfigureAwait(false);
+            sw.Stop();
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} entries={written} payloadBytes={BenchPreseed.PayloadBytes} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+            return;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (attempt < MaxPreseedAttempts
+            && (IsOrleansMessageRejection(ex)
+                || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
+                || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+                || WarmUpRetryClassifier.IsTransientSaturation(ex)
+                || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
+        {
+            var backoffMs = Math.Min(1000 * attempt, 5000);
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} transient ({ex.GetType().Name}); retrying in {backoffMs}ms (attempt={attempt}/{MaxPreseedAttempts})");
+            await Task.Delay(backoffMs, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Console.Error.WriteLine($"[producer] ERROR preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
+    }
+}
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {
     const int MaxReshardAttempts = 12;
