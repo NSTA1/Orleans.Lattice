@@ -1785,6 +1785,9 @@ function Add-PartOfLine([string]$Body, [string]$Line) {
 # version is: a screen reader, and any tool that reads a page as text. It is a
 # span, not a paragraph: those tools score paragraphs to find a page's main
 # content, and a note that moved that choice could cost a page some of its text.
+# Its links are out of the tab order, as the video posters' are: the note cannot
+# be seen, so a keyboard user tabbing onto them would lose sight of the focus
+# for two stops on every page. A screen reader still reads and follows them.
 function Get-PageNote([string]$Relative, $Package) {
     $scope = "the documentation for $($site.Label), built $($site.BuiltDate)"
     $opening = if ($Package -and $Package.Exact -and $Package.Id -ne 'Orleans.Lattice') {
@@ -1797,8 +1800,8 @@ function Get-PageNote([string]$Relative, $Package) {
     $markdownUrl = Get-EncodedHtml ($site.Url + $Relative)
     $name = Get-EncodedHtml ([System.IO.Path]::GetFileName($Relative))
     return '<span class="visually-hidden lt-page-note">' + (Get-EncodedHtml $opening) +
-        ' It is also published as markdown, with every table and list, at <a href="' + $markdownUrl + '">' + $name +
-        '</a>, and <a href="' + (Get-EncodedHtml ($site.Url + 'llms.txt')) + '">llms.txt</a> lists every page.</span>'
+        ' It is also published as markdown, with every table and list, at <a href="' + $markdownUrl + '" tabindex="-1">' + $name +
+        '</a>, and <a href="' + (Get-EncodedHtml ($site.Url + 'llms.txt')) + '" tabindex="-1">llms.txt</a> lists every page.</span>'
 }
 
 $splitPages = New-Object 'System.Collections.Generic.HashSet[string]'
