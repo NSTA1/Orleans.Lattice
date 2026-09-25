@@ -90,9 +90,20 @@ public partial class LatticeCrossTreeTxGrainTests
         });
     }
 
+    private const string CoordinatorRetentionReminder = "cross-tree-tx-retention";
+
+    private static Task AssertCoordinatorRetentionArmedAsync(CoordinatorEtagHarness h, int times) =>
+        h.Reminders.Received(times).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), CoordinatorRetentionReminder, Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+
+    private static void VoteSequence(IAtomicWriteGrain participant, params CrossTreePrepareVote[] votes) =>
+        participant.PrepareForCoordinatorAsync(
+                Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
+            .Returns(votes[0], votes[1..]);
+
     [TestCase((int)CrossTreeTxPhase.Preparing)]
     [TestCase((int)CrossTreeTxPhase.Committed)]
-    [TestCase((int)CrossTreeTxPhase.Completed)]
     public async Task CommitAsync_landed_conflict_deactivates_then_fresh_activation_reaches_the_same_verdict(int conflictedPhase)
     {
         var conflictedWrite = (CrossTreeTxPhase)conflictedPhase;
@@ -131,6 +142,166 @@ public partial class LatticeCrossTreeTxGrainTests
             await participant.Received(1).FinalizeAsync(true);
             await participant.DidNotReceive().FinalizeAsync(false);
         }
+
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+    }
+
+    [Test]
+    public async Task CommitAsync_landed_conflict_on_completed_is_confirmed_and_terminal_cleanup_runs_once()
+    {
+        var h = new CoordinatorEtagHarness("orders", "inventory");
+        var batches = Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B"));
+        var (grain, state, _) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == CrossTreeTxPhase.Completed;
+
+        var outcome = await grain.CommitAsync(batches);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Completed));
+            Assert.That(state.Reads, Is.EqualTo(1), "the conflict is resolved by re-reading the row");
+        });
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+        await h.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+
+        var attemptsBefore = state.WriteAttempts;
+        Assert.That(await grain.CommitAsync(batches), Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await grain.GetDecisionAsync(), Is.EqualTo(TxStatus.Committed));
+        Assert.That(state.WriteAttempts, Is.EqualTo(attemptsBefore));
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+        foreach (var participant in h.Participants.Values)
+        {
+            await participant.Received(1).FinalizeAsync(true);
+        }
+    }
+
+    [Test]
+    public async Task CommitAsync_landed_completed_conflict_with_a_failed_reread_is_cleaned_up_on_re_attach()
+    {
+        var h = new CoordinatorEtagHarness("orders", "inventory");
+        var batches = Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B"));
+        var (grain, state, context) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == CrossTreeTxPhase.Completed;
+        state.FailNextReadWith = new TimeoutException("read blip");
+
+        var ex = Assert.CatchAsync(() => grain.CommitAsync(batches));
+
+        AssertTranslatedCoordinatorConflict(ex);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Completed), "the terminal write landed");
+        await AssertCoordinatorRetentionArmedAsync(h, 0);
+
+        var (fresh, freshState, _) = h.Activate();
+        var outcome = await fresh.CommitAsync(batches);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+            Assert.That(freshState.WriteAttempts, Is.Zero, "a completed coordinator is re-attached, not re-run");
+        });
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+        foreach (var participant in h.Participants.Values)
+        {
+            await participant.Received(1).FinalizeAsync(true);
+        }
+    }
+
+    [Test]
+    public async Task ReceiveReminder_keepalive_on_a_completed_coordinator_arms_retention()
+    {
+        var h = new CoordinatorEtagHarness();
+        h.Row.Value = new CrossTreeTxState
+        {
+            Phase = CrossTreeTxPhase.Completed,
+            OperationId = OperationId,
+            Outcome = CrossTreeAtomicWriteOutcome.Committed,
+        };
+        var (grain, _, context) = h.Activate();
+
+        await grain.ReceiveReminder("cross-tree-tx-keepalive", new TickStatus());
+
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+        await h.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+    }
+
+    [Test]
+    public async Task CommitAsync_decision_conflict_that_did_not_land_never_serves_the_unpersisted_verdict()
+    {
+        var h = new CoordinatorEtagHarness("orders", "inventory");
+        // A transient fault makes the first prepare vote Failed; the sub-saga
+        // stays in Execute, so the re-dispatch votes Prepared.
+        VoteSequence(h.Participants["inventory"], CrossTreePrepareVote.Failed, CrossTreePrepareVote.Prepared);
+        var batches = Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B"));
+        var (grain, state, context) = h.Activate();
+        state.FailWithoutLandingWhen = s => s.Phase == CrossTreeTxPhase.Aborted;
+
+        var ex = Assert.CatchAsync(() => grain.CommitAsync(batches));
+
+        AssertTranslatedCoordinatorConflict(ex);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Preparing), "the abort decision did not land");
+        Assert.That(
+            async () => await grain.GetDecisionAsync(),
+            Throws.TypeOf<LatticeStateWriteFailedException>().With.Property(nameof(LatticeStateWriteFailedException.Conflict)).True,
+            "the in-memory Aborted verdict must never be served, or a registry would cache it");
+
+        var (fresh, _, _) = h.Activate();
+        var outcome = await fresh.CommitAsync(batches);
+        var decision = await fresh.GetDecisionAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed),
+                "the fresh activation re-decides from the durable Preparing phase");
+            Assert.That(decision, Is.EqualTo(TxStatus.Committed));
+        });
+        foreach (var participant in h.Participants.Values)
+        {
+            await participant.Received(1).FinalizeAsync(true);
+            await participant.DidNotReceive().FinalizeAsync(false);
+        }
+    }
+
+    [Test]
+    public async Task CommitAsync_transient_decision_write_fault_reports_in_flight_until_the_decision_is_persisted()
+    {
+        var h = new CoordinatorEtagHarness("orders", "inventory");
+        var batches = Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B"));
+        var (grain, state, context) = h.Activate();
+        state.FailWithoutLandingWhen = s => s.Phase == CrossTreeTxPhase.Committed;
+        state.FailWithoutLandingException = new TimeoutException("storage blip");
+
+        var ex = Assert.CatchAsync(() => grain.CommitAsync(batches));
+
+        Assert.That(ex, Is.TypeOf<TimeoutException>(),
+            "a client-loadable, non-conflict fault propagates unchanged and keeps the activation");
+        context.DidNotReceiveWithAnyArgs().Deactivate(default!);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Preparing));
+        Assert.That(await grain.GetDecisionAsync(), Is.EqualTo(TxStatus.InFlight),
+            "a decision that is not yet durable is not served");
+        foreach (var participant in h.Participants.Values)
+        {
+            await participant.DidNotReceive().FinalizeAsync(Arg.Any<bool>());
+        }
+
+        var outcome = await grain.CommitAsync(batches);
+        var decision = await grain.GetDecisionAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Completed));
+            Assert.That(decision, Is.EqualTo(TxStatus.Committed));
+        });
+        foreach (var participant in h.Participants.Values)
+        {
+            await participant.Received(1).PrepareForCoordinatorAsync(
+                Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>());
+            await participant.Received(1).FinalizeAsync(true);
+        }
     }
 
     [Test]
@@ -156,20 +327,49 @@ public partial class LatticeCrossTreeTxGrainTests
     }
 
     [Test]
-    public async Task CommitAsync_landed_conflict_on_a_vacuous_commit_is_memoized_for_a_fresh_activation()
+    public async Task CommitAsync_landed_conflict_on_a_vacuous_commit_is_confirmed_and_arms_retention()
     {
         var h = new CoordinatorEtagHarness();
         var (grain, state, _) = h.Activate();
         state.LandThenConflictOnNextWrite();
 
-        var ex = Assert.CatchAsync(() => grain.CommitAsync([]));
-        AssertTranslatedCoordinatorConflict(ex);
+        var outcome = await grain.CommitAsync([]);
 
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Completed));
+            Assert.That(state.Reads, Is.EqualTo(1));
+        });
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
+
+        var (fresh, freshState, _) = h.Activate();
+        Assert.That(await fresh.CommitAsync([]), Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(freshState.WriteAttempts, Is.Zero, "the landed vacuous commit is re-attached, not rewritten");
+    }
+
+    [Test]
+    public async Task CommitAsync_landed_vacuous_conflict_with_a_failed_reread_arms_retention_on_re_attach()
+    {
+        var h = new CoordinatorEtagHarness();
+        var (grain, state, _) = h.Activate();
+        state.LandThenConflictOnNextWrite();
+        state.FailNextReadWith = new TimeoutException("read blip");
+
+        var ex = Assert.CatchAsync(() => grain.CommitAsync([]));
+
+        AssertTranslatedCoordinatorConflict(ex);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(CrossTreeTxPhase.Completed), "the vacuous commit landed");
+        await AssertCoordinatorRetentionArmedAsync(h, 0);
+
+        // A vacuous commit has no keepalive, so the re-attach is the only
+        // trigger left to arm retention; without it the row would leak.
         var (fresh, freshState, _) = h.Activate();
         var outcome = await fresh.CommitAsync([]);
 
         Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
-        Assert.That(freshState.WriteAttempts, Is.Zero, "the landed vacuous commit is re-attached, not rewritten");
+        Assert.That(freshState.WriteAttempts, Is.Zero);
+        await AssertCoordinatorRetentionArmedAsync(h, 1);
     }
 
     [Test]

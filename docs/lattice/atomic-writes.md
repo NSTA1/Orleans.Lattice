@@ -372,10 +372,27 @@ marks the activation conflicted, requests deactivation, and fails every further
 call on it fast rather than writing again with the stale ETag. The next call
 lands on a fresh activation, which reloads the row and resumes from the durable
 phase, exactly as crash recovery does. Resuming is idempotent whether or not the
-conflicted write landed: a persist failure never triggers compensation, the
-decision registry entry is write-once, and the coordinator's verdict is a
-deterministic function of the participants' sticky votes, so a resumed saga never
-applies a batch twice and never flips a decision. `SetManyAtomicAsync` absorbs
+conflicted write landed: a persist failure never triggers compensation and the
+decision registry entry is write-once, so a resumed saga never applies a batch
+twice. A fresh coordinator that resumes from a durable Preparing phase may
+re-decide, and its verdict need not match the one the conflicted activation held
+in memory, because a participant that voted Failed on a transient fault can vote
+Prepared on re-dispatch. That is safe because no verdict leaves an activation
+before it is durable: while a decision write is outstanding the coordinator
+reports the transaction as still in flight, a conflicted coordinator refuses to
+answer decision reads (a participant's registry treats the failed read as
+indeterminate and caches nothing), and no participant is finalized against an
+unpersisted decision. A decision that did land is re-read and never flipped.
+A terminal write (the saga's Completed or PreconditionFailed phase, or the
+coordinator's Completed phase) that reports a conflict is confirmed in place by
+re-reading the row; when it had landed, the terminal cleanup (keepalive removal,
+the retention reminder, completion metrics and events, forgetting the decision)
+runs once as normal. If the re-read also fails, the activation deactivates, and
+the next call, or the keepalive reminder, that finds the durable terminal phase
+re-arms retention, removes the keepalive and forgets the decision idempotently,
+so the row is still cleared. Completion metrics and the completed event are not
+re-emitted on that path, since a duplicate is worse than the rare loss.
+`SetManyAtomicAsync` absorbs
 the conflict by retrying on the fresh activation (the retry envelope for
 single-tree writes, and up to three re-attaches by operation id for cross-tree
 writes). A conflict that outlives that budget, or any other provider fault on a

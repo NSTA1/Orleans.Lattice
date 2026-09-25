@@ -61,6 +61,25 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// </summary>
     private bool _stateConflicted;
 
+    /// <summary>
+    /// Set while the global decision is held in memory but not yet confirmed
+    /// durable: from the moment <see cref="PreparePhaseAsync"/> records it until
+    /// a decision (or later) write succeeds. <see cref="GetDecisionAsync"/>
+    /// interleaves with that write, and a verdict served before it is durable
+    /// could be cached by a participant's registry and then contradicted by a
+    /// fresh activation that re-decides from the durable Preparing phase (issue
+    /// #3572), so an unconfirmed decision is reported as still in flight.
+    /// </summary>
+    private bool _decisionUnconfirmed;
+
+    /// <summary>
+    /// Set once this activation has run (or confirmed) the terminal cleanup, so
+    /// an idempotent re-attach to a completed coordinator does not re-register
+    /// reminders on every call. A fresh activation starts clear, which is what
+    /// lets it re-run the cleanup a conflicted terminal write skipped.
+    /// </summary>
+    private bool _terminalRetentionEnsured;
+
     /// <summary>This coordinator's key (the cross-tree operationId).</summary>
     private string OperationId => GrainContext.GrainId.Key.ToString()!;
 
@@ -108,12 +127,12 @@ internal sealed class LatticeCrossTreeTxGrain(
                 break;
             case CrossTreeTxPhase.Completed:
                 // A crash between persisting Completed (FinalizePhaseAsync) and
-                // arming retention lands here with the keepalive still
-                // registered. Arm retention idempotently so the orphaned state
-                // is eventually cleared, then unregister the keepalive and
-                // deactivate.
-                await UnregisterKeepaliveAsync();
-                await SlideTtlAsync();
+                // arming retention, or a Completed write that landed but
+                // reported a conflict (issue #3572), lands here with the
+                // keepalive still registered. Arm retention idempotently so the
+                // orphaned state is eventually cleared, then unregister the
+                // keepalive and deactivate.
+                await EnsureTerminalRetentionAsync();
                 this.DeactivateOnIdle();
                 break;
             case CrossTreeTxPhase.NotStarted:
@@ -176,6 +195,10 @@ internal sealed class LatticeCrossTreeTxGrain(
         // memoized verdict (or rethrow the original failure) without re-running.
         if (state.State.Phase == CrossTreeTxPhase.Completed)
         {
+            // A predecessor's terminal write may have landed and then reported
+            // a conflict, skipping retention; a vacuous commit has no keepalive
+            // to redo it, so the re-attach arms it idempotently (issue #3572).
+            await EnsureTerminalRetentionAsync();
             return MemoizedOutcomeOrThrow();
         }
 
@@ -200,11 +223,12 @@ internal sealed class LatticeCrossTreeTxGrain(
                 state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
                 state.State.Phase = CrossTreeTxPhase.Completed;
                 state.State.Outcome = CrossTreeAtomicWriteOutcome.Committed;
-                await WriteCoordinatorStateAsync("vacuous-completed");
+                await WriteTerminalCoordinatorStateAsync("vacuous-completed");
                 // Arm retention so the persisted vacuous-commit state is
                 // eventually cleared. This path never registered a keepalive,
                 // so the TTL reminder is the only cleanup trigger.
                 await SlideTtlAsync();
+                _terminalRetentionEnsured = true;
                 return CrossTreeAtomicWriteOutcome.Committed;
             }
 
@@ -224,9 +248,25 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// <inheritdoc />
     public Task<TxStatus> GetDecisionAsync()
     {
+        // A conflicted activation cannot tell whether its last write landed, so
+        // it must not answer: the registry maps a failed dial to Indeterminate
+        // and caches nothing, and the next dial reaches a fresh activation that
+        // answers from the durable row (issue #3572).
+        ThrowIfStateConflicted();
+
+        // A decision recorded in memory but not yet confirmed durable is not a
+        // decision yet: a registry would cache it, and a fresh activation that
+        // re-decides from the durable Preparing phase could reach the opposite
+        // verdict (a participant that voted Failed on a transient fault can vote
+        // Prepared on re-dispatch). Report it as still in flight.
+        if (_decisionUnconfirmed)
+        {
+            return Task.FromResult(TxStatus.InFlight);
+        }
+
         // The single global decision, read by every participating tree's
-        // registry. Committed/Aborted are durable the instant the coordinator
-        // persists the phase; Preparing/NotStarted resolve to InFlight so
+        // registry. Committed/Aborted are durable once the coordinator has
+        // persisted the phase; Preparing/NotStarted resolve to InFlight so
         // delegated reads see the pre-saga view until the global flip.
         var status = state.State.Phase switch
         {
@@ -260,6 +300,17 @@ internal sealed class LatticeCrossTreeTxGrain(
 
         if (state.State.Phase is CrossTreeTxPhase.Committed or CrossTreeTxPhase.Aborted)
         {
+            // An earlier decision write on this activation failed without a
+            // conflict (so the activation lived on with the decision only in
+            // memory). Persist it before any participant is finalized against
+            // it, so finalize never acts on a decision a fresh activation might
+            // not see.
+            if (_decisionUnconfirmed)
+            {
+                await WriteCoordinatorStateAsync("decision");
+                _decisionUnconfirmed = false;
+            }
+
             await FinalizePhaseAsync();
         }
     }
@@ -344,7 +395,9 @@ internal sealed class LatticeCrossTreeTxGrain(
                 : null;
         }
 
+        _decisionUnconfirmed = true;
         await WriteCoordinatorStateAsync("decision");
+        _decisionUnconfirmed = false;
     }
 
     /// <summary>
@@ -373,12 +426,66 @@ internal sealed class LatticeCrossTreeTxGrain(
         await Task.WhenAll(finalizeTasks);
 
         state.State.Phase = CrossTreeTxPhase.Completed;
-        await WriteCoordinatorStateAsync("completed");
+        await WriteTerminalCoordinatorStateAsync("completed");
 
         EmitCompletionMetrics();
 
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
+        _terminalRetentionEnsured = true;
+    }
+
+    /// <summary>
+    /// Persists a terminal (<see cref="CrossTreeTxPhase.Completed"/>) state. A
+    /// terminal write that lost an ETag check may still have landed (issue
+    /// #3572): the row is re-read and, when the Completed row with this
+    /// outcome is durable, the activation is trusted again and the caller's
+    /// terminal cleanup (metrics, keepalive, retention) runs exactly once
+    /// instead of being skipped by the throw. Otherwise the conflict
+    /// propagates and a fresh activation resumes from the durable phase.
+    /// </summary>
+    private async Task WriteTerminalCoordinatorStateAsync(string phase)
+    {
+        var outcome = state.State.Outcome;
+        try
+        {
+            await WriteCoordinatorStateAsync(phase);
+        }
+        catch (Exception ex) when (GrainStateWriteFaults.IsTranslatedConflict(ex))
+        {
+            if (!await GrainStateWriteFaults.TryConfirmLandedAsync(
+                    state, s => s.Phase == CrossTreeTxPhase.Completed && s.Outcome == outcome))
+            {
+                throw;
+            }
+
+            _stateConflicted = false;
+            Logger.LogInformation(
+                "Cross-tree saga {OperationId}: the conflicted {Phase} state write had landed; completing terminal cleanup.",
+                OperationId,
+                phase);
+        }
+    }
+
+    /// <summary>
+    /// Runs the terminal cleanup idempotently for a coordinator whose durable
+    /// phase is already <see cref="CrossTreeTxPhase.Completed"/>: unregisters
+    /// the keepalive and arms (or slides) the retention reminder. Covers a
+    /// terminal write that landed and then reported a conflict, and a crash
+    /// straight after it. At most once per activation. Completion metrics are
+    /// not re-emitted, since this activation cannot tell whether a predecessor
+    /// already emitted them.
+    /// </summary>
+    private async Task EnsureTerminalRetentionAsync()
+    {
+        if (_terminalRetentionEnsured)
+        {
+            return;
+        }
+
+        await UnregisterKeepaliveAsync();
+        await SlideTtlAsync();
+        _terminalRetentionEnsured = true;
     }
 
     /// <summary>
@@ -388,13 +495,16 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// conflicted, requests deactivation, and throws a translated
     /// <see cref="LatticeStateWriteFailedException"/>; the caller's retry (or
     /// the keepalive reminder) lands on a fresh activation that reloads the row
-    /// and resumes from the durable phase. In-memory state is deliberately not
-    /// reverted: <see cref="GetDecisionAsync"/> interleaves and may already have
-    /// observed it, and the decision is a deterministic function of the
-    /// participants' sticky prepare votes (a parked participant re-votes
-    /// <see cref="CrossTreePrepareVote.Prepared"/>, a failed one re-returns its
-    /// memoized verdict), so a fresh activation that re-decides reaches the
-    /// same verdict and a decision is never flipped or lost.
+    /// and resumes from the durable phase. A fresh activation may re-decide, and
+    /// its verdict is NOT guaranteed to match this activation's: a participant
+    /// that voted Failed on a transient fault (saturation, shutdown, a
+    /// non-conflict state-write fault) leaves its sub-saga in Execute and can
+    /// vote Prepared on re-dispatch. That is safe only because no verdict leaves
+    /// this activation before it is durable: <see cref="GetDecisionAsync"/>
+    /// reports an unconfirmed decision as in flight and throws once the
+    /// activation is conflicted, and finalize is never dispatched on an
+    /// unconfirmed decision. A decision that did land is re-read by the fresh
+    /// activation and never flipped.
     /// </summary>
     private async Task WriteCoordinatorStateAsync(string phase)
     {

@@ -54,6 +54,27 @@ internal sealed class LandedConflictPersistentState<T> : IPersistentState<T> whe
     public Func<T, bool>? LandThenConflictWhen { get; set; }
 
     /// <summary>
+    /// When set, the next write whose state satisfies this predicate does NOT
+    /// land and throws <see cref="FailWithoutLandingException"/> (an
+    /// <see cref="InconsistentStateException"/> when that is null). Models a
+    /// conflict or transient fault whose write never reached the row. Cleared
+    /// once it fires.
+    /// </summary>
+    public Func<T, bool>? FailWithoutLandingWhen { get; set; }
+
+    /// <summary>
+    /// The exception a <see cref="FailWithoutLandingWhen"/> write throws, or
+    /// <see langword="null"/> for an <see cref="InconsistentStateException"/>.
+    /// </summary>
+    public Exception? FailWithoutLandingException { get; set; }
+
+    /// <summary>
+    /// When set, the next read throws this exception without loading the row.
+    /// Cleared once it fires.
+    /// </summary>
+    public Exception? FailNextReadWith { get; set; }
+
+    /// <summary>
     /// When <see langword="true"/>, the next clear lands and then throws
     /// <see cref="InconsistentStateException"/>. Cleared once it fires.
     /// </summary>
@@ -75,6 +96,12 @@ internal sealed class LandedConflictPersistentState<T> : IPersistentState<T> whe
     public Task ReadStateAsync()
     {
         Reads++;
+        if (FailNextReadWith is { } readFault)
+        {
+            FailNextReadWith = null;
+            return Task.FromException(readFault);
+        }
+
         Load();
         return Task.CompletedTask;
     }
@@ -87,6 +114,12 @@ internal sealed class LandedConflictPersistentState<T> : IPersistentState<T> whe
         {
             StaleEtagRejections++;
             return Task.FromException(StaleEtag());
+        }
+
+        if (FailWithoutLandingWhen is { } failWhen && failWhen(State))
+        {
+            FailWithoutLandingWhen = null;
+            return Task.FromException(FailWithoutLandingException ?? StaleEtag());
         }
 
         _row.Value = Copier.Value.Copy(State);

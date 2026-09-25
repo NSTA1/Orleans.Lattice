@@ -129,6 +129,47 @@ public sealed class GrainStateWriteFaultsTests
         Assert.ThrowsAsync<TimeoutException>(() => GrainStateWriteFaults.ClearRecoveringConflictAsync(state, static _ => true));
     }
 
+    [Test]
+    public async Task TryConfirmLandedAsync_reloads_the_row_and_reports_whether_the_write_landed()
+    {
+        var row = new DurableStateRow<Holder>();
+        var state = new LandedConflictPersistentState<Holder>(row);
+        state.State.Terminal = true;
+        state.LandThenConflictOnNextWrite();
+        Assert.CatchAsync<InconsistentStateException>(() => state.WriteStateAsync());
+
+        var landed = await GrainStateWriteFaults.TryConfirmLandedAsync(state, static s => s.Terminal);
+        var mismatch = await GrainStateWriteFaults.TryConfirmLandedAsync(state, static s => !s.Terminal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(landed, Is.True);
+            Assert.That(mismatch, Is.False);
+            Assert.That(state.Reads, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task TryConfirmLandedAsync_is_false_when_the_row_is_absent_or_the_read_fails()
+    {
+        var row = new DurableStateRow<Holder>();
+        var state = new LandedConflictPersistentState<Holder>(row);
+
+        var absent = await GrainStateWriteFaults.TryConfirmLandedAsync(state, static _ => true);
+
+        row.Value = new Holder { Terminal = true };
+        state.FailNextReadWith = new TimeoutException("blip");
+        var readFailed = await GrainStateWriteFaults.TryConfirmLandedAsync(state, static _ => true);
+        var recovered = await GrainStateWriteFaults.TryConfirmLandedAsync(state, static s => s.Terminal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(absent, Is.False, "no row");
+            Assert.That(readFailed, Is.False, "the read failed");
+            Assert.That(recovered, Is.True);
+        });
+    }
+
     /// <summary>Minimal serializable state for the clear helper.</summary>
     [GenerateSerializer]
     public sealed class Holder

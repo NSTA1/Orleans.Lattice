@@ -112,20 +112,22 @@ public partial class AtomicWriteGrainTests
         });
     }
 
+    private const string RetentionReminder = "atomic-write-retention";
+
+    private static Task AssertRetentionArmedAsync(EtagConflictHarness h, int times) =>
+        h.Reminders.Received(times).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), RetentionReminder, Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+
     [TestCase("prepare")]
     [TestCase("execute-batch-commit")]
-    [TestCase("complete")]
     public async Task ExecuteAsync_landed_conflict_deactivates_then_fresh_activation_completes_without_double_apply(string step)
     {
         var h = new EtagConflictHarness();
         var entries = MakeEntries(("a", [1]), ("b", [2]));
         var (grain, state, context) = h.Activate();
-        state.LandThenConflictWhen = step switch
-        {
-            "prepare" => s => s.Phase == AtomicWritePhase.Execute && s.NextIndex == 0,
-            "execute-batch-commit" => s => s.Phase == AtomicWritePhase.Execute && s.NextIndex == s.Entries.Count,
-            _ => s => s.Phase == AtomicWritePhase.Completed,
-        };
+        state.LandThenConflictWhen = step == "prepare"
+            ? s => s.Phase == AtomicWritePhase.Execute && s.NextIndex == 0
+            : s => s.Phase == AtomicWritePhase.Execute && s.NextIndex == s.Entries.Count;
 
         var ex = Assert.CatchAsync(() => grain.ExecuteAsync(TreeId, entries));
 
@@ -153,6 +155,157 @@ public partial class AtomicWriteGrainTests
         await h.Lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
         await h.Registry.Received(1).MarkCommittedAsync(Arg.Any<Guid>());
         await h.Registry.DidNotReceive().MarkAbortedAsync(Arg.Any<Guid>());
+        await AssertRetentionArmedAsync(h, 1);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_landed_conflict_on_complete_is_confirmed_and_terminal_cleanup_runs_once()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("a", [1]), ("b", [2]));
+        var (grain, state, _) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.Completed;
+
+        await grain.ExecuteAsync(TreeId, entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+            Assert.That(state.Reads, Is.EqualTo(1), "the conflict is resolved by re-reading the row");
+            Assert.That(state.StaleEtagRejections, Is.Zero);
+        });
+        await AssertRetentionArmedAsync(h, 1);
+        await h.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+        await h.Registry.Received(1).ForgetAsync(Arg.Any<Guid>());
+        await h.Lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        await h.Registry.Received(1).MarkCommittedAsync(Arg.Any<Guid>());
+
+        // The activation is trusted again: an idempotent re-entry succeeds and
+        // neither rewrites the row nor re-arms retention.
+        var attemptsBefore = state.WriteAttempts;
+        await grain.ExecuteAsync(TreeId, entries);
+        Assert.That(state.WriteAttempts, Is.EqualTo(attemptsBefore));
+        await AssertRetentionArmedAsync(h, 1);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_landed_complete_conflict_with_a_failed_reread_is_cleaned_up_by_a_fresh_activation()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("a", [1]));
+        var (grain, state, context) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.Completed;
+        state.FailNextReadWith = new TimeoutException("read blip");
+
+        var ex = Assert.CatchAsync(() => grain.ExecuteAsync(TreeId, entries));
+
+        AssertTranslatedConflict(ex);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Completed), "the terminal write landed");
+        await AssertRetentionArmedAsync(h, 0);
+        await h.Registry.DidNotReceive().ForgetAsync(Arg.Any<Guid>());
+
+        // The fresh activation short-circuits on the durable Completed phase and
+        // must still arm retention and forget the decision, or the row leaks.
+        var (fresh, freshState, _) = h.Activate();
+        await fresh.ExecuteAsync(TreeId, entries);
+
+        Assert.That(freshState.WriteAttempts, Is.Zero, "a completed saga is never re-applied");
+        await AssertRetentionArmedAsync(h, 1);
+        await h.Registry.Received(1).ForgetAsync(Arg.Any<Guid>());
+        await h.Lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_complete_conflict_that_did_not_land_is_resumed_by_a_fresh_activation()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("a", [1]));
+        var (grain, state, context) = h.Activate();
+        state.FailWithoutLandingWhen = s => s.Phase == AtomicWritePhase.Completed;
+
+        var ex = Assert.CatchAsync(() => grain.ExecuteAsync(TreeId, entries));
+
+        AssertTranslatedConflict(ex);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Execute), "the terminal write did not land");
+
+        var (fresh, _, _) = h.Activate();
+        await fresh.ExecuteAsync(TreeId, entries);
+
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        await h.Lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        // The commit decision was recorded before the terminal write; the fresh
+        // activation re-records the same decision, which the registry treats
+        // idempotently. It never records the opposite one.
+        await h.Registry.Received().MarkCommittedAsync(Arg.Any<Guid>());
+        await h.Registry.DidNotReceive().MarkAbortedAsync(Arg.Any<Guid>());
+        await AssertRetentionArmedAsync(h, 1);
+    }
+
+    [Test]
+    public async Task ReceiveReminder_keepalive_on_a_completed_saga_arms_retention_and_forgets_the_decision()
+    {
+        var h = new EtagConflictHarness();
+        var txid = Guid.NewGuid();
+        h.Row.Value = new AtomicWriteState { Phase = AtomicWritePhase.Completed, TreeId = TreeId, TransactionId = txid };
+        var (grain, _, context) = h.Activate();
+
+        await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
+
+        await AssertRetentionArmedAsync(h, 1);
+        await h.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+        await h.Registry.Received(1).ForgetAsync(txid);
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+    }
+
+    [Test]
+    public async Task ExecuteGuardedAsync_landed_conflict_on_precondition_failed_is_confirmed_and_arms_retention()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("a", ScoredJson(1)));
+        var (grain, state, context) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.PreconditionFailed;
+
+        var outcome = await grain.ExecuteGuardedAsync(TreeId, entries, ScoreAtLeast(500));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(AtomicWriteOutcome.PreconditionFailed));
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.PreconditionFailed));
+            Assert.That(state.Reads, Is.EqualTo(1));
+        });
+        context.ReceivedWithAnyArgs(1).Deactivate(default!);
+        await AssertRetentionArmedAsync(h, 1);
+        await h.Reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+        await h.Lattice.DidNotReceive().SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteGuardedAsync_landed_precondition_failed_conflict_with_a_failed_reread_arms_retention_on_re_entry()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("a", ScoredJson(1)));
+        var (grain, state, _) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.PreconditionFailed;
+        state.FailNextReadWith = new TimeoutException("read blip");
+
+        var ex = Assert.CatchAsync(() => grain.ExecuteGuardedAsync(TreeId, entries, ScoreAtLeast(500)));
+
+        AssertTranslatedConflict(ex);
+        Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.PreconditionFailed), "the terminal write landed");
+        await AssertRetentionArmedAsync(h, 0);
+
+        var (fresh, freshState, _) = h.Activate();
+        var outcome = await fresh.ExecuteGuardedAsync(TreeId, entries, ScoreAtLeast(500));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(AtomicWriteOutcome.PreconditionFailed));
+            Assert.That(freshState.WriteAttempts, Is.Zero);
+        });
+        await AssertRetentionArmedAsync(h, 1);
+        await h.Lattice.DidNotReceive().SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
     }
 
     [Test]
@@ -226,7 +379,36 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
-    public async Task FinalizeAsync_landed_conflict_on_complete_is_not_reapplied_by_a_fresh_activation()
+    public async Task FinalizeAsync_landed_conflict_on_complete_is_confirmed_and_not_reapplied()
+    {
+        var h = new EtagConflictHarness();
+        var entries = MakeEntries(("k1", [1]));
+        var (parked, _, _) = h.Activate();
+        await parked.PrepareForCoordinatorAsync(
+            TreeId, entries, predicate: null, coordinatorKey: "xcoord-1", participants: new[] { TreeId });
+
+        var (grain, state, _) = h.Activate();
+        state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.Completed;
+
+        await grain.FinalizeAsync(commit: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+            Assert.That(state.Reads, Is.EqualTo(1));
+        });
+        await AssertRetentionArmedAsync(h, 1);
+
+        var (fresh, freshState, _) = h.Activate();
+        await fresh.FinalizeAsync(commit: true);
+
+        Assert.That(freshState.WriteAttempts, Is.Zero);
+        await h.Registry.Received(1).MarkCommittedAsync(Arg.Any<Guid>());
+        await h.Registry.DidNotReceive().MarkAbortedAsync(Arg.Any<Guid>());
+    }
+
+    [Test]
+    public async Task FinalizeAsync_landed_complete_conflict_with_a_failed_reread_is_cleaned_up_by_a_fresh_activation()
     {
         var h = new EtagConflictHarness();
         var entries = MakeEntries(("k1", [1]));
@@ -236,6 +418,7 @@ public partial class AtomicWriteGrainTests
 
         var (grain, state, context) = h.Activate();
         state.LandThenConflictWhen = s => s.Phase == AtomicWritePhase.Completed;
+        state.FailNextReadWith = new TimeoutException("read blip");
 
         var ex = Assert.CatchAsync(() => grain.FinalizeAsync(commit: true));
 
@@ -245,11 +428,13 @@ public partial class AtomicWriteGrainTests
             async () => await grain.FinalizeAsync(commit: true),
             Throws.TypeOf<LatticeStateWriteFailedException>(),
             "the conflicted activation fails fast");
+        await AssertRetentionArmedAsync(h, 0);
 
-        var (fresh, _, _) = h.Activate();
+        var (fresh, freshState, _) = h.Activate();
         await fresh.FinalizeAsync(commit: true);
 
-        Assert.That(h.Row.Value!.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        Assert.That(freshState.WriteAttempts, Is.Zero);
+        await AssertRetentionArmedAsync(h, 1);
         await h.Registry.Received(1).MarkCommittedAsync(Arg.Any<Guid>());
         await h.Registry.DidNotReceive().MarkAbortedAsync(Arg.Any<Guid>());
     }

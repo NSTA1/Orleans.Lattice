@@ -145,6 +145,34 @@ internal static class GrainStateWriteFaults
     }
 
     /// <summary>
+    /// Resolves whether a state write that reported an optimistic-concurrency
+    /// conflict actually landed, by re-reading the row. A storage SDK can retry
+    /// a write whose first attempt landed, and the retry then reports a conflict
+    /// against the ETag the landed attempt produced. The re-read also refreshes
+    /// the cached ETag. Returns <see langword="false"/> when the re-read itself
+    /// fails, the row is absent, or <paramref name="landed"/> rejects what was
+    /// read; the caller then treats the write as not landed and defers to a
+    /// fresh activation. On a successful re-read <see cref="IPersistentState{TState}.State"/>
+    /// holds the durable row either way.
+    /// </summary>
+    /// <typeparam name="T">The grain state type.</typeparam>
+    /// <param name="state">The persistent state whose write conflicted.</param>
+    /// <param name="landed">Decides whether the re-read row is the write that conflicted.</param>
+    internal static async Task<bool> TryConfirmLandedAsync<T>(IPersistentState<T> state, Func<T, bool> landed)
+    {
+        try
+        {
+            await state.ReadStateAsync();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return state.RecordExists && landed(state.State);
+    }
+
+    /// <summary>
     /// Whether an exception type lives in an assembly every Lattice client
     /// references: the BCL, the Orleans core and serialization assemblies, or
     /// the core Lattice library itself. A storage provider's assembly
