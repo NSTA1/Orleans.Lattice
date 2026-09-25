@@ -105,6 +105,22 @@ internal sealed partial class ViewMaintainerGrain(
     // deterministic without a real wall-clock wait.
     private TimeProvider _sourceIdentityClock = TimeProvider.System;
 
+    // Method-group delegate for the keepalive registration, materialised once per
+    // activation so the reminder-readiness retry envelope does not allocate a fresh
+    // delegate on every EnsureActiveAsync (which a suppressed ShipView maintainer
+    // re-runs on every keepalive tick).
+    private Func<Task>? _registerKeepaliveReminder;
+
+    /// <summary>
+    /// Inter-attempt backoff for the keepalive-reminder registration, which races
+    /// Orleans' asynchronous reminder-service startup. Defaults to
+    /// <see cref="ReminderServiceReadiness.DefaultRegistrationBackoff"/>; settable
+    /// only so a unit test can drive the retry budget without real delays, exactly
+    /// as <see cref="TreeDeletionGrain"/> exposes the same seam.
+    /// </summary>
+    internal IReadOnlyList<TimeSpan> KeepaliveRegistrationBackoff { get; set; }
+        = ReminderServiceReadiness.DefaultRegistrationBackoff;
+
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -167,11 +183,19 @@ internal sealed partial class ViewMaintainerGrain(
         // that reach a generation without coming through here.
         await EnsureGenerationNamingPinnedAsync();
 
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
+        // The keepalive reminder is what re-activates this maintainer after a silo
+        // restart, so it has no natural re-attempt seam and must not be dropped.
+        // Orleans' reminder service initialises asynchronously after the silo
+        // reaches Active, so a view created (or a maintainer started) inside that
+        // window sees the transient "Reminder Service is still initializing" fault.
+        // Wait it out with the same bounded retry the coordinator and tree-deletion
+        // keepalives use (#2086, #2579) rather than failing view creation; any other
+        // fault, and a transient that never clears within the budget, still surfaces
+        // with its original shape.
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            _registerKeepaliveReminder ??= RegisterKeepaliveReminderAsync,
+            KeepaliveRegistrationBackoff,
+            cancellationToken);
 
         var options = Options;
         ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
@@ -235,6 +259,13 @@ internal sealed partial class ViewMaintainerGrain(
         _activated = true;
         await DrainAsync(cancellationToken);
     }
+
+    private Task RegisterKeepaliveReminderAsync()
+        => reminderRegistry.RegisterOrUpdateReminder(
+            callingGrainId: context.GrainId,
+            reminderName: KeepaliveReminderName,
+            dueTime: TimeSpan.FromMinutes(1),
+            period: TimeSpan.FromMinutes(1));
 
     /// <summary>
     /// Re-hydrates this view's registration from the durable runtime-view registry
