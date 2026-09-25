@@ -145,6 +145,7 @@ internal sealed partial class BPlusLeafGrain
     /// expressed relative to it.
     /// </summary>
     private static int _replayConcurrencyCeiling;
+    private static int _starvationReplayPermits;
 
     /// <summary>
     /// Count of activations that have <b>entered</b> the wait on
@@ -538,6 +539,7 @@ internal sealed partial class BPlusLeafGrain
         {
             _replayConcurrencyGate = null;
             _replayConcurrencyCeiling = 0;
+            Volatile.Write(ref _starvationReplayPermits, 0);
             Volatile.Write(ref _withheldReplayPermits, 0);
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
@@ -1399,16 +1401,14 @@ internal sealed partial class BPlusLeafGrain
         => await AcquireReplayPermitAsync(enforceAdmissionBound: true, cancellationToken);
 
     /// <summary>
-    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with the
-    /// admission bound of issue #3284 optionally suppressed.
+    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with
+    /// non-queueing admission for background starvation drives.
     /// </summary>
     /// <param name="enforceAdmissionBound">
-    /// <see langword="false"/> for the WAL GC starvation drive, which is
-    /// <b>exempt</b>. The drive is already bounded upstream - one in flight per
-    /// activation, and a handful of touches per GC pass - so it cannot be the
-    /// source of an unbounded queue, and in the incident that produced issue
-    /// #3284 the GC drives were what <i>cleared</i> the wedge. Refusing them
-    /// would throttle the remedy rather than the load.
+    /// <see langword="false"/> for a starvation drive. Drives share the replay
+    /// gate but never queue, and hold at most half its configured permits
+    /// (rounded down, with a floor of one). Per-tree GC touch limits do not
+    /// bound their aggregate demand on this process-wide gate (issue #3480).
     /// </param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
@@ -1428,6 +1428,24 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        if (!enforceAdmissionBound)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryAcquireStarvationReplayPermit(gate))
+            {
+                _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+                throw new LatticeSaturatedException(
+                    "The per-silo WAL replay gate has no immediate starvation-drive capacity. "
+                    + "GC drives never queue and share at most half the configured replay permits "
+                    + "(at least one); retry after the GC cooldown.",
+                    state.State.TreeId,
+                    LatticeSaturationSource.ReplayPermitAdmission);
+            }
+
+            _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
+            return gate;
+        }
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is
@@ -1451,8 +1469,7 @@ internal sealed partial class BPlusLeafGrain
         // to drain, which is the only half that carries a latency term and the
         // only half that distinguishes a wide fan-out from a wedged one.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        if (enforceAdmissionBound
-            && !TryAdmitReplayPermitWaiter(
+        if (!TryAdmitReplayPermitWaiter(
                 options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
             && IsReplayPermitQueueNotDraining(options.WalReplayPermitMaxQueueWait))
         {
@@ -1551,6 +1568,42 @@ internal sealed partial class BPlusLeafGrain
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
         return gate;
+    }
+
+    /// <summary>
+    /// Reserves a process-wide GC slot and an immediately available shared
+    /// replay permit. A failed attempt retains neither and never joins a queue.
+    /// </summary>
+    internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate)
+    {
+        var limit = Math.Max(1, Volatile.Read(ref _replayConcurrencyCeiling) / 2);
+        while (true)
+        {
+            var held = Volatile.Read(ref _starvationReplayPermits);
+            if (held >= limit)
+                return false;
+            if (Interlocked.CompareExchange(ref _starvationReplayPermits, held + 1, held) == held)
+                break;
+        }
+
+        var acquired = false;
+        try
+        {
+            acquired = gate.Wait(0);
+            return acquired;
+        }
+        finally
+        {
+            if (!acquired)
+                Interlocked.Decrement(ref _starvationReplayPermits);
+        }
+    }
+
+    /// <summary>Returns both the shared replay permit and its GC reservation.</summary>
+    internal static void ReleaseStarvationReplayPermit(SemaphoreSlim gate)
+    {
+        gate.Release();
+        Interlocked.Decrement(ref _starvationReplayPermits);
     }
 
     /// <summary>
@@ -1802,15 +1855,10 @@ internal sealed partial class BPlusLeafGrain
             // exempt: a sweep that bypassed the gate would reintroduce the
             // unbounded-replay pathology of issue #2862 through a side door.
             //
-            // The token is passed but NOT belted with WaitAsync, unlike the work
-            // below, and the asymmetry is deliberate. The gate is an in-repo
-            // SemaphoreSlim, so its WaitAsync is guaranteed to honour the token
-            // and a belt would add nothing. It would also actively harm: a belt
-            // that abandoned this await could do so after the semaphore had been
-            // entered but before the assignment completed, producing a permit
-            // that is held by nobody and released by nothing. That is this very
-            // defect recreated in a narrower window, which is why the belt stops
-            // at the line below.
+            // Drives never enqueue behind that gate and have a process-wide
+            // concurrency cap, because per-tree touch limits do not bound their
+            // aggregate demand. Acquisition must stay in this frame so a timeout
+            // cannot abandon a successfully acquired permit before assignment.
             replayPermit = await AcquireReplayPermitAsync(enforceAdmissionBound: false, driveCts.Token);
 
             // The permit is acquired and released in THIS frame, and the work
@@ -1884,7 +1932,8 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            replayPermit?.Release();
+            if (replayPermit is not null)
+                ReleaseStarvationReplayPermit(replayPermit);
             _starvationDriveInFlight = false;
 
             // Disposing the source while detached work can still read its token

@@ -521,6 +521,24 @@ the leaf does once a trigger fires:
 > `checkpoint + 1`). A replay-budget or projection-age overrun against an
 > intact WAL never consults it - see the trigger list above.
 
+### Starvation-drive admission
+
+Background starvation drives share the same process-wide replay permits as
+leaf activations, but never queue for one. Across all trees, drives may hold
+at most half the configured replay ceiling, rounded down with a minimum of
+one. This leaves capacity for foreground and maintenance activations when
+the ceiling is greater than one; memory-pressure withholding can reduce the
+shared capacity further. At a ceiling of one, drives and activations still
+share that single permit.
+
+When no permit is immediately available, or the GC share is occupied, a drive
+raises `LatticeSaturatedException` with source `ReplayPermitAdmission` before
+replay starts. The GC sweep records the unsuccessful touch and retries after
+its cooldown; the refusal neither advances nor retires the leaf's retention
+pin. The activation queue's depth and drain policy are unchanged. Per-tree
+touch limits alone cannot bound the aggregate load of many trees on this
+process-wide gate (issue #3480).
+
 ### A live leaf whose projection has gone stale
 
 A leaf can find its projection stale while it is still activated. Its
