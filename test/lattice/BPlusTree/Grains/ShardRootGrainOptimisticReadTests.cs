@@ -21,13 +21,33 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 {
     private const string ShardKey = "optimistic-tree/0";
     private static readonly GrainId RootLeafId = GrainId.Create("leaf", "root-leaf");
+    private static readonly Guid LeafEpoch = Guid.NewGuid();
+
+    private static VersionedValue Stamped(byte[]? value, long generation = 1) => new()
+    {
+        Value = value,
+        LeafRoutingEpoch = LeafEpoch,
+        LeafRoutingGeneration = generation,
+    };
+
+    private static void SeedRoutingStamp(ShardRootGrain grain, GrainId leafId, Guid epoch, long generation)
+    {
+        // Arrange a warmed cache only. OwnershipTests drives the real serial
+        // warmup path separately so these focused epoch tests do not hide it.
+        var field = typeof(ShardRootGrain).GetField("_leafRoutingStamps",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(field, Is.Not.Null, "Ownership cache renamed; update the test arrangement.");
+        var stamps = (Dictionary<GrainId, (Guid, long)>)field!.GetValue(grain)!;
+        stamps[leafId] = (epoch, generation);
+    }
 
     private static (ShardRootGrain Grain, FakePersistentState<ShardRootState> State, IBPlusLeafGrain Leaf, ILeafCacheGrain Cache) CreateGrain(
         bool optimisticReads = true,
         bool seedRoot = true,
         IGrainContext? context = null,
         string shardKey = ShardKey,
-        IGrainFactory? factory = null)
+        IGrainFactory? factory = null,
+        bool warmStamp = true)
     {
         context ??= Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", shardKey));
@@ -43,6 +63,8 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var cache = Substitute.For<ILeafCacheGrain>();
         factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(cache);
         var leaf = Substitute.For<IBPlusLeafGrain>();
+        // Proof-focused tests take the raw-miss arm unless they arrange a value.
+        leaf.GetAsync(Arg.Any<string>()).Returns((byte[]?)null);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
         var optionsResolver = TestOptionsResolver.Create(
@@ -57,6 +79,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             NullLogger<ShardRootGrain>.Instance,
             TestMutationObservers.NoObservers());
 
+        if (warmStamp) SeedRoutingStamp(grain, RootLeafId, LeafEpoch, 1);
         return (grain, state, leaf, cache);
     }
 
@@ -65,27 +88,25 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public async Task TryGetOptimisticAsync_returns_validated_value_in_steady_state()
     {
-        var (grain, _, leaf, cache) = CreateGrain();
+        var (grain, _, leaf, cache) = CreateGrain(warmStamp: false);
         leaf.GetAsync("k1").Returns(Bytes("v1"));
 
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.True);
         Assert.That(Encoding.UTF8.GetString(result.Value!), Is.EqualTo("v1"));
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
-    public async Task TryGetOptimisticAsync_absent_key_defers_to_serial_even_when_routing_is_stable()
+    public async Task TryGetOptimisticAsync_absent_key_with_matching_ownership_stamp_validates()
     {
         var (grain, _, leaf, _) = CreateGrain();
-        leaf.GetAsync("missing").Returns((byte[]?)null);
+        leaf.GetWithVersionAsync("missing").Returns(Stamped(null));
 
-        // The primary leaf answers null for a key its moved-away seal hides, and a
-        // fold can seal a leaf without a shard-root routing mutation, so a null is
-        // never validated optimistically: the serial path adjudicates it.
         var result = await grain.TryGetOptimisticAsync("missing");
 
-        Assert.That(result.IsValidated, Is.False);
+        Assert.That(result.IsValidated, Is.True);
         Assert.That(result.Value, Is.Null);
     }
 
@@ -93,11 +114,12 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_reads_the_primary_leaf_not_the_leaf_cache()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
 
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.True);
+        await leaf.Received(1).GetWithVersionAsync("k1");
         await leaf.Received(1).GetAsync("k1");
         await cache.DidNotReceive().GetAsync(Arg.Any<string>());
     }
@@ -106,23 +128,23 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_concurrent_reads_are_in_flight_together_against_a_gated_leaf()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        var gateA = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var gateB = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        leaf.GetAsync("a").Returns(gateA.Task);
-        leaf.GetAsync("b").Returns(gateB.Task);
+        var gateA = new TaskCompletionSource<VersionedValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gateB = new TaskCompletionSource<VersionedValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        leaf.GetWithVersionAsync("a").Returns(gateA.Task);
+        leaf.GetWithVersionAsync("b").Returns(gateB.Task);
 
         var readA = grain.TryGetOptimisticAsync("a");
         var readB = grain.TryGetOptimisticAsync("b");
 
         // Both reads reached the leaf before either leaf reply arrived: they overlap
         // on the one shard root rather than being serialised behind each other.
-        await leaf.Received(1).GetAsync("a");
-        await leaf.Received(1).GetAsync("b");
+        await leaf.Received(1).GetWithVersionAsync("a");
+        await leaf.Received(1).GetWithVersionAsync("b");
         Assert.That(readA.IsCompleted, Is.False);
         Assert.That(readB.IsCompleted, Is.False);
 
-        gateB.SetResult(Bytes("vb"));
-        gateA.SetResult(Bytes("va"));
+        gateB.SetResult(Stamped(Bytes("vb")));
+        gateA.SetResult(Stamped(Bytes("va")));
         var resultA = await readA;
         var resultB = await readB;
 
@@ -136,8 +158,8 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_routing_mutation_between_snapshot_and_leaf_reply_forces_serial_retry()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        var gate = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        leaf.GetAsync("k1").Returns(gate.Task);
+        var gate = new TaskCompletionSource<VersionedValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        leaf.GetWithVersionAsync("k1").Returns(gate.Task);
 
         var read = grain.TryGetOptimisticAsync("k1");
 
@@ -146,7 +168,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         // epoch check alone must refuse: the routing it was resolved against moved.
         grain.BeginRoutingMutation();
         grain.EndRoutingMutation();
-        gate.SetResult(Bytes("stale"));
+        gate.SetResult(Stamped(Bytes("stale")));
 
         var result = await read;
 
@@ -158,13 +180,13 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_serial_fallback_after_routing_mutation_returns_the_present_value()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        var gate = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        leaf.GetAsync("k1").Returns(gate.Task);
+        var gate = new TaskCompletionSource<VersionedValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        leaf.GetWithVersionAsync("k1").Returns(gate.Task);
 
         var read = grain.TryGetOptimisticAsync("k1");
         grain.BeginRoutingMutation();
         grain.EndRoutingMutation();
-        gate.SetResult(null);
+        gate.SetResult(Stamped(null));
         var optimistic = await read;
 
         // The caller then takes the serial path against settled routing, which
@@ -185,7 +207,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
         grain.EndRoutingMutation();
     }
 
@@ -193,8 +215,8 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_leaf_fault_while_routing_moved_maps_to_serial_retry()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        var gate = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        leaf.GetAsync("k1").Returns(gate.Task);
+        var gate = new TaskCompletionSource<VersionedValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        leaf.GetWithVersionAsync("k1").Returns(gate.Task);
 
         var read = grain.TryGetOptimisticAsync("k1");
         grain.BeginRoutingMutation();
@@ -209,7 +231,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public void TryGetOptimisticAsync_leaf_fault_with_stable_routing_propagates()
     {
         var (grain, _, leaf, cache) = CreateGrain();
-        leaf.GetAsync("k1").Returns(Task.FromException<byte[]?>(new InvalidOperationException("boom")));
+        leaf.GetWithVersionAsync("k1").Returns(Task.FromException<VersionedValue>(new InvalidOperationException("boom")));
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.TryGetOptimisticAsync("k1"));
     }
@@ -218,12 +240,12 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     public async Task TryGetOptimisticAsync_flag_off_restores_serial_behaviour()
     {
         var (grain, _, leaf, cache) = CreateGrain(optimisticReads: false);
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
 
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -234,7 +256,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -250,7 +272,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -268,7 +290,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -287,7 +309,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
         Assert.ThrowsAsync<StaleShardRoutingException>(() => grain.GetAsync("k1"));
     }
 
@@ -300,7 +322,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var result = await grain.TryGetOptimisticAsync("k1");
 
         Assert.That(result.IsValidated, Is.False);
-        await leaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.GetAsync("k1"));
     }
 }

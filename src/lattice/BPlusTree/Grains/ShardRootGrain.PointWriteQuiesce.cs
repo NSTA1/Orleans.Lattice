@@ -97,6 +97,10 @@ internal sealed partial class ShardRootGrain
     /// <summary>Point writes currently admitted and not yet finished.</summary>
     private int _interleavedPointWritesInFlight;
 
+    // Unlike the in-flight count, this detects a write that both starts and
+    // finishes while a raw optimistic leaf read is awaiting its reply.
+    private long _pointWriteAdmissionEpoch;
+
     /// <summary>Batch writes counted only for deactivation, not serial-turn exclusion.</summary>
     private int _interleavedBatchWritesInFlight;
 
@@ -260,6 +264,7 @@ internal sealed partial class ShardRootGrain
 
     private Task InvokeAdmittedPointWrite(IIncomingGrainCallContext context)
     {
+        _pointWriteAdmissionEpoch++;
         _interleavedPointWritesInFlight++;
         Task invocation;
         try

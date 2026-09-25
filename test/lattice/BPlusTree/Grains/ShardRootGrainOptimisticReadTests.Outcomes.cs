@@ -24,6 +24,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         (string)LatticeMetrics.OutcomeOptimisticReadRoutingCacheMissTag.Value!,
         (string)LatticeMetrics.OutcomeOptimisticReadEpochChangedTag.Value!,
         (string)LatticeMetrics.OutcomeOptimisticReadAbsentTag.Value!,
+        (string)LatticeMetrics.OutcomeOptimisticReadLeafGenerationChangedTag.Value!,
     ];
 
     private static (MeterListener Listener, Dictionary<string, long> Totals) ListenForOptimisticReadOutcomes(string treeId)
@@ -84,7 +85,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         const string TreeId = "optimistic-outcome-validated-tree";
         var (listener, totals) = ListenForOptimisticReadOutcomes(TreeId);
         var (grain, _, leaf, _) = CreateGrain(shardKey: TreeId + "/0");
-        leaf.GetAsync("k1").Returns(Bytes("v1"));
+        leaf.GetWithVersionAsync("k1").Returns(Stamped(Bytes("v1")));
 
         var result = await grain.TryGetOptimisticAsync("k1");
         listener.Dispose();
@@ -95,12 +96,12 @@ public sealed partial class ShardRootGrainOptimisticReadTests
 
     [Test]
     [NonParallelizable]
-    public async Task Absent_key_records_the_absent_outcome()
+    public async Task Unstamped_absent_key_records_the_absent_outcome()
     {
         const string TreeId = "optimistic-outcome-absent-tree";
         var (listener, totals) = ListenForOptimisticReadOutcomes(TreeId);
         var (grain, _, leaf, _) = CreateGrain(shardKey: TreeId + "/0");
-        leaf.GetAsync("missing").Returns((byte[]?)null);
+        leaf.GetWithVersionAsync("missing").Returns(new VersionedValue());
 
         var result = await grain.TryGetOptimisticAsync("missing");
         listener.Dispose();
@@ -151,7 +152,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (grain, _, leaf, _) = CreateGrain(shardKey: "optimistic-ref-cache-tree/0", factory: factory);
-        leaf.GetAsync(Arg.Any<string>()).Returns(Bytes("v"));
+        leaf.GetWithVersionAsync(Arg.Any<string>()).Returns(Stamped(Bytes("v")));
 
         for (var i = 0; i < 5; i++)
         {

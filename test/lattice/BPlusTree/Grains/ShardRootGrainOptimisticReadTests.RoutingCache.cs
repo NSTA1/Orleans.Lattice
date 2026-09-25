@@ -50,6 +50,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         factory.GetGrain<ILeafCacheGrain>(Arg.Is<string>(k => k == leftKey), Arg.Any<string>()).Returns(left);
         factory.GetGrain<ILeafCacheGrain>(Arg.Is<string>(k => k == rightKey), Arg.Any<string>()).Returns(right);
         var rightLeaf = Substitute.For<IBPlusLeafGrain>();
+        rightLeaf.GetAsync(Arg.Any<string>()).Returns((byte[]?)null);
         factory.GetGrain<IBPlusLeafGrain>(RightLeafId).Returns(rightLeaf);
 
         var optionsResolver = TestOptionsResolver.Create(
@@ -72,7 +73,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     {
         var (grain, root, left, right, rightLeaf) = CreateGrainWithInternalRoot();
         root.GetRoutingTableAsync().Returns(Task.FromResult(PostSplitRouting));
-        rightLeaf.GetAsync("z").Returns(Encoding.UTF8.GetBytes("vz"));
+        rightLeaf.GetWithVersionAsync("z").Returns(Stamped(Encoding.UTF8.GetBytes("vz")));
 
         var first = await grain.TryGetOptimisticAsync("z");
         var second = await grain.TryGetOptimisticAsync("z");
@@ -85,7 +86,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         await root.DidNotReceive().GetRoutingTableAsync();
         await left.DidNotReceive().GetAsync(Arg.Any<string>());
         await right.DidNotReceive().GetAsync(Arg.Any<string>());
-        await rightLeaf.DidNotReceive().GetAsync(Arg.Any<string>());
+        await rightLeaf.DidNotReceive().GetWithVersionAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -94,8 +95,9 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         var (grain, root, _, right, rightLeaf) = CreateGrainWithInternalRoot();
         root.GetRoutingTableAsync().Returns(Task.FromResult(PostSplitRouting));
         right.GetAsync("z").Returns(Encoding.UTF8.GetBytes("vz"));
-        rightLeaf.GetAsync("z").Returns(Encoding.UTF8.GetBytes("vz"));
+        rightLeaf.GetWithVersionAsync("z").Returns(Stamped(Encoding.UTF8.GetBytes("vz")));
 
+        await grain.TryGetOptimisticAsync("z");
         await grain.GetAsync("z");
         var optimistic = await grain.TryGetOptimisticAsync("z");
 

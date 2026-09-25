@@ -303,7 +303,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.view.source_backpressure` | counter | `view`, `state`, `tenant` | MaterialisedViews | Source back-pressure self-throttle (rate). Counts throttled drain passes of every trigger, read-your-writes barrier drains included; only background timer ticks are also deferred |
 | `orleans.lattice.get.duration` | histogram (ms) | `tree`, `tenant` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
 | `orleans.lattice.get.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | Overview | GetAsync stage breakdown p95 (ms) |
-| `orleans.lattice.shard_root.optimistic_read.outcomes` | counter | `tree`, `outcome`, `tenant` | Overview | Shard-root optimistic point reads by outcome (reads/s) |
+| `orleans.lattice.shard_root.optimistic_read.outcomes` | counter | `tree`, `outcome`, `tenant` | Overview | Shard-root optimistic point reads by outcome (reads/s); includes leaf-generation retries and validated absences |
 | `orleans.lattice.get_many.duration` | histogram (ms) | `tree`, `tenant` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
 | `orleans.lattice.get_many.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | Overview | GetManyAsync stage breakdown p95 (ms) |
 | `orleans.lattice.exists.duration` | histogram (ms) | `tree`, `tenant` | Overview | ExistsAsync / GetWithVersionAsync envelope p95 (ms) |
