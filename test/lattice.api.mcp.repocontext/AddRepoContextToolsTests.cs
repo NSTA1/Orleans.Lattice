@@ -151,6 +151,35 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
+    public void AddRepoContextTools_registers_the_ingest_reporter_the_runner_takes_optionally()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            // The runner takes the reporter as an optional constructor parameter, so an
+            // unregistered reporter would silently default to null and the whole ingest
+            // family would be absent from /metrics - the exact blindness issue #3151
+            // exists to remove.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextIngestReporter)
+                    && d.Lifetime == ServiceLifetime.Singleton),
+                Is.True,
+                "the ingest reporter must be registered as a singleton, or the runner's optional "
+                + "parameter silently defaults to null and every ingest instrument is absent");
+
+            Assert.That(provider.GetService<RepoContextIngestReporter>(), Is.Not.Null);
+            Assert.That(
+                provider.GetService<RepoContextIngestReporter>(),
+                Is.SameAs(provider.GetService<RepoContextIngestReporter>()),
+                "one instance, so every pass charges one meter and each repository is primed once");
+        });
+    }
+
+    [Test]
     public void AddRepoContextTools_registers_the_coverage_probe_reporter_both_consumers_take_optionally()
     {
         var services = new ServiceCollection();
