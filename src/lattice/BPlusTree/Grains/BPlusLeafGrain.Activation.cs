@@ -1834,7 +1834,7 @@ internal sealed partial class BPlusLeafGrain
         // await into a method that previously had none before this point, so the
         // pair is re-tested HERE rather than above the resolve. Testing it above
         // and setting it below would span an await and could admit two drives.
-        if (_starvationDriveInFlight)
+        if (_starvationDriveInFlight || _warmRescueInFlight)
         {
             return LeafStarvationDriveOutcome.AlreadyDriving;
         }
@@ -2054,7 +2054,17 @@ internal sealed partial class BPlusLeafGrain
         int partitionCount,
         CancellationToken cancellationToken)
     {
-        var advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
+        bool advanced;
+        try
+        {
+            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
+        }
+        catch (LeafProjectionStaleException)
+        {
+            if (await TryRescueWarmStaleLeafAsync(partitionCount, cancellationToken))
+                return LeafStarvationDriveOutcome.Lifted;
+            throw;
+        }
 
         // Issue #3476: make the replay's advance DURABLE before anything below
         // republishes the pin. The replay advances the checkpoint through
@@ -3211,12 +3221,16 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
+        _warmCacheReplaysInFlight++;
+        if (_warmCacheReplaysInFlight != 1)
+            _warmCacheReplayFailed = true;
         try
         {
             return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
         }
         catch (OperationCanceledException)
         {
+            _warmCacheReplayFailed = true;
             // Bank whatever this replay absorbed before it was cut short. This
             // is the ONLY reachable banking point on this path: Orleans does not
             // run OnDeactivateAsync when OnActivateAsync throws, and a cancelled
@@ -3264,6 +3278,15 @@ internal sealed partial class BPlusLeafGrain
             }
 
             throw;
+        }
+        catch (Exception fault) when (fault is not LeafProjectionStaleException)
+        {
+            _warmCacheReplayFailed = true;
+            throw;
+        }
+        finally
+        {
+            _warmCacheReplaysInFlight--;
         }
     }
 
@@ -3395,6 +3418,7 @@ internal sealed partial class BPlusLeafGrain
         var deferredOffsets = new DeferredOffsetLedger(partitionCount);
         var perPartitionMaxApplied = new long[partitionCount];
         for (var p = 0; p < partitionCount; p++) perPartitionMaxApplied[p] = -1L;
+        var warmReplayProven = true;
 
         // Pass-1 absorb frontier. A deferred terminal is only safe to apply in
         // place while pass 1 is still running once every OTHER partition has
@@ -3455,6 +3479,8 @@ internal sealed partial class BPlusLeafGrain
             // window of every partition.
             long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
             var checkpoint = checkpointOverride ?? persistedCheckpoint;
+            warmReplayProven &= CanProveWarmReplayStart(partition, checkpoint);
+            perPartitionMaxApplied[partition] = checkpoint;
 
             // Durable-frontier fall-off guard (issue #945: silent durable data
             // loss). The cold-cache-reset override (checkpointOverride = -1, set
@@ -3711,6 +3737,9 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        if (warmReplayProven && !_warmCacheTopologyChanged && _warmCacheHydrations == 1
+            && !_warmCacheReplayFailed && _warmCacheReplaysInFlight == 1)
+            _warmCacheProvenOffsets = perPartitionMaxApplied;
         return anyAdvanced;
     }
 
@@ -6207,6 +6236,10 @@ internal sealed partial class BPlusLeafGrain
             foreach (var entry in slice)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // Maxima alone cannot certify the cache: a provider may return a
+                // surviving suffix after trimming between classification and read.
+                if (entry.Offset != maxApplied + 1)
+                    _warmCacheReplayFailed = true;
 
                 if (ShouldApplyDuringReplay(
                     entry.Mutation,

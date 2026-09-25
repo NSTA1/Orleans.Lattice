@@ -544,15 +544,67 @@ process-wide gate (issue #3480).
 A leaf can find its projection stale while it is still activated. Its
 in-memory cache was built before the WAL was trimmed, so it keeps
 serving reads and taking writes, but its *persisted* checkpoint needs
-an offset the trim removed. Nothing automatic repairs that leaf: the
-recovery paths the policy table marks as not yet integrated are the
-only ones that could, and replaying from the persisted checkpoint can
-never succeed, because the WAL tail only moves forward.
+an offset the trim removed. Before latching this fault, the starvation
+drive attempts a conservative **warm-cache rescue**. This is not a cold
+rebuild: it writes a snapshot of the surviving cache only when that
+activation can prove the entire claimed prefix is present.
+
+Eligibility starts with a successfully hydrated snapshot covering every
+configured partition. A successful replay retains its independently
+scanned, contiguous per-partition frontier; foreground checkpoint hints
+are never evidence for that frontier. Later hydration, reset, topology
+changes, failed or overlapping replay, and gaps in the observed WAL
+sequence invalidate the proof. Each partition's activation anchor must
+be at or behind its persisted checkpoint, and its current checkpoint
+must not exceed the proven frontier. The live WAL must still cover
+everything after the proposed snapshot claim.
+
+The drive also excludes unresolved transactions, active mutations,
+another capture, split/merge activity, retirement, and moved-away seals.
+It holds the topology gate across snapshot storage and checkpoint
+persistence; sealing and unsealing use that same gate. The snapshot
+claim is fixed before capture, and eligibility is rechecked immediately
+before copying the rows. Only a store-confirmed kept snapshot permits
+the checkpoint persist; the drive then awaits durable-pin publication
+before reporting success. A failure after the snapshot was kept propagates
+rather than claiming that nothing was saved. Storage is addressed using
+the leaf's bound tree identity, never an identity taken from a replayed
+mutation.
+
+Every rescue decline emits one structured warning per reason per
+activation, with `LeafId`, `TreeId`, and typed `DeclineReason` fields:
+
+| Reason | Evidence that is missing or blocks rescue |
+|---|---|
+| `UnprovenBaseline` | No fully covering snapshot-seeded successful replay frontier. |
+| `CacheRehydratedOrReset` | The original cache was replaced or its replay barrier retired. |
+| `TopologyChanged` | This activation attempted a topology change after its baseline. |
+| `ReplayIncomplete` | Replay failed, overlapped, remains active, or has not satisfied its barrier. |
+| `UnknownPartition` | The stale partition or complete partition width is not established. |
+| `CheckpointUnproven` | A current checkpoint exceeds its independently proven frontier. |
+| `ActivationAnchorAhead` | A persisted checkpoint is behind the activation's snapshot anchor. |
+| `WalGapBeyondCache` | The oldest surviving WAL offset is beyond the claimed prefix plus one. |
+| `PendingTransactions` | Prepared, shadowed, or unresolved replay work remains. |
+| `MutationInFlight` | An admitted mutation has not finished. |
+| `CaptureInFlight` | Another snapshot capture owns the capture slot. |
+| `SplitInFlight` | A split is interrupted or the topology gate is occupied. |
+| `RetiredOrSealed` | The leaf is retired or holds moved-away slots. |
+| `CaptureDeclined` | Snapshot storage did not acknowledge a kept capture. |
+| `StorageFailure` | A probe or capture failed before kept coverage was acknowledged. |
+
+Cold, already-lost, partially snapshot-covered, or otherwise unproven
+caches still decline. This tree-agnostic path also covers derived trees,
+but does not trigger their re-derivers and cannot reconstruct lost data.
+The proof is activation-local and is never serialized or reconstructed
+from a persisted checkpoint. A cache already warm before this code was
+deployed has no recorded proof and declines with `UnprovenBaseline`.
+Restarting to deploy the change discards that cache; this path cannot
+recover it.
 
 Two drivers still reach such a leaf: the coverage-lag timer, which
 drives a leaf whose checkpoint has stopped advancing, and the WAL GC's
-blocked-leaf sweep. The first starvation drive that finds the
-projection stale logs one `Error` naming the leaf and tree, and latches
+blocked-leaf sweep. If the rescue declines, the first starvation drive
+logs one `Error` naming the leaf and tree, and latches
 that verdict for the activation (issue #3450). While the
 persisted checkpoints are unchanged:
 
