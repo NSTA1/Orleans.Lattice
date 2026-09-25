@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Storage.File;
 
@@ -298,6 +300,209 @@ internal sealed class FileWalShard : IDisposable
                 throw UnaffordableRead(entry, ex);
             }
         }
+    }
+
+    /// <summary>
+    /// Bytes read from the front of a record to classify it for a filtered read
+    /// (issue #3565). The routing slots come first in an encoded record, so this
+    /// covers any record whose key is shorter than about a kilobyte; a longer
+    /// key is classified by a full decode instead, which is slower but gives the
+    /// same answer.
+    /// </summary>
+    internal const int RoutingPrefixBytes = 1024;
+
+    /// <summary>
+    /// Snapshots the records of the window
+    /// <c>(<paramref name="fromOffsetExclusive"/>, <paramref name="toOffsetInclusive"/>]</c>
+    /// that a reader owning <paramref name="filter"/> needs (issue #3565), under
+    /// the rule <see cref="IWalStorageProvider.ReadFilteredAsync"/> documents:
+    /// every examined record the filter does not exclude, decoded in full, and
+    /// the last examined record routing-only when it is excluded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With a <paramref name="routing"/> reader, a record is classified from the
+    /// first <see cref="RoutingPrefixBytes"/> of its payload, read into a stack
+    /// buffer, and an excluded record is skipped without its payload ever being
+    /// read in full or decoded. So an excluded record costs one short read from
+    /// the page cache and no allocation at all. Without one, each record is
+    /// decoded and then judged, which returns the same records at the cost the
+    /// push-down exists to avoid.
+    /// </para>
+    /// <para>
+    /// The page is bounded exactly as <see cref="SnapshotDecodedAsync{T}"/>
+    /// bounds one - by <paramref name="maxEntries"/>, by
+    /// <paramref name="maxBytes"/> of examined payload narrowed by memory
+    /// occupancy, and by the quarter-and-retry on an allocation failure - so a
+    /// filtered page never examines more than an unfiltered one would have read.
+    /// </para>
+    /// <para>
+    /// <b>The returned arrays are rented</b> from <see cref="ArrayPool{T}.Shared"/>
+    /// and owned by the caller, who must return both once it has consumed the
+    /// first <c>Count</c> elements - unless they are empty, which is what the
+    /// method returns when the window holds nothing.
+    /// </para>
+    /// </remarks>
+    /// <param name="fromOffsetExclusive">Exclusive lower bound of the window.</param>
+    /// <param name="toOffsetInclusive">Inclusive upper bound of the window; no record above it is examined.</param>
+    /// <param name="maxEntries">Maximum records to examine; must be at least <c>1</c>.</param>
+    /// <param name="maxBytes">Maximum payload bytes to examine; must be at least <c>1</c>. See <see cref="SnapshotAsync"/>.</param>
+    /// <param name="filter">The reader's ownership.</param>
+    /// <param name="routing">Classifies a record from its prefix, or <see langword="null"/> to judge every record from a full decode.</param>
+    /// <param name="decode">Decodes a payload in full.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    internal async Task<(long[] Offsets, WalRecord[] Records, int Count)> SnapshotFilteredAsync(
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int maxEntries,
+        long maxBytes,
+        WalKeyFilter filter,
+        WalRecordRoutingReader? routing,
+        Func<ReadOnlySequence<byte>, WalRecord> decode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(decode);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
+        }
+
+        if (maxBytes < 1L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            if (fromOffsetExclusive == long.MaxValue || toOffsetInclusive <= fromOffsetExclusive)
+            {
+                return (Array.Empty<long>(), Array.Empty<WalRecord>(), 0);
+            }
+
+            var startIndex = LowerBound(fromOffsetExclusive + 1);
+            var endIndex = toOffsetInclusive == long.MaxValue
+                ? _entries.Count
+                : LowerBound(toOffsetInclusive + 1);
+            var available = endIndex - startIndex;
+            if (available <= 0)
+            {
+                return (Array.Empty<long>(), Array.Empty<WalRecord>(), 0);
+            }
+
+            var budget = NarrowBudget(maxBytes);
+            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
+            return DecodeFilteredPage(startIndex, take, filter, routing, decode);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private (long[] Offsets, WalRecord[] Records, int Count) DecodeFilteredPage(
+        int startIndex,
+        int take,
+        WalKeyFilter filter,
+        WalRecordRoutingReader? routing,
+        Func<ReadOnlySequence<byte>, WalRecord> decode)
+    {
+        // Rented at the window's width but handed back holding only what was
+        // kept: on a partition shared by many leaves most of the window is
+        // excluded, so nothing here is allocated in proportion to it.
+        var offsets = ArrayPool<long>.Shared.Rent(take);
+        var records = ArrayPool<WalRecord>.Shared.Rent(take);
+        var transferred = false;
+        Span<byte> prefix = stackalloc byte[RoutingPrefixBytes];
+        PooledPayloadSequence? chunks = null;
+        try
+        {
+            while (true)
+            {
+                var entry = default(IndexEntry);
+                var count = 0;
+                try
+                {
+                    for (var i = 0; i < take; i++)
+                    {
+                        entry = _entries[startIndex + i];
+                        var last = i == take - 1;
+
+                        if (routing is not null)
+                        {
+                            var head = prefix[..Math.Min(entry.PayloadLength, RoutingPrefixBytes)];
+                            ReadAt(entry.Position, head);
+                            if (routing.TryClassify(head, in filter, out var excluded) && excluded)
+                            {
+                                if (!last)
+                                {
+                                    continue;
+                                }
+
+                                if (routing.TryReadRoutingOnly(head, out var routingOnly))
+                                {
+                                    offsets[count] = entry.Offset;
+                                    records[count++] = routingOnly;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        chunks ??= new PooledPayloadSequence();
+                        chunks.Fill(_stream!, entry.Position, entry.PayloadLength);
+                        var record = decode(chunks.Sequence);
+                        if (filter.Excludes(record.Op, record.Key))
+                        {
+                            if (!last)
+                            {
+                                continue;
+                            }
+
+                            record = WalFilteredRead.RoutingOnly(in record);
+                        }
+
+                        offsets[count] = entry.Offset;
+                        records[count++] = record;
+                    }
+
+                    transferred = true;
+                    return (offsets, records, count);
+                }
+                catch (OutOfMemoryException) when (take > 1)
+                {
+                    records.AsSpan(0, count).Clear();
+                    take = NarrowAfterAllocationFailure(take);
+                }
+                catch (OutOfMemoryException ex)
+                {
+                    throw UnaffordableRead(entry, ex);
+                }
+            }
+        }
+        finally
+        {
+            chunks?.Dispose();
+            if (!transferred)
+            {
+                ArrayPool<long>.Shared.Return(offsets);
+                ArrayPool<WalRecord>.Shared.Return(records, clearArray: true);
+            }
+        }
+    }
+
+    private void ReadAt(long position, Span<byte> destination)
+    {
+        if (destination.IsEmpty)
+        {
+            return;
+        }
+
+        var stream = _stream!;
+        stream.Seek(position, SeekOrigin.Begin);
+        stream.ReadExactly(destination);
     }
 
     private (long[] Offsets, byte[][] Payloads) MaterialiseOwnedPage(int startIndex, int take)

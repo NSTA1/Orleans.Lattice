@@ -3,7 +3,9 @@ using Microsoft.Extensions.Options;
 using NUnit.Framework;
 using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.ContractProbes;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
+using Orleans.Serialization.Session;
 
 namespace Orleans.Lattice.Storage.File.Tests;
 
@@ -60,6 +62,11 @@ public sealed class FileWalStorageProviderContractTests : WalStorageProviderCont
     {
         var root = _root;
         var serializer = _serializer;
+        var routing = new WalRecordRoutingReader(_services.GetRequiredService<SerializerSessionPool>());
+
+        // The shape AddFileWalStorage registers, routing reader included, so the
+        // suite exercises the filtered read's prefix classification (issue
+        // #3565) rather than only its full-decode fallback.
         return Task.FromResult<IWalStorageProviderContractProbe>(
             new WalStorageProviderContractProbe(
                 () => new FileWalStorageProvider(
@@ -68,7 +75,10 @@ public sealed class FileWalStorageProviderContractTests : WalStorageProviderCont
                         RootDirectory = root,
                         FlushToDisk = true,
                     }),
-                    serializer),
+                    serializer,
+                    GcWalReadPressureGovernor.Instance,
+                    PhysicalFileWalFileSystem.Instance,
+                    routing),
                 serializer,
                 durable: true));
     }

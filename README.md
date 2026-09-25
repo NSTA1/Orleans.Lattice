@@ -346,7 +346,7 @@ For the complete catalogues:
 - [FEATURES.md](FEATURES.md) - every capability, grouped by concern, with its docs and sample.
 - [PACKAGES.md](PACKAGES.md) - every package, grouped by the seam it fills.
 - [reference-architecture.md](reference-architecture.md) - the active-active, cross-region deployment blueprint and its parameterised deployment kit.
-- [llms.txt](llms.txt) - the documentation index for AI agents and LLM tooling.
+- [llms.txt](llms.txt) - the documentation index for AI agents and LLM tooling. The documentation site generates the complete index from its documentation map, and publishes every page as markdown too, at the same address ending in `.md`.
 
 ## Performance Characteristics
 

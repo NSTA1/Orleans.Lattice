@@ -158,6 +158,47 @@ public sealed partial class AzureTableWalStorageProvider
             return payload;
         }
 
+        var compressor = ResolveDecompressor(payload, compressionTag, out var uncompressedLength);
+        var result = new byte[uncompressedLength];
+        compressor.Decompress(
+            payload.AsSpan(CompressedLengthPrefixBytes),
+            result,
+            uncompressedLength);
+        return result;
+    }
+
+    /// <summary>
+    /// Pooled counterpart of <see cref="DecompressPayload"/> for the filtered
+    /// read (issue #3565): a compressed row is inflated into a buffer rented
+    /// from <see cref="ArrayPool{T}.Shared"/>, which the caller owns through
+    /// <paramref name="rented"/> and must return, so a row that turns out to be
+    /// excluded costs no allocation. An uncompressed row is returned in place and
+    /// leaves <paramref name="rented"/> <see langword="null"/>.
+    /// </summary>
+    /// <exception cref="NotSupportedException">See <see cref="DecompressPayload"/>.</exception>
+    /// <exception cref="InvalidDataException">See <see cref="DecompressPayload"/>.</exception>
+    private ReadOnlySpan<byte> DecompressPayloadPooled(byte[]? payload, byte compressionTag, out byte[]? rented)
+    {
+        rented = null;
+        if (compressionTag == (byte)LatticeCompression.None || payload is null || payload.Length == 0)
+        {
+            return payload;
+        }
+
+        var compressor = ResolveDecompressor(payload, compressionTag, out var uncompressedLength);
+        rented = ArrayPool<byte>.Shared.Rent(uncompressedLength);
+        var destination = rented.AsSpan(0, uncompressedLength);
+        compressor.Decompress(payload.AsSpan(CompressedLengthPrefixBytes), destination, uncompressedLength);
+        return destination;
+    }
+
+    /// <summary>
+    /// Validates a compressed row's length prefix and resolves the compressor
+    /// its tag names, shared by the owned and pooled decompression paths so the
+    /// two refuse exactly the same rows.
+    /// </summary>
+    private ILatticeCompressor ResolveDecompressor(byte[] payload, byte compressionTag, out int uncompressedLength)
+    {
         if (!_compressors.TryGetValue(compressionTag, out var compressor))
         {
             throw new NotSupportedException(
@@ -171,7 +212,7 @@ public sealed partial class AzureTableWalStorageProvider
                 $"Compressed WAL payload is {payload.Length} bytes, shorter than the {CompressedLengthPrefixBytes}-byte uncompressed-length prefix; the row is corrupt.");
         }
 
-        var uncompressedLength = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        uncompressedLength = BinaryPrimitives.ReadInt32LittleEndian(payload);
         if (uncompressedLength < 0)
         {
             throw new InvalidDataException(
@@ -185,12 +226,7 @@ public sealed partial class AzureTableWalStorageProvider
                 + $"{MaxDecompressedRowBytes}-byte decompression ceiling; the row is corrupt or hostile.");
         }
 
-        var result = new byte[uncompressedLength];
-        compressor.Decompress(
-            payload.AsSpan(CompressedLengthPrefixBytes),
-            result,
-            uncompressedLength);
-        return result;
+        return compressor;
     }
 
     /// <summary>

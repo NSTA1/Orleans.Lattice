@@ -93,30 +93,26 @@ public partial class BPlusLeafGrainTests
                 .Returns(_ => Task.FromResult(Head));
             coord.ReadSliceAsync(
                     Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var fromExclusive = call.ArgAt<long>(0);
-                    var toInclusive = call.ArgAt<long>(1);
-                    var budget = call.ArgAt<int>(2);
-                    var slice = new List<CommitLogSliceEntry>();
-                    foreach (var e in _entries)
-                    {
-                        if (e.Offset <= fromExclusive) continue;
-                        if (e.Offset > toInclusive) break;
-                        slice.Add(e);
-                        if (slice.Count >= budget) break;
-                    }
+                .Returns(call => Serve(ReplaySliceStub.Unfiltered(
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2))));
 
-                    var hook = OnRead;
-                    return hook is null
-                        ? Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice)
-                        : Hooked(hook, slice);
-                });
+            // A bounded leaf pushes its ownership down (issue #3565), so the
+            // filtered overload serves the same entries by the reference rule.
+            coord.ReadSliceAsync(
+                    Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>())
+                .Returns(call => Serve(ReplaySliceStub.Filtered(
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2), call.ArgAt<WalKeyFilter>(3))));
 
             Coordinator = coord;
 
+            Task<IReadOnlyList<CommitLogSliceEntry>> Serve(IReadOnlyList<CommitLogSliceEntry> slice)
+            {
+                var hook = OnRead;
+                return hook is null ? Task.FromResult(slice) : Hooked(hook, slice);
+            }
+
             static async Task<IReadOnlyList<CommitLogSliceEntry>> Hooked(
-                Func<Task> hook, List<CommitLogSliceEntry> slice)
+                Func<Task> hook, IReadOnlyList<CommitLogSliceEntry> slice)
             {
                 await hook();
                 return slice;

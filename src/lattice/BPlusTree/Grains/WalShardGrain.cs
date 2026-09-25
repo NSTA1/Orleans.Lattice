@@ -1190,39 +1190,8 @@ internal sealed partial class WalShardGrain(
             {
                 break;
             }
-            // Recover the declared merge mode durably. Since wire id 26
-            // the encoded WAL record persists the authored mode, so a
-            // record decoded by the storage provider carries it on
-            // walEntry.Mutation.Mode - the authoritative source for the
-            // replay/fold. Only when the durable mode is the enum default
-            // (a plain LWW write, or a legacy record authored before the
-            // slot was tagged) do we consult the resolver, preserving the
-            // historical behaviour and the cross-cluster ship typing.
-            // This stops a non-replicated CRDT tree's delta-only record
-            // from replaying as an LWW null (issue #926): the resolver
-            // returns null -> LwwRegister for any tree it does not know,
-            // which previously clobbered the durable mode here.
-            var mode = walEntry.Mutation.Mode != LatticeMergeMode.LwwRegister
-                ? walEntry.Mutation.Mode
-                : modeResolver.Resolve(walEntry.Mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
-            // The WAL is durability-only at the core layer; the origin
-            // cluster id is stamped upstream on the mutation itself by
-            // the replication observer (when the replication package is
-            // registered). Single-cluster hosts have no cluster id, so
-            // the converter receives an empty string and the resulting
-            // record's OriginClusterId is empty too.
-            // The mutation's own OriginClusterId wins when present (a
-            // remote-replay path stamped it before reaching the WAL).
-            // When it is null - i.e. a foreground commit on a host
-            // where the replication observer has not yet stamped - the
-            // resolver supplies the local cluster id. Single-cluster
-            // hosts get string.Empty from the default resolver and the
-            // resulting record's OriginClusterId is empty.
-            var entry = WalRecordConverter.ToWalRecord(
-                walEntry.Mutation,
-                mode,
-                originClusterId: clusterIdResolver.Resolve(walEntry.Mutation.TreeId));
-            collected.Add(new WalShardSequencedEntry { Sequence = walEntry.Offset, Entry = entry });
+
+            collected.Add(ToSequencedEntry(in walEntry));
             if (collected.Count >= maxEntries)
             {
                 break;
@@ -1235,6 +1204,187 @@ internal sealed partial class WalShardGrain(
             Entries = collected,
             NextSequence = nextSequence,
         };
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<WalShardPage> ReadFilteredAsync(
+        long fromSequence,
+        long toSequenceInclusive,
+        int maxEntries,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+
+        if (fromSequence < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(fromSequence),
+                fromSequence,
+                "Sequence numbers start at 0; negative values are not valid.");
+        }
+
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per page.");
+        }
+
+        EnsureInitialized();
+
+        // The durable-contiguous clamp is applied to the window the provider
+        // EXAMINES, not only to what it returns as ReadAsync does. This read
+        // drops excluded entries, so a page reports how far it scanned only
+        // through its LAST entry. Were the provider allowed to examine past the
+        // watermark, whatever it dropped there would be invisible to
+        // NextSequence, and a page that kept nothing below the watermark would
+        // read as the end of the log. Bounding the window keeps the last entry
+        // examined exposable, which is what lets the trailing routing-only
+        // entry surface on this page.
+        var durableTail = DurableContiguousTailOffset();
+        var upperInclusive = Math.Min(toSequenceInclusive, durableTail - 1);
+        if (fromSequence > upperInclusive)
+        {
+            return WalShardPage.Empty(fromSequence);
+        }
+
+        // Pooled rather than a List sized to the window: on a partition shared
+        // by many leaves a page keeps little of what it examined, so only the
+        // exact-length result below is allocated.
+        var buffer = ArrayPool<WalShardSequencedEntry>.Shared.Rent(Math.Min(maxEntries, 64));
+        var count = 0;
+        try
+        {
+            // The rule is re-applied over the provider's output rather than
+            // trusted. It is idempotent over a conforming provider, and it is
+            // what guarantees no excluded payload crosses this grain boundary
+            // from one that is not - a third-party override that ignores the
+            // filter, say.
+            var delivered = 0;
+            var trailingExcluded = false;
+            var trailing = default(WalEntry);
+            await foreach (var walEntry in _provider
+                .ReadFilteredAsync(
+                    _treeId, _shardIndex, fromSequence - 1, upperInclusive, maxEntries, filter, cancellationToken)
+                .ConfigureAwait(true))
+            {
+                if (walEntry.Offset > upperInclusive
+                    || !WalShippingWatermark.IsOffsetExposable(walEntry.Offset, durableTail))
+                {
+                    break;
+                }
+
+                delivered++;
+                if (filter.Excludes(walEntry.Mutation.Kind, walEntry.Mutation.Key))
+                {
+                    trailingExcluded = true;
+                    trailing = walEntry;
+                }
+                else
+                {
+                    trailingExcluded = false;
+                    Append(ref buffer, ref count, ToSequencedEntry(in walEntry));
+                }
+
+                if (delivered >= maxEntries)
+                {
+                    break;
+                }
+            }
+
+            // The trailing routing-only entry carries nothing a reader applies,
+            // so it skips the mode and origin resolution a real record needs.
+            if (trailingExcluded)
+            {
+                Append(ref buffer, ref count, new WalShardSequencedEntry
+                {
+                    Sequence = trailing.Offset,
+                    Entry = new WalRecord
+                    {
+                        TreeId = trailing.Mutation.TreeId ?? string.Empty,
+                        Op = trailing.Mutation.Kind,
+                        Key = trailing.Mutation.Key,
+                    },
+                });
+            }
+
+            if (count == 0)
+            {
+                return WalShardPage.Empty(fromSequence);
+            }
+
+            var entries = buffer.AsSpan(0, count).ToArray();
+            return new WalShardPage
+            {
+                Entries = entries,
+                NextSequence = entries[^1].Sequence + 1,
+            };
+        }
+        finally
+        {
+            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
+    /// <summary>
+    /// Appends to a pooled buffer, growing it from the pool when full.
+    /// </summary>
+    private static void Append(ref WalShardSequencedEntry[] buffer, ref int count, in WalShardSequencedEntry entry)
+    {
+        if (count == buffer.Length)
+        {
+            var larger = ArrayPool<WalShardSequencedEntry>.Shared.Rent(buffer.Length * 2);
+            buffer.AsSpan(0, count).CopyTo(larger);
+            ArrayPool<WalShardSequencedEntry>.Shared.Return(buffer, clearArray: true);
+            buffer = larger;
+        }
+
+        buffer[count++] = entry;
+    }
+    /// <summary>
+    /// Translates a provider-boundary entry into the sequenced
+    /// <see cref="WalRecord"/> a read page carries, recovering the declared
+    /// merge mode and the origin cluster id. Shared by every entry-shaped read
+    /// so the two cannot drift apart.
+    /// </summary>
+    private WalShardSequencedEntry ToSequencedEntry(in WalEntry walEntry)
+    {
+        // Recover the declared merge mode durably. Since wire id 26
+        // the encoded WAL record persists the authored mode, so a
+        // record decoded by the storage provider carries it on
+        // walEntry.Mutation.Mode - the authoritative source for the
+        // replay/fold. Only when the durable mode is the enum default
+        // (a plain LWW write, or a legacy record authored before the
+        // slot was tagged) do we consult the resolver, preserving the
+        // historical behaviour and the cross-cluster ship typing.
+        // This stops a non-replicated CRDT tree's delta-only record
+        // from replaying as an LWW null (issue #926): the resolver
+        // returns null -> LwwRegister for any tree it does not know,
+        // which previously clobbered the durable mode here.
+        var mode = walEntry.Mutation.Mode != LatticeMergeMode.LwwRegister
+            ? walEntry.Mutation.Mode
+            : modeResolver.Resolve(walEntry.Mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
+        // The WAL is durability-only at the core layer; the origin
+        // cluster id is stamped upstream on the mutation itself by
+        // the replication observer (when the replication package is
+        // registered). Single-cluster hosts have no cluster id, so
+        // the converter receives an empty string and the resulting
+        // record's OriginClusterId is empty too.
+        // The mutation's own OriginClusterId wins when present (a
+        // remote-replay path stamped it before reaching the WAL).
+        // When it is null - i.e. a foreground commit on a host
+        // where the replication observer has not yet stamped - the
+        // resolver supplies the local cluster id. Single-cluster
+        // hosts get string.Empty from the default resolver and the
+        // resulting record's OriginClusterId is empty.
+        var entry = WalRecordConverter.ToWalRecord(
+            walEntry.Mutation,
+            mode,
+            originClusterId: clusterIdResolver.Resolve(walEntry.Mutation.TreeId));
+        return new WalShardSequencedEntry { Sequence = walEntry.Offset, Entry = entry };
     }
 
     /// <inheritdoc />

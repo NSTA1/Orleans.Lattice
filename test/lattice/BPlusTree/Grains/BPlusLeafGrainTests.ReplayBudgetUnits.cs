@@ -155,29 +155,10 @@ public partial class BPlusLeafGrainTests
         ReachableWalFixture.EnsureReachable(head, entries);
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(head));
-        coord.ReadSliceAsync(
-                Arg.Any<long>(),
-                Arg.Any<long>(),
-                Arg.Any<int>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var fromExclusive = call.ArgAt<long>(0);
-                var toInclusive = call.ArgAt<long>(1);
-                var budget = call.ArgAt<int>(2);
-                var slice = new List<CommitLogSliceEntry>();
-                foreach (var e in entries)
-                {
-                    if (e.Offset <= fromExclusive)
-                        continue;
-                    if (e.Offset > toInclusive)
-                        break;
-                    slice.Add(e);
-                    if (slice.Count >= budget)
-                        break;
-                }
-                return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(slice);
-            });
+        // Both slice overloads, from the one shared stub: a leaf that owns a bounded
+        // range pushes it down with the filtered overload (issue #3565).
+        ReplaySliceStub.ServeBothOverloads(coord, entries);
+
         return coord;
     }
 
