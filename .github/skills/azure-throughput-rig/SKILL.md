@@ -303,6 +303,60 @@ CPU peak, RSS, verdict, timestamp) to its `-ResultsCsv`.
 
 ---
 
+## Parallel Layer 3 producer
+
+The Orleans-client producer uses `BENCH_GENERATOR_PARALLELISM` workers (default
+`Environment.ProcessorCount`; `0` also means automatic), capped at the vehicle
+count. `run-cohort-aca.ps1 -GeneratorParallelism K` pins it for a cohort; omission
+resets any previous pin to automatic. Workers own disjoint vehicle slices and
+retain the per-vehicle tick pacing: total offered load is still vehicles x Hz,
+not K times that rate. An in-progress tick finishes at the duration boundary.
+
+Keys are formatted once before measurement. `get-point` and `get-many` pass
+empty values directly to the ingest engine, which reads only their keys; write
+modes still serialize the same telemetry JSON with a fresh tick timestamp.
+The TCP producer and its JSON wire protocol are unchanged. The client generator
+transfers up to 1,024 entries per channel item (64 bounded items), avoiding a
+shared channel lock per key. The engine still receives individual entries and
+retains its own batching, flush concurrency, and single pre-seed pass. In
+addition to the channel, each worker and the reader can hold one chunk.
+
+Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
+
+- `genBlockedFrac` is generator-seconds spent waiting for channel capacity or
+  behind the scheduled tick budget, divided by elapsed seconds x worker count.
+  Overlapping wait and lateness count once. Periodic values cover the reporting
+  interval; `DONE` covers the full run. Live blocked writes remain observable.
+- `slipMaxMs` is the run-wide maximum schedule slip across workers, including
+  overrun of an unfinished tick, not just the last completed tick.
+
+`performance-report.ps1` warns and renders `>= X` when a retained producer log
+shows slip above 1,000 ms, or `genBlockedFrac` at least 0.2 while completed
+throughput is below 90% of offered load. These are conservative lower bounds:
+channel back-pressure can originate downstream, so this is not proof of a
+producer CPU bottleneck. Such cells cannot establish a cluster ceiling. Scaling
+ratios are omitted when the cell or its 1-silo anchor is producer-bound, and
+charts omit affected workload curves rather than plot a misleading plateau.
+Resume and dry-run aggregation re-read retained logs, including legacy slip
+fields. New evidence is also retained in cohort state.
+
+For a local generator-only measurement, build the Producer project in Release,
+then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,
+and pre-seeding, but drains the same channel adapter into a no-op sink:
+
+```powershell
+$env:BENCH_WORKLOAD_MODE = 'get-many'
+$env:BENCH_VEHICLE_COUNT = '1000000'
+$env:BENCH_TICK_HZ = '10'
+$env:BENCH_DURATION_SEC = '10'
+$env:BENCH_GENERATOR_PARALLELISM = '4' # Repeat with 1, keeping load unchanged.
+dotnet benchmark\azure-throughput\Producer\bin\Release\net10.0\VehicleFleetSimulator.AzureThroughput.Producer.dll --dry-run
+```
+
+Compare `DONE avg` and verify `dry-run drained` equals `DONE total`. This measures
+local generation/queue capacity, not cluster throughput or a guaranteed parallel
+speedup. No producer replicas or sliced pre-seeding are required by this path.
+
 ## Auto-shutdown and teardown
 
 `deploy.ps1` installs a DevTestLab schedule `shutdown-computevm-<prefix>-vm` that
