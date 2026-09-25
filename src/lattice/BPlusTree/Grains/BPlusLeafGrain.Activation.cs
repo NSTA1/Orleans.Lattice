@@ -1843,6 +1843,16 @@ internal sealed partial class BPlusLeafGrain
         _lastStaleReplayPartition = -1;
 
         var startedAt = Stopwatch.GetTimestamp();
+        var acquiredAt = startedAt;
+        var permitAcquired = false;
+
+        // Issue #3479. Sampled so that an abandoned drive can report whether its
+        // replay banked anything. Summed across partitions because the log reports
+        // one leaf-wide advance, and read here instead of from a counter inside the
+        // replay loop, which only accumulates at a partition boundary and so would
+        // read zero for a drive abandoned mid-partition.
+        var checkpointAtStart = SumCheckpointOffsets(partitionCount, persistedOnly: false);
+        var persistedCheckpointAtStart = SumCheckpointOffsets(partitionCount, persistedOnly: true);
         var driveCts = new CancellationTokenSource(budget);
         SemaphoreSlim? replayPermit = null;
         Task<LeafStarvationDriveOutcome>? driveTask = null;
@@ -1860,6 +1870,8 @@ internal sealed partial class BPlusLeafGrain
             // aggregate demand. Acquisition must stay in this frame so a timeout
             // cannot abandon a successfully acquired permit before assignment.
             replayPermit = await AcquireReplayPermitAsync(enforceAdmissionBound: false, driveCts.Token);
+            acquiredAt = Stopwatch.GetTimestamp();
+            permitAcquired = true;
 
             // The permit is acquired and released in THIS frame, and the work
             // runs in an inner task. That split is the fix.
@@ -1903,16 +1915,50 @@ internal sealed partial class BPlusLeafGrain
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 
-            // Logged with the measured elapsed rather than the budget alone, so
-            // a drive abandoned while queued for a permit and one abandoned deep
-            // in replay separate numerically in the log as well as on the arm
-            // above.
-            ResolveLogger()?.LogWarning(
-                "WAL GC starvation drive on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned; the replay permit was {PermitState} and the in-flight latch has been cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment on this tree means storage is not answering inside the budget - look at the provider, not at the leaf.",
-                state.State.TreeId,
-                budget,
-                Stopwatch.GetElapsedTime(startedAt),
-                replayPermit is null ? "never acquired" : "released");
+            // Logged with the measured elapsed rather than the budget alone, and
+            // split at the moment the permit was acquired (issue #3479). One
+            // template with a single piece of storage advice was given whatever
+            // the drive had been doing, and could not say how the budget divided
+            // between admission and replay. A drive that holds a permit spent its
+            // budget replaying, which is the case where storage or the size of
+            // the WAL gap is the question, so it reports that split and how far
+            // the replay moved the checkpoint. A drive that never took one never
+            // read storage, so it must not be sent there.
+            //
+            // Keyed on whether the acquire returned rather than on
+            // `replayPermit is null`: the acquire also returns null, without
+            // gating, for a leaf with no tree id, and that drive did replay.
+            var abandonedAt = Stopwatch.GetTimestamp();
+            if (!permitAcquired)
+            {
+                // Reachable only when the budget expires during admission itself.
+                // GC drives never queue for a permit (issue #3480): a drive that
+                // finds no capacity is refused with a typed saturation instead,
+                // and never reaches this arm. Admission does no I/O, but it is not
+                // free - the first drive in a process sizes the process-wide
+                // replay gate, which reads the container CPU grant and the heap
+                // ceiling and logs the result - so a budget shorter than that, or
+                // a thread stall inside it, expires before the admission check.
+                ResolveLogger()?.LogWarning(
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after {Elapsed}, before it was admitted to the per-silo WAL replay gate: its {Budget} budget expired before a replay permit was taken, so the replay never started, storage was never read and the leaf's checkpoint did not move. GC drives never queue for a replay permit - a drive that finds no capacity is refused at once with a ReplayPermitAdmission saturation rather than abandoned - so this is neither storage latency nor replay-permit contention: admission itself outlasted the budget, which means the budget is far too small or this drive's thread stalled while it was being admitted (the first drive in a process also sizes the replay gate). Raise StarvationDriveBudget. The in-flight latch has been cleared.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    Stopwatch.GetElapsedTime(startedAt, abandonedAt),
+                    budget);
+            }
+            else
+            {
+                ResolveLogger()?.LogWarning(
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} exceeded its {Budget} budget after {Elapsed} and was abandoned while replaying: it spent {PermitWait} being admitted to the replay gate and then replayed for {Replaying} without finishing. Before it was abandoned the replay advanced the leaf's checkpoint by {CheckpointAdvanced} offset(s) in memory, of which {CheckpointPersisted} are persisted; an in-memory advance is persisted by the leaf's next checkpoint flush. The permit has been released and the in-flight latch cleared. Replay banks its absorbed prefix at every slice boundary, so the next drive resumes from a shorter gap. A repeating abandonment of this form means the replay itself cannot finish inside the budget, either because storage is slow to answer or because the leaf's WAL gap is too large: investigate the storage provider and this leaf's replay gap, not the replay gate.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    budget,
+                    Stopwatch.GetElapsedTime(startedAt, abandonedAt),
+                    Stopwatch.GetElapsedTime(startedAt, acquiredAt),
+                    Stopwatch.GetElapsedTime(acquiredAt, abandonedAt),
+                    SumCheckpointOffsets(partitionCount, persistedOnly: false) - checkpointAtStart,
+                    SumCheckpointOffsets(partitionCount, persistedOnly: true) - persistedCheckpointAtStart);
+            }
 
             return LeafStarvationDriveOutcome.TimedOut;
         }
@@ -1962,6 +2008,35 @@ internal sealed partial class BPlusLeafGrain
                     TaskScheduler.Default);
             }
         }
+    }
+
+    /// <summary>
+    /// Sums this leaf's checkpoint offsets over its WAL partitions, so that a
+    /// starvation drive can report how far its replay advanced (issue #3479).
+    /// </summary>
+    /// <param name="partitionCount">The number of WAL partitions to sum over.</param>
+    /// <param name="persistedOnly">
+    /// <see langword="true"/> to sum only the persisted checkpoints;
+    /// <see langword="false"/> to sum the current view, which also counts an
+    /// advance recorded in memory and not yet flushed.
+    /// </param>
+    /// <remarks>
+    /// Only the difference between two samples is meaningful. A single sum mixes
+    /// independent offset spaces and the <c>-1</c> sentinel, but both cancel in a
+    /// difference, and both the current and the persisted views only move forward
+    /// during a drive.
+    /// </remarks>
+    private long SumCheckpointOffsets(int partitionCount, bool persistedOnly)
+    {
+        var sum = 0L;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            sum += persistedOnly
+                ? GetPersistedCheckpointForPartition(partition)
+                : GetCurrentCheckpointForPartition(partition);
+        }
+
+        return sum;
     }
 
     /// <summary>

@@ -7336,8 +7336,10 @@ public static class LatticeMetrics
     /// A first-class arm rather than a fold into
     /// <see cref="BlockedLeafReactivationDroveNoAdvance"/>, because an abandoned
     /// drive and a drive that ran to completion without advancing are different
-    /// events with different remedies: the first says storage did not answer
-    /// within the budget, the second says there was nothing to absorb. Reporting
+    /// events with different remedies: the first says the drive ran out of
+    /// budget before its replay finished (the grain's warning log reports how
+    /// its time divided between admission and replay, issue #3479), the second
+    /// says there was nothing to absorb. Reporting
     /// the first as the second is the misfiling the verdict enum's contract
     /// forbids, and <c>DriveOutcomeTag</c> throwing on an unmapped member is the
     /// mechanism that forces this arm to exist.
