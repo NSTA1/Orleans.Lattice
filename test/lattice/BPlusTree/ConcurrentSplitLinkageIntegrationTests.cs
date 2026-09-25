@@ -20,10 +20,12 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// cycle, and the write failed after its leaf had already been spliced in.
 /// </item>
 /// </list>
-/// Each test drives concurrent single-entry writes - and, in one case, point
+/// Each test drives concurrent single-entry writes - and, in two cases, point
 /// and range deletes - into a tree that splits under them. It then audits
 /// every shard for orphaned leaves and a leaf chain that tiles the keyspace,
-/// and reads every key back.
+/// and reads every key back. Both the batch and the point write interleave on
+/// the shard root (#812), so each arm exercises truly concurrent writes into
+/// one activation.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -105,9 +107,9 @@ public class ConcurrentSplitLinkageIntegrationTests
     {
         var (treeId, tree) = await CreateSeededTreeAsync("split-link-mixed", maxInternalChildren);
 
-        // SetAsync is not interleaving and SetManyAsync is, so a single-key
+        // Both calls interleave on the shard root (#812), so a single-key
         // write's split can be linked while a batch turn is mid-descent over
-        // the same nodes.
+        // the same nodes, and the other way round.
         var writes = new Task[ConcurrentWrites];
         for (var i = 0; i < ConcurrentWrites; i++)
         {
@@ -125,24 +127,62 @@ public class ConcurrentSplitLinkageIntegrationTests
     [Repeat(3)]
     [TestCase(null)]
     [TestCase(SmallMaxInternalChildren)]
-    public async Task Deletes_racing_splits_neither_resurrect_nor_lose_keys(int? maxInternalChildren)
+    public async Task Interleaved_point_SetAsync_with_and_without_expiry_leaves_no_orphaned_leaves_or_lost_keys(int? maxInternalChildren)
     {
-        var (treeId, tree) = await CreateSeededTreeAsync("split-link-delete", maxInternalChildren);
+        var (treeId, tree) = await CreateSeededTreeAsync("split-link-point-ttl", maxInternalChildren);
+
+        // Both point overloads interleave on the shard root (#812). The expiry
+        // is far enough out that no entry can lapse before the read-back.
+        var writes = new Task[ConcurrentWrites];
+        for (var i = 0; i < ConcurrentWrites; i++)
+        {
+            var value = Encoding.UTF8.GetBytes($"live-{i}");
+            writes[i] = i % 2 == 0
+                ? tree.SetAsync(LiveKey(i), value)
+                : tree.SetAsync(LiveKey(i), value, TimeSpan.FromHours(1));
+        }
+
+        await Task.WhenAll(writes);
+
+        await AssertNoOrphansAndNoLostKeysAsync(treeId, tree);
+    }
+
+    [Repeat(3)]
+    [TestCase(null)]
+    [TestCase(SmallMaxInternalChildren)]
+    public Task Deletes_racing_splits_neither_resurrect_nor_lose_keys(int? maxInternalChildren) =>
+        AssertDeletesRacingSplitsAsync(
+            "split-link-delete",
+            maxInternalChildren,
+            static (tree, key, value) => tree.SetManyAsync([new KeyValuePair<string, byte[]>(key, value)]));
+
+    [Repeat(3)]
+    [TestCase(null)]
+    [TestCase(SmallMaxInternalChildren)]
+    public Task Deletes_racing_point_SetAsync_splits_neither_resurrect_nor_lose_keys(int? maxInternalChildren) =>
+        AssertDeletesRacingSplitsAsync(
+            "split-link-point-delete",
+            maxInternalChildren,
+            static (tree, key, value) => tree.SetAsync(key, value));
+
+    private async Task AssertDeletesRacingSplitsAsync(
+        string prefix,
+        int? maxInternalChildren,
+        Func<ILattice, string, byte[], Task> write)
+    {
+        var (treeId, tree) = await CreateSeededTreeAsync(prefix, maxInternalChildren);
         for (var i = 0; i < DoomedCount; i++)
         {
             await tree.SetAsync(DoomedKey(i), Encoding.UTF8.GetBytes($"doomed-{i}"));
         }
 
         // Point deletes take the first half of the doomed keys and a range
-        // delete takes the next quarter, both while batch writes split the
+        // delete takes the next quarter, both while the writes split the
         // leaves under them. The last quarter is never deleted.
         var operations = new List<Task>(ConcurrentWrites + (DoomedCount / 2) + 1);
         for (var i = 0; i < ConcurrentWrites; i++)
         {
-            operations.Add(tree.SetManyAsync(
-            [
-                new KeyValuePair<string, byte[]>(LiveKey(i), Encoding.UTF8.GetBytes($"live-{i}")),
-            ]));
+            operations.Add(write(tree, LiveKey(i), Encoding.UTF8.GetBytes($"live-{i}")));
 
             if (i < DoomedCount / 2)
             {

@@ -277,11 +277,19 @@ internal static class ShardActivationRetry
     /// cold-start seed timeout. Matched by type name - one of the Orleans
     /// types is internal - mirroring the detection the atomic-write saga
     /// coordinator already uses for the deactivation-race rejection shape.
+    /// Lattice's own <see cref="ShardRootDeactivatingException"/> is the same
+    /// condition raised one hop earlier, by a shard root that refused a point
+    /// write because it had already requested its own deactivation (#812).
     /// </summary>
     internal static bool IsTransientSiloChurn(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException!)
         {
+            if (e is ShardRootDeactivatingException)
+            {
+                return true;
+            }
+
             var typeName = e.GetType().Name;
             if (typeName.Contains("SiloUnavailableException", StringComparison.Ordinal)
                 || typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal))

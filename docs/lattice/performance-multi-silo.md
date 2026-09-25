@@ -303,6 +303,12 @@ longer, and so the ceiling much lower, than for reads. Some cohorts at four
 or more silos report failed keys (up to ~12 k); in every one checked they
 are Azure Tables server timeouts, not WAL back-pressure.
 
+Both limits named here have since been lifted, so these numbers describe the
+design at the time of the sweep, not the current one. The `LatticeGrain`
+worker pool is 256 per silo (#3528), and a shard root's `SetAsync` now
+interleaves the way `SetManyAsync` does (#812). Concurrent point writes on one
+shard no longer queue behind each other's WAL commit.
+
 The materialised-view variant tracks plain `SetAsync` within cohort noise
 from two silos on (~1.1-1.3 k keys/s). At one silo it is lower (764 against
 979 keys/s, with its two cohorts at 669 and 859), where the view maintainer

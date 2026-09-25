@@ -63,7 +63,23 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     }
 
     /// <inheritdoc />
-    Task IIncomingGrainCallFilter.Invoke(IIncomingGrainCallContext context)
+    /// <remarks>
+    /// Dispatches through the point-write quiesce guard first (see
+    /// <c>ShardRootGrain.PointWriteQuiesce.cs</c>), then applies the routing-mutation
+    /// bracket in <see cref="InvokeRoutingFiltered"/>.
+    /// </remarks>
+    Task IIncomingGrainCallFilter.Invoke(IIncomingGrainCallContext context) =>
+        ClassifyIncomingTurn(context.Request) switch
+        {
+            IncomingTurnKind.PointWrite => InvokePointWriteAsync(context),
+            IncomingTurnKind.Serial => InvokeSerialTurnAsync(context),
+            _ => InvokeRoutingFiltered(context),
+        };
+
+    /// <summary>
+    /// Applies the routing-mutation bracket to an admitted call.
+    /// </summary>
+    private Task InvokeRoutingFiltered(IIncomingGrainCallContext context)
     {
         if (IsRoutingNeutralCall(context.Request))
         {
