@@ -127,6 +127,15 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the write origin that reached a leaf (<c>client_write</c>,
+    /// <c>merge</c>, or <c>cross_shard_migration</c>) on
+    /// <see cref="LeafSpanFailOpenCommits"/>, which separates a deliberate
+    /// migration graft from an accidental fall-back on the foreground or merge
+    /// path.
+    /// </summary>
+    public const string TagOrigin = "origin";
+
+    /// <summary>
     /// Tag key for the cache surface that released a leaf's lazily hydrated
     /// snapshot frame. Paired with <see cref="TagReason"/> on
     /// <see cref="LeafBisectRefusals"/>, where it is what separates a leaf that
@@ -236,6 +245,16 @@ public static class LatticeMetrics
     /// or with the size of a tree.
     /// </summary>
     public const string TagGrainType = "grain_type";
+
+    /// <summary>
+    /// Tag key for the grain-interface member a call invoked, on
+    /// <see cref="RegistryCallerDuration"/>. The value is the member name exactly
+    /// as declared on the interface (<c>ResolveAsync</c>, <c>UpdateAsync</c>, and
+    /// so on), which is also the name Orleans prints in a timeout line, so a metric
+    /// series and a log line for the same call can be joined by eye. Cardinality is
+    /// bounded by the interface's member count, a compile-time constant.
+    /// </summary>
+    public const string TagMethod = "method";
 
     /// <summary>
     /// Tag key for the activation temperature of an activation-time leaf
@@ -1006,6 +1025,55 @@ public static class LatticeMetrics
     public static readonly Histogram<int> RegistryCallInFlight =
         Meter.CreateHistogram<int>("orleans.lattice.registry.call.in_flight", unit: "{call}",
             description: "Concurrent ILatticeRegistry reads in flight on the registry singleton at the moment a new read is admitted.");
+
+    /// <summary>
+    /// Histogram of how long one <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/>
+    /// call took as observed by the <b>caller</b>, from dispatch to response,
+    /// timeout, or fault. Tagged with <see cref="TagMethod"/> (the interface
+    /// member name, e.g. <c>ResolveAsync</c>, for every member of the interface)
+    /// and <see cref="TagOutcome"/> (<c>completed</c>, <c>timeout</c>, or
+    /// <c>faulted</c>). Recorded by the caller-side decorator every production
+    /// caller obtains the registry through, so it is always on without an
+    /// outgoing grain call filter: unlike the opt-in <see cref="GrainCallDuration"/>,
+    /// no other grain call on the silo pays for it.
+    /// <para>
+    /// <b>Why this exists (issue #3088).</b> Registry contention was previously
+    /// diagnosed from the <c>Diagnostics: [... CurrentlyExecuting=...]</c> block
+    /// Orleans appends to a <c>Response did not arrive on time</c> timeout. Orleans
+    /// stops emitting that block when the silo saturates - measured at 95% of
+    /// timeout lines before saturation and 0% after - and its absence is
+    /// byte-identical to "the grain was idle", so the diagnostic produced its most
+    /// confident-looking reading exactly when it had stopped measuring. The
+    /// grain-body census (<see cref="RegistryCallDuration"/>) cannot close that
+    /// gap on its own: it records only calls the grain <i>admitted</i>, so a
+    /// registry nothing can reach is silent there too. This instrument records one
+    /// sample for every call dispatched to the registry from this silo, whatever
+    /// becomes of it, so the three states are distinguishable from metrics alone:
+    /// <b>fine</b> is <c>outcome=completed</c> with a short tail; <b>slow</b> is
+    /// <c>outcome=completed</c> with a long tail; <b>unreachable</b> is
+    /// <c>outcome=timeout</c> - and a <c>timeout</c> population here beside an
+    /// empty <see cref="RegistryCallDuration"/> for the same member is a call that
+    /// was never served, not one that was served slowly.
+    /// </para>
+    /// <para>
+    /// <b>Occupancy.</b> Tagged by every interface member rather than by the read
+    /// subset the census covers, so a non-interleaved mutator holding the
+    /// singleton's turn token (<c>UpdateAsync</c>, <c>SetShardMapAsync</c>,
+    /// <c>ReassignSlotsAsync</c>, ...) shows as a long <c>completed</c> tail on
+    /// its own member rather than being invisible.
+    /// </para>
+    /// <para>
+    /// <b>Limits.</b> Per-process: calls from another silo or an external client
+    /// are recorded on that process, not here. The sample is taken on completion, and
+    /// Orleans bounds every call by its response timeout, so no dispatched call
+    /// goes unrecorded - but a timed-out call contributes a sample pinned at the
+    /// deadline, which is why <c>timeout</c> is its own arm rather than folded into
+    /// a single distribution whose quantiles it would dominate.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> RegistryCallerDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.registry.caller.duration", unit: "ms",
+            description: "Caller-observed duration of one ILatticeRegistry call from dispatch to response, timeout, or fault, by interface method and outcome. Recorded for every dispatched call, so outcome=timeout names an unreachable registry that the grain-body census cannot see.");
 
     /// <summary>
     /// Histogram of how long a registry read waited for admission through the
@@ -2223,6 +2291,14 @@ public static class LatticeMetrics
     public static readonly Histogram<long> WalGcDurableFloorStallSeconds =
         Meter.CreateHistogram<long>("orleans.lattice.wal.gc.durable_floor_stall_seconds", unit: "s",
             description: "Seconds since a tree's durable materialiser offset floor last advanced, tagged by tree and by state: advanced, stalled or absent.");
+
+    /// <summary>
+    /// Name of the per-tree uncapped blocked-consumer gauge, registered by
+    /// <c>WalGcBlockedConsumerCensus</c>. The denominator for
+    /// <see cref="WalGcBlockedLeafReactivations"/>; neither signal alone shows
+    /// convergence. Zero-primed before the first pass awaits; -1 means unknown.
+    /// </summary>
+    public const string WalGcBlockedConsumersName = "orleans.lattice.wal.gc.blocked_consumers";
 
     /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
@@ -7437,6 +7513,73 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafDeferredTerminalsDroppedAtCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deferred_terminals_dropped_at_cap", unit: "{terminal}",
             description: "Deferred terminals (TxCommit, TxAbort, DeleteRange) dropped by replay pass 1 because the durable UnresolvedReplayWork ledger was at the MaxDurableUnresolvedReplayWork cap, falling back to the in-memory clamp that can pin the replay checkpoint. Tagged by tree and WAL partition.");
+
+    /// <summary>
+    /// Canonical name of <see cref="LeafSpanFailOpenCommits"/>.
+    /// </summary>
+    public const string LeafSpanFailOpenCommitsName = "orleans.lattice.leaf.span_fail_open_commits";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// the key is out of the leaf's declared span and the chain pointer on the
+    /// relevant side is null, so there is no leaf to forward it to.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenReasonNoSibling = new(TagReason, "no_sibling");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// the key is out of the leaf's declared span and the chain pointer on the
+    /// relevant side names the leaf itself, so forwarding would spin on the
+    /// same grain.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenReasonSelfReference = new(TagReason, "self_reference");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a foreground set, delete, or batched set (conditional or unconditional).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginClientWrite = new(TagOrigin, "client_write");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a <c>MergeManyAsync</c> batch that is not a cross-shard migration
+    /// (replication apply, restore, consolidation, tree merge).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginMerge = new(TagOrigin, "merge");
+
+    /// <summary>
+    /// <see cref="TagOrigin"/> value on <see cref="LeafSpanFailOpenCommits"/>:
+    /// a <c>MergeManyAsync</c> batch flagged as a cross-shard migration import,
+    /// which is the deliberate graft shape rather than an accidental fall-back.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SpanFailOpenOriginCrossShardMigration = new(TagOrigin, "cross_shard_migration");
+
+    /// <summary>
+    /// Keys a leaf committed <b>locally</b> although its declared
+    /// <c>[LowKeyInclusive, HighKeyExclusive)</c> span excludes them, because
+    /// declared-span admission found no leaf to forward them to (issue #2125).
+    /// <para>
+    /// Declared-span admission forwards an out-of-span key to the neighbouring
+    /// leaf and <b>fails open</b> - commits here - when no neighbour resolves.
+    /// The row is then held by a leaf whose own replay filter refuses to
+    /// reinstate it, so its survival across a rebuild depends on the declaring
+    /// leaf's checkpoint position. Before this instrument that fall-back was
+    /// silent. Tagged <see cref="TagTree"/>, <see cref="TagReason"/>
+    /// (<c>no_sibling</c> or <c>self_reference</c>) and <see cref="TagOrigin"/>
+    /// (<c>client_write</c>, <c>merge</c>, or <c>cross_shard_migration</c>),
+    /// so a deliberate migration graft reads apart from an accidental one.
+    /// </para>
+    /// <para>
+    /// A leaf that declares no span at all (both bounds null: a single-leaf
+    /// tree or a bulk-loaded leaf) owns every key and never advances it. The
+    /// counter is not pre-minted, so an absent series reads "has never fallen
+    /// open on this silo", which is the healthy state. Observability only: the
+    /// fail-open behaviour itself is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafSpanFailOpenCommits =
+        Meter.CreateCounter<long>(LeafSpanFailOpenCommitsName, unit: "{key}",
+            description: "Keys a leaf committed locally although its declared span excludes them, because declared-span admission found no neighbouring leaf to forward them to (fail-open). Tagged by tree, reason (no_sibling or self_reference) and origin (client_write, merge or cross_shard_migration). A leaf with no declared span never advances it.");
 
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //

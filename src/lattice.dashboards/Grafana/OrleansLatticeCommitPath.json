@@ -1168,6 +1168,21 @@
       ]
     },
     {
+      "id": 3161,
+      "title": "WAL GC blocked-consumer population (uncapped)",
+      "description": "Latest distinct durable consumers blocking the cursor floor, per tree and silo. Denominator for orleans.lattice.wal.gc.blocked_leaf_reactivations: read the population trend beside heal/drive outcomes to distinguish backlog drain from arrivals outpacing drain; neither signal alone establishes convergence. Partition pins are distinct consumers, not distinct leaves. The scan continues past the eight-id report cap even when every partition is blocked; this changes diagnostics only, never trim entitlement. Registry-present pins, offset-covered zero pins and proven-empty abstained partitions are excluded. Offset-plane population gaps are included once. Zero is primed on the first pass; -1 means the census could not be established, not an empty population. No cross-silo sum: multiple silos may observe the same durable pins. Values remain at the latest census until the next pass; use the scheduler phase-age panel to detect stalled collection.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 398 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "spanNulls": false } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "orleans_lattice_wal_gc_blocked_consumers{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}", "legendFormat": "{{tree}} {{instance}} blocked consumers (-1 = unknown)" }
+      ]
+    },
+    {
       "id": 164,
       "title": "Leaf checkpoint-flush TAIL failures by step - issue #3393 (a post-flush notification threw and was contained)",
       "description": "Notification steps that threw AFTER the checkpoint flush itself succeeded (orleans.lattice.leaf.checkpoint.flush.tail.failures), split by which step faulted - issue #3393. READ THIS PANEL BESIDE PANEL 163, NOT INSTEAD OF IT, because the two measure different halves of one named thing. The checkpoint_flush barrier on 163 covers the BODY - the durable write - and stands down once that write lands. The tail runs three notifications after it (cursor_report, inline_digest_publish, snapshot_recheck), each contained separately and deliberately so, because under issue #2220 a failed notification tearing down the activation produced a replay loop. That containment is correct and this instrument does not change it; what it changes is that the fault is now countable. THE CONSEQUENCE FOR READING 163 IS THE WHOLE POINT: a checkpoint_flush count of ZERO on 163 does NOT establish that the checkpoint path is healthy. On the drain captured under #3393 the barrier counter read zero for checkpoint_flush while 1,699 dirty digests died inside this tail, so the barrier counts are a FLOOR on the damage, not a total. inline_digest_publish is the arm that fired in production and means a leaf's parent was never told its digest changed, so the tree's upward digest chain is stale until the next mutation re-drives it - which on a quiescing tree may be never. snapshot_recheck means the post-flush re-evaluation of snapshot need did not run, so a block pin can retain the tree's shared WAL and is a candidate contributor to unbounded WAL growth (issue #3094). cursor_report DESERVES A SPECIFIC WARNING: the reporter call is ALSO wrapped in its own per-partition try/catch inside ReportCursorIfActiveAsync, so only the option lookup and consumer-id construction around it can reach this counter. A ZERO ON cursor_report IS THEREFORE NOT EVIDENCE THAT CURSOR REPORTING IS HEALTHY; it is double-contained and its ordinary failures are invisible here by construction. ABSENT IS NOT A MEASURED ZERO. This instrument is not zero-primed, matching its barrier sibling on 163, so a series appears only on the first fault and a missing line is consistent BOTH with a build that lacks the instrument AND with a build that carries it and has drained cleanly. Confirm deployment from the image digest, never from the presence of this series. A HEALTHY ESTATE IS FLAT AT ABSENT, so any line at all here is worth reading.",
@@ -1183,6 +1198,24 @@
       },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_checkpoint_flush_tail_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} faulted/s" }
+      ]
+    },
+    {
+      "id": 165,
+      "title": "Leaf span FAIL-OPEN commits by reason/origin - issue #2125 (out-of-span key kept locally; absent = healthy or build did not land)",
+      "description": "Keys a leaf committed LOCALLY although its declared [low, high) span excludes them, because declared-span admission found no neighbouring leaf to forward them to (orleans.lattice.leaf.span_fail_open_commits) - issue #2125. Split by reason (no_sibling: the chain pointer on the key's side is null; self_reference: it names the leaf itself) and origin (client_write, merge, cross_shard_migration). WHY IT MATTERS: WAL replay admits by declared span, so a row committed outside its leaf's span is one that leaf will not reinstate on its own rebuild; whether it survives a cold restart depends on the checkpoint position of the leaf that does declare it. A fail-open is the shape that precedes a silent loss. READ THE ORIGIN TAG FIRST: cross_shard_migration is the deliberate graft shape and can be expected during a reshard; client_write or merge is an accidental fall-back and is worth investigating on its own. A leaf that declares no span at all (a single-leaf tree or a bulk-loaded leaf) owns every key and never advances this counter, so a bulk-loaded tree reading absent is not evidence its chain is healthy. ABSENT IS NOT A MEASURED ZERO. This counter is not zero-primed, so a series appears only on the first fail-open and a missing line is consistent BOTH with a build that lacks the instrument AND with a build that carries it and has never fallen open. Confirm deployment from the image digest, never from the presence of this series. A HEALTHY ESTATE IS FLAT AT ABSENT, so any line at all here is worth reading. The companion warning log (rate-limited to one line per silo every 10 seconds) names the leaf and tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 405 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason, origin) (rate(orleans_lattice_leaf_span_fail_open_commits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} {{origin}} keys/s" }
       ]
     }
   ]

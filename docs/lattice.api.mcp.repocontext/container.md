@@ -48,6 +48,8 @@ The host selects a durability profile from the `LATTICE_DURABILITY` environment 
 
 Every profile applies finite per-tree tombstone compaction to the churn trees (structural, symbol, content, memory, and the vector membership and metadata projection trees), so re-write, re-embed, and forget tombstones are reaped rather than accumulating. The write-once, content-addressed vector-payload tree is excluded because it never deletes in place.
 
+SQLite grain storage and reminders derive their busy-retry window from the resolved Orleans `SiloMessagingOptions.ResponseTimeout`: half the budget, rounded down to whole seconds (15 seconds for the default 30-second request budget). This leaves headroom for a held write lock to surface as `SQLITE_BUSY` before the enclosing request times out; it is not an end-to-end deadline guarantee when a request also queues or performs several storage operations. Budgets below two seconds are rejected because a zero command timeout means unlimited retries. Very large budgets are capped at SQLite's signed 32-bit millisecond limit. Startup schema initialization uses the same derivation with the Orleans default budget and applies the matching `busy_timeout` PRAGMA; runtime providers use the resolved budget through their connection-string command timeout.
+
 ## Data root and fail-fast
 
 All durable local state - the file WAL directory and, in the `local` profile, the SQLite database - lives under `LATTICE_DATA_ROOT` (default `/data`), which must be a bind mount or named volume. The host fails fast at startup if that path is missing or not writable by its non-root UID, so a misconfigured mount surfaces immediately instead of silently losing durability.

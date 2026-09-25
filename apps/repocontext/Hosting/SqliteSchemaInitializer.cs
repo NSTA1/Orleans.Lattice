@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.Data.Sqlite;
+using Orleans.Configuration;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -30,8 +31,6 @@ public sealed class SqliteSchemaInitializer
     /// </summary>
     public const string InvariantName = "System.Data.SQLite";
 
-    private const int BusyTimeoutSeconds = 30;
-
     private static readonly string[] ScriptResourceNames =
     {
         "Persistence.Sqlite.SQLite-Main.sql",
@@ -40,11 +39,14 @@ public sealed class SqliteSchemaInitializer
     };
 
     private readonly string _databasePath;
+    private readonly string _connectionString;
 
     /// <summary>Creates an initializer for the SQLite database at <paramref name="databasePath"/>.</summary>
     /// <param name="databasePath">The absolute path to the SQLite database file on the data root.</param>
+    /// <param name="requestTimeout">The enclosing Orleans request budget, or its default when omitted.</param>
     /// <exception cref="ArgumentException"><paramref name="databasePath"/> is null or whitespace.</exception>
-    public SqliteSchemaInitializer(string databasePath)
+    /// <exception cref="ArgumentOutOfRangeException">The request budget is less than two seconds.</exception>
+    public SqliteSchemaInitializer(string databasePath, TimeSpan? requestTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
         {
@@ -52,6 +54,7 @@ public sealed class SqliteSchemaInitializer
         }
 
         _databasePath = databasePath;
+        _connectionString = BuildConnectionString(databasePath, requestTimeout);
     }
 
     /// <summary>
@@ -59,16 +62,32 @@ public sealed class SqliteSchemaInitializer
     /// and the Orleans ADO.NET providers: the file data source plus a command
     /// timeout that Microsoft.Data.Sqlite honours as a busy-retry window, so
     /// Orleans' pooled connections wait out a transient lock rather than failing.
+    /// The retry window is half the request budget, rounded down to whole seconds,
+    /// leaving headroom for contention to surface before the enclosing request expires.
     /// </summary>
     /// <param name="databasePath">The SQLite database file path.</param>
+    /// <param name="requestTimeout">The enclosing Orleans request budget, or its default when omitted.</param>
     /// <returns>The connection string.</returns>
-    public static string BuildConnectionString(string databasePath)
-        => new SqliteConnectionStringBuilder
+    /// <exception cref="ArgumentOutOfRangeException">The request budget is less than two seconds.</exception>
+    public static string BuildConnectionString(string databasePath, TimeSpan? requestTimeout = null)
+    {
+        var budget = requestTimeout ?? new SiloMessagingOptions().ResponseTimeout;
+        if (budget < TimeSpan.FromSeconds(2))
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestTimeout), budget,
+                "SQLite requires a request timeout of at least two seconds to leave retry headroom.");
+        }
+
+        // Zero means unlimited retries in Microsoft.Data.Sqlite. Keep a positive
+        // whole-second window and fit SQLite's signed 32-bit millisecond PRAGMA.
+        var busySeconds = (int)Math.Min(budget.TotalSeconds / 2, int.MaxValue / 1000);
+        return new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
-            DefaultTimeout = BusyTimeoutSeconds,
+            DefaultTimeout = busySeconds,
             Pooling = true,
         }.ToString();
+    }
 
     /// <summary>
     /// Ensures the database directory exists and is writable, then applies the
@@ -85,7 +104,7 @@ public sealed class SqliteSchemaInitializer
     {
         EnsureWritableDirectory();
 
-        using var connection = new SqliteConnection(BuildConnectionString(_databasePath));
+        using var connection = new SqliteConnection(_connectionString);
         connection.Open();
 
         ExecutePragmas(connection);
@@ -122,7 +141,7 @@ public sealed class SqliteSchemaInitializer
     {
         using var command = connection.CreateCommand();
         command.CommandText =
-            $"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={BusyTimeoutSeconds * 1000};";
+            $"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={connection.DefaultTimeout * 1000};";
         command.ExecuteNonQuery();
     }
 

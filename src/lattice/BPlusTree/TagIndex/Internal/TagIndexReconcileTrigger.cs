@@ -24,7 +24,7 @@ internal sealed class TagIndexReconcileTrigger(
         IReadOnlyList<string> treeIds;
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
 
             // Push the tag-index prefix down: a bounded range scan over the sorted
             // registry rather than a full catalog read whose ids are then filtered

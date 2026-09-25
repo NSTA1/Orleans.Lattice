@@ -91,18 +91,39 @@ CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, Grai
 
 -- Updates an existing grain state with optimistic concurrency control or inserts it if it does not exist.
 --
--- This batch deliberately does NOT wrap its statements in an explicit
--- BEGIN TRANSACTION / COMMIT. SQLite forbids nested transactions, and under
--- Microsoft.Data.Sqlite connection pooling a batch that fails before reaching
--- its COMMIT leaves the transaction open on the pooled connection; the next
--- reuse of that connection then fails at BEGIN with "cannot start a transaction
--- within a transaction", cascading across a burst of concurrent writes. Manual
--- transaction control is unnecessary here for correctness: Orleans serializes
--- WriteStateAsync per grain (a single activation writes a given row), exactly
--- one of the UPDATE or the conditional INSERT below mutates the target row, and
--- the total_changes() / temp-table version bookkeeping is connection-scoped and
--- independent of any surrounding transaction. Each statement therefore
--- auto-commits and no open transaction can leak onto a pooled connection.
+-- The mutation runs as ONE statement. The batch stages its parameters as a single row
+-- in a connection-scoped temp table, OrleansStorageWriteRequest, and a TEMP trigger on
+-- that table performs the UPDATE or the conditional INSERT against OrleansStorage.
+-- Trigger actions belong to the statement that fired them, so the staging INSERT, the
+-- storage mutation and the outcome bookkeeping commit or roll back together, in one
+-- implicit transaction that takes the database write lock once.
+--
+-- This replaces an earlier form that ran the UPDATE and the conditional INSERT as two
+-- separate auto-committing statements (issue #3512). There the UPDATE committed on its
+-- own, and the INSERT after it - a write statement even when its WHERE matches nothing -
+-- had to take the write lock again. When that wait outran the busy timeout the command
+-- threw SQLITE_BUSY ("database is locked") for a write that was already durable, so
+-- Orleans kept the old ETag and the grain's next write failed with
+-- InconsistentStateException: Version conflict (WriteState). No write statement may run
+-- after the one that mutates the row: everything after it here reads only the
+-- connection-private temp table, which needs no database lock at all.
+--
+-- The batch deliberately does NOT use an explicit BEGIN TRANSACTION / COMMIT (or
+-- BEGIN IMMEDIATE), which would also make the write atomic. SQLite forbids nested
+-- transactions, and under Microsoft.Data.Sqlite connection pooling a batch that fails
+-- before reaching its COMMIT leaves the transaction open on the pooled connection; the
+-- pool does not roll it back, so the next reuse of that connection fails at BEGIN with
+-- "cannot start a transaction within a transaction", cascading across a burst of
+-- concurrent writes. A single statement's implicit transaction cannot leak that way:
+-- SQLite ends it when the statement completes or fails.
+--
+-- The staging table and trigger are TEMP objects, so they are private to the connection
+-- and created on its first write. A TEMP trigger is allowed to modify a table in the main
+-- database. Bound parameters are not visible inside a trigger body, which is why they
+-- travel as the staged row's columns (NEW.*). The trigger records whether it mutated a
+-- row in the staged row's Applied column, using changes() of the trigger step just
+-- completed, and nulls the staged payload in the same statement so a pooled connection
+-- never pins the last grain state it wrote.
 --
 -- The two trailing SELECTs report the new version to Orleans, which reads them
 -- with SingleOrDefault(): more than one returned row throws
@@ -114,7 +135,10 @@ CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, Grai
 -- non-unique (see design criterion 4 above), so a grain that ever acquires a
 -- second row becomes permanently unwritable while still reading cleanly, since
 -- ReadFromStorageKey below caps itself with LIMIT 1. Observed in production as a
--- storm of write failures against leaf, internal and leaf-snapshot rows.
+-- storm of write failures against leaf, internal and leaf-snapshot rows. Each
+-- SELECT reads the staging table, which holds exactly one row after the DELETE and
+-- INSERT above it, so each returns at most one row. The same property rules out an
+-- INSERT ... ON CONFLICT upsert: it needs a unique index this schema cannot carry.
 --
 -- This is a deliberate divergence from the upstream script this file is derived
 -- from, which reads the version back out of the table in both queries and is
@@ -132,44 +156,65 @@ CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, Grai
 -- redundant indexed lookup from every write.
 INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('WriteToStorageKey', '
-    CREATE TEMP TABLE IF NOT EXISTS OrleansStorageWriteState
+    CREATE TEMP TABLE IF NOT EXISTS OrleansStorageWriteRequest
     (
-        TotalChangesBefore INT NOT NULL
+        GrainIdHash                INT NOT NULL,
+        GrainIdN0                BIGINT NOT NULL,
+        GrainIdN1                BIGINT NOT NULL,
+        GrainTypeHash            INT NOT NULL,
+        GrainTypeString            NVARCHAR(512) NOT NULL,
+        GrainIdExtensionString    NVARCHAR(512) NULL,
+        ServiceId                NVARCHAR(150) NOT NULL,
+        PayloadBinary    BLOB NULL,
+        GrainStateVersion INT NULL,
+        Applied INT NOT NULL DEFAULT 0
     );
-    DELETE FROM OrleansStorageWriteState;
-    INSERT INTO OrleansStorageWriteState (TotalChangesBefore) VALUES (total_changes() + 1);
 
-    UPDATE OrleansStorage
-    SET
-        PayloadBinary = @PayloadBinary,
-        ModifiedOn = datetime(''now''),
-        Version = Version + 1
-    WHERE
-        GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
-        AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
-        AND GrainTypeString = @GrainTypeString
-        AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId
-        AND Version = @GrainStateVersion;
+    CREATE TEMP TRIGGER IF NOT EXISTS OrleansStorageWriteApply
+    AFTER INSERT ON OrleansStorageWriteRequest
+    BEGIN
+        UPDATE OrleansStorage
+        SET
+            PayloadBinary = NEW.PayloadBinary,
+            ModifiedOn = datetime(''now''),
+            Version = Version + 1
+        WHERE
+            GrainIdHash = NEW.GrainIdHash AND GrainTypeHash = NEW.GrainTypeHash
+            AND GrainIdN0 = NEW.GrainIdN0 AND GrainIdN1 = NEW.GrainIdN1
+            AND GrainTypeString = NEW.GrainTypeString
+            AND (GrainIdExtensionString = NEW.GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND NEW.GrainIdExtensionString IS NULL))
+            AND ServiceId = NEW.ServiceId
+            AND Version = NEW.GrainStateVersion;
 
-    INSERT INTO OrleansStorage (GrainIdHash, GrainIdN0, GrainIdN1, GrainTypeHash, GrainTypeString, GrainIdExtensionString, ServiceId, PayloadBinary, ModifiedOn, Version)
-    SELECT @GrainIdHash, @GrainIdN0, @GrainIdN1, @GrainTypeHash, @GrainTypeString, @GrainIdExtensionString, @ServiceId, @PayloadBinary, datetime(''now''), 1
-    WHERE changes() = 0
-      AND @GrainStateVersion IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM OrleansStorage
-        WHERE GrainIdHash = @GrainIdHash AND GrainTypeHash = @GrainTypeHash
-        AND GrainIdN0 = @GrainIdN0 AND GrainIdN1 = @GrainIdN1
-        AND GrainTypeString = @GrainTypeString
-        AND (GrainIdExtensionString = @GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND @GrainIdExtensionString IS NULL))
-        AND ServiceId = @ServiceId
-    );
+        UPDATE OrleansStorageWriteRequest SET Applied = changes() WHERE rowid = NEW.rowid;
+
+        INSERT INTO OrleansStorage (GrainIdHash, GrainIdN0, GrainIdN1, GrainTypeHash, GrainTypeString, GrainIdExtensionString, ServiceId, PayloadBinary, ModifiedOn, Version)
+        SELECT NEW.GrainIdHash, NEW.GrainIdN0, NEW.GrainIdN1, NEW.GrainTypeHash, NEW.GrainTypeString, NEW.GrainIdExtensionString, NEW.ServiceId, NEW.PayloadBinary, datetime(''now''), 1
+        WHERE NEW.GrainStateVersion IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM OrleansStorage
+            WHERE GrainIdHash = NEW.GrainIdHash AND GrainTypeHash = NEW.GrainTypeHash
+            AND GrainIdN0 = NEW.GrainIdN0 AND GrainIdN1 = NEW.GrainIdN1
+            AND GrainTypeString = NEW.GrainTypeString
+            AND (GrainIdExtensionString = NEW.GrainIdExtensionString OR (GrainIdExtensionString IS NULL AND NEW.GrainIdExtensionString IS NULL))
+            AND ServiceId = NEW.ServiceId
+        );
+
+        UPDATE OrleansStorageWriteRequest SET Applied = Applied + changes(), PayloadBinary = NULL WHERE rowid = NEW.rowid;
+    END;
+
+    DELETE FROM OrleansStorageWriteRequest;
+
+    INSERT INTO OrleansStorageWriteRequest (GrainIdHash, GrainIdN0, GrainIdN1, GrainTypeHash, GrainTypeString, GrainIdExtensionString, ServiceId, PayloadBinary, GrainStateVersion)
+    VALUES (@GrainIdHash, @GrainIdN0, @GrainIdN1, @GrainTypeHash, @GrainTypeString, @GrainIdExtensionString, @ServiceId, @PayloadBinary, @GrainStateVersion);
 
     SELECT (CASE WHEN @GrainStateVersion IS NULL THEN 1 ELSE @GrainStateVersion + 1 END) AS NewGrainStateVersion
-    WHERE total_changes() > (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1);
+    FROM OrleansStorageWriteRequest
+    WHERE Applied > 0;
 
     SELECT @GrainStateVersion AS NewGrainStateVersion
-    WHERE total_changes() = (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
+    FROM OrleansStorageWriteRequest
+    WHERE Applied = 0
         AND @GrainStateVersion IS NOT NULL;
 ');
 

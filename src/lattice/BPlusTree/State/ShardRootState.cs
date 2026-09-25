@@ -350,9 +350,17 @@ internal sealed record PendingChildLink
     [Id(2)] public bool ChildIsLeaf { get; init; }
 
     /// <summary>
-    /// The ancestors that still have to accept this separator, nearest first -
+    /// The ancestors that still had to accept this separator, nearest first -
     /// the contents of the descent path at the moment the split was produced.
     /// </summary>
+    /// <remarks>
+    /// Retained for wire and storage compatibility only. Since issue #3523 a
+    /// pending link is delivered by a fresh descent from the current root, and
+    /// never to a recorded ancestor, because a path captured before an
+    /// interleaved split or root promotion names the wrong parent. New records
+    /// write an empty list, and a non-empty list read from older state is
+    /// ignored.
+    /// </remarks>
     [Id(3)] public required List<GrainId> Ancestors { get; init; }
 }
 

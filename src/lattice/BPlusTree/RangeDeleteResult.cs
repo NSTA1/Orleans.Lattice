@@ -45,4 +45,19 @@ public readonly record struct RangeDeleteResult
     /// keeps the unconditional range-delete observer payload unchanged.
     /// </summary>
     [Id(2)] public IReadOnlyList<string>? MatchedKeys { get; init; }
+
+    /// <summary>
+    /// Every leaf split this range delete caused, for the shard root to link,
+    /// or <see langword="null"/> when none did (issue #3523). A split that
+    /// interleaves with the delete's WAL append can move a matched key to a new
+    /// sibling before its tombstone is applied; the tombstone is then forwarded
+    /// to the leaf that declares the key, and the forwarded merge can divide
+    /// that leaf. Left unlinked, such a division orphans the new leaf.
+    /// <para>
+    /// Carried in a new field slot so the wire shape stays compatible across a
+    /// rolling upgrade: an older leaf never sets it, which reads as
+    /// <see langword="null"/>, and an older shard root skips it.
+    /// </para>
+    /// </summary>
+    [Id(3)] internal BPlusTree.SplitResult? Split { get; init; }
 }

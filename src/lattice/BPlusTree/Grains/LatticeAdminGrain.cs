@@ -53,7 +53,7 @@ internal sealed partial class LatticeAdminGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var treeIds = await registry.GetAllTreeIdsAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -94,7 +94,7 @@ internal sealed partial class LatticeAdminGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var treeIds = await registry.GetAllTreeIdsAsync();
         cancellationToken.ThrowIfCancellationRequested();
 

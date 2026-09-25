@@ -100,7 +100,7 @@ internal sealed class TreeResizeGrain(
         // MaxScanRetries is spent), which can outlast the caller's response
         // budget on a tree being written concurrently. See TreeEmptinessProbe
         // for why an existence question needs no such reconciliation.
-        var registryForProbe = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registryForProbe = grainFactory.GetLatticeRegistry();
         var resolvedOptions = await optionsResolver.ResolveAsync(TreeId);
         var probeMap = await registryForProbe.GetShardMapAsync(TreeId)
             ?? ShardMap.GetOrCreateDefaultShared(
@@ -127,7 +127,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private async Task ApplyEmptyTreeResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var existing = await registry.GetEntryAsync(TreeId);
         var updated = (existing ?? new State.TreeRegistryEntry()) with
         {
@@ -169,7 +169,7 @@ internal sealed class TreeResizeGrain(
         var operationId = Guid.NewGuid().ToString("N");
 
         // Resolve the current physical tree ID (may already be aliased from a prior resize).
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var currentPhysical = await registry.ResolveAsync(TreeId);
         var snapshotTreeId = $"{TreeId}/resized/{operationId}";
 
@@ -393,7 +393,7 @@ internal sealed class TreeResizeGrain(
         await Task.WhenAll(undoTasks);
 
         // 3. Remove the alias so the logical tree maps back to the old physical tree.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         await registry.RemoveAliasAsync(TreeId);
 
         // 4. Delete the snapshot tree.
@@ -504,7 +504,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     internal async Task SwapAliasAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
 
         // Update registry entry with new structural sizing. Preserve the
         // previously-pinned ShardCount so the registry resolver does not

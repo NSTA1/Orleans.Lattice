@@ -206,7 +206,7 @@ internal sealed partial class LatticeGrain
                 }
                 retriesUsed++;
 
-                registry ??= grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                registry ??= grainFactory.GetLatticeRegistry();
                 var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
 
                 var needSlots = new HashSet<int>();
@@ -252,7 +252,7 @@ internal sealed partial class LatticeGrain
 
                 // Final stability check: handle the edge case where all
                 // live cursors finished before the split report propagated.
-                registry ??= grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                registry ??= grainFactory.GetLatticeRegistry();
                 var shardMapFinal = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (shardMapFinal.Version == lastMapVersion) yield break;
 

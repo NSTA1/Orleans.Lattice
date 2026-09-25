@@ -525,6 +525,41 @@ internal sealed partial class ShardRootGrain(
     private readonly SemaphoreSlim _promotionGate = new(1, 1);
 
     /// <summary>
+    /// Per-activation gate that serialises every split link: the fresh
+    /// ancestor descent, each <c>AcceptSplitAsync</c> up the chain, and any
+    /// root promotion the link bubbles into (issue #3523).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The write paths are <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>,
+    /// so before this gate two turns could link concurrently against ancestor
+    /// paths each had captured before the other mutated the tree. A separator
+    /// delivered to an internal node that had since split was inserted into the
+    /// donor half, whose range no longer covers it, and the new leaf became
+    /// reachable by chain but by no descent - every acknowledged key on it lost
+    /// to reads.
+    /// </para>
+    /// <para>
+    /// Taken only on the split-propagation path, never on the per-key write
+    /// path, so an ordinary write that does not split never waits on it. Lock
+    /// order is this gate, then <see cref="_promotionGate"/>; nothing that holds
+    /// the promotion gate may wait on this one.
+    /// </para>
+    /// </remarks>
+    private readonly SemaphoreSlim _splitLinkGate = new(1, 1);
+
+    /// <summary>
+    /// The <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.PendingChildLinks"/>
+    /// entries recorded by the link currently holding
+    /// <see cref="_splitLinkGate"/>, by reference. Lets the pre-operation fast
+    /// path tell an in-flight link (nothing owed) from an interrupted one (a
+    /// resume owed), so a concurrent write does not queue behind a link that is
+    /// merely running. Emptied whenever the gate is released: anything still
+    /// recorded then is stranded, and owed a resume.
+    /// </summary>
+    private readonly HashSet<PendingChildLink> _inFlightChildLinks = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     /// Per-activation gate that serialises the lazy single-leaf root
     /// seed in <see cref="EnsureRootAsync"/>. Public operations are
     /// annotated <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>, so two turns
@@ -1820,7 +1855,18 @@ internal sealed partial class ShardRootGrain(
                 var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
                 await RecordAffectedLeafIfPreparedAsync(leafId);
                 await MarkLeafDirtyAsync(leafId);
-                result = await leafGrain.DeleteAsync(key);
+                var deleted = await DeleteOnLeafAsync(leafGrain, key);
+                result = deleted.Deleted;
+
+                // Link any leaf split the delete caused (issue #3523). A split
+                // that interleaved with the leaf's WAL append can leave the
+                // tombstone outside the leaf's span; the leaf then relocates it
+                // to the sibling that declares the key, and that merge can
+                // divide the sibling. Only this grain can link the new leaf.
+                if (deleted.Split is { } deleteSplit)
+                {
+                    await LinkSplitAsync(deleteSplit);
+                }
 
                 // Shadow-forward the prepared tombstone to the split
                 // destination and install the destination-side shadow marker
@@ -1839,6 +1885,67 @@ internal sealed partial class ShardRootGrain(
                 // Retry - same rationale as SetAsync.
             }
         }
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="key"/> on <paramref name="leaf"/> through
+    /// <see cref="IBPlusLeafGrain.DeleteTrackedAsync"/>, so any split the delete
+    /// caused comes back to be linked, falling back to
+    /// <see cref="IBPlusLeafGrain.DeleteAsync"/> when the leaf is hosted on a
+    /// silo that predates the tracked method.
+    /// <para>
+    /// The fallback exists only for a rolling upgrade. An older silo cannot
+    /// resolve the new method's request type, so it rejects the message before
+    /// the leaf runs any of it and the caller receives the type-resolution
+    /// fault; see <see cref="IsLeafMethodUnavailableFault"/>. Because nothing
+    /// ran, re-issuing the delete through the older method is safe. Any other
+    /// fault propagates unchanged, so a delete that did run is never
+    /// re-issued. The fallback cannot report a split, which leaves an
+    /// upgrading cluster exposed to the pre-fix orphan window only on the
+    /// older leaves, never worse than before.
+    /// </para>
+    /// </summary>
+    private static async Task<LeafDeleteResult> DeleteOnLeafAsync(IBPlusLeafGrain leaf, string key)
+    {
+        try
+        {
+            return await leaf.DeleteTrackedAsync(key);
+        }
+        catch (Exception ex) when (IsLeafMethodUnavailableFault(ex))
+        {
+            return new LeafDeleteResult { Deleted = await leaf.DeleteAsync(key) };
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is the fault a silo raises when it
+    /// cannot decode a request because the request type is unknown to it:
+    /// a <see cref="TypeLoadException"/> (an unresolved type alias), an Orleans
+    /// <see cref="Orleans.Serialization.SerializerException"/>, or either of
+    /// those carried back as an
+    /// <see cref="Orleans.Serialization.UnavailableExceptionFallbackException"/>.
+    /// Searches the inner-exception chain, since the fault can arrive wrapped.
+    /// Such a fault is raised before the target grain runs, which is what makes
+    /// retrying through an older method safe (see <see cref="DeleteOnLeafAsync"/>).
+    /// </summary>
+    internal static bool IsLeafMethodUnavailableFault(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case TypeLoadException:
+                case Orleans.Serialization.SerializerException:
+                    return true;
+                case Orleans.Serialization.UnavailableExceptionFallbackException fallback
+                    when fallback.ExceptionType is { } type
+                        && (type.Contains(nameof(TypeLoadException), StringComparison.Ordinal)
+                            || type.StartsWith("Orleans.Serialization.", StringComparison.Ordinal)):
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     // Mutating, and therefore the one site where the stall ceiling abandons work
@@ -1931,6 +2038,12 @@ internal sealed partial class ShardRootGrain(
                 await MarkLeafDirtyAsync(leafId);
             if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
                 matchedKeys.AddRange(result.MatchedKeys);
+
+            // Link any leaf split the range delete caused (issue #3523); see
+            // DeleteAsync. An older leaf never sets Split, so this is inert
+            // across a rolling upgrade.
+            if (result.Split is { } rangeSplit)
+                await LinkSplitAsync(rangeSplit);
 
             if (result.PastRange)
                 break;
@@ -2635,7 +2748,7 @@ internal sealed partial class ShardRootGrain(
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             await registry.RegisterAsync(TreeId);
             state.State.IsRegistered = true;
         }
@@ -2760,7 +2873,7 @@ internal sealed partial class ShardRootGrain(
         if (state.State.RootNodeId is not null
             && state.State.PendingPromotion is null
             && state.State.PendingBulkGraft is null
-            && state.State.PendingChildLinks.Count == 0)
+            && state.State.PendingChildLinks.Count == _inFlightChildLinks.Count)
         {
             return Task.CompletedTask;
         }
@@ -2817,10 +2930,16 @@ internal sealed partial class ShardRootGrain(
         // grouped internal-routing path below instead of blind-casting.
         if (RootIsLeafTyped)
         {
-            await MergeGroupAsync(entries, isCrossShardMigration);
+            await MergeGroupAsync(entries, isCrossShardMigration,
+                Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
             await forwardTask;
             return;
         }
+
+        // Captured BEFORE grouping so a routing change that lands while the
+        // grouping traversal is suspended is also seen as a change (#2125).
+        var groupedAtGeneration = Volatile.Read(ref _routingGeneration);
+        var groupedAtRoot = state.State.RootNodeId;
 
         // Group entries by target leaf so each leaf is called exactly once.
         // Per-leaf WriteStateAsync collapses from O(entries) to O(leaves) -
@@ -2854,7 +2973,7 @@ internal sealed partial class ShardRootGrain(
 
         foreach (var group in groups.Values)
         {
-            await MergeGroupAsync(group, isCrossShardMigration);
+            await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
         }
 
         // Await forwardTask at the end of the grouped path - matches the
@@ -2891,8 +3010,31 @@ internal sealed partial class ShardRootGrain(
     /// against the current topology and propagating any resulting split up to
     /// the root. Retries on transient Orleans / storage exceptions; the leaf's
     /// <c>MergeManyAsync</c> is LWW-idempotent, so replay is safe.
+    /// <para>
+    /// <b>Re-grouping (issue #2125).</b> The group was built by routing each
+    /// key once, and the normal path re-routes only its first key and hands
+    /// the whole group to that leaf. That is correct only while routing is
+    /// unchanged: if a leaf split (or a reclaim, graft, or root promotion)
+    /// moved a boundary through the group since it was built, every key past
+    /// the new boundary reaches a leaf whose declared span excludes it, and
+    /// its survival then rests on the leaf's span forward - or, with no
+    /// resolvable neighbour, on a fail-open local commit. So on a retry, and
+    /// whenever <see cref="_routingGeneration"/> or the root has moved since
+    /// <paramref name="groupedAtGeneration"/> /
+    /// <paramref name="groupedAtRoot"/> were captured, every key is re-routed
+    /// and the group is split into per-leaf sub-groups before merging.
+    /// </para>
+    /// <para>
+    /// The normal path - first attempt, unchanged routing - is exactly the
+    /// pre-#2125 path: one volatile read and one <see cref="GrainId"/>
+    /// comparison, no extra routing lookup, and no allocation.
+    /// </para>
     /// </summary>
-    private async Task MergeGroupAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
+    private async Task MergeGroupAsync(
+        Dictionary<string, LwwValue<byte[]>> group,
+        bool isCrossShardMigration,
+        long groupedAtGeneration,
+        GrainId? groupedAtRoot)
     {
         // Any key in the group routes to the same leaf under the current
         // topology; pick one via foreach-break to avoid the LINQ enumerator
@@ -2903,10 +3045,23 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+
+        // Tracked separately from attempt: the retired-leaf back-off rewinds
+        // attempt so it does not consume the transient retry budget, and a
+        // retry after that back-off must still re-group.
+        var retried = false;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
+                if (retried
+                    || Volatile.Read(ref _routingGeneration) != groupedAtGeneration
+                    || !Nullable.Equals(state.State.RootNodeId, groupedAtRoot))
+                {
+                    await RegroupAndMergeAsync(group, isCrossShardMigration);
+                    return;
+                }
+
                 var splitResult = await TraverseForMergeAsync(pivotKey!, group, isCrossShardMigration);
 
                 while (splitResult is not null)
@@ -2918,8 +3073,69 @@ internal sealed partial class ShardRootGrain(
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
+                retried = true;
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
 
+            }
+        }
+    }
+
+    /// <summary>
+    /// The re-grouping arm of <see cref="MergeGroupAsync"/>: re-routes every
+    /// key of <paramref name="group"/> against the current topology and merges
+    /// each resulting per-leaf sub-group through the ordinary
+    /// <see cref="TraverseForMergeAsync"/> + <see cref="PromoteRootAsync"/>
+    /// sequence.
+    /// <para>
+    /// It deliberately does not recurse into <see cref="MergeGroupAsync"/>. A
+    /// fault here propagates to the caller's retry loop, which re-groups again
+    /// from scratch under the same retry budget and deadline; recursing would
+    /// give every nested level a fresh budget, so a persistently failing leaf
+    /// could re-group without bound. Re-merging a sub-group that already
+    /// landed before the fault is LWW-idempotent.
+    /// </para>
+    /// </summary>
+    private async Task RegroupAndMergeAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
+    {
+        Interlocked.Increment(ref _mergeRegroupCount);
+
+        // A root that is (again) a single leaf owns every key, so there is
+        // nothing to split; TraverseForMergeAsync routes the whole group to it.
+        if (RootIsLeafTyped)
+        {
+            string? onlyPivot = null;
+            foreach (var k in group.Keys) { onlyPivot = k; break; }
+            var rootSplit = await TraverseForMergeAsync(onlyPivot!, group, isCrossShardMigration);
+            while (rootSplit is not null)
+            {
+                rootSplit = await PromoteRootAsync(rootSplit);
+            }
+
+            return;
+        }
+
+        var subGroups = new Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>();
+        foreach (var (key, lww) in group)
+        {
+            var leafId = await TraverseToLeafWithRetryAsync(key);
+            if (!subGroups.TryGetValue(leafId, out var subGroup))
+            {
+                subGroup = new Dictionary<string, LwwValue<byte[]>>(capacity: Math.Min(group.Count, 16));
+                subGroups[leafId] = subGroup;
+            }
+
+            subGroup[key] = lww;
+        }
+
+        foreach (var subGroup in subGroups.Values)
+        {
+            string? subPivot = null;
+            foreach (var k in subGroup.Keys) { subPivot = k; break; }
+
+            var splitResult = await TraverseForMergeAsync(subPivot!, subGroup, isCrossShardMigration);
+            while (splitResult is not null)
+            {
+                splitResult = await PromoteRootAsync(splitResult);
             }
         }
     }

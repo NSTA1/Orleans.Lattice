@@ -150,4 +150,72 @@ public sealed class BPlusLeafGrainSplitGateTests
 
         Assert.That(result, Is.Not.Null, "split should proceed when the gate is free");
     }
+
+    [Test]
+    public async Task Split_publishes_digest_to_parent_only_after_releasing_the_gate()
+    {
+        // Issue #3523: a parent seeding a freshly linked sibling holds its own
+        // split gate while it waits on the sibling's. A leaf that published
+        // its post-split digest while still holding its gate could therefore
+        // wait on that parent until the publish deadline broke the cycle.
+        var state = new FakePersistentState<LeafNodeState>
+        {
+            State = { ParentId = GrainId.Create("internal", "split-gate-parent") },
+        };
+        var sibling = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        ((IGrainBase)sibling).GrainContext.Returns(siblingContext);
+        sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(Task.CompletedTask);
+        sibling.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "split-gate-leaf"));
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(sibling);
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(sibling);
+        var parent = Substitute.For<IBPlusInternalGrain>();
+        grainFactory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(parent);
+        var resolver = TestOptionsResolver.Create(
+            maxLeafKeys: 3,
+            shardCount: 1,
+            factory: grainFactory);
+        var grain = new BPlusLeafGrain(
+            context,
+            state,
+            grainFactory,
+            resolver,
+            TestMutationObservers.NoObservers(),
+            TestOriginClusterIdResolver.Default());
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var gate = SplitGateOf(grain);
+        var publishesUnderGate = 0;
+        var publishes = 0;
+        parent.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(_ =>
+            {
+                publishes++;
+                if (gate.CurrentCount == 0)
+                {
+                    publishesUnderGate++;
+                }
+
+                return Task.CompletedTask;
+            });
+
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Not.Null, "the overflowing write must split");
+            Assert.That(publishes, Is.GreaterThan(0), "the split must publish its changed digest");
+            Assert.That(publishesUnderGate, Is.Zero, "no digest publish may run while the split gate is held");
+        });
+    }
 }

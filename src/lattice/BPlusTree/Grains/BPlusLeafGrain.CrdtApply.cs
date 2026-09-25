@@ -503,6 +503,10 @@ internal sealed partial class BPlusLeafGrain
         if (batch is null && IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
+            if (splitResult is not null)
+            {
+                await PublishSplitDigestAsync(splitResult.PromotedKey);
+            }
         }
 
         // step 5 (observer) - publish under a commit-log scope so a
@@ -530,7 +534,7 @@ internal sealed partial class BPlusLeafGrain
         // apply has landed carries the same result as N publishes.
         if (batch is null)
         {
-            await PublishDigestUpwardAsync();
+            await PublishDigestUpwardAfterWriteAsync(splitResult);
         }
 
         return new CrdtApplyResult { Version = stamp, Split = splitResult };
@@ -616,9 +620,13 @@ internal sealed partial class BPlusLeafGrain
         if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
             splitResult = await SplitAsync();
+            if (splitResult is not null)
+            {
+                await PublishSplitDigestAsync(splitResult.PromotedKey);
+            }
         }
 
-        await PublishDigestUpwardAsync();
+        await PublishDigestUpwardAfterWriteAsync(splitResult);
         return splitResult;
     }
 

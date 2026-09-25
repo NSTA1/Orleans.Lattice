@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
+using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -54,9 +55,9 @@ internal sealed partial class BPlusInternalGrain
 
     /// <summary>
     /// Reusable deadline source for <see cref="PublishUpwardAsync"/>. Upward
-    /// publishes only run while the activation holds its non-reentrant
-    /// <c>_splitGate</c>, so at most one publish is in flight per activation at
-    /// a time and this single source is never armed concurrently. Recycling it
+    /// publishes only run through <see cref="FlushUpwardPublishAsync"/>, which
+    /// admits one flush at a time per activation, so this single source is
+    /// never armed concurrently. Recycling it
     /// (arm with <see cref="CancellationTokenSource.CancelAfter(System.TimeSpan)"/>,
     /// disarm with <see cref="CancellationTokenSource.TryReset"/> after a
     /// non-fired publish) reuses the underlying timer object across the hot path
@@ -67,6 +68,20 @@ internal sealed partial class BPlusInternalGrain
     /// activation-lifetime convention of <c>_splitGate</c>.
     /// </summary>
     private CancellationTokenSource? _publishDeadline;
+
+    /// <summary>
+    /// Child publishes that arrived while <c>_splitGate</c> was held, keyed by
+    /// child and keeping only the freshest snapshot per child. Folded by the
+    /// holder in <see cref="ReleaseSplitGateAsync"/>. Allocated on first
+    /// contention only.
+    /// </summary>
+    private Dictionary<GrainId, ChildDigestSnapshot>? _deferredChildSnapshots;
+
+    /// <summary>Set by <see cref="MarkUpwardPublishPending"/>; cleared by a flush.</summary>
+    private bool _upwardPublishPending;
+
+    /// <summary>True while a <see cref="FlushUpwardPublishAsync"/> is running.</summary>
+    private bool _upwardPublishInFlight;
 
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
@@ -107,8 +122,13 @@ internal sealed partial class BPlusInternalGrain
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
+
+        // Parked child publishes folded on release leave an upward publish
+        // pending. It is deliberately not sent from here: the re-parenting
+        // caller pulls GetChildDigestSnapshotAsync next, which reads the
+        // post-fold aggregate, and the next mutation's flush sends the rest.
     }
 
     /// <inheritdoc />
@@ -127,15 +147,32 @@ internal sealed partial class BPlusInternalGrain
         // (which already holds the gate), so we do NOT push the gate
         // down into the helper - we acquire it here at the public entry
         // point only.
-        await _splitGate.WaitAsync().ConfigureAwait(true);
+        //
+        // Never WAITS for the gate, though (issue #3523). A holder of the gate
+        // can be blocked on this very publisher: AcceptSplitAsync and the
+        // InitializeAsync seeding call SetParentAsync on a child, which queues
+        // behind the child's current turn, and that turn can be the one
+        // publishing here. Waiting closed the cycle until the publish deadline
+        // faulted, stalling every write routed through the child. A contended
+        // publish is instead parked for the holder, which folds it before it
+        // releases the gate - see ReleaseSplitGateAsync.
+        if (!_splitGate.Wait(0))
+        {
+            DeferChildSnapshot(childId, newSnapshot);
+            return;
+        }
         try
         {
             await ApplyChildSnapshotAsync(childId, newSnapshot);
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
+
+        // Onward publish outside the gate (issue #3523). Faults propagate:
+        // the caller is a child's own flush, which keeps its flag set.
+        await FlushUpwardPublishAsync();
     }
 
     /// <summary>
@@ -176,10 +213,7 @@ internal sealed partial class BPlusInternalGrain
             {
                 RecomputeSubtreeAggregatesFromChildDigests();
                 await state.WriteStateAsync();
-                if (state.State.ParentId is { } staleParentId)
-                {
-                    await PublishUpwardAsync(staleParentId);
-                }
+                MarkUpwardPublishPending();
             }
             return;
         }
@@ -252,9 +286,162 @@ internal sealed partial class BPlusInternalGrain
         // delta from this child happened to cancel out at the XOR level -
         // a future-proof shape that gracefully handles tree rewrites
         // (the parent's stored snapshot for us simply gets refreshed).
-        if (state.State.ParentId is { } parentId)
+        // Deferred, not sent here: this helper runs under _splitGate, and the
+        // public entry point flushes after releasing it (issue #3523).
+        MarkUpwardPublishPending();
+    }
+
+    /// <summary>
+    /// Records that this node's subtree aggregate changed and its parent must be
+    /// sent a fresh snapshot. Every state-write path runs under <c>_splitGate</c>,
+    /// and the publish itself is a cross-grain call up the tree, so it is never
+    /// made while the gate is held: the public entry point that took the gate
+    /// calls <see cref="FlushUpwardPublishAsync"/> after releasing it.
+    /// </summary>
+    /// <remarks>
+    /// Publishing under the gate formed a cycle with a parent mid-split (issue
+    /// #3523). The parent holds its own gate across <c>AcceptSplitAsync</c> and
+    /// calls <see cref="SetParentAsync"/> on a moved child, which needs the
+    /// child's gate; a child holding that gate while it published to the parent
+    /// needed the parent's. Neither could proceed until
+    /// <see cref="LatticeOptions.DigestPublishTimeout"/> faulted the publish,
+    /// and the fault propagated out of the child's <c>AcceptSplitAsync</c>,
+    /// discarding the <see cref="SplitResult"/> it would have returned - so the
+    /// split sibling it had just created was never linked, and every key routed
+    /// to it became unreachable. With the publish outside the gate, a gate is
+    /// only ever held across calls made downward, which cannot cycle.
+    /// </remarks>
+    private void MarkUpwardPublishPending() => _upwardPublishPending = true;
+
+    /// <summary>
+    /// Parks a child publish that found <c>_splitGate</c> held, keeping only the
+    /// freshest snapshot per child. The current holder folds it before
+    /// releasing the gate (<see cref="ReleaseSplitGateAsync"/>).
+    /// </summary>
+    private void DeferChildSnapshot(GrainId childId, ChildDigestSnapshot snapshot)
+    {
+        var deferred = _deferredChildSnapshots ??= [];
+        if (deferred.TryGetValue(childId, out var parked)
+            && snapshot.PublishSequence < parked.PublishSequence)
         {
-            await PublishUpwardAsync(parentId);
+            return;
+        }
+
+        deferred[childId] = snapshot;
+    }
+
+    /// <summary>
+    /// Releases <c>_splitGate</c>, first folding every child publish parked by
+    /// <see cref="OnChildDigestPublishedAsync"/> while the gate was held. Every
+    /// holder releases through here, so a parked publish is never stranded.
+    /// </summary>
+    /// <remarks>
+    /// Grain turns are single-threaded, so the emptiness check and the release
+    /// run with no await between them: a publish either parks before the check,
+    /// and is folded here, or arrives after the release and takes the gate
+    /// itself. A fold that faults is re-parked and logged rather than thrown,
+    /// because the caller's own mutation is already durable and the digest is
+    /// staleness-tolerant - the next holder folds it again.
+    /// </remarks>
+    private async Task ReleaseSplitGateAsync()
+    {
+        try
+        {
+            while (_deferredChildSnapshots is { Count: > 0 } deferred)
+            {
+                GrainId childId = default;
+                ChildDigestSnapshot snapshot = default;
+                foreach (var kvp in deferred)
+                {
+                    (childId, snapshot) = (kvp.Key, kvp.Value);
+                    break;
+                }
+
+                deferred.Remove(childId);
+                try
+                {
+                    await ApplyChildSnapshotAsync(childId, snapshot);
+                }
+                catch (Exception ex)
+                {
+                    DeferChildSnapshot(childId, snapshot);
+                    ResolveLogger()?.LogWarning(
+                        ex,
+                        "Internal node {GrainId} of tree {TreeId}: folding a parked child digest publish failed; "
+                        + "it stays parked and the next gate holder re-drives it.",
+                        context.GrainId, state.State.TreeId ?? "<unknown>");
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sends the pending upward publish recorded by
+    /// <see cref="MarkUpwardPublishPending"/>, if any, to the current parent.
+    /// Must be called with <c>_splitGate</c> released.
+    /// </summary>
+    /// <remarks>
+    /// At most one flush is in flight per activation, which keeps the recycled
+    /// <see cref="_publishDeadline"/> single-armed. A flush that finds another
+    /// already running returns at once and leaves the flag set; the running flush
+    /// loops until the flag stays clear, so the latest aggregate is always the one
+    /// sent last. On a fault the flag is restored before rethrowing, so the next
+    /// entry point re-drives the publish rather than losing it.
+    /// </remarks>
+    private async Task FlushUpwardPublishAsync()
+    {
+        if (!_upwardPublishPending || _upwardPublishInFlight) return;
+
+        _upwardPublishInFlight = true;
+        try
+        {
+            while (_upwardPublishPending)
+            {
+                _upwardPublishPending = false;
+                if (state.State.ParentId is not { } parentId) return;
+                try
+                {
+                    await PublishUpwardAsync(parentId);
+                }
+                catch
+                {
+                    _upwardPublishPending = true;
+                    throw;
+                }
+            }
+        }
+        finally
+        {
+            _upwardPublishInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="FlushUpwardPublishAsync"/> for an entry point whose own
+    /// mutation has already been persisted and must be reported to its caller
+    /// regardless of the publish. The digest is staleness-tolerant and the flag
+    /// survives the fault, so the next mutation re-drives it; failing the caller
+    /// instead would discard a durable result - for <c>AcceptSplitAsync</c>, a
+    /// <see cref="SplitResult"/> whose sibling then goes unlinked (issue #3523).
+    /// </summary>
+    private async Task FlushUpwardPublishContainedAsync(string operation)
+    {
+        try
+        {
+            await FlushUpwardPublishAsync();
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Internal node {GrainId} of tree {TreeId}: deferred upward digest publish after {Operation} failed; "
+                + "it stays pending and the next mutation re-drives it.",
+                context.GrainId, state.State.TreeId ?? "<unknown>", operation);
         }
     }
 
@@ -507,18 +694,16 @@ internal sealed partial class BPlusInternalGrain
     /// updates on this activation do not retroactively mutate the bytes
     /// the parent's table has captured.
     /// <para>
-    /// The upward publish is a cross-grain RPC that is awaited while this
-    /// activation holds its non-reentrant <c>_splitGate</c>, and it
-    /// recurses up the internal-node chain toward the shard root. A parent
-    /// that is itself mid-mutation can leave the await neither completing
-    /// nor faulting, pinning the gate with no ceiling and wedging every
-    /// subsequent mutating turn on this activation. The await is therefore
-    /// bounded by <see cref="LatticeOptions.DigestPublishTimeout"/>: on a
-    /// park the publish is abandoned (its eventual completion is harmlessly
-    /// unobserved) and the turn faults with a <see cref="TimeoutException"/>
-    /// so the gate releases via the caller's <c>finally</c>. The digest is
-    /// staleness-tolerant - the next mutation's dirty-flag publish
-    /// re-drives convergence - and the abandoned publish never partially
+    /// The upward publish is a cross-grain RPC that recurses up the
+    /// internal-node chain toward the shard root. It runs only from
+    /// <see cref="FlushUpwardPublishAsync"/>, never while this activation holds
+    /// its <c>_splitGate</c> (issue #3523). A parent that is itself
+    /// mid-mutation can still leave the await neither completing nor faulting,
+    /// so the await is bounded by <see cref="LatticeOptions.DigestPublishTimeout"/>:
+    /// on a park the publish is abandoned (its eventual completion is harmlessly
+    /// unobserved) and the flush faults with a <see cref="TimeoutException"/>. The digest is
+    /// staleness-tolerant - the pending flag survives the fault and the next
+    /// mutation re-drives convergence - and the abandoned publish never partially
     /// applied at the parent, so the exact-count invariant is preserved.
     /// When the timeout is <see cref="Timeout.InfiniteTimeSpan"/> the call
     /// is awaited unbounded, restoring the historical behaviour.
@@ -539,8 +724,8 @@ internal sealed partial class BPlusInternalGrain
 
         // Recycle a single per-activation deadline source rather than allocating
         // a CancellationTokenSource(timeout) - and arming a fresh one-shot timer -
-        // on every publish. Safe because the gate serialises publishes to one
-        // in-flight per activation. On the non-fired path TryReset() unschedules
+        // on every publish. Safe because FlushUpwardPublishAsync admits one
+        // flush in flight per activation. On the non-fired path TryReset() unschedules
         // the timer and returns the source to the pool; on the fired (timeout)
         // path the source can no longer be reset, so it is dropped and a fresh
         // one is created next publish.

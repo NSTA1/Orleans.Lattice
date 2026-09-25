@@ -4011,6 +4011,16 @@ public class LatticeOptions
     /// the tree permanently <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>.
     /// </para>
     /// <para>
+    /// The same window also judges a leaf materialiser's <b>position</b>
+    /// (issue #3131): a leaf whose cursor has not advanced within the window
+    /// (<see cref="WalCursorSnapshot.CursorAdvancedAtTicks"/>) and whose cursor
+    /// itself predates the window is excluded even when its report is fresh. A
+    /// leaf's cursor covers only its own key range while the WAL head is
+    /// tree-wide, and a leaf re-reports its persisted position on every
+    /// activation, so a leaf whose range received no writes would otherwise read
+    /// as phantom lag. Tree-wide consumers are judged on report age alone.
+    /// </para>
+    /// <para>
     /// Defaults to <see cref="DefaultWalDrainLagConsumerFreshness"/> (5
     /// minutes), which is 1,500 times the default
     /// <see cref="WalSaturationSampleInterval"/> of 200 milliseconds. That is

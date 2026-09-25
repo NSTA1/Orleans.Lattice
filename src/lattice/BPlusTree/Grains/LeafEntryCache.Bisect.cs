@@ -152,8 +152,9 @@ internal sealed partial class LeafEntryCache
     /// Returns the interior keys at which a transfer starting from
     /// <paramref name="startInclusive"/> should be cut into batches, so that
     /// each batch's decoded footprint stays near
-    /// <paramref name="targetBatchBytes"/>. Reads only frame keys, so no
-    /// hydration block is materialised and no payload is decoded.
+    /// <paramref name="targetBatchBytes"/>. Reads frame keys when attached,
+    /// otherwise resident rows and their accounted lengths; no hydration
+    /// block is materialised and no deferred payload is decoded.
     /// <para>
     /// The batch width is derived at runtime from this frame's own measured
     /// mean row footprint, so it adapts to the data rather than to a tuned
@@ -161,8 +162,10 @@ internal sealed partial class LeafEntryCache
     /// because a block is the unit of both materialisation and eviction.
     /// </para>
     /// <para>
-    /// An empty result means "transfer in one pass": either nothing is lazily
-    /// hydrated, or the whole remaining range already fits a single batch.
+    /// Without a frame, each batch is bounded by the actual row footprints,
+    /// except that an indivisible oversized row travels alone. An empty result
+    /// means batching is disabled or the remaining range fits a single batch,
+    /// never that the absence of a frame prevented planning.
     /// </para>
     /// </summary>
     /// <param name="startInclusive">Inclusive lower bound of the transfer.</param>
@@ -173,10 +176,15 @@ internal sealed partial class LeafEntryCache
     {
         ArgumentNullException.ThrowIfNull(startInclusive);
 
-        var source = _hydration;
-        if (source is null || targetBatchBytes <= 0)
+        if (targetBatchBytes <= 0)
         {
             return [];
+        }
+
+        var source = _hydration;
+        if (source is null)
+        {
+            return GetResidentTransferBatchBoundaries(startInclusive, targetBatchBytes);
         }
 
         var rowCount = source.RowCount;
@@ -220,6 +228,32 @@ internal sealed partial class LeafEntryCache
         }
 
         return boundaries;
+    }
+
+    private IReadOnlyList<string> GetResidentTransferBatchBoundaries(string startInclusive, long targetBatchBytes)
+    {
+        if (_stateBytes <= targetBatchBytes)
+        {
+            return [];
+        }
+
+        List<string>? boundaries = null;
+        long batchBytes = 0;
+        var hasRows = false;
+        // Do not use EnumerateRange: it drains deferred payloads. Their recorded
+        // lengths suffice, and the existing key strings can be reused as cuts.
+        foreach (var (key, row) in new RangeRows(_rows, startInclusive, null))
+        {
+            var rowBytes = AccountedRowBytes(key, row);
+            if (hasRows && rowBytes > targetBatchBytes - batchBytes)
+            {
+                (boundaries ??= []).Add(key);
+                batchBytes = 0;
+            }
+            batchBytes += rowBytes;
+            hasRows = true;
+        }
+        return boundaries is null ? [] : boundaries;
     }
 
     /// <summary>

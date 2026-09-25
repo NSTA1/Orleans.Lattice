@@ -155,7 +155,7 @@ internal sealed class TreeShardConsolidationGrain(
     private async Task<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         _physicalTreeId = await registry.ResolveAsync(TreeId);
         return _physicalTreeId;
     }
@@ -221,7 +221,7 @@ internal sealed class TreeShardConsolidationGrain(
     /// </summary>
     internal async Task InitiateConsolidationStateAsync(int donorShardIndex, int survivorShardIndex)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
         var currentMap = await registry.GetShardMapAsync(TreeId)
@@ -541,7 +541,7 @@ internal sealed class TreeShardConsolidationGrain(
         // them, so a split persisting in the gap would be clobbered by the
         // write below and its moved slots would keep routing to the source it
         // had already migrated away from.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         await registry.ReassignSlotsAsync(
             TreeId,
             slots,

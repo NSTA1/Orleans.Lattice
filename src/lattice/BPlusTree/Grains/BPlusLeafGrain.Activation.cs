@@ -6613,7 +6613,7 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var registry = grainFactory.GetLatticeRegistry();
             var map = await registry.GetShardMapAsync(treeId);
             if (map is not null && map.GetPhysicalShardIndices().Contains(leafShardIndex))
                 return map;

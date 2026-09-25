@@ -441,7 +441,7 @@ internal sealed partial class LatticeGrain(
             return true;
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         if (!await registry.ExistsAsync(TreeId))
         {
             return false;
@@ -1407,7 +1407,7 @@ internal sealed partial class LatticeGrain(
                 stageTagTree, LatticeMetrics.StageRouteTag,
                 StageTagTenant);
         }
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
 
         // Double-checked snapshot retry: pre-fetch a TxRegistry snapshot
         // (snap1), fan out under that ambient view, then re-fetch
@@ -3307,7 +3307,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
@@ -3790,7 +3790,7 @@ internal sealed partial class LatticeGrain(
         // counts are also topology-consistent with the observed map. Without
         // this, a split mid-call would surface as a target-shard count
         // inflated by double-counted migrating slots.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
@@ -4189,7 +4189,7 @@ internal sealed partial class LatticeGrain(
             return _physicalTreeId;
         }
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         _physicalTreeId = await registry.ResolveAsync(TreeId);
         return _physicalTreeId;
     }
@@ -4370,7 +4370,7 @@ internal sealed partial class LatticeGrain(
             }
             else
             {
-                var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                var registry = grainFactory.GetLatticeRegistry();
                 _shardMap = await registry.GetShardMapAsync(TreeId)
                     ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
             }
