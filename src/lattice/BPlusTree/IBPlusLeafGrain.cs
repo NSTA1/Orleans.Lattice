@@ -704,6 +704,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// shard, so nothing stale is ever unsealed.
     /// </para>
     /// <para>
+    /// The lift also records a fresh delivery sequence for every key this leaf
+    /// holds in a reclaimed slot, so a <c>LeafCacheGrain</c> that pruned those
+    /// rows while the slot was sealed is shipped them again on its next refresh
+    /// instead of answering a miss for a key this leaf owns.
+    /// </para>
+    /// <para>
     /// Idempotent and allocation-lean: a leaf carrying no seal, or none for
     /// the requested slots, returns without touching storage. Slots recorded
     /// under a different virtual shard count are left untouched.

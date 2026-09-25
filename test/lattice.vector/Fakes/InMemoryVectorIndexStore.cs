@@ -20,6 +20,16 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// <summary>Throws on the write that many writes from now; negative means never.</summary>
     internal int FailAfterWrites { get; set; } = -1;
 
+    /// <summary>
+    /// Fails every <see cref="DeletePrefixAsync"/> whose prefix it matches, while
+    /// set, and lets every other call through: the fault that a range delete which
+    /// stalls produces, isolated from the writes around it.
+    /// </summary>
+    internal Func<string, bool>? FailDeletePrefix { get; set; }
+
+    /// <summary>Every prefix <see cref="DeletePrefixAsync"/> has deleted, in order.</summary>
+    internal List<string> DeletedPrefixes { get; } = [];
+
     /// <summary>How many write calls have been issued.</summary>
     internal int Writes { get; private set; }
 
@@ -243,7 +253,14 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
                 $"The store was configured to fail after {FailAfterWrites} writes.");
         }
 
+        if (FailDeletePrefix is { } predicate && predicate(keyPrefix))
+        {
+            throw new SimulatedStoreFailureException(
+                $"The store was configured to fail a delete of the prefix '{keyPrefix}'.");
+        }
+
         Writes++;
+        DeletedPrefixes.Add(keyPrefix);
         var doomed = _records.Keys
             .Where(key => key.StartsWith(keyPrefix, StringComparison.Ordinal))
             .ToArray();

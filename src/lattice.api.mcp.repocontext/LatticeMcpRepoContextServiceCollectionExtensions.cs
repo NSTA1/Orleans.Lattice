@@ -422,6 +422,12 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // service (the container host does).
         services.TryAddSingleton<IRepoIndexRunner, RepoIndexRunner>();
 
+        // The ingest instrument family (issue #3151), which the runner accounts every
+        // pass against so a stalled ingest is distinguishable from a finished one on
+        // /metrics alone. Resolved by the runner's optional constructor parameter.
+        services.TryAddSingleton(
+            sp => new RepoContextIngestReporter(sp.GetRequiredService<TimeProvider>()));
+
         // The index reset runs its sweep the same way: off the request thread, bound
         // to the host lifetime, so a caller that drops its connection mid-reset
         // abandons only its wait and the reset still reports its completion through

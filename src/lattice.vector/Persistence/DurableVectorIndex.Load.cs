@@ -233,6 +233,11 @@ public sealed partial class DurableVectorIndex
         // next flush writes only what a subsequent mutation dirties.
         _persistedPartitionVersion = new long[partitionSlots];
         CaptureCleanPartitionVersions();
+
+        // The slots now describe the restored generation, so any commit this
+        // instance had in flight is no longer described by them; what the store
+        // says about unfinished work is adopted from the build state instead.
+        ResetCommitState();
         return true;
     }
 
@@ -492,6 +497,15 @@ public sealed partial class DurableVectorIndex
         _durableCursor = null;
         _chunkBoundaryCursor = null;
         _expected = _index.Count;
+
+        if (buildRecord is not null &&
+            _loadMode == VectorIndexLoadMode.Full &&
+            VectorIndexBuildState.TryReadRecord(buildRecord, out var stale) &&
+            stale.Generation < manifest.Generation)
+        {
+            // A reader only reports what it finds; the cleanup is the writer's.
+            AdoptUnfinishedCommit(stale, manifest.Generation);
+        }
     }
 
     /// <summary>
@@ -545,6 +559,7 @@ public sealed partial class DurableVectorIndex
         _ingestAppendOnly = true;
         _chunkBoundaryCursor = null;
         _durableCursor = null;
+        ResetCommitState();
     }
 
     private void CaptureCleanPartitionVersions()

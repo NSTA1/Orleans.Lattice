@@ -64,6 +64,13 @@ public sealed class FileWalStorageOptions
     /// crash-durability for throughput and is intended only for
     /// throwaway test or sample deployments where the WAL need not
     /// survive an unclean shutdown.
+    /// <para>
+    /// A write or flush that fails is not acknowledged: the shard truncates
+    /// the file back to its last acknowledged end before rethrowing, so a
+    /// later recovery cannot roll the failed batch or trim forward. If that
+    /// truncation also fails, the shard fail-stops and every later
+    /// operation throws until it is reopened.
+    /// </para>
     /// </summary>
     public bool FlushToDisk { get; set; } = true;
 
