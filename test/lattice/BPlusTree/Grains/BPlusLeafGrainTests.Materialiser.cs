@@ -37,7 +37,8 @@ public partial class BPlusLeafGrainTests
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         int? maxLeafReplayEntries = null,
         TimeSpan? starvationDriveBudget = null,
-        ILoggerProvider? loggerProvider = null)
+        ILoggerProvider? loggerProvider = null,
+        int? maxConcurrentReplays = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -103,6 +104,8 @@ public partial class BPlusLeafGrainTests
         // unit test.
         if (starvationDriveBudget is { } driveBudget)
             baseOptions.StarvationDriveBudget = driveBudget;
+        if (maxConcurrentReplays is { } replayCeiling)
+            baseOptions.WalMaterialiserMaxConcurrentReplays = replayCeiling;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
