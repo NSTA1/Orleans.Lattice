@@ -13,10 +13,11 @@
 # worked down. Lower the ceiling as the backlog shrinks; 0 is the goal.
 #
 # After DocFX, the build publishes each page's markdown alternate beside it and
-# links the page to it, places each page's note under its title, then fails
-# unless every page has both, every page's source link names a file in the
-# repository, and llms.txt, sitemap.xml and the footer's docs version are all in
-# place (see stage.ps1 for what they are).
+# links the page to it, places each page's note under its title, and drops the
+# dates DocFX writes into sitemap.xml, then fails unless every page has both,
+# every page's source link names a file in the repository, and llms.txt,
+# sitemap.xml and the footer's docs version are all in place (see stage.ps1 for
+# what they are).
 
 param(
     [switch]$Serve,
@@ -176,14 +177,33 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $site $path))) { $url }
     })
     if ($deadLinks.Count -gt 0) { throw "llms.txt links to $($deadLinks.Count) address(es) the site does not have: $(($deadLinks | Select-Object -First 10) -join ', ')" }
+
+    # DocFX stamps every sitemap entry with the build's own time as its lastmod,
+    # and writes the hour on a 12-hour clock, so an evening build is dated that
+    # morning and every page claims to have changed at every deploy. A crawler
+    # trusts a date it is given, so a wrong one is worse than none: the dates are
+    # dropped. The sitemap must still list every rendered page, as llms.txt says.
     $sitemap = Join-Path $site 'sitemap.xml'
-    if (-not (Test-Path $sitemap) -or -not ([System.IO.File]::ReadAllText($sitemap)).Contains("<loc>${siteUrl}index.html</loc>")) {
-        throw "The site has no sitemap.xml listing ${siteUrl}index.html; docfx.json's build.sitemap produces it."
+    if (-not (Test-Path $sitemap)) { throw "The site has no sitemap.xml; docfx.json's build.sitemap produces it." }
+    $sitemapText = [System.IO.File]::ReadAllText($sitemap)
+    $undated = [regex]::Replace($sitemapText, '\s*<lastmod>[^<]*</lastmod>', '')
+    if ($undated -ne $sitemapText) { [System.IO.File]::WriteAllText($sitemap, $undated, $utf8) }
+    [xml]$sitemapXml = $undated
+    $sitemapUrls = @($sitemapXml.urlset.url)
+    if ($sitemapXml.GetElementsByTagName('lastmod').Count -gt 0) {
+        throw 'sitemap.xml still dates its entries after the dates were dropped, so DocFX has changed how it writes them; update the pattern above.'
+    }
+    if (-not ($sitemapUrls | Where-Object { $_.loc -eq "${siteUrl}index.html" })) {
+        throw "sitemap.xml does not list ${siteUrl}index.html; docfx.json's build.sitemap produces it."
+    }
+    if ($sitemapUrls.Count -ne $pagesWithAlternate) {
+        throw "sitemap.xml lists $($sitemapUrls.Count) page(s), but the site renders $pagesWithAlternate; llms.txt tells a reader it lists every rendered page."
     }
     if (-not ([System.IO.File]::ReadAllText($landing)).Contains('class="lt-footer-version"')) {
         throw "The home page's footer has no docs version. stage.ps1 writes it to obj/site-metadata.json, which docfx.json lists in globalMetadataFiles."
     }
-    Write-Host "Agent entry points: llms.txt, llms-full.txt, sitemap.xml"
+    $packageFiles = @(Get-ChildItem (Join-Path $site 'docs') -Recurse -Filter 'llms-full.txt').Count
+    Write-Host "Agent entry points: llms.txt, llms-full.txt, $packageFiles package file(s), sitemap.xml ($($sitemapUrls.Count) page(s), undated)"
 
     if ($Serve) { docfx serve $site --port $Port }
 }

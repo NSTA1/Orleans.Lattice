@@ -9,7 +9,7 @@ Every page on the site also has a markdown alternate at the same address ending 
 ## Documentation index
 
 - [llms.txt](https://nsta1.github.io/Orleans.Lattice/llms.txt): Every page of the documentation site, grouped by the seam each package fills, each linked to its markdown, with the three reading paths (Build, Evaluate, Operate).
-- [llms-full.txt](https://nsta1.github.io/Orleans.Lattice/llms-full.txt): Every documentation page's markdown in one file.
+- [llms-full.txt](https://nsta1.github.io/Orleans.Lattice/llms-full.txt): Every documentation page's markdown in one file. Each package's documentation is also in one file of its own, `docs/<package>/llms-full.txt` on the site, which the index lists with the package.
 - [sitemap.xml](https://nsta1.github.io/Orleans.Lattice/sitemap.xml): Every rendered page of the site.
 
 ## Start here
