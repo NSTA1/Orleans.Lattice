@@ -2247,6 +2247,14 @@ public class LatticeOptions
     /// still fits half the budget. Raise it only to start a shard at a wider
     /// layout than it would reach on its own.
     /// </para>
+    /// <para>
+    /// Once every bucket holding the legacy slot's pins has been written, the
+    /// legacy slot is emptied, so a consumer removed after a split is not
+    /// resurrected from it. A build that predates the split therefore finds no
+    /// pins at a bucket count of 1: during a rolling upgrade, or a rollback,
+    /// run the older silos at a bucket count of at least 2 (ideally the width
+    /// recorded in bucket zero), or drain them first.
+    /// </para>
     /// </summary>
     public int WalMaterialiserPinBuckets { get; set; } = DefaultWalMaterialiserPinBuckets;
 

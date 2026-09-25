@@ -172,10 +172,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private readonly HashSet<int> _dirtyBuckets = new();
 
     /// <summary>
-    /// Bucket ordinals whose activation read failed. Their durable contents are
-    /// unknown, so they are re-read and merged before anything overwrites them.
+    /// Slots of the current bucketed layout that must land before the legacy
+    /// slot can be retired: together they hold every pin the legacy slot held.
     /// </summary>
-    private readonly HashSet<int> _unreadBuckets = new();
+    private readonly HashSet<int> _legacyDrainBuckets = new();
 
     /// <summary>
     /// Width-independent routing hash per consumer
@@ -204,11 +204,12 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private int _readWidth = 1;
 
     /// <summary>
-    /// Whether bucket zero, and therefore the persisted layout width, has been
-    /// read. No bucketed write is issued while it is unknown, so a failed probe
-    /// can never lead to a narrower width overwriting a wider one.
+    /// Whether the legacy slot still holds pins that a bucketed layout has
+    /// superseded. Once every slot in <see cref="_legacyDrainBuckets"/> has
+    /// landed the legacy slot is emptied, so a consumer removed after the split
+    /// is not resurrected from it by the next activation.
     /// </summary>
-    private bool _widthKnown = true;
+    private bool _legacyRetirePending;
 
     /// <summary>
     /// A pending relayout target width, or zero. While pending, every persist
@@ -316,19 +317,25 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         // of the union. Bucket zero records the width the store was last laid
         // out at; probe it first so a split store is read at its full width
         // whatever this host is configured with.
+        //
+        // Every read here is fail-closed: if any slot of the recorded layout
+        // cannot be read, activation fails, exactly as it does when the legacy
+        // slot itself cannot be read. A caller then sees the pin shard as
+        // unavailable (the WAL GC logs its census as unavailable and retries)
+        // instead of a map silently missing that slot's pins, which would raise
+        // the trim floor. Without bucket zero the width is unknown, so no
+        // narrower assumption is safe either.
+        var legacyIds = SnapshotLegacyIds();
         var probe = await ReadSlotRawAsync(0);
-        var stamp = 0;
-        if (probe.Holder is { } probeHolder)
+        if (probe.Holder is not { } probeHolder)
         {
-            _bucketStates[0] = probeHolder;
-            MergeSlotContents(probeHolder.State, layoutWidth: 0);
-            stamp = probeHolder.State.PersistedBucketCount;
+            throw new InvalidOperationException(
+                $"WAL materialiser pin bucket 0 for '{GrainKey}' could not be read, so the persisted layout width is unknown.");
         }
-        else
-        {
-            _widthKnown = false;
-            _unreadBuckets.Add(0);
-        }
+
+        _bucketStates[0] = probeHolder;
+        MergeSlotContents(probeHolder.State, layoutWidth: 0);
+        var stamp = probeHolder.State.PersistedBucketCount;
 
         // A stamp of one means the store was narrowed back to the legacy slot;
         // zero means no bucketed layout was ever recorded, so the configured
@@ -344,8 +351,9 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
         var target = ResolveTargetWidth(
             _bucketCount, _configuredBuckets, EffectiveEstimate, allowNarrow: true);
-        if (target == _bucketCount || !_widthKnown)
+        if (target == _bucketCount)
         {
+            ScheduleLegacyRetirement(legacyIds);
             return;
         }
 
@@ -354,6 +362,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             SwitchFromLegacy(target);
             return;
         }
+
+        // The relayout rewrites every slot of the new layout from the merged
+        // map, which carries every legacy pin; once it lands the legacy slot
+        // can be retired.
+        _legacyRetirePending = legacyIds is not null;
 
         _logger?.LogInformation(
             "WAL materialiser pin store for {GrainKey} is laid out across {PersistedBuckets} buckets; re-laying out across {TargetBuckets} (configured floor {ConfiguredBuckets}, estimated {EstimatedBytes} bytes).",
@@ -472,15 +485,109 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             _configuredBuckets);
         _bucketCount = target;
         _persistedWidth = target;
+        _legacyDrainBuckets.Clear();
         for (var bucket = 0; bucket < target; bucket++)
         {
             _dirtyBuckets.Add(bucket);
+            _legacyDrainBuckets.Add(bucket);
         }
 
+        _legacyRetirePending = true;
         _dirty = true;
     }
 
-    /// <summary>Reads bucket slots <c>[from, to)</c> concurrently and merges them.</summary>
+    /// <summary>
+    /// Captures the consumer ids the legacy slot held at activation, before any
+    /// bucket is merged over them, or <see langword="null"/> when it held none.
+    /// </summary>
+    private HashSet<string>? SnapshotLegacyIds()
+    {
+        var legacy = _state.State;
+        if (legacy.Pins.Count == 0 && legacy.Offsets.Count == 0)
+        {
+            return null;
+        }
+
+        var ids = new HashSet<string>(legacy.Pins.Keys, StringComparer.Ordinal);
+        ids.UnionWith(legacy.Offsets.Keys);
+        return ids;
+    }
+
+    /// <summary>
+    /// Under a bucketed layout, a non-empty legacy slot means a move out of it
+    /// never finished: the slot is only emptied once every pin it held has
+    /// landed in its bucket. Every one of its pins is therefore still live and
+    /// is kept, and the buckets that receive them are rewritten so the legacy
+    /// slot can then be retired.
+    /// </summary>
+    private void ScheduleLegacyRetirement(HashSet<string>? legacyIds)
+    {
+        if (legacyIds is null || _bucketCount < 2)
+        {
+            return;
+        }
+
+        foreach (var consumerId in legacyIds)
+        {
+            var slot = SlotOf(consumerId, _bucketCount);
+            _dirtyBuckets.Add(slot);
+            _legacyDrainBuckets.Add(slot);
+        }
+
+        _legacyRetirePending = true;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// Empties the legacy slot once the bucketed layout holds everything it
+    /// held. Only the legacy blob is emptied: the in-memory map, which is also
+    /// the injected state's <c>State</c>, is swapped back straight after the
+    /// write, which is safe because the grain is non-reentrant. A failure is
+    /// logged and not retried by this activation; the next activation finds
+    /// the slot non-empty and schedules the retirement again.
+    /// </summary>
+    private async Task TryRetireLegacySlotAsync()
+    {
+        if (!_legacyRetirePending
+            || _legacyDrainBuckets.Count != 0
+            || _bucketCount < 2
+            || _relayoutTarget != 0
+            || WidthStampPending())
+        {
+            return;
+        }
+
+        _legacyRetirePending = false;
+        var live = _state.State;
+        _state.State = new WalMaterialiserPinState();
+        try
+        {
+            await _state.WriteStateAsync();
+            _logger?.LogInformation(
+                "WAL materialiser pin store for {GrainKey} retired its legacy slot; every pin now lives in its {Buckets} buckets.",
+                GrainKey,
+                _bucketCount);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Retiring the legacy WAL materialiser pin slot for {GrainKey} failed; the next activation retries it.",
+                GrainKey);
+        }
+        finally
+        {
+            _state.State = live;
+        }
+    }
+
+    /// <summary>
+    /// Reads bucket slots <c>[from, to)</c> concurrently and merges them,
+    /// throwing if any cannot be read. Activation must fail rather than serve a
+    /// partial map: the WAL GC's floor is a minimum over the pins it is given,
+    /// so an omitted pin raises the floor and could let the GC reclaim WAL a
+    /// dormant leaf still needs.
+    /// </summary>
     private async Task ReadSlotsAsync(int from, int to, CancellationToken cancellationToken)
     {
         for (var start = from; start < to; start += SlotReadConcurrency)
@@ -497,12 +604,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             {
                 if (holder is null)
                 {
-                    _unreadBuckets.Add(bucket);
-                    continue;
+                    throw new InvalidOperationException(
+                        $"WAL materialiser pin bucket {bucket} for '{GrainKey}' could not be read.");
                 }
 
                 _bucketStates[bucket] = holder;
-                _unreadBuckets.Remove(bucket);
                 MergeSlotContents(holder.State, layoutWidth: 0);
             }
 
@@ -512,9 +618,9 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
     /// <summary>
     /// Reads one bucket slot without touching grain state, so reads can be
-    /// issued concurrently. A failed read yields a null holder, which is
-    /// treated as "nothing to merge": losing a bucket read leaves the durable
-    /// floor lower than it could be, retaining more WAL, which is safe.
+    /// issued concurrently. A failed read is logged and yields a null holder;
+    /// every caller treats that as fatal to the operation, because omitting a
+    /// slot's pins would raise the WAL GC floor.
     /// </summary>
     private async Task<(int Bucket, GrainState<WalMaterialiserPinState>? Holder)> ReadSlotRawAsync(int bucket)
     {
@@ -527,7 +633,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             _logger?.LogWarning(
                 ex,
-                "Reading WAL materialiser pin bucket {Bucket} for {GrainKey} failed; its pins are omitted from this activation's floor until they are re-reported.",
+                "Reading WAL materialiser pin bucket {Bucket} for {GrainKey} failed.",
                 bucket,
                 GrainKey);
             return (bucket, null);
@@ -803,12 +909,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     }
 
     /// <summary>
-    /// Empties the legacy single-slot blob. Only called from
-    /// <see cref="ClearAsync"/>: outside tree deletion and a narrowing back to
-    /// the legacy layout, the legacy slot is read but never rewritten under a
-    /// bucketed layout, so that a host which rolls back to a pre-bucketing build
-    /// still finds the pins it wrote before the split. Those pins are stale,
-    /// which retains more WAL and is safe; deleting them would not be.
+    /// Empties the legacy single-slot blob on tree deletion. Under a bucketed
+    /// layout the legacy slot is otherwise only rewritten by
+    /// <see cref="TryRetireLegacySlotAsync"/>, once every bucket holding its
+    /// pins has landed, and by a narrowing back to the legacy layout.
     /// </summary>
     private async Task ClearLegacySlotAsync()
     {
@@ -1295,12 +1399,6 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         var target = ResolveTargetWidth(_bucketCount, _configuredBuckets, EffectiveEstimate, allowNarrow: false);
         if (_pinStorage is not null && target > _bucketCount && _relayoutTarget < target)
         {
-            if (!await EnsureWidthKnownAsync())
-            {
-                throw new InvalidOperationException(
-                    $"WAL materialiser pin bucket 0 for '{GrainKey}' could not be read, so the persisted layout width is unknown and the store cannot be split.");
-            }
-
             target = ResolveTargetWidth(_bucketCount, _configuredBuckets, EffectiveEstimate, allowNarrow: false);
             if (target > _bucketCount)
             {
@@ -1334,13 +1432,14 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
 
         var slots = SelectSlots(scope, scopeHashes);
-        if (slots.Count == 0)
+        if (slots.Count != 0)
         {
-            return wrote;
+            await WriteSlotsAsync(slots);
+            wrote = true;
         }
 
-        await WriteSlotsAsync(slots);
-        return true;
+        await TryRetireLegacySlotAsync();
+        return wrote;
     }
 
     /// <summary>
@@ -1456,31 +1555,13 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task WriteSlotsAsync(List<int> slots)
     {
-        var widthBefore = _bucketCount;
-        if (!await EnsureWidthKnownAsync())
-        {
-            throw new InvalidOperationException(
-                $"WAL materialiser pin bucket 0 for '{GrainKey}' could not be read, so the persisted layout width is unknown; no bucket is written until it is.");
-        }
-
-        // Resolving the width may have adopted a different persisted layout,
-        // which re-marks every slot of it dirty; the selection made under the
-        // assumed layout no longer applies.
-        if (_bucketCount != widthBefore)
-        {
-            slots = SelectSlots(PersistScope.All, null);
-            if (slots.Count == 0)
-            {
-                return;
-            }
-        }
-
         await EnsureHoldersAsync(slots);
         var slices = BuildSlices(_bucketCount, slots, _persistedWidth);
         await WriteGroupsAsync(slots, slices);
         foreach (var slot in slots)
         {
             _dirtyBuckets.Remove(slot);
+            _legacyDrainBuckets.Remove(slot);
         }
     }
 
@@ -1505,9 +1586,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
     /// <summary>
     /// Ensures a cached holder (and therefore an ETag) exists for every slot in
-    /// <paramref name="slots"/>, re-reading any that are missing. A slot whose
-    /// activation read failed is merged into memory before it is overwritten,
-    /// so an unreadable slot is never replaced by a slice that omits its pins.
+    /// <paramref name="slots"/>, re-reading any that are missing. Every slot of
+    /// the recorded layout was read and merged at activation, so a missing
+    /// holder is either one evicted by a failed write or a slot outside the
+    /// recorded layout (stale content from an earlier, wider layout); neither
+    /// is merged, only its ETag is taken.
     /// </summary>
     private async Task EnsureHoldersAsync(IEnumerable<int> slots)
     {
@@ -1539,78 +1622,8 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 }
 
                 _bucketStates[bucket] = holder;
-                if (_unreadBuckets.Remove(bucket))
-                {
-                    MergeSlotContents(holder.State, _bucketCount);
-                }
             }
         }
-    }
-
-    /// <summary>
-    /// Makes sure the persisted layout width is known before a bucketed write:
-    /// re-probes bucket zero if its activation read failed, reads any slot the
-    /// persisted width names beyond those already read, and adopts the
-    /// persisted layout if it differs from the one assumed. Returns
-    /// <see langword="false"/> when bucket zero still cannot be read.
-    /// </summary>
-    private async Task<bool> EnsureWidthKnownAsync()
-    {
-        if (_widthKnown || _pinStorage is null)
-        {
-            return true;
-        }
-
-        var probe = await ReadSlotRawAsync(0);
-        if (probe.Holder is not { } holder)
-        {
-            return false;
-        }
-
-        _widthKnown = true;
-        _bucketStates[0] = holder;
-        _unreadBuckets.Remove(0);
-        MergeSlotContents(holder.State, layoutWidth: 0);
-        var stamp = holder.State.PersistedBucketCount;
-        var layout = stamp >= 1 ? stamp : _configuredBuckets;
-        var readWidth = Math.Max(_configuredBuckets, layout);
-        if (readWidth > _readWidth)
-        {
-            await ReadSlotsAsync(_readWidth, readWidth, CancellationToken.None);
-            _readWidth = readWidth;
-        }
-
-        if (layout == _bucketCount)
-        {
-            return true;
-        }
-
-        // The layout assumed while the width was unknown was the configured
-        // one; adopt the persisted one instead. No bucketed write was issued
-        // under the assumption, so nothing has to be undone.
-        _bucketCount = layout;
-        _persistedWidth = layout;
-        _dirtyBuckets.Clear();
-        _dirty = true;
-        if (layout == 1)
-        {
-            // Narrowed to the legacy slot by a previous activation, but this
-            // host's floor is bucketed.
-            var target = ResolveTargetWidth(1, _configuredBuckets, EffectiveEstimate, allowNarrow: false);
-            if (target > 1)
-            {
-                SwitchFromLegacy(target);
-            }
-
-            return true;
-        }
-
-        for (var bucket = 0; bucket < layout; bucket++)
-        {
-            _dirtyBuckets.Add(bucket);
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -1667,12 +1680,6 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task RelayoutAsync(int target)
     {
-        if (!await EnsureWidthKnownAsync())
-        {
-            throw new InvalidOperationException(
-                $"WAL materialiser pin bucket 0 for '{GrainKey}' could not be read, so the persisted layout width is unknown and the store cannot be re-laid out.");
-        }
-
         var from = _bucketCount;
         if (from == target)
         {
@@ -1718,6 +1725,13 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _persistedWidth = target;
         _relayoutTarget = 0;
         _dirtyBuckets.Clear();
+        _legacyDrainBuckets.Clear();
+        if (target == 1)
+        {
+            // The legacy slot is the live layout again.
+            _legacyRetirePending = false;
+        }
+
         _flushCursor = 0;
         _dirty = false;
     }

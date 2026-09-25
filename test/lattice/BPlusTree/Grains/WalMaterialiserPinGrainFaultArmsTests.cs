@@ -142,53 +142,40 @@ public sealed class WalMaterialiserPinGrainFaultArmsTests
     // --- Bucket read faults ---
 
     [Test]
-    public async Task A_bucket_whose_read_fails_is_omitted_from_the_floor_and_the_rest_still_load()
+    public void A_bucket_whose_read_fails_fails_activation_instead_of_serving_a_partial_census()
     {
-        // Seed both consumers durably, then fail exactly one bucket's read.
-        var seed = new FaultingPinStore();
-        seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets), ConsumerA, Hlc(100));
-        seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerB, Buckets), ConsumerB, Hlc(200));
-        seed.FailReadsForSlot = WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets);
-
-        var h = await ActivateAsync(seed);
-        var pins = await h.Grain.GetPinsAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(pins.ContainsKey(ConsumerA), Is.False,
-                "A bucket that could not be read must be omitted rather than guessed at.");
-            Assert.That(pins.TryGetValue(ConsumerB, out var b) ? b : default, Is.EqualTo(Hlc(200)),
-                "The readable buckets must still load - this is the positive control that "
-                + "proves the omission above is the read fault and not a broken fixture.");
-        });
-
-        var warnings = h.Logs.Warnings.Where(w => w.Value("Bucket") is not null).ToArray();
-        Assert.That(warnings, Is.Not.Empty, "The omitted bucket must be reported.");
-        Assert.That(
-            warnings.Select(w => w.Value("Bucket")).Distinct().Single(),
-            Is.EqualTo(WalMaterialiserPinRouting.BucketOf(ConsumerA, Buckets)),
-            "Only the bucket that actually failed may be reported as omitted.");
-    }
-
-    [Test]
-    public async Task An_omitted_bucket_lowers_the_durable_floor_rather_than_raising_it()
-    {
-        // The safety property behind the arm above. Omitting a bucket may only
-        // ever retain more WAL; a floor computed from the surviving buckets
-        // must never sit above the pin that was lost.
+        // Review of #3580: a swallowed bucket read let activation succeed and
+        // GetPinsAsync serve a map missing that bucket's pins. The WAL GC's
+        // floor is a minimum over the pins it is given, so an omitted pin can
+        // only RAISE it and let the GC reclaim WAL a dormant leaf still needs.
+        // The read fault must surface as an unavailable shard (the GC logs its
+        // census as unavailable and retries), never as a partial one.
         var seed = new FaultingPinStore();
         seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets), ConsumerA, Hlc(10));
         seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerB, Buckets), ConsumerB, Hlc(999));
         seed.FailReadsForSlot = WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets);
 
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await ActivateAsync(seed));
+    }
+
+    [Test]
+    public async Task Once_a_bucket_read_fault_clears_the_next_activation_serves_the_full_census()
+    {
+        var seed = new FaultingPinStore();
+        seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets), ConsumerA, Hlc(10));
+        seed.SeedPin(WalMaterialiserPinRouting.BucketStateName(ConsumerB, Buckets), ConsumerB, Hlc(999));
+        seed.FailReadsForSlot = WalMaterialiserPinRouting.BucketStateName(ConsumerA, Buckets);
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await ActivateAsync(seed));
+
+        seed.FailReadsForSlot = null;
         var h = await ActivateAsync(seed);
         var pins = await h.Grain.GetPinsAsync();
-
-        Assert.That(pins.Values, Is.Not.Empty);
-        Assert.That(pins.ContainsKey(ConsumerA), Is.False,
-            "The low pin was the one lost, so the surviving floor is higher than the true "
-            + "floor - which is why the read fault must not be treated as 'no pin exists' "
-            + "by anything that trims. It is re-established by the consumer's next report.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(pins.TryGetValue(ConsumerA, out var a) ? a : default, Is.EqualTo(Hlc(10)),
+                "the low pin that the fault hid is the one that holds the floor down");
+            Assert.That(pins.TryGetValue(ConsumerB, out var b) ? b : default, Is.EqualTo(Hlc(999)));
+        });
     }
 
     // --- Removal marks only the removed consumer's bucket ---

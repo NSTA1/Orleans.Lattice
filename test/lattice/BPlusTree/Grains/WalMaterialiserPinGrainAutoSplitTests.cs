@@ -532,6 +532,197 @@ public sealed class WalMaterialiserPinGrainAutoSplitTests
         });
     }
 
+    [TestCase(0)]
+    [TestCase(5)]
+    public async Task A_split_store_whose_slot_read_fails_fails_activation_rather_than_serving_a_partial_census(int failingBucket)
+    {
+        // Review of #3580. The WAL GC floor is a minimum over the pins it is
+        // given, so a census missing a slot's pins can only raise the floor and
+        // let the GC reclaim WAL a dormant leaf still needs. A failed read of
+        // any slot in the recorded layout must fail activation, which the GC
+        // reports as "census unavailable" and retries. Bucket zero is the only
+        // record of the width, so a failed probe must not fall back to a
+        // narrower layout either.
+        var store = new SizeLimitedPinStore(AzureTableMaxBytes);
+        var reports = new List<MaterialiserPinReport>();
+        for (var leaf = 0; leaf < 200; leaf++)
+        {
+            reports.AddRange(LeafBirth(leaf, 8, frontier: 10 + leaf));
+        }
+
+        await SeedAtFixedWidthAsync(store, reports, width: 8);
+        Assume.That(
+            store.Snapshot(WalMaterialiserPinRouting.BucketStateName(failingBucket))!.Pins,
+            Is.Not.Empty,
+            "precondition: the failing slot holds pins a partial census would omit");
+        store.FailReadsFor.Add(WalMaterialiserPinRouting.BucketStateName(failingBucket));
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () => await ActivateAsync(store));
+        Assert.That(ex!.Message, Does.Contain($"bucket {failingBucket} "));
+
+        store.FailReadsFor.Clear();
+        var recovered = await ActivateAsync(store);
+        Assert.That(await recovered.Grain.GetPinsAsync(), Has.Count.EqualTo(1_600),
+            "once the fault clears the next activation serves the full census");
+    }
+
+    [TestCase(0)]
+    [TestCase(3)]
+    [TestCase(20)]
+    public async Task A_legacy_drain_that_crashes_part_way_keeps_the_legacy_slot_and_loses_no_pin(int writesBeforeCrash)
+    {
+        var store = new SizeLimitedPinStore(int.MaxValue);
+        var legacyState = new WalMaterialiserPinState();
+        for (var leaf = 0; leaf < 400; leaf++)
+        {
+            for (var p = 0; p < 8; p++)
+            {
+                legacyState.Pins[Consumer(leaf, p)] = Hlc(1_000 + leaf);
+            }
+        }
+
+        store.Replace(WalMaterialiserPinState.StateName, legacyState);
+        store.FailAfterWrites = writesBeforeCrash;
+        var h = await ActivateAsync(store);
+        try
+        {
+            await h.Grain.ReportAsync(Consumer(0, 0), Hlc(5_000));
+        }
+        catch (InvalidOperationException)
+        {
+            // The crash surfacing to the reporter is fine; losing a pin is not.
+        }
+
+        Assume.That(Field<int>(h.Grain, "_bucketCount"), Is.GreaterThan(1), "precondition: the store split");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Field<bool>(h.Grain, "_legacyRetirePending"), Is.True);
+            Assert.That(store.Snapshot(WalMaterialiserPinState.StateName)!.Pins, Has.Count.EqualTo(3_200),
+                "the legacy slot is only retired once every bucket holding its pins has landed");
+        });
+
+        store.FailAfterWrites = null;
+        var reactivated = await ActivateAsync(store);
+        var pins = await reactivated.Grain.GetPinsAsync();
+        Assert.That(pins, Has.Count.EqualTo(3_200));
+        Assert.That(pins[Consumer(399, 7)], Is.EqualTo(Hlc(1_399)));
+    }
+
+    [Test]
+    public async Task A_consumer_removed_after_a_split_is_not_resurrected_from_the_legacy_slot()
+    {
+        // Review of #3580. A split used to freeze the legacy slot, and every
+        // activation reads it, so a consumer removed after the split came back
+        // at its pre-split frontier on the next activation and held the floor
+        // down indefinitely. Once every bucket has landed the legacy slot is
+        // now retired.
+        var store = new SizeLimitedPinStore(int.MaxValue);
+        var legacyState = new WalMaterialiserPinState();
+        for (var leaf = 0; leaf < 400; leaf++)
+        {
+            for (var p = 0; p < 8; p++)
+            {
+                legacyState.Pins[Consumer(leaf, p)] = Hlc(1_000 + leaf);
+            }
+        }
+
+        store.Replace(WalMaterialiserPinState.StateName, legacyState);
+        var h = await ActivateAsync(store, flushIntervalMs: 50);
+        await h.Grain.ReportAsync(Consumer(0, 0), Hlc(5_000));
+        Assume.That(Field<int>(h.Grain, "_bucketCount"), Is.GreaterThan(1), "precondition: the store split");
+
+        await DrainAsync(h);
+        var legacyAfter = store.Snapshot(WalMaterialiserPinState.StateName)!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(Field<bool>(h.Grain, "_legacyRetirePending"), Is.False);
+            Assert.That(legacyAfter.Pins, Is.Empty, "every bucket has landed, so the legacy slot is retired");
+            Assert.That(legacyAfter.Offsets, Is.Empty);
+        });
+
+        var removed = Consumer(7, 3);
+        await h.Grain.RemoveAsync(removed);
+
+        var reactivated = await ActivateAsync(store);
+        var pins = await reactivated.Grain.GetPinsAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(pins.ContainsKey(removed), Is.False,
+                "a removed consumer must stay removed across reactivation");
+            Assert.That(pins, Has.Count.EqualTo(3_199));
+            Assert.That(pins[Consumer(0, 0)], Is.EqualTo(Hlc(5_000)));
+            Assert.That(pins[Consumer(399, 7)], Is.EqualTo(Hlc(1_399)));
+        });
+    }
+
+    [Test]
+    public async Task A_frozen_legacy_slot_under_a_bucketed_layout_is_drained_into_its_buckets_then_retired()
+    {
+        // The state a pre-fix build at WalMaterialiserPinBuckets = 8 leaves
+        // behind: pins written before bucketing was enabled are still in the
+        // legacy slot, which that build never rewrote, and no bucket records a
+        // width.
+        var store = new SizeLimitedPinStore(AzureTableMaxBytes);
+        var legacyState = new WalMaterialiserPinState();
+        for (var leaf = 0; leaf < 50; leaf++)
+        {
+            for (var p = 0; p < 8; p++)
+            {
+                legacyState.Pins[Consumer(leaf, p)] = Hlc(100 + leaf);
+            }
+        }
+
+        store.Replace(WalMaterialiserPinState.StateName, legacyState);
+        var later = new List<MaterialiserPinReport>();
+        for (var leaf = 50; leaf < 100; leaf++)
+        {
+            later.AddRange(LeafBirth(leaf, 8, frontier: 500));
+        }
+
+        await SeedAtFixedWidthAsync(store, later, width: 8);
+        for (var bucket = 0; bucket < 8; bucket++)
+        {
+            var name = WalMaterialiserPinRouting.BucketStateName(bucket);
+            var slot = store.Snapshot(name)!;
+            slot.PersistedBucketCount = 0;
+            store.Replace(name, slot);
+        }
+
+        var h = await ActivateAsync(store, buckets: 8, flushIntervalMs: 50);
+        Assert.That(Field<bool>(h.Grain, "_legacyRetirePending"), Is.True,
+            "a non-empty legacy slot under a bucketed layout is an unfinished move and is scheduled for retirement");
+        await h.Grain.ReportAsync(Consumer(99, 0), Hlc(600));
+        await DrainAsync(h);
+
+        Assert.That(store.Snapshot(WalMaterialiserPinState.StateName)!.Pins, Is.Empty);
+        foreach (var buckets in new[] { 8, 1 })
+        {
+            var reactivated = await ActivateAsync(store, buckets: buckets);
+            var pins = await reactivated.Grain.GetPinsAsync();
+            Assert.Multiple(() =>
+            {
+                Assert.That(pins, Has.Count.EqualTo(800), $"no pin lost when read back at buckets={buckets}");
+                Assert.That(pins[Consumer(0, 0)], Is.EqualTo(Hlc(100)), "the legacy-only pins were carried into their buckets");
+                Assert.That(pins[Consumer(99, 0)], Is.EqualTo(Hlc(600)));
+            });
+        }
+    }
+
+    /// <summary>
+    /// Drives coalesced ticks, defeating the write amortisation gate, until
+    /// the grain has nothing left to write and no legacy retirement pending.
+    /// </summary>
+    private static async Task DrainAsync(Harness h)
+    {
+        for (var ticks = 0;
+            ticks < 256 && (Field<bool>(h.Grain, "_dirty") || Field<bool>(h.Grain, "_legacyRetirePending"));
+            ticks++)
+        {
+            SetField(h.Grain, "_lastWriteCompletedTickMs", Environment.TickCount64 - 100_000L);
+            await h.Tick.Value!(CancellationToken.None);
+        }
+    }
+
     /// <summary>
     /// Writes <paramref name="reports"/> straight into the store at a fixed
     /// bucketed width, stamped with that width, bypassing the grain - the
@@ -588,6 +779,9 @@ public sealed class WalMaterialiserPinGrainAutoSplitTests
         /// <summary>When set, every write after this many successful ones fails.</summary>
         public int? FailAfterWrites { get; set; }
 
+        /// <summary>State names whose reads fail.</summary>
+        public HashSet<string> FailReadsFor { get; } = new(StringComparer.Ordinal);
+
         public void ResetCounters()
         {
             _writeAttempts = 0;
@@ -613,6 +807,11 @@ public sealed class WalMaterialiserPinGrainAutoSplitTests
 
         public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
+            if (FailReadsFor.Contains(stateName))
+            {
+                return Task.FromException(new InvalidOperationException($"slot '{stateName}' unavailable"));
+            }
+
             if (_slots.TryGetValue(stateName, out var state))
             {
                 grainState.State = (T)(object)Clone(state);
