@@ -888,6 +888,15 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <inheritdoc />
     public async Task ClearAsync()
     {
+        // Checked before the empty short-circuit: a clear whose legacy write
+        // conflicted has already emptied the in-memory map, so a repeated clear
+        // on the same activation would otherwise report success while the
+        // legacy slot may still hold the deleted tree's pins (issue #3572).
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, GrainKey);
+        }
+
         if (_state.State.Pins.Count == 0 && _state.State.Offsets.Count == 0)
         {
             return;
@@ -923,14 +932,17 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// layout the legacy slot is otherwise only rewritten by
     /// <see cref="TryRetireLegacySlotAsync"/>, once every bucket holding its
     /// pins has landed, and by a narrowing back to the legacy layout.
+    /// A non-conflict failure is logged and swallowed, as before; an ETag
+    /// conflict propagates from <see cref="WriteLegacySlotAsync"/> so the
+    /// caller retries the clear against a fresh activation.
     /// </summary>
     private async Task ClearLegacySlotAsync()
     {
         try
         {
-            await _state.WriteStateAsync();
+            await WriteLegacySlotAsync();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not LatticeStateWriteFailedException)
         {
             _logger?.LogWarning(
                 ex,
