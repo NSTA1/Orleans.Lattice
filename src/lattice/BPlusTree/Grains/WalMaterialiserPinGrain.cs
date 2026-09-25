@@ -61,6 +61,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool _dirty;
     private bool _flushInFlight;
 
+    /// <summary>Grain-type label carried on a translated state-write fault.</summary>
+    private const string StateWriteGrainType = "wal-materialiser-pin";
+
+    /// <summary>
+    /// Set once a single-slot pin write loses an optimistic-concurrency (ETag)
+    /// check (issue #3572). The activation has asked to deactivate and fails
+    /// later durable writes fast rather than retrying with a stale ETag.
+    /// </summary>
+    private bool _stateConflicted;
+
     /// <summary>
     /// Optional durable-storage handle used only when
     /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> is greater than
@@ -458,7 +468,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     {
         _flushTimer?.Dispose();
         _flushTimer = null;
-        if (!_dirty)
+
+        // A conflicted activation's cached ETag is stale, so a final flush can
+        // only fail again; the next activation reloads the row (issue #3572).
+        if (!_dirty || _stateConflicted)
         {
             return;
         }
@@ -725,6 +738,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task PersistNowAsync(string outcome = MaterialiserPinCoalescedOutcome)
     {
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, _context.GrainId.Key.ToString());
+        }
+
         while (_dirty)
         {
             if (_flushInFlight)
@@ -787,7 +805,27 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     {
         if (_bucketCount <= 1 || _pinStorage is null)
         {
-            await _state.WriteStateAsync();
+            try
+            {
+                await _state.WriteStateAsync();
+            }
+            catch (Exception ex) when (GrainStateWriteFaults.IsConflict(ex))
+            {
+                // Issue #3572: the write may have landed while the cached ETag
+                // went stale, so every later write here would fail the same way.
+                // Deactivate so the next call reloads the row; a lost advance
+                // only leaves the durable pin staler, which is GC-safe, and a
+                // re-sent seed that already landed merges as a no-op.
+                _stateConflicted = true;
+                _logger?.LogWarning(
+                    ex,
+                    "WAL materialiser pin write for {GrainKey} lost an optimistic-concurrency check (the write may have landed); deactivating so the next call reloads durable state.",
+                    _context.GrainId.Key.ToString());
+                this.DeactivateOnIdle();
+                throw new LatticeStateWriteFailedException(
+                    StateWriteGrainType, _context.GrainId.Key.ToString(), ex, conflict: true);
+            }
+
             return;
         }
 

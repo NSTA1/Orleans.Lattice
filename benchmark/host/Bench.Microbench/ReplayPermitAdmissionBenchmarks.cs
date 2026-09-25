@@ -121,18 +121,43 @@ public class ReplayPermitAdmissionBenchmarks
     public void NoteQueueWait() =>
         BPlusLeafGrain.NoteReplayPermitQueueWaitForTest(HealthyWait, acquired: true);
 
-    /// <summary>Measures the successful GC reservation and shared-permit round trip.</summary>
+    /// <summary>
+    /// Measures the successful GC reservation and shared-permit round trip for a
+    /// WAL GC sweep drive, which may use the whole GC share.
+    /// </summary>
     [Benchmark]
     public bool StarvationAdmission()
     {
-        var acquired = BPlusLeafGrain.TryAcquireStarvationReplayPermit(_starvationGate);
+        var acquired = BPlusLeafGrain.TryAcquireStarvationReplayPermit(
+            _starvationGate, BPlusLeafGrain.StarvationDriveOrigin.WalGcSweep);
         if (acquired)
             BPlusLeafGrain.ReleaseStarvationReplayPermit(_starvationGate);
         return acquired;
     }
 
-    /// <summary>Measures refusal before constructing the caller's typed exception.</summary>
+    /// <summary>
+    /// The same round trip for a coverage-lag timer drive, which is admitted one
+    /// slot below the GC share so the last free slot stays with the sweep
+    /// (issue #3575).
+    /// </summary>
+    [Benchmark]
+    public bool StarvationAdmissionTimer()
+    {
+        var acquired = BPlusLeafGrain.TryAcquireStarvationReplayPermit(
+            _starvationGate, BPlusLeafGrain.StarvationDriveOrigin.CoverageLagTimer);
+        if (acquired)
+            BPlusLeafGrain.ReleaseStarvationReplayPermit(_starvationGate);
+        return acquired;
+    }
+
+    /// <summary>
+    /// Measures refusal before constructing the caller's typed exception. A
+    /// refused sweep drive also stamps the refusal that a single-slot share
+    /// yields to (issue #3575), so this is the costlier of the two origins'
+    /// refusals.
+    /// </summary>
     [Benchmark]
     public bool StarvationAdmissionBusy() =>
-        BPlusLeafGrain.TryAcquireStarvationReplayPermit(_busyStarvationGate);
+        BPlusLeafGrain.TryAcquireStarvationReplayPermit(
+            _busyStarvationGate, BPlusLeafGrain.StarvationDriveOrigin.WalGcSweep);
 }

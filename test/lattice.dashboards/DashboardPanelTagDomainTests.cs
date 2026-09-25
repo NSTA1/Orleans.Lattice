@@ -184,6 +184,14 @@ public sealed class DashboardPanelTagDomainTests
             // diverge while describing nothing. It is charted on panel 160 on
             // its own isolated target E, deliberately not folded into that
             // panel's collapsed benign target.
+            // recheck_drive_refused and recheck_drive_deferred (issue #3575)
+            // are omitted for the same structural reason as the two arms above,
+            // whose QUALIFIERS they are: each is recorded on the same tick as
+            // one of those two routing arms, to say that the coverage-lag
+            // timer's starvation drive was refused admission to the replay gate
+            // or is backing off after a refusal. Neither is a minting event, and
+            // neither is discharged by the drive in this panel's denominator.
+            // Both are charted on panel 160 on their own target F.
             ["CommitPath|161|orleans.lattice.leaf.snapshot.driver.declines|reason"] =
             [
                 "deactivate_unproven_coverage_current",
@@ -192,6 +200,8 @@ public sealed class DashboardPanelTagDomainTests
                 "recheck_capture_in_flight",
                 "recheck_checkpoint_stalled",
                 "recheck_coverage_current",
+                "recheck_drive_deferred",
+                "recheck_drive_refused",
                 "recheck_no_durable_checkpoint",
             ],
 
@@ -221,6 +231,9 @@ public sealed class DashboardPanelTagDomainTests
             // makes the two separable on the panel that draws both.
             // "latched_stale" (issue #3478) is terminal for its pin and so is a
             // one-off step per latched leaf, which only a totals panel renders.
+            // "admission_refused" (issue #3575) is charted here beside
+            // "faulted" because it was counted as a fault until it had an arm of
+            // its own, and the two have to be legible side by side.
             //
             // The six drive arms (issues #2692, #3065) record what a touch achieved
             // rather than that it was issued, and are charted with their full
@@ -240,7 +253,8 @@ public sealed class DashboardPanelTagDomainTests
             //
             // This list grew by three (completed, faulted, unresolvable) when
             // issue #2938 armed them, and by one (orphaned) when issue #3101
-            // armed that, and by one (latched_stale) when issue #3478 armed that.
+            // armed that, and by one (latched_stale) when issue #3478 armed that,
+            // and by one (admission_refused) when issue #3575 armed that.
             // That growth is the whole hazard of a
             // declared-omission list: it is a statement about the complement of
             // a domain, so widening the domain silently makes every existing
@@ -248,7 +262,7 @@ public sealed class DashboardPanelTagDomainTests
             // and this entry was wrong the moment #2938 merged.
             ["Replication|2692|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 [
-                    "abandoned", "attempted", "completed", "faulted", "healed",
+                    "abandoned", "admission_refused", "attempted", "completed", "faulted", "healed",
                     "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
                 ],
 
@@ -590,12 +604,12 @@ public sealed class DashboardPanelTagDomainTests
             // hop is what keeps a newly added arm in scope for the charting
             // gate below. Issue #2692 added a second such mapping over a second
             // enum, so the domain is now the union of three disjoint groups:
-            // four lifecycle arms, six terminal arms, and six drive verdicts.
-            // All sixteen are derivable; a drop here means the hop stopped
+            // four lifecycle arms, seven terminal arms, and six drive verdicts.
+            // All seventeen are derivable; a drop here means the hop stopped
             // resolving for one of the two mappings.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
                 [
-                    "abandoned", "attempted", "completed", "drove_already_driving",
+                    "abandoned", "admission_refused", "attempted", "completed", "drove_already_driving",
                     "drove_lifted", "drove_memory_refused", "drove_no_advance",
                     "drove_not_driven", "drove_timed_out", "faulted", "healed",
                     "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",

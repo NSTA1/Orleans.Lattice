@@ -151,6 +151,26 @@ $site = [pscustomobject]@{
 }
 Write-Host "Documenting $($site.Label), from $($site.Ref) at $($site.ShortCommit), built $($site.BuiltDate)"
 
+# The version of each package the site documents: its newest tag on the release
+# line the site is built from, or on an earlier line, never on a later one. A
+# package tagged on the next line before the core tag moves the site there is
+# not yet what these pages describe. Off a release line, the newest tag.
+$documentedVersions = @{}
+$lineCeiling = if ($releaseLine) { [version]$releaseLine } else { $null }
+foreach ($name in $tagNames) {
+    if ($name -notmatch '^(?<stem>[a-z0-9.]+)-v(?<version>\d+\.\d+\.\d+)$') { continue }
+    $version = [version]$Matches.version
+    if ($lineCeiling -and [version]"$($version.Major).$($version.Minor)" -gt $lineCeiling) { continue }
+    if (-not $documentedVersions.ContainsKey($Matches.stem) -or $documentedVersions[$Matches.stem] -lt $version) {
+        $documentedVersions[$Matches.stem] = $version
+    }
+}
+function Get-DocumentedVersion([string]$PackageId) {
+    $stem = ($PackageId -replace '^Orleans\.', '').ToLowerInvariant()
+    if ($documentedVersions.ContainsKey($stem)) { return [string]$documentedVersions[$stem] }
+    return $null
+}
+
 # Links into the repository point at the ref the site was built from.
 function Get-SourceUrl([string]$RepoPath, [int]$FromLine = 0, [int]$ToLine = 0) {
     $url = "$repositoryUrl/blob/$($site.Ref)/$RepoPath"
@@ -939,6 +959,20 @@ if (Test-Path (Join-Path $Staging 'CHANGELOG.md')) {
         Anchor          = $firstRelease
         Directory       = 'changelog'
         Title           = { param($plain) 'Release ' + $plain.Trim('[', ']') }
+        # A release is looked up by the version it shipped. Its opening paragraph
+        # names that ("advance to `9.7.1`"), but often after the first sentence,
+        # which the contents would cut short, so they lead with it. Locals carry
+        # a prefix: this runs inside Split-LargePage's scope.
+        Describe        = {
+            param([string]$RelPlain, [string[]]$RelLines, [int]$RelStart, [int]$RelEnd)
+            $relDescription = Get-RangeDescription $RelLines $RelStart $RelEnd
+            $relIntro = New-Object System.Collections.Generic.List[string]
+            for ($relAt = $RelStart; $relAt -lt $RelEnd -and $RelLines[$relAt] -notmatch '^#{1,6}\s'; $relAt++) { $relIntro.Add($RelLines[$relAt]) }
+            $relShipped = @([regex]::Matches(($relIntro -join ' '), '\bto\s+`(?<v>\d+\.\d+\.\d+)`') | ForEach-Object { '`' + $_.Groups['v'].Value + '`' } | Select-Object -Unique)
+            if ($relShipped.Count -eq 0) { return $relDescription }
+            $relList = if ($relShipped.Count -le 2) { $relShipped -join ' and ' } else { ($relShipped[0..($relShipped.Count - 2)] -join ', ') + ', and ' + $relShipped[-1] }
+            return "Ships $relList. $relDescription"
+        }
         Keep            = @('Older releases')
         Drop            = @('Released')
         ContentsHeading = 'Releases'
@@ -1109,6 +1143,8 @@ foreach ($dir in $packageDirs) {
     $dirInfo[$name] = [pscustomobject]@{
         Section     = if ($section) { $section.Name } else { $fallbackSection }
         Id          = $id
+        # Whether Id is one package, rather than the family prefix of several.
+        Exact       = [bool]$exact
         Display     = $display
         Status      = $status
         Description = $description
@@ -1662,9 +1698,12 @@ foreach ($relative in $stagedPages) {
 # the page itself instead (build.ps1 copies these into the site and links each
 # page to its alternate). The page's own markdown is kept as it is; the HTML the
 # site adds is turned back into markdown (lib/agent.ps1); and a header says what
-# the page is, where its source is, and which release it documents.
+# the page is, where its source is, and which release it documents - and, on a
+# package's page, which version of that package, since a package can be on a
+# different patch from the release the site is named for.
 $agentRoot = Join-Path $Intermediate 'agent'
 $pageInfo = @{}
+$pageByLower = @{}
 foreach ($relative in $stagedPages) {
     $text = [System.IO.File]::ReadAllText((Join-Path $Staging $relative))
     $front = Split-FrontMatter $text
@@ -1676,23 +1715,134 @@ foreach ($relative in $stagedPages) {
         $h1 = $headings | Where-Object { $_.Level -eq 1 } | Select-Object -First 1
         $title = if ($h1) { Get-HeadingPlainText $h1.Text } else { [System.IO.Path]::GetFileNameWithoutExtension($relative) }
     }
-    $body = ConvertTo-AgentMarkdown $front.Body
-    $header = @(
-        '---',
-        "title: $(ConvertTo-QuotedYaml $title)",
-        "url: $(ConvertTo-QuotedYaml ($site.Url + [System.IO.Path]::ChangeExtension($relative, '.html')))",
-        "source: $(ConvertTo-QuotedYaml $origins[$relative])",
-        "documents: $(ConvertTo-QuotedYaml $site.Label)",
-        "built: $(ConvertTo-QuotedYaml $site.BuiltDate)",
-        '---',
-        ''
-    ) -join "`n"
+    $pageInfo[$relative] = [pscustomobject]@{ Title = $title; Body = (ConvertTo-AgentMarkdown $front.Body) }
+    $pageByLower[$relative.ToLowerInvariant()] = $relative
+}
+
+# The package a page documents, if it documents one: a page under docs/<dir>/,
+# with the version this build documents (see $documentedVersions) or the status
+# that stands in for one.
+function Get-PagePackage([string]$Relative) {
+    if ($Relative -notmatch '^docs/(?<dir>[^/]+)/') { return $null }
+    $info = $dirInfo[$Matches.dir]
+    if (-not $info -or -not $info.Id) { return $null }
+    $version = if ($info.Exact -and -not $info.Status) { Get-DocumentedVersion $info.Id } else { $null }
+    return [pscustomobject]@{ Id = $info.Id; Exact = $info.Exact; Version = $version; Status = $info.Status }
+}
+
+# The page a page sits under, for its "Part of" line: a package page under its
+# package's landing page, a landing page under the documentation map, and any
+# other page under the nearest index or README above it, up to the home page.
+function Get-ParentPage([string]$Relative) {
+    if ($Relative -eq 'index.md') { return $null }
+    if ($Relative -match '^docs/(?<dir>[^/]+)/[^/]+$' -and $dirInfo.ContainsKey($Matches.dir)) {
+        $info = $dirInfo[$Matches.dir]
+        $landing = if ($info.Landing) { "docs/$($Matches.dir)/$($info.Landing)" } else { $null }
+        if ($landing -and $landing -ne $Relative -and $pageInfo.ContainsKey($landing)) {
+            return [pscustomobject]@{ Path = $landing; Text = "the [$($info.Display) documentation]" }
+        }
+        return [pscustomobject]@{ Path = 'docs/index.md'; Text = 'the [documentation map]' }
+    }
+    $directory = Get-SiteDirectory $Relative
+    while ($true) {
+        foreach ($name in @('index.md', 'README.md')) {
+            $key = if ($directory) { "$directory/$name" } else { $name }
+            $candidate = $pageByLower[$key.ToLowerInvariant()]
+            if (-not $candidate -or $candidate -eq $Relative) { continue }
+            $text = if ($candidate -eq 'index.md') { 'the [Orleans.Lattice documentation]' }
+                elseif ($candidate -eq 'docs/index.md') { 'the [documentation map]' }
+                else { '[' + $pageInfo[$candidate].Title + ']' }
+            return [pscustomobject]@{ Path = $candidate; Text = $text }
+        }
+        if (-not $directory) { return $null }
+        $directory = Get-SiteDirectory $directory
+    }
+}
+
+# A "Part of" line under a markdown body's title, as split pages already carry.
+function Add-PartOfLine([string]$Body, [string]$Line) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.AddRange([string[]]@($Body -split "`n"))
+    $h1 = -1
+    for ($n = 0; $n -lt $lines.Count; $n++) {
+        if ($lines[$n] -match '^#\s') { $h1 = $n; break }
+        if (Get-FenceCloser $lines[$n]) { break }
+    }
+    if ($h1 -lt 0) { return "$Line`n`n$Body" }
+    $next = $h1 + 1
+    while ($next -lt $lines.Count -and $lines[$next].Trim() -eq '') { $next++ }
+    if ($next -lt $lines.Count -and $lines[$next].StartsWith('Part of ')) { return $Body }
+    $insert = @('', $Line)
+    if ($h1 + 1 -ge $lines.Count -or $lines[$h1 + 1].Trim() -ne '') { $insert += '' }
+    $lines.InsertRange($h1 + 1, [string[]]$insert)
+    return ($lines -join "`n")
+}
+
+# What a page's note says: which release, and which package version, the page
+# documents, and where its markdown and the index of every page are. build.ps1
+# places it under the page's title, visually hidden, for the readers that never
+# see the page's head, where the alternate link is, or its footer, where the
+# version is: a screen reader, and any tool that reads a page as text. It is a
+# span, not a paragraph: those tools score paragraphs to find a page's main
+# content, and a note that moved that choice could cost a page some of its text.
+# Its links are out of the tab order, as the video posters' are: the note cannot
+# be seen, so a keyboard user tabbing onto them would lose sight of the focus
+# for two stops on every page. A screen reader still reads and follows them.
+function Get-PageNote([string]$Relative, $Package) {
+    $scope = "the documentation for $($site.Label), built $($site.BuiltDate)"
+    $opening = if ($Package -and $Package.Exact -and $Package.Id -ne 'Orleans.Lattice') {
+        if ($Package.Version) { "This page documents $($Package.Id) $($Package.Version), in $scope." }
+        elseif ($Package.Status) { "This page documents $($Package.Id), which is $($Package.Status), in $scope." }
+        else { "This page documents $($Package.Id), in $scope." }
+    }
+    elseif ($Package -and -not $Package.Exact -and $Package.Status) { "This page documents the $($Package.Id) packages, which are $($Package.Status), in $scope." }
+    else { "This page is part of $scope." }
+    $markdownUrl = Get-EncodedHtml ($site.Url + $Relative)
+    $name = Get-EncodedHtml ([System.IO.Path]::GetFileName($Relative))
+    return '<span class="visually-hidden lt-page-note">' + (Get-EncodedHtml $opening) +
+        ' It is also published as markdown, with every table and list, at <a href="' + $markdownUrl + '" tabindex="-1">' + $name +
+        '</a>, and <a href="' + (Get-EncodedHtml ($site.Url + 'llms.txt')) + '" tabindex="-1">llms.txt</a> lists every page.</span>'
+}
+
+$splitPages = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($result in $splits.Values) { foreach ($entry in $result.Pages) { [void]$splitPages.Add($entry.Path) } }
+$pageNotes = [ordered]@{}
+foreach ($relative in $stagedPages) {
+    $info = $pageInfo[$relative]
+    $package = Get-PagePackage $relative
+    $header = New-Object System.Collections.Generic.List[string]
+    $header.Add('---')
+    $header.Add("title: $(ConvertTo-QuotedYaml $info.Title)")
+    $header.Add("url: $(ConvertTo-QuotedYaml ($site.Url + [System.IO.Path]::ChangeExtension($relative, '.html')))")
+    $header.Add("source: $(ConvertTo-QuotedYaml $origins[$relative])")
+    if ($package) {
+        $packageName = if ($package.Exact) { $package.Id } else { $package.Id + '.*' }
+        $header.Add('package: ' + (ConvertTo-QuotedYaml $packageName))
+        if ($package.Version) { $header.Add('version: ' + (ConvertTo-QuotedYaml $package.Version)) }
+        if ($package.Status) { $header.Add('status: ' + (ConvertTo-QuotedYaml $package.Status)) }
+    }
+    $header.Add("documents: $(ConvertTo-QuotedYaml $site.Label)")
+    $header.Add("built: $(ConvertTo-QuotedYaml $site.BuiltDate)")
+    $header.Add("all-pages: $(ConvertTo-QuotedYaml ($site.Url + 'llms.txt'))")
+    $header.Add('---')
+    $header.Add('')
+
+    # A split page opens with where it belongs already; every other page gains
+    # the same line, since the rendered page's sidebar is not in its markdown.
+    $body = $info.Body
+    $parent = if ($splitPages.Contains($relative)) { $null } else { Get-ParentPage $relative }
+    if ($parent) {
+        $link = Get-SiteRelativeLink (Get-SiteDirectory $relative) $parent.Path
+        $body = Add-PartOfLine $body ('Part of ' + $parent.Text + '(' + $link + ').')
+    }
+
     $target = Join-Path $agentRoot $relative
     New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
-    [System.IO.File]::WriteAllText($target, $header + $body, $utf8)
-    $pageInfo[$relative] = [pscustomobject]@{ Title = $title; Body = $body }
+    [System.IO.File]::WriteAllText($target, ($header -join "`n") + $body, $utf8)
+    $pageNotes[$relative] = Get-PageNote $relative $package
 }
-Write-Host "Wrote $($stagedPages.Count) markdown alternate(s) under $agentRoot"
+[System.IO.File]::WriteAllText((Join-Path $Intermediate 'page-notes.json'), ($pageNotes | ConvertTo-Json -Compress), $utf8)
+Write-Host "Wrote $($stagedPages.Count) markdown alternate(s) under $agentRoot, and each page's note"
 
 # --- llms.txt: the site's entry point for agents and LLM tooling ---
 # Generated from the same catalogue as the documentation map and the sidebar
@@ -1714,15 +1864,38 @@ function Get-PageDescription([string]$Relative, [int]$Max = 110) {
 
 $llms = New-Object System.Collections.Generic.List[string]
 $listed = New-Object 'System.Collections.Generic.HashSet[string]'
+# A description is taken from the page it describes, so a link in it that is
+# relative to that page would resolve from the site root here; it keeps its text.
+function ConvertTo-LlmsDescription([string]$Text) {
+    if (-not $Text) { return $Text }
+    return [regex]::Replace($Text, '(?<!!)\[(?<text>[^\]]+)\]\((?<target>[^)\s]+)\)', {
+        param($match)
+        if ($match.Groups['target'].Value -match '^[a-z][a-z0-9+.-]*:') { return $match.Value }
+        return $match.Groups['text'].Value
+    })
+}
 function Add-LlmsLink([string]$Relative, [string]$Name, [string]$Description) {
     if (-not $pageInfo.ContainsKey($Relative) -or -not $listed.Add($Relative)) { return }
     $item = "- [$Name]($($site.Url)$Relative)"
-    if ($Description) { $item += ": $Description" }
+    if ($Description) { $item += ': ' + (ConvertTo-LlmsDescription $Description) }
     $llms.Add($item)
 }
+# A split page's parts, each with what it holds: a section's first sentence, or,
+# for a run of subsections, their names - its title names only the first and the
+# last, in the page's order, which is not alphabetical.
 function Add-LlmsSplit([string]$Relative, [string]$Prefix) {
     if (-not $splits.ContainsKey($Relative)) { return }
-    foreach ($entry in $splits[$Relative].Pages) { Add-LlmsLink $entry.Path "${Prefix}: $($entry.Title)" $null }
+    foreach ($entry in $splits[$Relative].Pages) {
+        $description = $null
+        if ($entry.Chunk -and $entry.Headings.Count -gt 0) {
+            $shown = @($entry.Headings | Select-Object -First 60)
+            $description = 'Sections: ' + ($shown -join ', ')
+            if ($entry.Headings.Count -gt $shown.Count) { $description += ", and $($entry.Headings.Count - $shown.Count) more" }
+            $description += '.'
+        }
+        elseif ($entry.Description) { $description = Get-ShortDescription $entry.Description 160 }
+        Add-LlmsLink $entry.Path "${Prefix}: $($entry.Title)" $description
+    }
 }
 
 # The README's opening paragraphs are the platform's own summary.
@@ -1766,8 +1939,11 @@ if (Test-Path $homeSource) {
         $llms.Add("## Reading path: $($path.Groups['name'].Value)")
         $llms.Add('')
         foreach ($step in [regex]::Matches($path.Groups['list'].Value, '(?m)^\d+\.\s+\[(?<text>[^\]]+)\]\((?<href>[^)#]+)(?<anchor>#[^)]*)?\)\s*(?<note>.*?)\s*$')) {
-            # A step's note, less its cross-reference to the other path ("Also on Operate").
-            $note = [regex]::Replace([regex]::Replace($step.Groups['note'].Value, '<span class="lt-shared">[^<]*</span>', ''), '<[^>]+>', '').Trim()
+            # A step's note, less its cross-reference to the other path ("Also on
+            # Operate"), with its status pill read as the page reads it.
+            $note = [regex]::Replace($step.Groups['note'].Value, '<span class="lt-shared">[^<]*</span>', '')
+            $note = [regex]::Replace($note, '<span class="lt-status">(?<status>[^<]*)</span>', '(${status})')
+            $note = [regex]::Replace($note, '<[^>]+>', '').Trim()
             $llms.Add("- [$($step.Groups['text'].Value)]($($site.Url)$($step.Groups['href'].Value)$($step.Groups['anchor'].Value)): $note")
         }
         $llms.Add('')
@@ -1785,7 +1961,14 @@ foreach ($section in $sectionOrder) {
         $name = if ($info.Status) { "$($info.Display) ($($info.Status))" } else { $info.Display }
         if ($info.Landing) {
             $landing = "docs/$($dir.Name)/$($info.Landing)"
-            $lead = if ($info.Id) { "``$($info.Id)``. " } else { '' }
+            # A package opens with its id and the version these pages document.
+            $lead = ''
+            if ($info.Id) {
+                $lead = "``$($info.Id)``"
+                $documented = if ($info.Exact -and -not $info.Status) { Get-DocumentedVersion $info.Id } else { $null }
+                if ($documented) { $lead += " $documented" }
+                $lead += '. '
+            }
             Add-LlmsLink $landing $name ($lead + $(if ($info.Description) { Get-ShortDescription $info.Description 200 } else { '' })).Trim()
             Add-LlmsSplit $landing $name
         }
@@ -1822,6 +2005,14 @@ if ($episodes.Count -gt 0) {
 $llms.Add('## Optional')
 $llms.Add('')
 Add-LlmsLink 'CHANGELOG.md' 'Changelog' 'Release history for the package family, newest first, with one page per release.'
+# The newest release, which is what "what changed" asks about; the rest are one
+# link away on the changelog's own page.
+$releases = $splits['CHANGELOG.md']
+if ($releases -and $releases.Children.Count -gt 0) {
+    $newest = $releases.Children[0]
+    $newestDescription = if ($newest.Description) { Get-ShortDescription $newest.Description 200 } else { $null }
+    Add-LlmsLink $newest.Path ('Newest release, ' + ($newest.TocName -replace '^Release\s+', '')) $newestDescription
+}
 Add-LlmsLink 'docs/RELEASING.md' 'Releasing' (Get-PageDescription 'docs/RELEASING.md')
 # Anything else on the site - the benchmark and specification pages the
 # documentation links into - so that nothing is left out.

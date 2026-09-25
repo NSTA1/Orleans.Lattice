@@ -713,19 +713,29 @@ internal sealed partial class BPlusLeafGrain(
             return await GetWithVersionWithPendingAsync(key, txid, pendingValue);
         }
 
+        var canStamp = CanStampOptimisticRead(key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
+            // Shadowed migrated values need the serial read's registry check.
+            if (lww.IsMigrated && TryGetShadowedSagas(key, out _))
+                canStamp = false;
             return new VersionedValue
             {
                 Value = lww.Value,
                 Version = lww.Timestamp,
                 ExpiresAtTicks = lww.ExpiresAtTicks,
                 MergeMode = Cache.GetMergeMode(key),
+                LeafRoutingEpoch = canStamp ? _leafRoutingEpoch : default,
+                LeafRoutingGeneration = canStamp ? _leafRoutingGeneration : 0,
             };
         }
 
-        return new VersionedValue();
+        return new VersionedValue
+        {
+            LeafRoutingEpoch = canStamp ? _leafRoutingEpoch : default,
+            LeafRoutingGeneration = canStamp ? _leafRoutingGeneration : 0,
+        };
     }
 
     private async Task<VersionedValue> GetWithVersionWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
@@ -2438,6 +2448,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetNextSiblingAsync(GrainId? siblingId)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // U9p step c2-iv-redux: serialise every public PersistAsync
         // site through the per-activation _splitGate. With
@@ -2467,6 +2478,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetPrevSiblingAsync(GrainId? siblingId)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -2483,6 +2495,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetTreeIdAsync(string treeId)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
@@ -2554,6 +2567,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetShardIndexAsync(int shardIndex)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
@@ -2596,6 +2610,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
@@ -2678,6 +2693,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
 
@@ -3225,6 +3241,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.Write);
@@ -3778,6 +3795,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.Write);
@@ -4138,6 +4156,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task ClearGrainStateAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         // Retire the replay BEFORE the clear (issue #2871). The replay now runs
         // concurrently with requests, so an in-flight one would otherwise
         // re-hydrate the cache from the WAL immediately after this clear -

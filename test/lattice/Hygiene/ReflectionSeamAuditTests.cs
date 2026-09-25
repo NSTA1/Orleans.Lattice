@@ -91,6 +91,8 @@ public sealed class ReflectionSeamAuditTests
             "Same SplitAsync exemption as BoundedSplitTransfer: gated by SplitIfNeededUnderGateAsync, whose wiring SplitGate's Split_proceeds_normally_when_gate_is_free drives. Reflection here isolates the division from a triggering write, so the cache refresh is attributed to the division alone.",
         ["test/lattice/BPlusTree/Grains/LeafSnapshotDetachAttributionTests.cs"] =
             "Census: Every_detach_seam_has_its_own_metric_tag's subject is the population of LeafSnapshotDetachSeam members and their projection onto detach_seam, so there is no single wiring to exempt. DetachSeamTag's sole production caller, RecordBisectRefusal, applies it unconditionally on every recorded refusal, so no gate can decline it; the reflected assert also fails loudly if the method is renamed rather than passing vacuously.",
+        ["test/lattice/BPlusTree/Grains/ShardRootGrainOptimisticReadTests.ReadCost.cs"] =
+            "Structural guard: inspects the compiler-generated state machine of public TryGetOptimisticAsync and invokes only the fixture's own generic Unsafe.SizeOf<T> helper for size reporting, not a private production method. Sibling RawFastPath tests drive the public read seam and its admission races.",
         ["test/lattice/BPlusTree/Grains/WalCommitLogWriterWedgeDiagnosticsTests.cs"] =
             "Arrange-only: wedges private tracker state by reflection, then asserts through the public AppendAsync.",
         ["test/lattice/BPlusTree/Grains/WalMaterialiserPinGrainFaultArmsTests.cs"] =

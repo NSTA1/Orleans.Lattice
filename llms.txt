@@ -4,7 +4,7 @@
 
 This file is the repository's entry point for AI agents and LLM tooling. The complete documentation index is published with the documentation site, generated from the same catalogue as the site's documentation map, so it lists every package and every page of the newest release and cannot drift from them. This file deliberately does not repeat it.
 
-Every page on the site also has a markdown alternate at the same address ending in `.md` (announced by `<link rel="alternate" type="text/markdown">`), and every page's footer names the release it documents. In this repository the documentation is markdown under `docs/`, and every public type carries XML doc comments that ship in the NuGet packages. Prefer the linked markdown over crawling source.
+Every page on the site also has a markdown alternate at the same address ending in `.md`, announced by `<link rel="alternate" type="text/markdown">` and by a note under the page's title. Every page names the release it documents, in its footer and in that note, and a package's pages also name the version of the package they describe. In this repository the documentation is markdown under `docs/`, and every public type carries XML doc comments that ship in the NuGet packages. Prefer the linked markdown over crawling source.
 
 ## Documentation index
 

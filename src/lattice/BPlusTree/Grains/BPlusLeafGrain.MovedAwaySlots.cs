@@ -13,6 +13,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task MarkSlotsMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
         await _splitGate.WaitAsync();
         try

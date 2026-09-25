@@ -118,6 +118,13 @@ public partial class BPlusLeafGrainTests
     /// fixture uses it to make exactly one named partition stale, so the latch
     /// can be shown to refuse that partition's hints and no other's.
     /// </param>
+    /// <param name="maxConcurrentReplays">
+    /// Pins the per-silo replay gate's ceiling, which is otherwise derived from
+    /// the host's processor count. Only takes effect when the process-wide gate
+    /// is sized by this leaf's activation, so a fixture that pins it resets the
+    /// gate first; issue #3575's timer-admission fixtures use it to put the GC
+    /// share at a known width on any machine.
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -130,7 +137,8 @@ public partial class BPlusLeafGrainTests
             int walPartitions = 1,
             string? treeId = null,
             Func<FallOffLogDecision>? detectorDecision = null,
-            Func<int, FallOffLogDecision>? detectorDecisionForPartition = null)
+            Func<int, FallOffLogDecision>? detectorDecisionForPartition = null,
+            int? maxConcurrentReplays = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -217,6 +225,8 @@ public partial class BPlusLeafGrainTests
                 WalPartitions = walPartitions,
                 MaterialiserCheckpointInterval = TimeSpan.Zero,
                 LeafSnapshotReClassifyEveryNCheckpoints = reClassifyEveryN,
+                WalMaterialiserMaxConcurrentReplays =
+                    maxConcurrentReplays ?? LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays,
             },
             maxLeafKeys: 128,
             shardCount: 1,
