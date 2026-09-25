@@ -333,6 +333,10 @@ public sealed class WalMaterialiserPinGrainFaultArmsTests
         // explicitly so what is measured here is re-arming, not clock granularity.
         SetField(h.Grain, "_lastWriteCompletedTickMs", Environment.TickCount64 - 100_000L);
 
+        // The failure also armed the flush backoff (so a permanently failing
+        // store is not retried on every tick); retire it too, for the same reason.
+        SetField(h.Grain, "_nextFlushAttemptTickMs", 0L);
+
         await h.FlushTick!(CancellationToken.None);
 
         Assert.That(

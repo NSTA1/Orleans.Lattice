@@ -152,12 +152,14 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Per-activation budget for the zero-coverage repair path (issue #2692).
-    /// The repair is self-extinguishing on success - a capture stamps coverage
-    /// for every checkpointed partition, and coverage is monotone-max, so the
-    /// trigger predicate is false forever afterwards - which means this budget
-    /// is only ever consumed by captures that FAIL. Eight attempts absorbs a
-    /// transient snapshot-store fault without letting a persistently failing
-    /// store turn every checkpoint persist into a capture attempt.
+    /// A capture stamps coverage for every partition checkpointed at the time,
+    /// and coverage is monotone-max, so a covered partition leaves the trigger
+    /// predicate permanently. A partition that checkpoints later re-arms it,
+    /// which is why an attempt that covered at least one partition is refunded
+    /// (issue #3576): the budget is consumed only by captures that made no
+    /// progress, which in practice means captures that FAIL. Eight attempts
+    /// absorbs a transient snapshot-store fault without letting a persistently
+    /// failing store turn every checkpoint persist into a capture attempt.
     /// </summary>
     private const int MaxZeroCoverageRepairAttempts = 8;
 
@@ -590,18 +592,35 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     internal bool HasCheckpointedPartitionWithoutCoverage(int partitionCount)
+        => CountCheckpointedPartitionsWithoutCoverage(partitionCount, stopAtFirst: true) > 0;
+
+    /// <summary>
+    /// Counts the partitions that are proven checkpointed yet carry no durable
+    /// snapshot coverage, the population
+    /// <see cref="HasCheckpointedPartitionWithoutCoverage"/> tests for. The
+    /// zero-coverage repair compares the count before and after a capture to
+    /// tell a capture that made progress from one that did not (issue #3576).
+    /// </summary>
+    /// <param name="partitionCount">The configured WAL partition count.</param>
+    /// <param name="stopAtFirst">Return 1 at the first match instead of counting.</param>
+    internal int CountCheckpointedPartitionsWithoutCoverage(int partitionCount, bool stopAtFirst = false)
     {
         var width = ResolveCoveragePartitionCount(partitionCount);
+        var count = 0;
         for (var p = 0; p < width; p++)
         {
             if (IsPartitionProvenCheckpointed(p)
                 && DurableSnapshotCoverageForPartition(p) < 0)
             {
-                return true;
+                count++;
+                if (stopAtFirst)
+                {
+                    return count;
+                }
             }
         }
 
-        return false;
+        return count;
     }
 
     /// <summary>
@@ -950,8 +969,11 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// The population is also self-extinguishing, which is what keeps the cost
     /// one-off rather than per-write: the predicate requires coverage &lt; 0,
-    /// the first successful capture moves coverage to 0 or above, and coverage
-    /// is monotone, so a leaf leaves the eligible set permanently.
+    /// the first successful capture moves every then-checkpointed partition's
+    /// coverage to 0 or above, and coverage is monotone, so each partition
+    /// leaves the eligible set permanently. A partition that checkpoints later
+    /// brings the leaf back once, for that partition only, so a leaf re-enters
+    /// at most once per partition (issue #3576).
     /// </para>
     /// <para>
     /// Two residuals, stated rather than papered over. First, the cross-leaf
@@ -1053,6 +1075,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _zeroCoverageRepairAttempts++;
+        var uncoveredBefore = CountCheckpointedPartitionsWithoutCoverage(partitionCount);
 
         // The byte-overflow pre-split that used to run here now runs inside
         // CaptureSnapshotCoreAsync, which this method reaches through
@@ -1074,6 +1097,27 @@ internal sealed partial class BPlusLeafGrain
         // caller token and passes none, exactly as the pre-existing cadence and
         // coverage-deficit captures on that same path do.
         await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
+
+        // Refund an attempt that made progress (issue #3576). The budget exists
+        // to bound captures that FAIL, but it used to be charged for every
+        // capture, successful or not. A leaf whose partitions checkpoint one
+        // after another - every bulk-loaded leaf, which spans up to
+        // WalPartitions partitions that each checkpoint on their own schedule -
+        // re-enters this repair once per newly checkpointed partition, each time
+        // successfully, and so spent its eight attempts on successes and
+        // abandoned the repair for the re-arm backoff with partitions still
+        // uncovered. Their block pins then held the tree's WAL trim floor for
+        // thirty minutes. A refund is only granted when the capture removed at
+        // least one partition from the uncovered set, and coverage is
+        // monotone-max, so refunds are bounded by the partition count: the
+        // budget still bounds a store that keeps failing, and a capture that
+        // ran but covered nothing (a lost in-flight race, a failed write) is
+        // still charged.
+        if (_zeroCoverageRepairAttempts > 0
+            && CountCheckpointedPartitionsWithoutCoverage(partitionCount) < uncoveredBefore)
+        {
+            _zeroCoverageRepairAttempts--;
+        }
 
         if (!HasCheckpointedPartitionWithoutCoverage(partitionCount))
         {
