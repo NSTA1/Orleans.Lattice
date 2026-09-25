@@ -200,13 +200,18 @@ Replica-count timeline (offered-load lines come from the driver):
 **Timing expectations.** Scale-out **lags** the load by tens of seconds. Three
 delays stack between offered load and a new replica:
 
-1. the KEDA polling interval (ACA default 30s),
-2. the KEDA scale-down cooldown / stabilization window, and
-3. the signal's producer-side EWMA smoothing.
+1. the signal's sample interval (`SampleInterval`, 5 seconds by default) - the
+   scalar itself snaps up immediately, with no smoothing on the way up;
+2. the KEDA polling interval (ACA default 30s); and
+3. the time a new replica takes to start and join the cluster.
 
-That is by design (it prevents replica thrashing). Sustain the load past the
-window - the 5 minute default is comfortable - then watch the count settle back
-toward `minReplicas` after the driver stops:
+Scale-in is deliberately slower (it prevents replica thrashing): the signal
+holds a falling scalar until every scale-in precondition has held for
+`ScaleInGateWindow` (2 minutes by default) and then lets it decay through the
+EWMA (`EwmaHalfLife`, 30 seconds by default), and ACA applies its own scale-in
+cooldown on top. Sustain the load for a while - the 5 minute default is
+comfortable - then watch the count settle back toward `minReplicas` after the
+driver stops:
 
 ```powershell
 az containerapp replica list -g rg-clusterscaling -n <app> --query 'length(@)' -o tsv
@@ -270,13 +275,15 @@ samples/ClusterScaling/
       Program.cs
       BasicAdminDataApiAuthorizer.cs
       ClusterScaling.Silo.csproj
+      Dockerfile                  # the silo image deploy.ps1 builds with az acr build
     ClusterScaling.LoadDriver/    # compute-axis gRPC load generator
       Program.cs
       LoadDriverOptions.cs
       ClusterScaling.LoadDriver.csproj
   deploy/
     main.bicep                    # identity, storage, role, ACA env + app, KEDA scale rule
-    deploy.ps1                    # hash password, provision, print FQDN (idempotent)
+    registry.bicep                # the Basic container registry deploy.ps1 provisions by default
+    deploy.ps1                    # hash password, provision, build + push image, print FQDN (idempotent)
     drive-load.ps1                # run LoadDriver + poll replica timeline
     teardown.ps1                  # delete the resource group
 ```

@@ -53,14 +53,15 @@ public readonly record struct PnCounterAccessor
     /// by <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
     /// <remarks>
-    /// When the caller has entered an ambient
-    /// <see cref="LatticeIdempotencyContext"/> scope the accessor adds a
-    /// pre-CAS dedup guard: if the stored entry's HLC version already
-    /// equals the supplied <see cref="LatticeIdempotencyKey.Timestamp"/>
-    /// (and the origin matches), a previous attempt under the same key
-    /// already advanced the counter and the second call drops to a
-    /// no-op. Without the scope the counter advances on every call,
-    /// which is the negative-control behaviour for the dedup feature.
+    /// The call reads the counter once and applies a delta carrying this
+    /// replica's resulting positive total, which the leaf folds by a
+    /// per-replica maximum, so re-applying the same delta (for example a
+    /// grain-side retry of the apply) cannot double-count. A second call
+    /// reads the updated counter and advances it again, with or without an
+    /// ambient <see cref="LatticeIdempotencyContext"/> scope: the scope only
+    /// lets a configured <see cref="LatticeOptions.RetryPolicy"/> re-run the
+    /// underlying delta apply. <paramref name="maxAttempts"/> is kept for
+    /// binary compatibility and no longer drives a retry loop.
     /// </remarks>
     public Task IncrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
@@ -120,9 +121,9 @@ public readonly record struct PnCounterAccessor
     /// by <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
     /// <remarks>
-    /// Honours the same ambient
-    /// <see cref="LatticeIdempotencyContext"/> dedup guard as
-    /// <see cref="IncrementAsync"/>.
+    /// Applies the same way as <see cref="IncrementAsync(string, long, CancellationToken, int)"/>: one read, then a
+    /// delta carrying this replica's resulting negative total, folded by a
+    /// per-replica maximum.
     /// </remarks>
     public Task DecrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {

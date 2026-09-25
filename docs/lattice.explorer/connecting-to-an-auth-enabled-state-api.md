@@ -30,7 +30,11 @@ challenge:
 - `basic` presents a username and password form and attaches an
   `authorization: Basic ...` header. This is always available.
 - `entra` (from the optional `Orleans.Lattice.Explorer.Entra` package) runs an
-  interactive Microsoft Entra ID sign-in and attaches a bearer token.
+  interactive Microsoft Entra ID sign-in and attaches a bearer token. A hosted
+  Blazor Server head uses the
+  [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
+  provider for the same scheme instead, which exchanges the browser's OpenID
+  Connect session for the token.
 - Any custom scheme a host registers presents its own sign-in surface.
 
 When the endpoint advertises a scheme the Explorer has no method for, the sign-in
@@ -80,10 +84,11 @@ which makes each of these optional against an endpoint that advertises them,
 without your configuration ever being silently displaced. Because the
 advertisement is fetched over an unauthenticated RPC from the endpoint that will
 receive the resulting token, an advertised **authority** is additionally admitted
-only when it is `https` and names a recognised Entra login host, or a host you
-list in `ExplorerEntraOptions.AllowedAuthorityHosts`; anything else fails the
-sign-in with the remedy named, rather than sending you to an identity provider
-the endpoint chose.
+only when it is `https` and its host is allow-listed: a recognised Entra login
+host by default, or, when `ExplorerEntraOptions.AllowedAuthorityHosts` is
+non-empty, exactly the hosts listed there (the list replaces the default set).
+Anything else fails the sign-in with the remedy named, rather than sending you to
+an identity provider the endpoint chose.
 
 ## Token freshness
 

@@ -1,7 +1,7 @@
 # Managing access control from the Explorer
 
-The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
-detail tabs. **Access** is the membership and authorization admin area. It lets
+The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
+left of the shell. **Access** is the membership and authorization admin area. It lets
 an operator inspect and edit the identity directory and the authorization rules
 that gate a cluster whose State API has authorization enabled, and it explains
 why a given subject is allowed or denied an operation - all over the existing
@@ -9,10 +9,12 @@ auth gRPC binding, with no new server surface.
 
 ## Where it sits
 
-Access is one of the switcher's areas, alongside **Explore** (the tree browser),
-**Backups**, and **Schema**. Selecting it swaps the whole working surface to the
-access admin tabs. Like every area, it is registered in one place and carries an
-advisory rule that decides whether it is available to the connected user.
+Access is one of the rail's areas, alongside **Explore** (the tree browser),
+**Backups**, **Tenant administration**, **My tenant**, and **Telemetry** (and
+**Schema** when a head registers it). Selecting it swaps the whole working
+surface to the access admin tabs. Like every area, it is a plugin that carries
+its own advisory access gate, which decides whether it is available to the
+connected user.
 
 The area drives the authorization admin surface of the auth API
 ([`Orleans.Lattice.Api.Auth.Grpc`](../lattice.api.auth.grpc/README.md)); it holds
@@ -88,7 +90,8 @@ The area shows a banner describing the cluster's real authentication and
 enforcement posture, read from the server, so an operator is never guessing:
 
 - the **authentication mode** the silo can authoritatively see from its
-  registered authenticators (anonymous, claims-based, or unknown); and
+  registered authenticators (anonymous, claims-based, Basic username/password, or
+  unknown); and
 - a **"recorded but not enforced"** notice when the server confirms authorization
   rules are being stored but the connected State API is not actually enforcing
   them - so an operator does not mistake an advisory rule set for a live gate. A
@@ -133,11 +136,12 @@ capability demotion, this is advisory: the server remains the enforcement point.
 
 ## Capability-aware, demote not hide
 
-The whole area is gated by a single coarse capability, **AuthAdminAllowed**. It
-is discovered with a fail-closed probe: the Explorer asks the server for the
-smallest possible page of the admin surface, and only if that succeeds is the
-area treated as available. If the probe is denied or the endpoint is
-unreachable, the area entry stays **visible but demoted**, grouped below a
+The whole area is gated by a single coarse check, made by the plugin's own
+access gate. It is discovered with a fail-closed probe: the Explorer asks the
+server for the smallest possible page of the admin surface (a one-row group
+listing), and only if that succeeds is the area treated as available. If the
+probe is denied or the endpoint is unreachable, the area entry stays **visible
+but demoted**, grouped below a
 divider and stating the permission it needs and who to ask, so the user can see
 the capability exists and ask for the grant.
 

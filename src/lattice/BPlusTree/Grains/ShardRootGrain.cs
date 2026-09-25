@@ -2658,7 +2658,7 @@ internal sealed partial class ShardRootGrain(
     /// stalls behind it, the lattice grain's per-shard fan-out saturates at
     /// its in-flight limit, and the whole write pipeline wedges with no
     /// fault and no activation recycle until the caller-side Orleans
-    /// response deadline (default 3 minutes) expires. The deadline abandons
+    /// response deadline (30 seconds by default) expires. The deadline abandons
     /// the parked seed (its eventual completion is harmlessly unobserved)
     /// and faults the turn with a <see cref="TimeoutException"/>, which the
     /// existing transient-exception retry envelope on every mutation path

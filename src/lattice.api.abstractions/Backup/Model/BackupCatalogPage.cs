@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Backup;
 [Immutable]
 public sealed record BackupCatalogPage
 {
-    /// <summary>The backup manifests on this page, ordered by backup id.</summary>
+    /// <summary>The backup manifests on this page, ordered according to the request.</summary>
     [Id(0)] public IReadOnlyList<BackupManifest> Entries { get; init; } = Array.Empty<BackupManifest>();
 
     /// <summary>

@@ -167,7 +167,7 @@ public sealed class VectorIndexOptions
     /// comparisons; with <c>C = sqrt(n)</c> a probe count that is a fixed
     /// <i>fraction</i> of <c>C</c> would make the second term proportional to
     /// <c>n</c> again, so the fraction of the corpus scanned must fall as the
-    /// corpus grows. Under this rule it does: about 17 percent at ten thousand
+    /// corpus grows. Under this rule it does: about 20 percent at ten thousand
     /// vectors, 12 percent at the seventy thousand of a large live corpus, and 6
     /// percent at a million. The measured recall of the default is published in
     /// the package readme.

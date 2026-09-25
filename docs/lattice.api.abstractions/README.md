@@ -16,8 +16,9 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 The `Orleans.Lattice.Api.Region` namespace carries the transport-agnostic region-discovery contract, so any consumer - the MCP `lattice_list_regions` tool today, a future Explorer UI or gRPC binding - reads the same region model rather than a surface-specific type:
 
 - `ILatticeRegionCatalog` - `ListRegionsAsync` lists the regions a server can route to, current region first.
-- `LatticeRegionDescriptor` - one region's id, cluster id, whether it is the current region, and its per-group reachability.
+- `LatticeRegionDescriptor` - one region's id, cluster id, whether it is the current region, its per-group reachability, and - on a tenant-scoped discovery call only - the asserting tenant's standing in that region (`TenantScope`; `null` otherwise).
 - `LatticeRegionGroupReachability` - whether a facade group is reachable in a region and the endpoint it is served at.
+- `LatticeRegionTenantScope` - one tenant's standing in one region: the tenant id, whether an operator has allowed the region for it, its per-region residency lifecycle status, and whether it is resident there.
 
 The package has no implementation, no registration extension, and no background work. Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
 

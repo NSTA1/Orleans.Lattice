@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 
 /// <summary>
-/// Validates <see cref="AzureTelemetryBackendTokenOptions"/> at host start:
+/// Validates <see cref="AzureTelemetryBackendTokenOptions"/> when options are first resolved:
 /// requires an Azure credential, a non-empty scope, and a non-negative refresh
 /// skew.
 /// </summary>

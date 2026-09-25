@@ -274,17 +274,20 @@ Use it when you need cross-key atomicity and fall back to `SetManyAsync`
 when you don't.
 
 Read paths are uniformly fast, but they are **fast because the
-production read path is cache-served**, not because they exhaust Azure
-Tables' read budget. The `GetAsync` and `GetManyAsync` per-call
-latencies in the Layer 2 table above are each
-roughly two orders of magnitude faster than a single Azure Tables
-round-trip - the difference is the per-silo read-through leaf cache. The
+production read path is served from memory**, not because they exhaust
+Azure Tables' read budget. A read resolves through the per-silo
+read-through leaf cache, and whatever the cache cannot answer is read
+from the leaf grain's resident state, so neither path issues a storage
+request; that is why the `GetAsync` and `GetManyAsync` per-call
+latencies in the Layer 2 table above are each roughly two orders of
+magnitude faster than a single Azure Tables round-trip. The
 single-account read budget itself (the same ~2,500 transactions/sec
 empirical ceiling that gates the write path - the Azure-published
 per-account TPS target is higher but the binder for both shapes is
 per-account concurrent in-flight transactions; see
-`benchmark/azure-throughput/throughput.md` section 31) sits in front
-of the cache, not behind it. On a workload with a low cache hit ratio
+`benchmark/azure-throughput/throughput.md` section 31) is spent when a
+leaf has to activate and load its state. On a workload whose working
+set does not stay activated - a large keyspace read at random, say -
 the read envelope grows toward the round-trip cost and the read budget
 starts to matter.
 
@@ -297,10 +300,14 @@ local-silo cache absorbs most of the cost: a same-silo revision-cookie
 short-circuit skips the cross-grain delta fetch entirely, the read
 collapses to an in-memory dictionary `TryGetValue`, and
 the envelope p50 settles into the tens-of-microseconds range you see
-above. On a cache miss (the key has not been seen, or its TTL elapsed),
-the cache fetches a delta from the primary leaf and the envelope grows
-by an Azure-Tables round-trip - typically pushing the p99 noticeably
-above the p50.
+above. When the primary leaf has changed since the cache last
+refreshed, or is activated on another silo, the read first pulls a
+delta from it - an extra grain call, and a cross-silo hop when the leaf
+is remote (a remote pull can be rate-limited with
+`LatticeOptions.CacheTtl`, zero by default) - and a key whose cached
+payload was evicted, or that an in-flight saga has pending, is read
+from the leaf directly. Either path adds a grain round-trip rather than
+a storage read, typically pushing the p99 noticeably above the p50.
 
 This is **not** a knock against the published numbers: the cache is part
 of the production read path and an honest representation of what an
@@ -335,9 +342,10 @@ consequences follow:
   workload measured here. Adaptive shard splitting will eventually
   rebalance a persistently hot shard, but the rebalance itself is a
   brief throughput dip.
-- **Multi-silo.** A second silo with shard fan-out is the next campaign
-  axis and is not yet measured. Numbers for a 2-, 4-, or N-silo cluster
-  will appear in a follow-up document once that work lands.
+- **Multi-silo.** Every cell here is one silo. What a 2- to 8-silo
+  cluster delivers is measured separately, on its own tier and on a more
+  conservative throughput basis - see
+  [Performance: multi-silo scaling guide](performance-multi-silo.md).
 - **WAL shipping defaults.** Layer 2 cells are measured against the
   library's shipping `WalPartitions` and `WalMaxPendingBatches` defaults
   recorded in the marker block's meta-header above. Both the foreground

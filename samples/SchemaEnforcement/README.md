@@ -56,7 +56,8 @@ Done.
 - Trees storing arbitrary opaque binary blobs: versioning targets UTF-8 / JSON
   payloads (see [wire format](../../docs/lattice.schema/wire-format.md)).
 - Hot paths where any per-write validation cost is unacceptable - leave the tree
-  un-opted-in and it pays zero schema overhead.
+  un-opted-in and it pays only a cached per-tree lookup on write (and nothing at
+  all when the package is not registered).
 
 ## Feature doc
 

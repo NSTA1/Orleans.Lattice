@@ -13,7 +13,7 @@ services.AddTelemetryTools(o =>
     o.BackendAddress = new Uri("https://prometheus.internal:9090/"));
 ```
 
-There is no destructive opt-in flag, unlike the data, backup, and auth modules: adding the module advertises exactly the four read-only tools below to a granted caller.
+There is no destructive opt-in flag, unlike the data, backup, auth, replication, tree-administration, and tenant-administration modules: adding the module advertises exactly the four read-only tools below to a granted caller.
 
 ## The tools
 

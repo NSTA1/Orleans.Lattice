@@ -76,9 +76,9 @@ The backup-health operations surface the periodic health monitor to an operator.
 
 Paging request for the catalog listing. By default the catalog is enumerated ascending by backup id.
 
-- `int PageSize` - maximum manifests per page. Values below 1 fall back to `LatticeApiBackupOptions.DefaultListPageSize`; values above `MaxListPageSize` are clamped to it.
+- `int PageSize` - maximum manifests per page (in the newest-first mode, the maximum logical rows per page, where the adjacent members of one backup set count as a single row). Values below 1 fall back to `LatticeApiBackupOptions.DefaultListPageSize`; values above `MaxListPageSize` are clamped to it.
 - `string? PageToken` - the exclusive continuation cursor. In the default order this is the backup id of the last manifest on the previous page; in the newest-first mode it is the opaque `BackupCatalogPage.NextPageToken`. `null` (the default) starts from the beginning.
-- `bool OrderByCreatedDescending` - when set, returns the catalog newest-first (by capture time) with backup-set members kept adjacent, and enables the filter predicates below. This mode is served efficiently from a maintained backup-catalog index. When `false` (the default) the listing keeps the ascending-by-backup-id order and ignores the filters.
+- `bool OrderByCreatedDescending` - when set, returns the catalog newest-first (by capture time) with backup-set members kept adjacent, and enables the filter predicates below. In this mode an incremental chain is listed once, as its tip: a backup that another backup names as its base is folded out of the listing. This mode is served efficiently from a maintained backup-catalog index; when that index is not hosted it degrades to a full catalog scan with the same ordering, filtering, and cursor semantics. When `false` (the default) the listing keeps the ascending-by-backup-id order and ignores the filters.
 - `BackupKind? Kind` - optional exact kind filter (full or incremental). Applied only in newest-first mode.
 - `string? NamePrefix` - optional case-insensitive starts-with filter on the row's display name. Applied only in newest-first mode.
 - `string? TreeId` - optional exact scope tree-id filter. Applied only in newest-first mode.
@@ -88,7 +88,7 @@ Paging request for the catalog listing. By default the catalog is enumerated asc
 
 One page of the catalog.
 
-- `IReadOnlyList<BackupManifest> Entries` - the manifests on this page, ordered by backup id (defaults to empty).
+- `IReadOnlyList<BackupManifest> Entries` - the manifests on this page (defaults to empty), in the request's order: ascending by backup id by default, or newest-first with backup-set members adjacent when `OrderByCreatedDescending` is set.
 - `string? NextPageToken` - the cursor to pass back in the next request, or `null` on the final page.
 
 ### `BackupChainDescription`
@@ -123,8 +123,8 @@ The allowed-operation set the read-only capability probe reports for one scope. 
 
 A single scope's schedule and last-run status.
 
-- Constructor: `BackupScopeStatus(BackupScopeSelector scope, bool fullScheduleRegistered, bool incrementalScheduleRegistered, DateTimeOffset? lastFullRunUtc, DateTimeOffset? lastFullSuccessUtc, DateTimeOffset? lastIncrementalRunUtc, DateTimeOffset? lastIncrementalSuccessUtc, BackupScopeRunOutcome lastRunOutcome, int chainDepth)`. Throws `ArgumentNullException` when `scope` is null.
-- Properties: `BackupScopeSelector Scope`, `bool FullScheduleRegistered`, `bool IncrementalScheduleRegistered`, `DateTimeOffset? LastFullRunUtc`, `DateTimeOffset? LastFullSuccessUtc`, `DateTimeOffset? LastIncrementalRunUtc`, `DateTimeOffset? LastIncrementalSuccessUtc`, `BackupScopeRunOutcome LastRunOutcome`, `int ChainDepth`.
+- Constructor: `BackupScopeStatus(BackupScopeSelector scope, bool fullScheduleRegistered, bool incrementalScheduleRegistered, DateTimeOffset? lastFullRunUtc, DateTimeOffset? lastFullSuccessUtc, DateTimeOffset? lastIncrementalRunUtc, DateTimeOffset? lastIncrementalSuccessUtc, BackupScopeRunOutcome lastRunOutcome, int chainDepth, TimeSpan? runtimeFullBackupInterval = null, TimeSpan? runtimeIncrementalBackupInterval = null)`. Throws `ArgumentNullException` when `scope` is null.
+- Properties: `BackupScopeSelector Scope`, `bool FullScheduleRegistered`, `bool IncrementalScheduleRegistered`, `DateTimeOffset? LastFullRunUtc`, `DateTimeOffset? LastFullSuccessUtc`, `DateTimeOffset? LastIncrementalRunUtc`, `DateTimeOffset? LastIncrementalSuccessUtc`, `BackupScopeRunOutcome LastRunOutcome`, `int ChainDepth`, `TimeSpan? RuntimeFullBackupInterval`, `TimeSpan? RuntimeIncrementalBackupInterval` (the runtime-registered full / incremental cadence, `null` when none is registered).
 
 ## Serialization aliases
 

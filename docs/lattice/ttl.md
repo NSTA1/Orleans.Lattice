@@ -56,16 +56,18 @@ Read filtering, scans, counts, cursors, caching, and tombstone compaction treat 
 
 ## Internal representation
 
-Every entry is stored as an `LwwValue<byte[]>`:
+Every stored entry carries its TTL alongside the rest of its row:
 
-| Field | Purpose |
+| Stored with each entry | Purpose |
 |---|---|
-| `Value` | The stored bytes (or tombstone marker). |
-| `Timestamp` | HLC timestamp used for last-writer-wins conflict resolution. |
-| `IsTombstone` | Tombstone flag. |
-| `ExpiresAtTicks` | Absolute UTC ticks at which the entry expires. `0` means "no expiry" - this is the default and keeps pre-TTL snapshots wire-compatible. |
+| Value bytes | The stored bytes (absent for a tombstone). |
+| HLC timestamp | Last-writer-wins conflict resolution. |
+| Tombstone flag | Marks a deleted entry. |
+| Absolute expiry (UTC ticks) | The instant the entry expires. `0` means "no expiry" - this is the default and keeps pre-TTL snapshots wire-compatible. |
+| Origin cluster and vector clock | Replication metadata: which cluster authored the write, and the causal frontier it carried. |
+| Migrated flag | Marks a row that arrived through a cross-shard migration, until a newer non-migrated write supersedes it. |
 
-`LwwValue<T>.IsExpired(long nowUtcTicks)` is the single predicate used by every read path to decide whether to hide an entry.
+A single expiry predicate over the stored row decides, on every read path, whether to hide an entry.
 
 ## Read paths
 
@@ -74,13 +76,13 @@ All read entry points filter expired entries before returning results to callers
 | Operation | Behaviour when entry is expired |
 |---|---|
 | `GetAsync` | Returns `null`. |
-| `GetWithVersionAsync` | Returns `VersionedValue.NotFound`. |
+| `GetWithVersionAsync` | Returns an empty `VersionedValue` (`Value` is `null`, `Version` is `HybridLogicalClock.Zero`) - the same result as a missing key. |
 | `ExistsAsync` | Returns `false`. |
 | `GetManyAsync` | Key is absent from the returned dictionary. |
-| `GetOrSetAsync` | Treats the expired entry as absent and proceeds to write the supplied factory value. |
+| `GetOrSetAsync` | Treats the expired entry as absent and proceeds to write the supplied value. |
 | `SetIfVersionAsync` | Treats the expired entry as `HybridLogicalClock.Zero` for CAS comparison. |
 
-The effective "now" is captured once per grain call so all keys in a single `GetManyAsync` / `CountAsync` / scan observe the same expiry instant.
+The effective "now" is captured once per leaf call, so every key a single leaf evaluates for one `GetManyAsync` / `CountAsync` / scan request observes the same expiry instant; keys served by different leaves are each judged against their own leaf's clock read.
 
 ## Scans and counts
 
@@ -98,15 +100,13 @@ The effective "now" is captured once per grain call so all keys in a single `Get
 
 `LeafCacheGrain` (the per-silo `[StatelessWorker]` cache described in [Read Caching](caching.md)) stores the raw `LwwValue<byte[]>` including `ExpiresAtTicks`. On a cache hit it applies `IsExpired(nowUtcTicks)` before returning, so expired entries are never served from cache even if the primary leaf has not yet had them compacted.
 
-## Atomic writes (saga compensation)
+## Atomic writes
 
-`SetManyAtomicAsync` runs a two-phase saga: `Prepare` captures the pre-image of each target entry, `Apply` writes the new values, and on failure `Compensate` restores each pre-image.
+`SetManyAtomicAsync` and `SetManyAtomicWhereAsync` accept no TTL, and their writes carry none: the saga stages every entry through the non-TTL batch write. Each committed entry therefore resolves against the key's current row by the same last-writer-wins [overwrite rule](#ttl-on-setasync) as a non-TTL `SetAsync` - where it wins, it clears any expiry the key had.
 
-TTL preservation is end-to-end:
+Before staging, the saga reads each key's pre-saga row, absolute expiry included, and treats a value that has already expired as absent. That capture feeds guard evaluation only - it is never used to restore a value. A guarded batch (`SetManyAtomicWhereAsync`) treats any key with no live pre-saga value (missing, deleted, or expired) as failing its predicate, whatever the predicate says, and a single failing key rejects the whole batch before anything is staged.
 
-- `Prepare` reads the full `LwwValue` (including `ExpiresAtTicks`) via the guarded internal `IShardRootGrain.GetRawEntryAsync` - not the filtered `VersionedValue` surface.
-- `Compensate` restores each pre-image through the TTL-aware `SetAsync(key, value, TimeSpan)` overload, reconstructing the original expiry relative to the pre-image's absolute expiry instant.
-- If a pre-image's expiry has already passed by compensation time, it is restored as a tombstone rather than a live value - matching what a read would have seen.
+An abort never rewrites a pre-saga entry or its TTL, because it issues no rollback writes. Staged entries wait in each leaf's per-transaction pending bucket, invisible to readers; the abort records the decision in the tree's transaction registry, then broadcasts an abort terminal that drops each bucket. Every key keeps its pre-saga row, absolute expiry included, so an aborted batch neither extends nor clears any TTL.
 
 ## Shard splits
 
@@ -119,7 +119,7 @@ See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
 ## Snapshots
 
-`TreeSnapshotGrain.CopyShardAsync` drains each source shard via `GetLiveRawEntriesAsync` and bulk-loads the destination via `BulkLoadRawAsync`. Both sides transport `LwwValue<byte[]>` directly, so HLC timestamps and `ExpiresAtTicks` cross the snapshot boundary unchanged. This applies to both offline and online snapshot modes. See [Snapshots](snapshots.md).
+A snapshot copies each source shard's live entries as full stored rows, HLC timestamp and absolute expiry included. An offline snapshot bulk-loads those rows into the empty destination shard; an online snapshot merges them last-writer-wins alongside the live writes it shadow-forwards. Either way TTLs cross the snapshot boundary unchanged, in both modes. See [Snapshots](snapshots.md).
 
 ## Resize
 

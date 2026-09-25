@@ -15,12 +15,12 @@ Both bounds apply to the `BackupCatalogRequest.PageSize` a caller supplies: a va
 
 ## `LatticeBackupHealthOptions`
 
-Engine-level cluster-wide options for the periodic backup-health monitor. Configure them on the underlying `Orleans.Lattice.Backup` package.
+Engine-level cluster-wide options for the periodic backup-health monitor. Configure the two settable properties (`Enabled`, `DefaultInterval`) on the underlying `Orleans.Lattice.Backup` package; `MinimumInterval` and `DefaultSweepInterval` are `static readonly` fields, fixed values rather than knobs.
 
 | Member | Type | Default | Meaning |
 |---|---|---|---|
-| `MinimumInterval` | `TimeSpan` | `TimeSpan.FromMinutes(1)` | The smallest sweep cadence the monitor reminder honours. |
-| `DefaultSweepInterval` | `TimeSpan` | `TimeSpan.FromHours(6)` | The default value used by `DefaultInterval`. |
+| `MinimumInterval` | `static readonly TimeSpan` | `TimeSpan.FromMinutes(1)` | The smallest sweep cadence the monitor reminder honours (the Orleans reminder minimum). Not settable. |
+| `DefaultSweepInterval` | `static readonly TimeSpan` | `TimeSpan.FromHours(6)` | The default value of `DefaultInterval`. Not settable. |
 | `Enabled` | `bool` | `true` | Whether the periodic monitor runs at all. A non-durable sink keeps the monitor inert even when this is `true`. |
 | `DefaultInterval` | `TimeSpan` | `DefaultSweepInterval` (six hours) | Default catalog sweep cadence and default per-backup re-verification interval. Values below `MinimumInterval` are clamped up when the reminder is registered. |
 

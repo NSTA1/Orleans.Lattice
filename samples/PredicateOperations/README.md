@@ -37,6 +37,8 @@ Seeded 5 users (ages 31, 12, 18, 9, 47).
    user:2 -> Bob (12)
    user:4 -> Dave (9)
    -> only the minors' values were materialized client-side.
+
+Done.
 ```
 
 ## When to use

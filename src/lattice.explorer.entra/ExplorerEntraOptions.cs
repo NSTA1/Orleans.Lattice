@@ -34,7 +34,7 @@ public sealed class ExplorerEntraOptions
     /// only when no <see cref="Authority"/> or <see cref="TenantId"/> is
     /// configured, so the endpoint's advertisement is the sole source of the
     /// authority. When left empty the well-known Microsoft Entra login hosts are
-    /// accepted; add a host here to accept an authority outside that set. An
+    /// accepted; adding any host here replaces that default set. An
     /// advertised authority that is not <c>https</c>, or whose host is not
     /// admitted, is refused rather than used.
     /// </summary>

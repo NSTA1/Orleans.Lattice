@@ -26,51 +26,65 @@ selects the scenario and runs end-to-end:
 
 ```
 benchmark/
-├── benchmark.ps1                    # Single-parameter runner (scenario slug). Captures
-│                                    # results.json + opportunistically pushes to history.
-├── benchmark-all.ps1                # Sweep runner: invokes benchmark.ps1 for every scenario.
-├── performance-report.ps1           # End-to-end perf-report orchestrator: provisions an
-│                                    # Azure VM via azure-throughput/scripts/, runs Layer 1
-│                                    # (BDN microbench) + Layer 2 (silo + producer cohorts),
-│                                    # aggregates results, rewrites the marker blocks in
-│                                    # docs/lattice/performance-single-silo.md, and tears
-│                                    # the VM down. See the dedicated section below.
-├── start-history.ps1                # Bring up / tear down the long-lived history stack only.
-├── benchmark-scenarios.md           # Authoritative scenario plan.
-├── docker-compose.yml               # Base topology (single cluster).
-├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer,
-│                                    # replication-backpressure, receiver-crash,
-│                                    # bidirectional-replication, replication-key-filter).
-├── host/
-│   ├── Bench.Microbench/            # BenchmarkDotNet harness for the `microbench` scenario
-│   │                                # (in-process; bypasses the Orleans cluster entirely).
-│   ├── Bench.Sink/                  # LatticeSink (bounded-channel ITelemetrySink) +
-│   │                                # LatticeReadDriver hosted service for read-* scenarios.
-│   └── Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice /
-│                                    # Replication wiring.
-├── scenarios/                       # Per-scenario knobs - one .env per scenario slug.
-├── prometheus/
-│   ├── prometheus.yml               # Scrape config (single cluster).
-│   └── prometheus-replication.yml   # Scrape config (both clusters under the overlay).
-├── grafana/
-│   ├── provisioning/                # Datasource + dashboards provider yaml.
-│   └── dashboards/                  # Embedded Orleans.Lattice dashboards (overview, commit
-│                                    # path, replication), synced at run-time from
-│                                    # src/lattice.dashboards/Grafana/.
-├── history/                         # Long-lived run-over-run history stack.
-│   ├── docker-compose.history.yml   # VictoriaMetrics + Grafana on :3001 / :8428.
-│   ├── Generate-Dashboards.ps1      # Regenerates the eight persona-trend dashboards.
-│   ├── README.md                    # Data model, label schema, ad-hoc query path.
-│   └── grafana/                     # Provisioning + generated BenchmarkHistory.*.json.
-├── azure-throughput/                # Out-of-band benchmark targeting real Azure Storage:
-│                                    # a single Linux VM (Standard_D4as_v5 + accelerated
-│                                    # networking) runs the producer and silo as co-located
-│                                    # systemd units, with the silo authenticating to a real
-│                                    # Azure Tables account via system-assigned managed
-│                                    # identity. Used for WAL throughput numbers that need
-│                                    # to be backed by a real Azure Tables account. See its
-│                                    # own README.md for usage.
-└── .run/                            # Per-run output: <scenario>/<run_id>/results.json
+|-- benchmark.ps1                    # Single-parameter runner (scenario slug). Captures
+|                                    # results.json + opportunistically pushes to history.
+|-- benchmark-all.ps1                # Sweep runner: invokes benchmark.ps1 for every scenario.
+|-- benchmark-attribution.ps1        # Diagnostic attribution matrix: sweeps the WAL, Azure
+|                                    # Table WAL and atomic-saga scenarios across a grid of
+|                                    # WAL knobs.
+|-- initialise.ps1                   # One-time per-host fleet-size calibration (see below).
+|-- performance-report.ps1           # End-to-end perf-report orchestrator: provisions an
+|                                    # Azure VM via azure-throughput/scripts/, runs Layer 1
+|                                    # (BDN microbench) + Layer 2 (silo + producer cohorts),
+|                                    # aggregates results, rewrites the marker blocks in
+|                                    # docs/lattice/performance-single-silo.md, and tears
+|                                    # the VM down. See the dedicated section below.
+|-- start-history.ps1                # Bring up / tear down the long-lived history stack only.
+|-- benchmark-scenarios.md           # Authoritative scenario plan.
+|-- Directory.Build.props            # Excludes the harness assemblies from code coverage.
+|-- docker-compose.yml               # Base topology (single cluster).
+|-- docker-compose.replication.yml   # Replication overlay (every scenario that sets
+|                                    # BENCH_REPLICATION_OVERLAY=true).
+|-- host/
+|   |-- Bench.LeafCacheGrowth/       # Leaf read-through cache footprint probe (own README).
+|   |-- Bench.Microbench/            # BenchmarkDotNet harness for the `microbench` scenario
+|   |                                # (in-process; bypasses the Orleans cluster entirely).
+|   |-- Bench.Sink/                  # LatticeSink (bounded-channel ITelemetrySink) plus the
+|   |                                # read, write and atomic-saga driver hosted services.
+|   |-- Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice /
+|   |                                # Replication wiring.
+|   `-- Bench.WalAzureTable/         # Azurite-backed Azure Table WAL partitioning probe
+|                                    # (own README).
+|-- scenarios/                       # Per-scenario knobs - one .env per scenario slug.
+|-- prometheus/
+|   |-- prometheus.yml               # Scrape config (single cluster).
+|   `-- prometheus-replication.yml   # Scrape config (both clusters under the overlay).
+|-- grafana/
+|   |-- provisioning/                # Datasource + dashboards provider yaml.
+|   `-- dashboards/                  # Every embedded Orleans.Lattice dashboard, synced at
+|                                    # run time from src/lattice.dashboards/Grafana/.
+|-- history/                         # Long-lived run-over-run history stack.
+|   |-- docker-compose.history.yml   # VictoriaMetrics + Grafana on :3001 / :8428.
+|   |-- Generate-Dashboards.ps1      # Regenerates the overview + seven persona-trend
+|   |                                # dashboards.
+|   |-- README.md                    # Data model, label schema, ad-hoc query path.
+|   `-- grafana/                     # Provisioning + BenchmarkHistory.*.json (generated,
+|                                    # plus the hand-maintained atomic-writes dashboard).
+|-- azure-throughput/                # Out-of-band benchmark targeting real Azure Storage:
+|                                    # a single Linux VM (Standard_D2as_v5 by default +
+|                                    # accelerated networking) runs the producer and silo as
+|                                    # co-located systemd units, with the silo authenticating
+|                                    # to a real Azure Tables account via system-assigned
+|                                    # managed identity; a multi-silo Layer 3 variant runs the
+|                                    # same engine on Azure Container Apps. Used for WAL
+|                                    # throughput numbers that need to be backed by a real
+|                                    # Azure Tables account. See its own README.md for usage.
+|-- coldstart-rig/                   # Isolated RepoContext cold-start and scale rig (own
+|                                    # README).
+|-- registry-fanin/                  # Registry cold-start fan-in measurement rig (own
+|                                    # README).
+|-- diagnostic-reports/              # Dated diagnostic write-ups (retrospective).
+`-- .run/                            # Per-run output: <scenario>/<run_id>/results.json
                                      # plus comparison.{md,csv} when `-Compare` is used.
 ```
 
@@ -109,15 +123,17 @@ flowchart TB
 ```
 
 The replication overlay (`docker-compose.replication.yml`) is layered on top of the
-base `docker-compose.yml` for the five scenarios that need a second cluster:
+base `docker-compose.yml` for the seven scenarios that need a second cluster
+(every `.env` that sets `BENCH_REPLICATION_OVERLAY=true`):
 `current-state-single-peer`, `replication-backpressure`, `receiver-crash`,
-`bidirectional-replication`, and `replication-key-filter`. Every other scenario
+`bidirectional-replication`, `bidirectional-replication-azuretable`,
+`replication-key-filter`, and `atomic-write-replication`. Every other scenario
 runs against the base topology only.
 
 ## Scenarios
 
-Fourteen scenarios live under `scenarios/<slug>.env`. They span four
-lattice-usage profiles plus a micro-benchmark control.
+Twenty scenarios live under `scenarios/<slug>.env`. They span the
+lattice-usage profiles below plus a micro-benchmark control.
 
 | Profile             | Scenario id                       | Description                                              | Replication | Chaos |
 |---------------------|-----------------------------------|----------------------------------------------------------|-------------|-------|
@@ -134,9 +150,15 @@ lattice-usage profiles plus a micro-benchmark control.
 | replication         | `replication-key-filter`          | Per-key replication filter cost                          | on          | none  |
 | replication         | `replication-backpressure`        | Backpressure / catch-up under sender pause               | on          | pause |
 | replication         | `receiver-crash`                  | Receiver crash mid-stream, recovery cost                 | on          | kill  |
-| replication control | `observer-no-peer`                | Observer-off control paired with `current-state-single-peer` | off     | none  |
+| replication control | `observer-no-peer`                | Replication on with no peer: commit-observer cost without shipping (pairs with `current-state-single-peer`) | on (no peer) | none |
+| write-heavy random  | `current-state-no-replication-azuretable` | `current-state-no-replication` with the WAL on Azure Tables (Azurite) | off | none |
+| write-heavy random  | `current-state-no-replication-azuretable-no-crow` | Azure Table WAL variant with the hot-path candidate row eliminated | off | none |
+| write-heavy random  | `current-state-no-replication-azuretable-pipelined` | Azure Table WAL variant with pipelined phase-2 commits | off | none |
+| replication         | `bidirectional-replication-azuretable` | `bidirectional-replication` with the WAL on Azure Tables on both silos | on (both) | none |
+| atomic              | `atomic-write`                    | `SetManyAtomicAsync` saga driver, single cluster         | off         | none  |
+| atomic              | `atomic-write-replication`        | Saga drivers on both clusters, bidirectional replication | on (both)   | none  |
 
-Per-scenario knobs live in `scenarios/<slug>.env`. Each file sets:
+Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a file omits the ones its scenario does not use):
 
 | Variable                       | Purpose                                                  |
 |--------------------------------|----------------------------------------------------------|
@@ -153,6 +175,17 @@ Per-scenario knobs live in `scenarios/<slug>.env`. Each file sets:
 | `BENCH_CHAOS_TARGET`           | Compose service name to apply chaos to                    |
 | `BENCH_CHAOS_AFTER_SECONDS`    | Delay before chaos action                                 |
 | `BENCH_CHAOS_DURATION_SECONDS` | How long the disruption lasts                             |
+| `BENCH_DESCRIPTION`            | One-line scenario description (documentary; the runner does not read it) |
+| `BENCH_KIND`                   | `microbench` routes the scenario to the BenchmarkDotNet harness instead of the docker stack |
+| `BENCH_MICROBENCH_*`           | Microbench fidelity, workload filter, key / value / batch sizes, and profiling knobs (`microbench` only) |
+| `BENCH_READ_DRIVER_ENABLED`, `BENCH_READ_RATE_PER_SECOND`, `BENCH_READ_PATTERN`, `BENCH_READ_CONCURRENCY`, `BENCH_READ_WARMUP` | Read-driver switch, offered read rate, `Random` \| `Sequential` pattern, concurrency, and warm-up delay (read-heavy and read/write-mix scenarios) |
+| `BENCH_REGIONS`, `BENCH_HOT_SHARE` | Region list and hot-region share for the `RegionPrefixedVehicleId` key shape |
+| `BENCH_REPLICA_TELEMETRY_SINK`, `BENCH_REPLICA_REPLICATION_ENABLED` | Sink and replication switch for the replica silo (overlay scenarios) |
+| `BENCH_ORIGIN_PEER_ENDPOINT`, `BENCH_REPLICA_PEER_ENDPOINT` | gRPC push endpoint each silo ships to |
+| `BENCH_REPLICA_WRITE_DRIVER_*` | Write driver on the replica silo (bidirectional scenarios) |
+| `BENCH_ATOMIC_SAGA_DRIVER_*`, `BENCH_REPLICA_ATOMIC_SAGA_DRIVER_*` | `SetManyAtomicAsync` saga driver on the origin / replica silo (atomic-write scenarios) |
+| `BENCH_WAL_PROVIDER`, `BENCH_WAL_TABLE_NAME` | `memory` (default) \| `azuretable` WAL provider, and its table name |
+| `BENCH_WAL_ELIMINATE_CANDIDATE_ROW`, `BENCH_WAL_PIPELINE_PHASE_TWO` | Azure Table WAL optimisation toggles (the `-azuretable-no-crow` / `-azuretable-pipelined` variants) |
 
 ## Calibrating fleet size for this host
 
@@ -280,8 +313,8 @@ The script:
 9. **Captures an auto-discovered panel of summary scalars** by listing every
    meter under the configured prefixes (`orleans.lattice` - covers both the
    core meter and `orleans.lattice.replication` - and `vehicle_fleet_simulator`
-   - covers `vehicle_fleet_simulator.sink` and the read-driver meter
-   `vehicle_fleet_simulator.read_driver` - plus a curated `dotnet.*`
+   - covers the sink, read-driver, write-driver, and atomic-saga-driver
+   meters - plus a curated `dotnet.*`
    allow-list) and synthesising p50/p95/p99 / per-second / max+avg keys per
    instrument type. A short `$ScalarPanelExtra` block in `benchmark.ps1`
    overlays a handful of hand-curated headline metrics that win on key
@@ -345,7 +378,7 @@ Four configuration blocks at the top of `benchmark.ps1` drive it:
 
 | Variable                    | Purpose                                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------------------|
-| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` - covers core + replication - and `vehicle_fleet_simulator_` - covers sink + read-driver). |
+| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` - covers core + replication - and `vehicle_fleet_simulator_` - covers the sink and the read, write, and atomic-saga drivers). |
 | `$AutoDiscoverDotnetAllow`  | Allow-list of `dotnet.*` instruments to include (the runtime meter is noisy, so we curate).            |
 | `$ScalarPanelExclude`       | Names to drop after discovery (e.g. duplicates of curated extras).                                     |
 | `$ScalarPanelExtra`         | Hand-curated headline metrics. Keys here **win on collision** with auto-discovered ones.               |
@@ -379,8 +412,9 @@ invocation.
 ```
 
 Then visit <http://localhost:3001>. The history Grafana hosts an
-**Overview dashboard** plus **seven persona dashboards** - one per
-lattice-usage profile - so each dashboard answers a single regression
+**Overview dashboard** plus **seven generated persona dashboards** - one per
+lattice-usage profile - and a hand-maintained atomic-writes dashboard, so each
+dashboard answers a single regression
 question without templating-var juggling:
 
 | Persona dashboard         | Aggregates                                                          | Asks                                                           |
@@ -393,6 +427,7 @@ question without templating-var juggling:
 | `lat-hist-read-write-mix` | `read-write-mix-random`, `read-write-mix-ordered`                   | Has the YCSB-A-shaped balanced workload regressed?            |
 | `lat-hist-microbench`     | `microbench`                                                        | Has the `ILattice` algorithm cost (no Orleans dispatch) regressed? |
 | `lat-hist-wal-performance` | the five replication-enabled silo scenarios                         | Has WAL-append or in-memory Apply latency regressed? The legacy shadow-write tile is retained for backwards comparison and reads zero on every recent run. |
+| `lat-hist-atomic-writes`  | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | Has the `SetManyAtomicAsync` saga cost regressed? Hand-maintained, not generated (see below). |
 
 The Overview dashboard is the recommended landing page: it shows every
 persona's headline KPIs in a single view (one row per persona, scoped to
@@ -418,15 +453,17 @@ Each persona dashboard has the same **3-band** layout, top-to-bottom:
 Dashboards regenerate from `benchmark/history/Generate-Dashboards.ps1`. Adding
 a scenario or moving it between personas is a one-line edit to the `$Personas`
 table at the top of that script - re-run, wait ~30 s for Grafana's
-file-provider rescan, done.
+file-provider rescan, done. The script rewrites every `BenchmarkHistory*.json`,
+so it also deletes the hand-maintained atomic-writes dashboard; restore that
+file from git after regenerating.
 
 See [`history/README.md`](./history/README.md) for the full data model, label
 schema, and ad-hoc query path.
 
 ## Dashboards
 
-Grafana provisions the embedded **Orleans.Lattice** dashboards (overview, commit
-path, replication) from `src/lattice.dashboards/Grafana/` automatically. Browse to
+Grafana provisions every embedded **Orleans.Lattice** dashboard, which
+`benchmark.ps1` syncs from `src/lattice.dashboards/Grafana/` before each run. Browse to
 <http://localhost:3000> - anonymous viewer access is enabled, admin
 credentials are `admin/admin`.
 
@@ -438,6 +475,8 @@ The dashboards bind against the meters:
 | `orleans.lattice.replication`          | replication package (WAL, ship-loop, apply)        |
 | `vehicle_fleet_simulator.sink`         | `LatticeSink` (publish/drop/queue depth)           |
 | `vehicle_fleet_simulator.read_driver`  | `LatticeReadDriver` (read-heavy / mix scenarios)   |
+| `vehicle_fleet_simulator.write_driver` | `LatticeWriteDriver` (replica-side writes in bidirectional scenarios) |
+| `vehicle_fleet_simulator.atomic_saga_driver` | `LatticeAtomicSagaDriver` (atomic-write scenarios) |
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
@@ -455,10 +494,14 @@ and the simulator pipeline; the Orleans-native end-to-end cost is captured by
 ./benchmark.ps1 microbench
 ```
 
-The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exposes ~25
-`[Benchmark]` methods across the primitive operations (`PointRead`, `PointWrite`,
-`PointGetMany`, `BulkLoad`, `SetManyAtomic`, etc.) plus their parameterised /
-deeper-tree / atomic-tree variants. Scope a run via the `-Workloads` CLI override
+The runner builds and invokes `benchmark/host/Bench.Microbench/`, whose default
+`LatticeMicroBenchmarks` suite exposes about 90 `[Benchmark]` methods across the
+primitive operations (`PointRead`, `PointWrite`, `PointGetMany`, `BulkLoad`,
+`SetManyAtomic`, etc.) plus their parameterised / deeper-tree / atomic-tree
+variants. Several dozen narrower suites (allocation trims, fan-out collapses,
+replication apply, tag index, tenancy, ...) are opt-in via
+`BENCH_MICROBENCH_SUITE=<name>`; `Bench.Microbench/Program.cs` lists the
+recognised names. Scope a run via the `-Workloads` CLI override
 (comma-separated BDN globs, e.g. `-Workloads '*.PointWrite,*.PointRead'`) and pick
 the fidelity via `-Fidelity` (`dry` / `quick` / `full`); see the script's
 comment-help for the cost / rigour trade-off table.
@@ -471,7 +514,7 @@ account rather than the in-repo Azurite emulator. The local `docker-compose` sce
 are reproducible and cheap to run, but Azurite collapses network RTT and does not model
 Azure Tables partition-server behaviour or throttling, so it is not a faithful proxy for
 throughput numbers that need to back a public performance claim. This harness fills that
-gap: a single Linux VM (Standard_D4as_v5 by default, accelerated networking) runs the
+gap: a single Linux VM (Standard_D2as_v5 by default, accelerated networking) runs the
 producer and silo as co-located systemd units, the silo authenticates to a real Azure
 Tables account via system-assigned managed identity, and the cohort runner reports
 the steady-state ops/sec from the silo's journald-captured per-second samples.
@@ -503,14 +546,25 @@ A single invocation:
 2. Runs **Layer 1** - `Bench.Microbench` cohorts on the VM (in-process BDN; no
    Orleans dispatch, no I/O) - to produce the per-call algorithmic ceilings.
 3. Runs **Layer 2** - silo + producer cohorts via `azure-throughput/scripts/run-cohort.ps1`,
-   one per public `ILattice` workload mode (`get-point`, `set-point`, `get-many`,
-   `set-many`, `set-many-atomic`) - to produce the sustained-throughput numbers
-   under real Azure Tables latency.
+   one per workload mode (`get-point`, `set-point`, `set-point-mv`, `get-many`,
+   `set-many`, `set-many-atomic`, `set-many-atomic-2`, `cross-tree-atomic-2`,
+   `cross-tree-atomic-64`) - to produce the sustained-throughput numbers under
+   real Azure Tables latency.
 4. Aggregates each cohort (median across N runs, default `N=3`) and rewrites the
    `perf-table:layer1` / `perf-table:layer2` marker blocks in
    `docs/lattice/performance-single-silo.md`, plus the `> Measured ...` provenance
    note that immediately follows each table.
 5. Tears the VM down (`az group delete --no-wait`) unless `-KeepVm` was passed.
+
+**Layer 3** (multi-silo) is opt-in (`-Layer 3` or `-Layer3`) and runs on its own:
+it provisions an Azure Container Apps rig through
+`azure-throughput/scripts/deploy-aca.ps1` (or reuses one with `-ReuseAca <prefix>`),
+sweeps the same nine workloads across the silo counts in `-SiloCounts` (default
+`1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, and rewrites the `perf-table:layer3`
+block of
+[`docs/lattice/performance-multi-silo.md`](../docs/lattice/performance-multi-silo.md)
+rather than the single-silo doc. The rig scripts and their parameters are described in
+[`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps).
 
 The script is the **only** way the published single-silo doc should be refreshed:
 the marker blocks are mechanically managed, and a CI hygiene test

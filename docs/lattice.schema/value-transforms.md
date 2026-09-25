@@ -59,12 +59,17 @@ LatticeValueTransform transform = LatticeValueTransformTranslator.Translate<Orde
 ## The DI escape hatch
 
 Some conversions cannot be expressed in the IR - arbitrary computation, or opaque
-/ non-JSON payloads. For those, register an `ILatticeValueTransform` implementation
-in DI and reference it by id from a
-[remediation](schema-enforcement.md#bringing-existing-data-into-compliance) or a
-[versioning upcaster](schema-versioning.md#declaring-upcasters). The registry
+/ non-JSON payloads. For those, implement `ILatticeValueTransform` (a
+`byte[] -> byte[]` transform with a stable `Id`), register it with
+`AddLatticeValueTransform(...)` (on the silo builder or the service collection),
+and reference it by id from a
+[versioning upcaster](schema-versioning.md#declaring-upcasters)
+(`AddUpcaster(schemaId, fromVersion, toVersion, transformId)`). The registry
 resolves the id to your implementation at evaluation time, so the same escape
-hatch works on the durable background-migration path.
+hatch works on the durable eager version-migration path. An enforcement
+[remediation](schema-enforcement.md#bringing-existing-data-into-compliance) takes
+only the IR: `RemediateAsync` accepts a `LatticeValueTransform`, so a DI-registered
+transform cannot drive one.
 
 ## See also
 

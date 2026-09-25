@@ -12,11 +12,11 @@ clearing cookies:
    with a key ring that, by default, is per-instance and ephemeral - so a cookie
    issued by replica A is undecryptable garbage to replica B.
 2. **A downstream State API token must be obtainable on the new replica.** With
-   the [Entra hosted-web provider](connecting-to-an-auth-enabled-state-api.md),
+   the [Entra hosted-web provider](../lattice.explorer.entra.web/README.md),
    the on-behalf-of token is acquired from a token cache. A cold replica has an
    empty cache and, holding only a still-valid cookie, never redeems a fresh
-   authorization code - so it cannot acquire a token and the circuit latches
-   into a revoked state.
+   authorization code - so it cannot acquire a token until a new code is
+   redeemed on that replica.
 
 Both fixes are **opt-in and additive**: the default single-instance behaviour is
 unchanged. Configure them together for any deployment that runs more than one
@@ -104,8 +104,9 @@ repopulated.
 
 The interstitial is always present; what it navigates to is configurable. The
 [Entra hosted-web provider](../lattice.explorer.entra.web/configuration.md#forced-interactive-re-authentication)
-maps a re-authentication endpoint and wires its path automatically, so no extra
-configuration is needed with that provider. A custom auth method (see
+wires the interstitial to its re-authentication path automatically; the host
+still maps the endpoint itself with `app.MapLatticeExplorerEntraWebReauth()`, at
+the same path. A custom auth method (see
 [Adding a custom auth method](adding-a-custom-auth-method.md)) can point the
 interstitial at its own forced-interactive challenge endpoint by registering
 `ExplorerReauthOptions`:
@@ -138,8 +139,9 @@ for auth methods that recover on a plain reload, such as Basic.
       a stable `DataProtectionApplicationName`.
 - [x] Select the distributed token cache and register one estate-global shared
       `IDistributedCache`.
-- [x] Map the forced-interactive re-authentication endpoint (automatic with the
-      Entra hosted-web provider).
+- [x] Map the forced-interactive re-authentication endpoint (with the Entra
+      hosted-web provider, `app.MapLatticeExplorerEntraWebReauth()`; the
+      interstitial's path is wired automatically).
 
 ## See also
 

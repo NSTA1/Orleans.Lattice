@@ -13,7 +13,8 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// Without an enabled history view a tree retains no durable change history: the
 /// timeline is served only from the bounded retained write-ahead-log window and
 /// is lost once that window is garbage-collected. Enabling the view (and setting
-/// a value-retaining retention mode) makes the Explorer History tab show a
+/// a value-retaining retention mode) makes the Explorer's History timeline (the
+/// History button on a Data-tab row) show a
 /// durable, retention-bounded timeline - successive last-writer-wins values plus
 /// diffs for the operator register, and element-level member changes for the
 /// label OR-Set - that survives source WAL garbage collection.
@@ -37,7 +38,7 @@ public sealed class HistoryShowcaseActivator(
     public const string LabelsHistoryView = PartCrdtStore.LabelsTreeId + "-history";
 
     /// <summary>
-    /// Value-retaining retention so the History tab can render successive
+    /// Value-retaining retention so the History timeline can render successive
     /// last-writer-wins values plus diffs. CRDT revisions are always stored
     /// delta-only regardless of mode, so this only shapes the operator register's
     /// byte values; the label OR-Set keeps its compact author deltas either way.

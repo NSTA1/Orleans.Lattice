@@ -127,8 +127,9 @@ the sweep ran on two identically deployed rigs in the same region, each with
 its own storage account: one ran the reads, the point writes and
 `SetManyAsync`, the other ran the four atomic workloads. Every curve comes
 from a single rig, so no line mixes the two. Each cell is the median of two
-cohorts; where the two disagreed by more than 2x the harness ran a third as
-a tie-break, which happened once (`SetManyAsync` at 6 silos, see below).
+cohorts; where the two disagreed by more than 2x a third cohort was run as a
+tie-break, which happened once (`SetManyAsync` at 6 silos, topped up with
+`-Resume` and a larger `-N`; see below).
 Between cells the silo app is parked at zero replicas.
 
 <!-- perf-table:layer3:start
@@ -478,8 +479,9 @@ tiers:
 pwsh benchmark/performance-report.ps1 -Layer3
 ```
 
-With no further arguments it provisions its own resource group, container
-registry, log workspace, container environment, silo app and producer job,
+With no further arguments it provisions its own resource group, storage
+account, container registry, log workspace, container environment, silo app
+and producer job,
 sweeps every workload at 1, 2, 4, 6 and 8 silos, parks the cluster at zero
 replicas between cells, and deletes the resource group when the sweep ends.
 The switches that matter for a partial or resumed run:

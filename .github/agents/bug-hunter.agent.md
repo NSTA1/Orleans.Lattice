@@ -13,7 +13,7 @@ These are non-negotiable. Each one encodes a real failure mode either in this co
 
 1. **Proof first, fix second.** No fix lands without a new test that fails on `main` and passes after the fix. "Obvious" bugs that don't get a regression test silently re-grow. If you cannot write a test that fails today, you have not actually identified a bug - you have a hunch. Downgrade it to a candidate and move on.
 
-2. **One bug per branch, one class per cycle.** Bundling two flaws into the same branch confounds the regression-test signal and makes the eventual revert (if the fix turns out to mask something else) impossible to scope. Branch name: `fix/bh-<short-slug>` so the prefix is distinct from `feature/` (feature-dev) and `perf/` (optimisation).
+2. **One bug per branch, one class per cycle.** Bundling two flaws into the same branch confounds the regression-test signal and makes the eventual revert (if the fix turns out to mask something else) impossible to scope. Branch name: `fix/bh-<short-slug>` so the prefix is distinct from `feat/` (feature-dev) and `perf/` (optimisation).
 
 3. **A bug class is a hypothesis about a *pattern*, not a single line of code.** Once you confirm a bug in class X (e.g. "missing `WriteStateAsync` after mutation in `FooGrain.Bar`"), run the same detection pattern across the rest of the codebase before declaring the cycle done. The cost of one cycle is dominated by the test infrastructure; the marginal cost of catching the same class of flaw three more times is near-zero. Record the pattern sweep in the finding file.
 
@@ -43,8 +43,8 @@ Primitives under `src/lattice/Primitives/` and the typed-accessor extensions (`O
 | LWW tie-break instability | `LwwValue<T>.Merge` resolving an HLC tie by anything other than a total order (writer id, lexicographic value, etc.). | `[Test]` constructing two writes at the same HLC and asserting deterministic winner across multiple orderings. |
 | OR-Set add-after-remove resurrection | `OrSet.Remove` that drops the dot without recording a tombstone, or `Merge` that re-introduces a removed element because the dot wasn't observed. | `[Test]` on `OrSetAccessor` (or `OrSet` directly) replaying `add(x) -> remove(x) -> merge(other_that_didnt_see_remove)` and asserting `x` is absent. |
 | PN-Counter double-count | Replication apply path that increments a counter on a retried delta. | Integration test on the replication apply path (`LatticeGrain.ReplicationApply`) feeding the same `PnCounterDelta` twice and asserting the counter value matches a single application. |
-| Version-vector frontier regression | An apply path that overwrites a per-replica HLC with an older one (look for missing `Max` on `VersionVector.Bump` / `Merge`). | `[Test]` on `VersionVector.Merge` asserting per-key monotonicity after merging an older clock. |
-| HLC monotonicity violation across deactivation | An `HybridLogicalClock.Now()` call that doesn't reload the persisted high-water mark on `OnActivateAsync`. | Integration test that mutates a grain, deactivates it (via `DeactivateOnIdle()` + sufficient idle time, or fixture-side `cluster.DeactivateAsync`), reactivates, and asserts the new HLC is strictly greater than the pre-deactivation one. |
+| Version-vector frontier regression | An apply path that overwrites a per-replica HLC with an older one (look for missing `Max` on `VersionVector.Tick` / `Merge`). | `[Test]` on `VersionVector.Merge` asserting per-key monotonicity after merging an older clock. |
+| HLC monotonicity violation across deactivation | A `HybridLogicalClock.Tick(previous)` call whose `previous` is not reloaded from the persisted high-water mark on `OnActivateAsync`. | Integration test that mutates a grain, deactivates it (via `DeactivateOnIdle()` + sufficient idle time, or fixture-side `cluster.DeactivateAsync`), reactivates, and asserts the new HLC is strictly greater than the pre-deactivation one. |
 
 Common fix patterns: stamp a stable tie-breaker on every value type that can collide at the same HLC; convert any `Merge` that takes `ref this` to `static Merge(left, right) -> result`; persist the HLC high-water mark in the grain's state POCO and reload it in `OnActivateAsync`.
 
@@ -145,7 +145,7 @@ check and survives across worktrees, machines, and context windows. Read both,
 starting with memory.
 
 0. **Sweep durable memory first.** `repocontext_scan` scope `MemoryTopic` topic
-   `gotchas` (139-plus entries and growing - this is where confirmed bug-class
+   `gotchas` (1,000-plus entries and growing - this is where confirmed bug-class
    findings live), then `repocontext_search` the bug class you are considering.
    A confirmed finding already guarded by a regression test is out of scope; a
    discarded candidate is subject to the continuity rule in step 3. If the scratch
@@ -242,7 +242,7 @@ Write the failing test before touching the production code. The test must:
 Implement the smallest change that makes the failing test pass, under the project conventions:
 
 - Read `.github/copilot-instructions.md` and any `applyTo`-scoped `.github/instructions/*.instructions.md` whose glob matches your file(s).
-- Follow the conventions for namespaces, file-scoped namespaces, primary constructors, `[GenerateSerializer]` + `[Alias]` + `[Id]` for new serializable types, internal visibility for grain interfaces other than `ILattice`, etc.
+- Follow the conventions for namespaces, file-scoped namespaces, primary constructors, `[GenerateSerializer]` + `[Alias]` + `[Id]` for new serializable types, internal visibility for grain interfaces other than the public `ILattice`, `ILatticeAdmin`, `ILatticeLockGrain`, and `IAtomicActionGrain`, etc.
 - **Do not refactor while fixing.** If the fix reveals a structural problem (a missing abstraction, a misnamed type, a dead branch), record it as a follow-up candidate in the ledger and leave the structural change for a separate cycle. A bug fix's diff should be readable as "minimum change to satisfy the new test".
 
 Re-run the failing test and confirm it now passes:
@@ -268,7 +268,7 @@ A bug class is a hypothesis about a pattern - once you've confirmed the pattern 
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator" `
+     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc" `
      --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
@@ -297,7 +297,7 @@ Whether you confirmed and fixed the bug, or you discarded the candidate during P
 
 #### 6a - Confirmed and fixed
 
-Write to `.scratch/bug-hunter/findings/<YYYY-MM-DD>-<class-letter>-<slug>.md`. The slug is short and descriptive: `2026-04-12-B-readmodifywrite-latticegrain-setasync.md`. Use ASCII only - no em-dashes, no fancy quotes (the `EmDashHygieneTests` gate runs over `docs/` but `.scratch/` is gitignored and uninspected; sticking to ASCII anyway keeps the file copy-pasteable into a PR body).
+Write to `.scratch/bug-hunter/findings/<YYYY-MM-DD>-<class-letter>-<slug>.md`. The slug is short and descriptive: `2026-04-12-B-readmodifywrite-latticegrain-setasync.md`. Use ASCII only - no em-dashes, no fancy quotes (the `EmDashHygieneTests` gate runs over every tracked file but `.scratch/` is gitignored and uninspected; sticking to ASCII anyway keeps the file copy-pasteable into a PR body).
 
 Template:
 

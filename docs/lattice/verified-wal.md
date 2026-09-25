@@ -36,8 +36,8 @@ cores are `internal` and exposed to the test assembly through
 
 | Core | Decision it owns |
 |------|------------------|
-| `WalShippingWatermark` | The highest contiguous offset a shipper may advance its shipped-watermark to, given the acked set - never past a gap, so a reader behind the watermark never misses an entry. |
-| `WalGcTrimCore.IsEntryEligible` | Whether one log entry may be trimmed, given the GC's min-acked cursor, the optional retention ceiling, the causal-stable frontier, and any buffer-pin blocked-floor - the exact per-entry predicate the GC scan applies. |
+| `WalShippingWatermark` | The durable-contiguous tail of a WAL shard that has several flushes in flight and out of completion order - the start of the oldest in-flight flush, or the next offset when none is in flight - and whether an offset may be shown to a cursor-advancing reader (the replication shipper, the view maintainer, leaf replay): only offsets strictly below the tail, so no reader is ever handed an offset above a still-unfilled prefix hole. |
+| `WalGcTrimCore.IsEntryEligible` | Whether one log entry may be trimmed, given the GC's min-acked cursor, the optional retention ceiling, the durable materialiser offset admission (which can also refuse an entry only the in-memory cursor would admit), the causal-stable frontier, and any buffer-pin blocked-floor - the exact per-entry predicate the GC scan applies. |
 | `InMemoryWalCursorRegistry` (driven directly) | The per-consumer cursor max-merge and the `min(cursor)` GC floor scan - a consumer cursor never regresses under a stale re-delivery, and the floor is the minimum across consumers. |
 | `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. |
 | `WalAdmissionGateCore.IsDispatchRefused` | Whether the commit-log writer refuses a new dispatch because it is draining for shutdown - the pre-admission gate paired with a drain that must release every parked caller. |
@@ -45,8 +45,8 @@ cores are `internal` and exposed to the test assembly through
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
 
-The core files live under `src/lattice/` and `src/lattice/BPlusTree/` next to the
-grains that call them.
+The core files live under `src/lattice/`, `src/lattice/BPlusTree/`, and
+`src/lattice/BPlusTree/Grains/` next to the grains that call them.
 
 ## The Coyote concurrency tier
 
@@ -64,10 +64,10 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 
 | Model | Core(s) exercised | Property checked |
 |-------|-------------------|------------------|
-| `WalShippingWatermarkModel` | `WalShippingWatermark` | The shipped watermark never advances past a gap in the acked set, so a lagging reader never skips an unshipped entry. |
+| `WalShippingWatermarkModel` | `WalShippingWatermark` | Under every explored order of out-of-order flush completions and reader polls, a reader that advances its cursor to an offset has every lower offset already persisted - no prefix hole is ever shipped. |
 | `WalGcTrimFloorModel` | `WalGcTrimCore` | The GC trims only past the *minimum* acked cursor across all peers; flooring under the maximum strands a lagging consumer. |
 | `WalCursorMonotonicityModel` | `InMemoryWalCursorRegistry` (real) | A consumer's cursor never regresses below its highest report; a stale re-delivery is max-merged away, not applied last-writer-wins. |
-| `WalMoveQuiesceModel` | `WalMoveFenceCore` | The fence check and the offset assignment are atomic, so a shard move that quiesces the log can never fence an append that has already taken an offset. |
+| `WalMoveQuiesceModel` | `WalMoveFenceCore` | The fence check and the offset assignment are atomic, so no append is assigned an offset once a shard move has raised the fence - every offset lands at or below the stable tail the move copies. |
 | `WalCommitLogWriterDrainModel` | `WalAdmissionGateCore` | A shutdown drain releases every parked admission caller; observing the drain token in the wait set (rather than sampling it before parking) closes the lost-wakeup. |
 | `WalOffsetContiguityModel` | `WalOffsetAllocationCore` | Reading and advancing the offset counter is atomic, so two concurrent appends never receive the same offset and the assigned sequence stays dense and strictly ascending. |
 | `WalBlockedFloorLifecycleModel` | `WalBlockedFloorCore` | The GC's blocked floor is the minimum live buffer pin across consumers, so through every interleaving of pin-take, pin-raise, and pin-clear it never rises above a live pin and never trims an entry a buffering consumer still needs. |
@@ -81,9 +81,10 @@ the property can actually fail. Every WAL model therefore ships a companion
 asserts Coyote *finds* the resulting violation
 (`AssertViolationFoundInSomeExploredRun`):
 
-- `WalShippingWatermarkModel` - the guard advances the watermark to the highest
-  acked offset ignoring gaps, and Coyote finds the schedule where a reader skips
-  an unshipped entry.
+- `WalShippingWatermarkModel` - the guard clamps the reader at the raw
+  next-offset tail, ignoring in-flight flushes, and Coyote finds the order in
+  which a higher window persists first, the reader advances past the hole, and
+  the still-in-flight lower offset is stranded.
 - `WalGcTrimFloorModel` - the guard floors the trim at the *maximum* consumer
   cursor, and Coyote finds the schedule that strands a lagging consumer.
 - `WalCursorMonotonicityModel` - the guard replaces the max-merge with a

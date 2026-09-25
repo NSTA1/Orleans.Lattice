@@ -16,8 +16,9 @@ namespace Orleans.Lattice.Auth;
 /// <remarks>
 /// <para>
 /// The gate calls this <b>after</b> it has computed the decision, so nothing here
-/// can change, delay, or block the decision: sink dispatch is fire-and-forget and
-/// never throws back into the gate. When neither a metrics listener is attached
+/// can change the decision, and sink failures never throw back into the gate.
+/// Auditing sinks are invoked inline before their returned work is observed, so a
+/// sink must keep its synchronous path cheap. When neither a metrics listener is attached
 /// nor auditing is enabled, <see cref="Observe"/> returns after a couple of
 /// branch-predictable boolean reads, allocating nothing - the zero-cost-when-off
 /// contract.

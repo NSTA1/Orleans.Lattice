@@ -13,6 +13,7 @@ The public surface of `Orleans.Lattice.GrainIndex`. Types live in the
 | `AddGrainIndexKeySource<TSource>(this ISiloBuilder, string indexName)` | Registers a keyed `IGrainKeySource` for an index's backfill. |
 | `AddGrainIndexKeySource(this ISiloBuilder, string indexName, IGrainKeySource)` | The same, from an instance. |
 | `AddGrainIndexKeySource(this ISiloBuilder, string indexName, Func<IServiceProvider, IGrainKeySource>)` | The same, from a factory. |
+| `ConfigureGrainIndex(this ISiloBuilder, Action<GrainIndexOptions>)` | Configures options for every declared index (`ConfigureAll`); an override registered later wins. |
 | `ConfigureGrainIndex(this ISiloBuilder, string indexName, Action<GrainIndexOptions>)` | Overrides a declared index's options by name. |
 | `ConfigureGrainIndexOutbox(this ISiloBuilder, Action<GrainIndexOutboxOptions>)` | Configures the silo-wide outbox drain. |
 
@@ -96,9 +97,9 @@ See [Observability](observability.md).
 |---|---|
 | `GrainIndexOptions` | Per-index settings, resolved by name through `IOptionsMonitor<GrainIndexOptions>.Get(indexName)`. |
 | `GrainIndexOutboxOptions` | Silo-wide outbox drain settings. |
-| `GrainIndexDeclarationOptions` | The declaration captured at `AddGrainIndex` time. |
+| `GrainIndexDeclarationOptions` | The silo's whole declaration set: `Definitions` lists every `AddGrainIndex` declaration (`IGrainIndexDefinition`) in registration order, validated as a set at startup. |
 | `GrainIndexDriftPolicy` | `Reject` (default) or `Rebuild`. |
-| `GrainIndexProjectionMode` | When entries are published relative to the state write. |
+| `GrainIndexProjectionMode` | When entries are published relative to the state write: `Synchronous` (default) or `Eventual`. |
 
 ## Definition model
 

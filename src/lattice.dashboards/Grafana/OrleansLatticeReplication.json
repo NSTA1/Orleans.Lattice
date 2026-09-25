@@ -323,7 +323,7 @@
     {
       "id": 7,
       "title": "Apply correctness violations (rate)",
-      "description": "FIFO and causal-violation counters. A sustained nonzero rate indicates a real correctness regression. Flat-zero is required for a healthy cluster. Conditionally-emitted series here (replication.apply.fifo_violations) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
+      "description": "FIFO and causal-violation counters. fifo violations is a diagnostic, not a correctness alarm: source HLCs are stamped per leaf, so a new write to a different key routinely applies below the highest HLC already applied for its origin (issue #1060), and the entry is still applied. Only a sustained climb warrants investigating sender, transport, or workload patterns. causal violations blocked counts replog entries parked because a causal dependency was not yet satisfied locally; a sustained nonzero rate flags causal skew between clusters. Conditionally-emitted series here (replication.apply.fifo_violations) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",

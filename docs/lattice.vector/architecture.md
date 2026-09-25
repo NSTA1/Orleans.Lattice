@@ -89,10 +89,12 @@ caller-chosen key prefix.
 - A **generation** covers a whole partitioning. Training and rebuilding change
   every cell's membership, so they write a fresh generation and flip the manifest
   to it rather than editing the live one.
-- An **epoch** covers one flush inside a generation. A dirty partition's chunks
-  are written under a new epoch and committed by rewriting that partition's state
-  record, so an interrupted flush leaves an uncommitted epoch the loader ignores
-  and the next flush sweeps.
+- An **epoch** covers one flush inside a generation. A dirty partition's changed
+  chunks are written under a new epoch and committed by rewriting that
+  partition's state record, which records the epoch each of its chunks lives
+  under - so one cell's chunks can span several epochs. An interrupted flush
+  leaves an uncommitted epoch the loader ignores and the next flush sweeps, and
+  the chunk keys a committed flush superseded are reclaimed after its state swap.
 
 Both are zero-padded so ordinal key order is numeric order, and neither is ever
 reused.
@@ -111,8 +113,9 @@ payload length, and a checksum. Truncation, a flipped bit, a wrong key and a
 future version all collapse to the same answer: the unwrap fails. There is exactly
 one place that decides whether a persisted byte sequence may be believed.
 
-No record grows with the corpus: chunk size is bounded by configuration, and a
-test asserts every persisted record stays under the bound that implies.
+No record grows with the corpus: a chunk is written at the largest item count
+that fits a fixed 64 KiB byte ceiling, capped by `MaxItemsPerChunk`, and a test
+asserts every persisted record stays under the bound that implies.
 
 ### Lazy partial load
 
@@ -135,11 +138,13 @@ mutation. A flush persists only the partitions whose stamp moved. Rendering a
 chunk fails if the index has moved since the snapshot was planned, so a torn
 snapshot cannot be written.
 
-The unit of persistence is one cell. A flush with nothing dirty costs a single
-write (the manifest); a flush after one update costs a handful. But 100 updates
-landing in 100 different cells rewrite 100 cells, so a maintenance loop that
-batches before flushing pays for the distinct cells it touched rather than for the
-updates it applied.
+Within a dirty partition the unit of persistence is one chunk: each rendered chunk
+is content-hashed and only the chunks whose bytes changed are rewritten, so
+re-embedding one vector rewrites a few chunks rather than its whole cell. A flush
+with nothing dirty costs a single write (the manifest); a flush after one update
+costs a handful. Each touched cell still costs its commit record, so a
+maintenance loop that batches before flushing pays for the distinct chunks and
+cells it touched rather than for the updates it applied.
 
 ## Coherence with the store of record
 

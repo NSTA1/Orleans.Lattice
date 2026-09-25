@@ -1,16 +1,26 @@
 # Change feed (`IChangeFeed`)
 
-`IChangeFeed` is the public, in-process subscriber API over the per-shard write-ahead log. It lets consumers - the outbound ship loop, custom transports, integration tests, and any in-process projection - read every captured `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks.
+`IChangeFeed` is the public, in-process subscriber API over the per-shard write-ahead log. It lets in-process consumers - custom bridges and transports, integration tests, and in-process projections - read every locally-authored `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks. Entries installed on this cluster by inbound replication apply are filtered out; decorate `IReplicationApplier` to observe those.
 
 The contract is deliberately neutral: there is no peer id, no per-call ack envelope, no notion of "live" vs. "snapshot" mode.
 
 ## API
 
-The interface lives in `Orleans.Lattice.Replication`:
+The interface lives in `Orleans.Lattice.Replication` and has three members:
 
 ```text
 public interface IChangeFeed
 {
+    IAsyncEnumerable<WalRecord> Subscribe(
+        string treeName,
+        ChangeFeedCursor cursor,
+        bool includeLocalOrigin = true,
+        CancellationToken cancellationToken = default);
+
+    Task<ChangeFeedCursor> GetCurrentCursorAsync(
+        string treeName,
+        CancellationToken cancellationToken = default);
+
     IAsyncEnumerable<WalRecord> Subscribe(
         string treeName,
         HybridLogicalClock cursor,
@@ -22,30 +32,34 @@ public interface IChangeFeed
 | Parameter | Default | Semantics |
 |---|---|---|
 | `treeName` | required | Logical tree id whose change feed is being consumed. Only entries with `WalRecord.TreeId` equal to this value are yielded. |
-| `cursor` | required | Strict lower-bound timestamp. The feed yields entries with `entry.Timestamp > cursor`. Pass `HybridLogicalClock.Zero` to read from the start of the WAL. |
+| `cursor` (`ChangeFeedCursor`) | required | Per-partition exclusive lower bound: for each WAL partition, the offset of the next entry to read. The feed yields every entry whose partition offset is greater than or equal to the matching cursor entry; a partition absent from the cursor reads from offset `0`. `ChangeFeedCursor.Initial` reads every partition from the start. |
+| `cursor` (`HybridLogicalClock`) | required | Kept for source compatibility only. The default implementation ignores the value and reads every partition from the start, so a consumer on this overload re-reads the whole retained feed on every call and must de-duplicate entries it has already seen. |
 | `includeLocalOrigin` | `true` | When `false`, entries whose `OriginClusterId` matches the local `LatticeReplicationOptions.ClusterId` are filtered out - the cycle-break used by remote shippers. Defaults to `true` because in-process projections and background materialisers need to observe local-origin mutations. |
 | `cancellationToken` | `default` | Observed between every page read and every yielded entry. |
 
+`GetCurrentCursorAsync` returns a snapshot of every partition's next append position. Passed back to the `ChangeFeedCursor` overload, it yields exactly the entries committed after the call.
+
 ## Pull semantics
 
-Each `Subscribe` call takes a snapshot of the WAL at invocation time and completes when that snapshot is exhausted. To pick up entries committed after the call, the consumer remembers the timestamp of the last entry it observed and re-subscribes with that value as the new cursor:
+Each `Subscribe` call takes a snapshot of the WAL at invocation time and completes when that snapshot is exhausted. To pick up later commits, the consumer re-subscribes with a fresh cursor. The offset cursor is the lossless resume shape: capture it with `GetCurrentCursorAsync`, then read the entries committed after that point:
 
 ```csharp verify
 using Orleans.Lattice;
 
 IChangeFeed feed = client.ServiceProvider.GetRequiredService<IChangeFeed>();
 string treeName = "orders";
-var cursor = HybridLogicalClock.Zero;
-while (!cancellationToken.IsCancellationRequested)
+
+// Capture "now"; a later Subscribe from this cursor yields exactly the
+// entries committed after this call.
+ChangeFeedCursor resumeFrom = await feed.GetCurrentCursorAsync(treeName, cancellationToken);
+
+await foreach (var entry in feed.Subscribe(treeName, resumeFrom, cancellationToken: cancellationToken))
 {
-    await foreach (var entry in feed.Subscribe(treeName, cursor, cancellationToken: cancellationToken))
-    {
-        // process entry
-        cursor = entry.Timestamp;
-    }
-    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+    // process entry
 }
 ```
+
+An offset cursor never skips an entry: WAL offsets are monotonic per partition, whereas hybrid-logical clocks are stamped per leaf and can arrive out of order at a shared partition, which is why the HLC cursor is no longer honoured as a filter.
 
 Pure-pull means there are no callbacks, no events, and no live-streaming guarantees - every consumer drives its own cadence.
 
@@ -55,9 +69,10 @@ Entries are yielded in `HybridLogicalClock` ascending order, merged across every
 
 ## Caveats
 
-- `DeleteRange` entries currently carry `HybridLogicalClock.Zero` (a known property of `WalRecord`). A non-`Zero` cursor therefore filters them out; this is fixed at the `WalRecord` layer in a later phase, not at the change-feed layer.
-- The current implementation merges by collecting filtered entries into a list and sorting them - `O(N log N)` in the number of entries that pass the cursor filter. Adequate for bootstrap and for the test surface this seam enables; the outbound shipper will swap to a streaming k-way merge if the change-feed consumer count grows.
-- `WalRecord.Value` is `null` on CRDT-mode `Set` entries - the canonical encoder strips the slot at WAL append time because the receiver-side apply path dispatches every typed CRDT mode through `WalRecord.Delta` and the primitive's `MergeDelta` operation. Consumers that previously read `Value` on CRDT entries must either (a) read `Delta` and apply it against their own prior observed state, or (b) read the producer's leaf store via the public lattice surface (`ILattice.GetAsync` or the typed accessor). `LwwRegister` entries are unaffected - `Value` remains the canonical payload. See `docs/lattice.replication/wire-format.md` for the encoder-side strip rules.
+- Tombstone-reap envelopes (`MutationKind.Tombstone`) are local structural clean-up records with no receiver-side apply rule, so the feed skips them.
+- `DeleteRange` entries carry the producer's authoring HLC. Entries persisted by older producers carry `HybridLogicalClock.Zero` and therefore sort ahead of every timestamped entry in the HLC-ordered output.
+- The current implementation merges by collecting every entry that passes the cursor and origin filters into a list and sorting it - `O(N log N)` in that entry count. That is adequate for tests and in-process projections; the outbound shipper does not use the feed at all - it tails the WAL partitions directly with its own durable per-partition cursors and streaming merge.
+- `WalRecord.Value` is `null` on CRDT-mode `Set` entries that carry a `Delta` (prepared saga entries keep it) - the canonical encoder strips the slot at WAL append time because the receiver-side apply path dispatches every typed CRDT mode through `WalRecord.Delta` and the primitive's `MergeDelta` operation. Consumers that previously read `Value` on CRDT entries must either (a) read `Delta` and apply it against their own prior observed state, or (b) read the producer's leaf store via the public lattice surface (`ILattice.GetAsync` or the typed accessor). `LwwRegister` entries are unaffected - `Value` remains the canonical payload. See `docs/lattice.replication/wire-format.md` for the encoder-side strip rules.
 
 ## Registration
 
@@ -69,21 +84,15 @@ var feed = client.ServiceProvider.GetRequiredService<IChangeFeed>();
 
 ## Why a separate seam from the transport
 
-The outbound shipper is one consumer of the change feed; an in-process projection or background materialiser is another. Keeping `IChangeFeed` free of peer ids, acks, and transport options means such a consumer can plug in at the same seam without replication being installed.
+The outbound shipper does not read the change feed; custom bridges, tests, and in-process projections or background materialisers do. Keeping `IChangeFeed` free of peer ids, acks, and transport options means such a consumer can plug in at the same seam without depending on the replication transport.
 
-## Cursor shape - HLC on the public surface
+## Cursor shape - offset cursor on the public surface
 
-The public `IChangeFeed.Subscribe` signature accepts a `HybridLogicalClock` cursor, not a per-shard offset. Both shapes were considered:
+`IChangeFeed` originally exposed only a `HybridLogicalClock` cursor. That shape assumed HLC monotonicity per WAL partition, which does not hold: each leaf stamps its own HLC, so two leaves appending to one partition can interleave out-of-order clocks, and an HLC lower bound silently dropped the lower-clock entry that arrived second. The public surface therefore carries a per-partition offset cursor, `ChangeFeedCursor`, as the canonical resume shape:
 
-| Shape | Advantages | Disadvantages |
+| Shape | Status | Properties |
 |---|---|---|
-| **HLC cursor** *(chosen)* | Preserves transitive replication HLC fidelity; aligns 1:1 with the per-origin high-water-mark dedup table; cross-tree consumers (a future cross-tree materialiser) have no notion of per-shard offset. | HLC-skew at reconnect time is a (rare) edge case the consumer must handle. |
-| **`(shardIndex, offset)` cursor** | Trivially monotonic per shard; matches the underlying `WalEntry.Offset` shape 1:1; no HLC-skew edge cases at reconnect time. | Couples the public API to the internal partitioning scheme; cross-tree consumers can't use it without an HLC translation layer. |
+| **`ChangeFeedCursor`** (per-partition offsets) | Canonical | Monotonic per partition by construction (offsets are assigned under the WAL partition's own ordering), so no entry is skipped. `GetCurrentCursorAsync` captures one; `PartitionOffsets` exposes the map for persistence. |
+| **`HybridLogicalClock`** | Source-compatible shim | Ignored by the default implementation, which reads every partition from the start; the consumer de-duplicates. |
 
-**The decision:** keep cursors HLC-shaped on every public surface. Per-shard offsets are exposed only on the internal transport-side seam used by the gRPC push transport, where reconnect resume points genuinely benefit from the offset shape. The internal `WalResumeToken` (`ShardIndex`, `Offset`) carries the offset cursor across that seam without leaking into the public API.
-
-This decision affects three downstream items:
-
-- The wire envelope's "resume from" field is HLC-shaped on the public transport contract; the internal gRPC stream may carry an opaque `WalResumeToken` alongside as a diagnostic fast-path.
-- The per-origin high-water-mark table continues to key on `(tree, originClusterId) → HLC` regardless of cursor shape - HLC is the dedup key, cursor shape only governs *resume* tokens.
-- The bootstrap snapshot pin takes a `HybridLogicalClock` argument, not an offset (see `ISnapshotProvider.ExportAsync`).
+Downstream of the feed, record identity stays HLC-based whichever cursor shape a consumer used: the receiver suppresses a repeated `(origin, hlc, key, op)` record and tracks a per-origin high-water mark of source HLCs, and the bootstrap snapshot pin takes a `HybridLogicalClock` argument, not an offset (see `ISnapshotProvider.ExportAsync`).

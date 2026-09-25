@@ -29,13 +29,13 @@ Terms used throughout the sample. Split into the **domain** side
 | **UseAsIs** | MRB disposition accepting the part despite a non-conformance; demotes `FlaggedForReview` (and armed `Rework`) back to `Nominal`. |
 | **Rework** | Corrective operation to bring a non-conforming part back into spec. Also the corresponding lattice state. |
 | **Scrap** | Terminal disposition - the part is destroyed. Terminal compliance state. |
-| **FAI** | First Article Inspection - the final certification step; produces a `FaiReportId` and an `inspectorId`. |
+| **FAI** | First Article Inspection - the final certification step; produces a `FaiReportId` and an `InspectorId`. |
 | **Heat lot** | A batch of material sharing the same heat-treat history; carried on `ProcessStepCompleted` facts where relevant. |
 | **Digital thread** | The ordered, queryable history of every fact recorded against a part across sites. What the sample's UI renders per part. |
 | **Severity lattice** | The totally ordered set of compliance states: `Nominal < UnderInspection < FlaggedForReview < Rework < Scrap`. |
 | **ComplianceState** | Current lattice position of a part, computed by folding its fact log. |
-| **Retest armed** | Internal flag that gates `MRBDisposition(UseAsIs)` demotion of `Rework` → `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest. |
-| **Operator** | Human user driving the UI. The sample uses a static `"demo"` label - no authentication in v1. |
+| **Retest armed** | Internal flag that gates `MrbDisposition(UseAsIs)` demotion of `Rework` -> `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest. |
+| **Operator** | Human user driving the UI. The sample uses a static `operator:demo` identity - no operator sign-in in v1. |
 
 ---
 
@@ -51,11 +51,11 @@ Terms used throughout the sample. Split into the **domain** side
 | **Grain key** | The identity of a grain instance. In this sample, enum values like `ProcessSite.OhioForge` and short strings like backend names (`"baseline"`, `"lattice"`). |
 | **Silo** | An Orleans host process. This sample runs two silos per cluster. |
 | **Cluster** | A set of silos sharing a membership table. The sample runs two - `us` and `eu`. |
-| **Grain storage** | Orleans' persistent state facility. Here backed by Azure Table Storage (`msmfgGrainState`). |
-| **Grain timer** | A periodic callback registered inside a grain activation. No minimum period; auto-disposed on deactivation. Used for the replicator's 3-second shipping loop. |
-| **Reminder** | Durable, cluster-wide scheduled callback surviving silo restarts. Minimum period of 1 minute. Used for the replicator keepalive and the replog janitor. |
-| **RequestContext** | Orleans per-call ambient dictionary flowing across grain calls. The sample no longer threads its own loop-break flag through it - that responsibility moved into the replication package's per-origin HWM (see Replication section below). |
-| **TestingHost** | Orleans' in-process test-cluster fixture. The sample's integration tests materialise a single cluster with in-memory storage. |
+| **Grain storage** | Orleans' persistent state facility. Here backed by Azure Table Storage; the sample's own grains use the `msmfgGrainState` provider. |
+| **Grain timer** | A periodic callback registered inside a grain activation. No minimum period; auto-disposed on deactivation. Used for the replication shipper's steady-state pump (every 100 ms by default). |
+| **Reminder** | Durable, cluster-wide scheduled callback surviving silo restarts. Minimum period of 1 minute. Used for the replication shipper's keepalive. |
+| **RequestContext** | Orleans per-call ambient dictionary flowing across grain calls. The sample no longer threads its own loop-break flag through it - loop-breaking now rides the origin stamped on every write-ahead-log record (see Replication section below). |
+| **TestingHost** | Orleans' in-process test-cluster fixture. The sample's integration tests share one single-silo cluster with in-memory storage; the coordinated-restore test stands up two such clusters over one shared backup sink directory. |
 
 ### Lattice
 
@@ -65,7 +65,7 @@ Terms used throughout the sample. Split into the **domain** side
 | **Tree** | A named Lattice namespace (e.g. `mfg-facts`). Independent key space, independent persistence. |
 | **ILattice** | The public tree API - `GetAsync`, `SetAsync`, `DeleteAsync`, range scans. |
 | **HLC** | Hybrid Logical Clock. A `(wallClockTicks, counter)` pair that provides a monotonic, roughly-wall-clock-aligned ordering across distributed producers. |
-| **Range scan** | Half-open key-range iteration over a tree; the primitive behind per-part history, replog shipping, and janitor pruning. |
+| **Range scan** | Half-open key-range iteration over a tree; the primitive behind per-part history and the partition-heal shadow sweep. |
 | **Tag index** | The built-in `Orleans.Lattice` secondary index (opened through the injected `ILatticeTagIndexFactory`). Associates tags with keys and answers `WithAnyTags` / `WithAllTags` queries from a sibling `tag-{name}` membership tree. Powers the sample's per-site "parts at site X" view over the part-major `mfg-site-activity` tree. |
 | **Lex order** | Lexicographic byte order of keys. Zero-padded HLC components (`D20`, `D10`) embedded in keys make lex order match HLC order. |
 
@@ -74,8 +74,8 @@ Terms used throughout the sample. Split into the **domain** side
 | Term | Meaning |
 |---|---|
 | **CRDT** | Conflict-free Replicated Data Type. A structure whose merge operation is commutative, associative, and idempotent, so replicas converge regardless of delivery order or duplication. |
-| **G-Set** | Grow-only Set. A CRDT that only supports add; merge is set union. Used for `{serial}/labels/{label}`. |
-| **LWW register** | Last-Writer-Wins register. A single-cell CRDT where the "latest" write (by some timestamp) wins. Used for `{serial}/operator`. Safe only when every replica compares the **same** timestamp - which is why the sample filters this key out of cross-cluster replication today. |
+| **OR-Set** | Observed-remove set. Supports add and remove; merge unions the add and remove dots, so a concurrent add beats a remove (add-wins). Used for `mfg-part-labels` (one OR-Set per serial). |
+| **LWW register** | Last-Writer-Wins register. A single-cell CRDT where the "latest" write (by some timestamp) wins. Used for `mfg-part-operator` (one register per serial). Safe only when every replica compares the **same** timestamp - which is why the sample leaves that tree out of cross-cluster replication. |
 | **Fold** | Left-to-right reduction over a sequence - `(state, fact) → state'`. Both backends fold the same fact list; they differ only in the order. |
 | **HLC-ordered fold** | Folding after sorting by `(WallClockTicks, Counter, FactId)`. Converges under reorder. The sample's lattice backend. |
 | **Arrival-order fold** | Folding in the order facts were appended to a grain's list. Drifts under reorder. The sample's baseline backend. |
@@ -85,21 +85,22 @@ Terms used throughout the sample. Split into the **domain** side
 
 ### Replication
 
-Provided by `Orleans.Lattice.Replication` (WAL + shipper + applier)
-and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
+Provided by `Orleans.Lattice.Replication` (shipper + applier, shipping
+from the core write-ahead log) and `Orleans.Lattice.Replication.Grpc`
+(HTTP/2 gRPC push transport).
 
 | Term | Meaning |
 |---|---|
-| **WAL** | The package's per-tree write-ahead log of replicated mutations. Replaces the sample's earlier hand-rolled `_replog__{tree}` tree. |
+| **WAL** | The core `Orleans.Lattice` per-tree write-ahead log of every committed mutation, persisted here by `Orleans.Lattice.Storage.AzureTable`. Replication ships from it; it replaces the sample's earlier hand-rolled `_replog__{tree}` tree. |
 | **Shipper grain** | One package-managed grain per `(tree, peer-cluster)` pair. Drains the WAL, calls `IReplicationTransport.SendAsync`, advances its per-peer cursor on ack. |
 | **Applier** | Receiver-side package component that merges incoming batches into the local lattice using the tree's CRDT semantics (`LwwRegister`, `OrFlag`, or `OrSet`). |
 | **Cursor** | The shipper's per-peer high-watermark - everything at or before this HLC has been successfully shipped to the peer. The package persists it in grain storage. |
 | **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for write-once keys (`mfg-facts`, `mfg-site-activity`); `OrFlag` for the `tag-mfg-site` membership tree (enable-wins flag-CRDT membership); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
-| **Per-origin HWM** | The package's loop-break: each cluster tracks the highest HLC it has seen from each peer origin and short-circuits replicated applies before they re-enter its own WAL. Replaces the sample's earlier `RequestContext["lattice.replay"]` flag. |
-| **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`. |
+| **Per-origin HWM** | The receiver's per-origin high-water mark: the highest HLC applied from each origin, used to dedupe re-delivered entries. Loop-breaking is separate - a replicated apply lands in the receiver's WAL under its source origin, and a shipper ships only locally-authored entries. Together they replace the sample's earlier `RequestContext["lattice.replay"]` flag. |
+| **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`; `ChaosReplicationApplier` (sample-side, Tier 4b inbound half) wraps it outermost and rejects every apply while the disconnect flag is set. |
 | **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; the package-side gRPC push transport is the concrete implementation. |
-| **Opt-in (tree level)** | `LatticeReplicationOptions.ReplicatedTrees` - a tree -> `ReplicationMode` map. The shipper observes only listed trees. |
-| **Traefik** | The HTTP reverse proxy fronting each cluster. Three routers per cluster: sticky-session for the UI, round-robin (no health check) for the `/orleans.lattice.replication.*` gRPC service path, and round-robin with active health check for the `/orleans.lattice.api.state/*` read-only state API browsed by the explorer. |
+| **Opt-in (tree level)** | `LatticeReplicationOptions.ReplicatedTrees` - a tree -> `LatticeMergeMode` map. The shipper observes only listed trees. |
+| **Traefik** | The HTTP reverse proxy fronting each cluster. Four routers per cluster: sticky-session for the UI, round-robin (no health check) for the `/orleans.lattice.replication.*` gRPC service path, and round-robin with active health check for both the `/orleans.lattice.api.state/*` read-only state API browsed by the explorer and the `/orleans.lattice.api.backup/*` backup control API. |
 | **Multi-homed container** | A container attached to more than one Docker network. In this sample, each Traefik is attached to both cluster networks and is the only cross-cluster bridge. |
 | **Tier-N chaos** | The sample's fault-injection taxonomy (tiers 1-5 + 4b). Each tier models a distinct failure class at a distinct seam. See [`approach.md`](./approach.md) §4. |
 
@@ -107,9 +108,9 @@ and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
 
 | Term | Meaning |
 |---|---|
-| **Azurite** | The local Azure Storage emulator. The sample ships two instances (one per cluster) under Docker Compose. |
-| **`msmfgGrainState`** | Azure Table holding Orleans grain state - chaos config, replicator cursors, seed flag, baseline part grains, inventory. |
-| **`msmfgLatticeFacts`** | Azure Table holding every Lattice tree - `mfg-facts`, `mfg-site-activity`, `tag-mfg-site`, `mfg-part-labels`, `mfg-part-operator`. The package's replication WAL lives in a separate package-managed table. |
+| **Azurite** | The local Azure Storage emulator. The sample runs three instances under Docker Compose: one per cluster plus the shared `azurite-backup` account both clusters reach. |
+| **`msmfgGrainState`** | Grain-storage provider name (not a table) for the sample's own grains - chaos config, seed flag, baseline part grains. Like every Azure Table grain-storage provider in the sample it writes Orleans' default `OrleansGrainState` table. |
+| **`OrleansLatticeWal`** | Azure Table holding the core write-ahead log of every Lattice tree - `mfg-facts`, `mfg-site-activity`, `tag-mfg-site`, `mfg-part-labels`, `mfg-part-operator` (the `Orleans.Lattice.Storage.AzureTable` default table name). The trees' node state lives in `OrleansGrainState` through the `lattice` grain-storage provider, as do the replication shipper's cursors. |
 
 ---
 

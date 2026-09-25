@@ -6,10 +6,11 @@ coherent, accessible Explorer") by issue #1849, which widened the automated swee
 to WCAG 2.1 and 2.2 AA across both themes, all three breakpoint bands, both
 identities, and every area the shell offers.
 
-It lives here, next to the tests, rather than in `docs/`, because it is the
-acceptance standard for the issues in that epic and each of them needs it before
-the epic's documentation is written. The coordinator folds it into
-`docs/lattice.explorer/` when the epic closes (#1859).
+It lives here, next to the tests, rather than in `docs/`, because it was the
+acceptance standard for the issues in that epic and each of them needed it before
+the epic's documentation was written. That epic has closed, and the published
+conformance statement is now `docs/lattice.explorer/accessibility-conformance.md`,
+which summarises this checklist and points back to it as the enforcing reference.
 
 ## How to use it
 
@@ -24,10 +25,11 @@ UI:
    mechanism to add one, deliberately: see the note in
    `AccessibilityConformance.cs` for why the last one was removed along with the
    entry it held. A finding is either fixed or tracked as its own issue.
-4. Never weaken an assertion to get a green run. Several assertions here are red
-   against the code as it stands, on purpose, because this gate was landed before
-   the fixes. The fixture doc comments name the issue expected to turn each one
-   green.
+4. Never weaken an assertion to get a green run. When this gate landed, several
+   assertions were deliberately red against the code, because the gate preceded
+   the fixes; the fixture doc comments still name the issue that was expected to
+   turn each one green. Those fixes have landed and the lane runs green, so a red
+   assertion now is a regression to fix, not an expected state.
 
 The target is WCAG 2.2 level AA. Where a criterion below cites a success
 criterion, that citation is the authority; the prose is a summary.
@@ -148,6 +150,11 @@ This is the criterion the pre-#1849 gate could not see at all: the sweep ran
 `wcag2a` / `wcag2aa` only, and 1.4.11 is a WCAG 2.1 criterion, so borders
 measuring 1.21:1 passed by construction. The sweep now runs `wcag21aa`.
 
+The token layer is also guarded browserlessly, on every build, by
+`Orleans.Lattice.Explorer.Tests.NonTextContrastTokenHygieneTests`: borders, focus
+rings, the selected-state cues and the elevation ladder, in both palettes and
+both high-contrast overlays.
+
 ### 9. Reduced motion
 
 A `prefers-reduced-motion: reduce` preference neutralises transitions,
@@ -196,19 +203,23 @@ a check belongs in bUnit instead.
 
 The axe sweep runs the `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa`
 rule sets over: both themes, all three breakpoint bands, signed in and signed
-out (the full twelve-cell cross product on the home surface), and every area the
-shell offers for each identity. Every case proves its own premises first - the
-shell rendered, the theme genuinely changed what the browser resolved, the
-viewport was genuinely classified into the band asked for, the identity is
-genuinely the one rendered - because a sweep of a blank or misconfigured page
-reports zero violations and would otherwise pass hardest when the app is most
-broken.
+out (the full twelve-cell cross product on the home surface), plus four
+high-contrast cells (both themes and both identities, at the expanded band), and
+every area the shell offers for each identity. Every case proves its own premises
+first - the shell rendered, the theme genuinely changed what the browser
+resolved, the high-contrast overlay genuinely resolved different colour tokens
+from the standard one, the viewport was genuinely classified into the band asked
+for, the identity is genuinely the one rendered - because a sweep of a blank or
+misconfigured page reports zero violations and would otherwise pass hardest when
+the app is most broken.
 
 It also proves the *rule set* is not vacuous. `target-size`, the only rule
 carrying the `wcag22aa` tag in the bundled axe-core, ships disabled by default:
 adding the tag without enabling the rule would have run zero WCAG 2.2 rules and
-reported a clean WCAG 2.2 AA pass that meant nothing. Every requested tag is
-checked against the tags of the rules axe actually evaluated.
+reported a clean WCAG 2.2 AA pass that meant nothing. The same trap applies to
+`label-content-name-mismatch`, the only `wcag21a` rule, which is tagged
+experimental. Both are force-enabled by id, and every requested tag is checked
+against the tags of the rules axe actually evaluated.
 
 Automated scanning still finds a minority of real barriers, and it is blind to
 most of the criteria above - it cannot see whether a tab is bound to a panel,

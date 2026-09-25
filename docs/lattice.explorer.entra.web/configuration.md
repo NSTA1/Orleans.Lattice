@@ -35,7 +35,7 @@ The options are validated at registration time (`AddLatticeExplorerEntraWebAuth`
 
 | Member | Meaning |
 |---|---|
-| `InMemory` | A per-process in-memory token cache. Correct for a single-replica host. The cache is per process, so on a multi-replica host a user's cached token is not shared across replicas: a request routed to a cold replica cannot silently acquire a downstream token (it holds a valid session cookie but no redeemed code), so silent renewal latches the credential as revoked and drives a fresh interactive re-authentication. Use `Distributed` with a shared `IDistributedCache` for seamless failover. |
+| `InMemory` | A per-process in-memory token cache. Correct for a single-replica host. The cache is per process, so on a multi-replica host a user's cached token is not shared across replicas: a circuit on a cold replica cannot silently acquire a downstream token (it holds a valid session cookie but no redeemed code), so acquisition there fails until a fresh authorization code is redeemed on that replica - for example through the forced-interactive re-authentication endpoint. Use `Distributed` with a shared `IDistributedCache` for seamless failover. |
 | `Distributed` | A Microsoft.Identity.Web distributed token cache over the registered `IDistributedCache`. Register a shared cache (for example `Orleans.Lattice.Caching.AzureBlob`) so a multi-replica host shares one token cache and tokens survive a replica restart. |
 
 ## Secret-less production configuration
@@ -69,7 +69,7 @@ shared cache and point **every** region at a single estate-global container.
 Because the on-behalf-of token an operator acquired on one replica is then
 visible to every other replica, a request routed to a cold replica - or to a
 different region after a failover - finds the cached token and acquisition
-succeeds instead of latching the credential as revoked.
+succeeds instead of failing for want of a redeemed authorization code.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -99,9 +99,12 @@ A token can expire or be revoked while an operator is signed in (a
 conditional-access change, a password reset), or a request can land on a replica
 whose cache cannot satisfy it. Microsoft.Identity.Web then raises a re-auth
 signal, which this package translates into a typed
-`ExplorerWebReauthRequiredException` and latches the credential as revoked. The
-core Explorer traps that revoked state and shows a "Your session expired - sign
-in again" interstitial whose button navigates to a forced-interactive sign-in.
+`ExplorerWebReauthRequiredException`. During silent renewal of an existing
+sign-in that latches the credential as revoked, and the core Explorer traps the
+revoked state and shows a "Your session expired - sign in again" interstitial
+whose button navigates to a forced-interactive sign-in. (The initial token
+acquisition of a new sign-in is outside that latch path, so the exception
+surfaces directly there.)
 
 Map the re-authentication endpoint so that navigation redeems a **new**
 authorization code even when a valid session cookie already exists - which is

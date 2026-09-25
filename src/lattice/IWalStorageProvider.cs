@@ -321,8 +321,8 @@ public interface IWalStorageProvider
     /// the GC predicate (<see cref="ILatticeWalGc"/>) once every consumer
     /// has acked past that point. Idempotent - trimming through an offset that
     /// has already been trimmed is a no-op. Trimming through an offset
-    /// that does not yet exist is permitted and reserves the trim point
-    /// for a future append.
+    /// that does not yet exist is permitted; whether the trim point is
+    /// retained for a future append is provider-specific.
     /// </summary>
     Task TrimAsync(
         string treeId,

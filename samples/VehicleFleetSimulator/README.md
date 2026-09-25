@@ -16,8 +16,8 @@ The simulator stands up a four-tier local stack:
 
 | Tier | Project | Purpose |
 |------|---------|---------|
-| Storage | Azurite (container) | Backing store for Orleans clustering, grain persistence, and stream queues. |
-| Silo | `VehicleFleetSimulator.Silo` | Hosts vehicle grains, the city graph, the fan-out telemetry sink, and reminder-driven simulation ticks. |
+| Storage | Azurite (container) | Backing store for Orleans clustering and the reminder table. Grain state is held in memory, and there are no Orleans streams. |
+| Silo | `VehicleFleetSimulator.Silo` | Hosts vehicle grains, the city graph, and the fan-out telemetry sink. Each vehicle ticks on a grain timer; a fleet wake reminder reactivates the vehicles after a silo restart. |
 | API | `VehicleFleetSimulator.Api` | ASP.NET Core gRPC + gRPC-Web frontend. Streams telemetry to subscribers; accepts admin commands. |
 | UI | `VehicleFleetSimulator.Ui` | Blazor WebAssembly dashboard - live map, simulation-speed slider, fleet controls. |
 

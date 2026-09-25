@@ -27,10 +27,11 @@ You reshard when a shard's **write path** is saturated - single root grain bottl
 | Property | Value |
 |---|---|
 | Availability | Reads and writes served throughout. No global lock. |
-| Direction | **Grow-only.** Shrink is not supported. |
-| Target range | `2 <= newShardCount <= LatticeConstants.DefaultVirtualShardCount` (fixed at 4096). Must be strictly greater than the current distinct-shard count. |
+| Direction | **Grow-only** on a tree that holds data. Shrink is not supported. |
+| Target range | `2 <= newShardCount <= 4096` (the fixed virtual shard count); a value outside it throws `ArgumentOutOfRangeException`. On a tree that holds data the target must exceed the current distinct-shard count: a smaller target throws `ArgumentOutOfRangeException`, and one equal to it is a no-op. An observably empty tree is instead re-pinned in place to any in-range count, with no coordinator. |
 | Idempotence | Repeated calls with the same target while in progress are no-ops. |
 | Concurrent target change | `InvalidOperationException` if a reshard with a different target is already in progress. |
+| Resize interlock | `InvalidOperationException` while a resize is in flight on the tree. |
 | Crash-safety | Reminder-anchored coordinator (`reshard-keepalive`, 1 min keepalive). Resumes automatically on silo restart. |
 | Completion signal | `ILattice.IsReshardCompleteAsync(CancellationToken)`. |
 
@@ -51,15 +52,15 @@ while (!await tree.IsReshardCompleteAsync())
 
 Internally, `ReshardAsync` routes through a dedicated per-tree reshard coordinator grain keyed per tree (`{treeId}`). The coordinator drives a small phase machine:
 
-1. **`Planning`** - persist the target shard count and operation ID.
-2. **`Migrating`** - on each 2-second tick, read the current `ShardMap`, count virtual-slot ownership per physical shard, filter to eligible sources (owns >= 2 virtual slots and not already splitting), and dispatch up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent online shard-split operations against the largest-slot owners. Each underlying split atomically grows the map by one distinct physical shard via its own shadow-write + swap + reject phases, inheriting all of that mechanism's online-safety guarantees. Repeats until the map contains at least the target number of distinct physical shards.
-3. **`Complete`** - clear in-progress state, unregister the keepalive, and deactivate.
+1. **Start** - `ReshardAsync` persists the target shard count and a fresh operation ID and enters the migrating phase directly. (A coordinator persisted in the older planning phase is advanced to migrating on its next tick.)
+2. **Migrating** - on each 2-second tick, read the current `ShardMap`, count virtual-slot ownership per physical shard, filter to eligible sources (owns >= 2 virtual slots and not already splitting), and dispatch up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent online shard-split operations against the largest-slot owners. Each underlying split atomically grows the map by one distinct physical shard via its own shadow-write + swap + reject phases, inheriting all of that mechanism's online-safety guarantees. Repeats until the map contains at least the target number of distinct physical shards.
+3. **Complete** - re-pin the registry's `ShardCount` to the target, clear in-progress state, publish a reshard-completed tree event (when tree events are enabled), prompt a reconcile of any tag index covering the tree, unregister the keepalive, and deactivate.
 
 Because each underlying split is itself an independent online operation, the tree never loses availability. Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard; after the split's swap phase, the source enters a `StaleShardRoutingException`-emitting reject state and the client retries against the new owner.
 
 ## Interaction with the autonomic split monitor
 
-The autonomic hot-shard split monitor polls `ILattice.IsReshardCompleteAsync` and suppresses its own passes while a reshard is running. This prevents two coordinators from simultaneously dispatching splits against the same tree and racing on `ShardMap` updates.
+The autonomic hot-shard split monitor polls `ILattice.IsReshardCompleteAsync` and suppresses its own passes while a reshard is running. This prevents two coordinators from simultaneously dispatching splits against the same tree and racing on `ShardMap` updates. A reshard is not bound by `LatticeOptions.MaxPhysicalShardsPerTree` (default 256), which caps only autonomic growth; a tree resharded above that ceiling simply stops splitting autonomically.
 
 ## Tuning
 
@@ -89,6 +90,6 @@ Splits halve the source shard's virtual-slot ownership. Starting from `ShardCoun
 
 ## Limitations and future work
 
-- **Grow-only.** Shrinking a tree (merging shards) is not supported. The underlying `ShardMap` primitive can represent any slot-to-shard mapping, but no coordinator currently implements the merge-and-drop flow.
+- **Grow-only.** `ReshardAsync` cannot shrink a tree that holds data. The only path that reduces a tree's physical shard count is automatic over-split healing, which folds shards that adaptive splits added back towards the tree's pinned shard count - never below it - one online shard consolidation at a time (see [`ShardHealingEnabled`](configuration.md#shardhealingenabled)). A count raised by `ReshardAsync` becomes the new pin, so healing never undoes a reshard.
 - **Shard-count only.** Changing the B+ fan-out (`MaxLeafKeys` / `MaxInternalChildren`) uses a different path - see [Tree Sizing](tree-sizing.md#resizing-an-existing-tree).
 - **Node-count policy is heuristic.** The coordinator picks the largest-slot owners as split sources; it does not currently read hotness counters. Hot-shard-aware source selection would fit neatly into the same loop.

@@ -23,6 +23,12 @@ gauge callbacks read a published scalar and never recompute the signal.
 | `orleans.lattice.scaling.storage.accounts_over_threshold` | `{account}` | count of over-threshold `WalAccountPressure` entries |
 | `orleans.lattice.scaling.storage.rebalance_recommendations` | `1` | `1` when a rebalance is recommended, else `0` |
 
+Every series carries a single tag, the repository-wide derived `tenant`
+dimension, fixed to the platform sentinel `_platform_`: the signal is a
+cluster-aggregate answer that belongs to no tenant. The three pressure gauges and
+the two scale-value gauges report `double` values; the replica, account, and
+recommendation gauges report `long` values.
+
 The instrument-name constants are exposed on `LatticeScalingMetrics`
 (`ScaleValueName`, `RawScaleValueName`, `ComputeActivationPressureName`, and so
 on) so a `MeterListener` or a test can reference them without hard-coding

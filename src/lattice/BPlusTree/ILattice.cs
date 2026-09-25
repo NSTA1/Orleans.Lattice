@@ -278,26 +278,28 @@ public interface ILattice : IGrainWithStringKey
     Task<IReadOnlyList<string>> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
-    /// pre-saga value up front, applies the writes sequentially, and
-    /// compensates (reverts) any already-committed entries if a subsequent
-    /// write fails - so the batch is either fully applied or fully rolled back
-    /// from the caller's perspective. Crash-recovery is reminder-driven: a
-    /// silo failure mid-saga reactivates the coordinator grain on another silo
-    /// which resumes from its persisted progress, optionally compensating.
+    /// Atomically writes <paramref name="entries"/> as a saga: stages the whole
+    /// batch as prepared writes that readers cannot see, then makes it visible -
+    /// or discards it - with a single commit or abort decision recorded in the
+    /// tree's transaction registry, so the batch is either fully applied or not
+    /// applied at all. An abort issues no per-key rollback writes; every key
+    /// keeps its pre-saga value. Crash-recovery is reminder-driven: a silo
+    /// failure mid-saga reactivates the coordinator grain on another silo,
+    /// which resumes from its persisted progress and drives the saga to its
+    /// commit or abort decision.
     /// <para>
-    /// <b>Partial-visibility window.</b> Readers observing the tree between the
-    /// first and last committed write may see a partial view of the batch.
-    /// This is inherent to the saga pattern; callers needing strict isolation
-    /// should layer version-guarded reads
-    /// (<see cref="GetWithVersionAsync"/> + <see cref="SetIfVersionAsync"/>)
-    /// on top.
+    /// <b>Atomic visibility.</b> No reader observes a partial view of the batch:
+    /// the staged writes stay hidden until the commit decision is recorded, at
+    /// which point every key becomes visible together. Paths that stream across
+    /// multiple grain calls keep this per underlying enumeration or cursor step;
+    /// the one-shot <see cref="DeleteRangeAsync(string, string, CancellationToken)"/>
+    /// observes it per key only.
     /// </para>
     /// <para>
     /// Throws <see cref="ArgumentException"/> when <paramref name="entries"/>
     /// contains duplicate keys or null values. Throws
-    /// <see cref="InvalidOperationException"/> if a write fails and compensation
-    /// completes - the original failure's message is included.
+    /// <see cref="InvalidOperationException"/> if a write fails and the saga
+    /// aborts - the original failure's message is included.
     /// </para>
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
@@ -553,9 +555,8 @@ public interface ILattice : IGrainWithStringKey
     /// the implementation sorts them internally.
     /// <para>
     /// Throws <see cref="InvalidOperationException"/> if any shard already
-    /// contains data, so the second and subsequent calls always fail unless
-    /// the operation id matches a previously-completed call (in which case
-    /// the call is an idempotent no-op). Streaming append-style ingestion
+    /// contains data, so the second and subsequent calls fail once the first
+    /// import has populated the tree. Streaming append-style ingestion
     /// must use <see cref="SetAsync(string, byte[], CancellationToken)"/>
     /// or the streaming
     /// <c>BulkLoadAsync(IAsyncEnumerable&lt;...&gt;, IGrainFactory, int)</c>
@@ -626,7 +627,7 @@ public interface ILattice : IGrainWithStringKey
     Task PurgeTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Resizes the tree by creating an offline snapshot with new
+    /// Resizes the tree by creating an online snapshot with new
     /// <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> and <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxInternalChildren"/>
     /// values into a new physical tree, then swapping the tree alias so that all
     /// subsequent reads and writes are redirected to the resized tree. The old
@@ -634,8 +635,9 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.SoftDeleteDuration"/>.
     /// <para>
     /// The tree ID is preserved - it becomes an alias to the new physical tree.
-    /// During the snapshot phase, the tree is temporarily locked (offline snapshot).
-    /// After the alias swap, the tree is immediately available with the new sizing.
+    /// The snapshot runs online: the tree stays available for reads and writes
+    /// throughout, with writes accepted during the copy shadow-forwarded to the
+    /// new physical tree. After the alias swap, the tree serves the new sizing.
     /// Cache invalidation is automatic: different physical trees produce different
     /// leaf grain IDs, which create fresh cache grain instances.
     /// </para>
@@ -672,8 +674,8 @@ public interface ILattice : IGrainWithStringKey
     /// before the snapshot completes is reflected on the destination.
     /// </para>
     /// <para>
-    /// The source and destination trees must have the same <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.ShardCount"/>.
-    /// The destination tree must not already exist.
+    /// The destination tree must not already exist: the snapshot creates it,
+    /// and it inherits the source tree's shard count.
     /// </para>
     /// </summary>
     /// <param name="destinationTreeId">The ID for the new tree. Must not already exist.</param>
@@ -685,7 +687,8 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Returns <c>true</c> if this tree is registered in the internal tree registry.
-    /// A tree is registered on its first write and unregistered when its purge completes.
+    /// A tree is registered on first use (its first options resolution or shard-root
+    /// operation, reads included) and unregistered when its purge completes.
     /// <para>
     /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
     /// registered access gate. A caller the gate denies is told the tree does not
@@ -1296,9 +1299,12 @@ public interface ILattice : IGrainWithStringKey
     /// replication apply, and topology changes that commit after the
     /// capture are all invisible to the cursor's view. The
     /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> gate
-    /// rejects opens whose projected WAL-replay cost would dominate
-    /// the call; a stalled snapshot whose pin TTL elapses throws
-    /// <see cref="LatticeSnapshotExpiredException"/> on the next step.
+    /// rejects an open whose deepest shard's frozen baseline would
+    /// exceed that many rows; a snapshot whose frozen baseline can no
+    /// longer be loaded (lost before it became durable, or reclaimed
+    /// after <see cref="LatticeOptions.SnapshotBaselineTtl"/> of
+    /// inactivity) throws <see cref="LatticeSnapshotExpiredException"/>
+    /// on the next step.
     /// </summary>
     /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the first key.</param>
     /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the end of the tree.</param>
@@ -1311,7 +1317,7 @@ public interface ILattice : IGrainWithStringKey
     /// Like <see cref="OpenSnapshotKeyCursorAsync"/>, but persists the
     /// predicate IR <paramref name="predicate"/> on the cursor spec so every
     /// snapshot page yields only matching keys. The filter composes with the
-    /// WAL-coordinate replay and the frozen saga-decision snapshot.
+    /// frozen per-shard baselines the snapshot serves.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     Task<string> OpenSnapshotKeyCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);

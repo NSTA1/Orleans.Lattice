@@ -44,10 +44,10 @@ Each `ShardDiagnosticReport` carries structural, volume, and hotness fields:
 
 ## Shallow vs deep
 
-The `deep` parameter controls whether tombstones are counted:
+The `deep` parameter controls whether tombstones are counted. Both modes fan out to every physical shard, and in both each shard walks its whole leaf chain - in work-bounded batches that each visit a bounded number of leaves and then release the shard, so a large shard answers over several calls instead of being held for the whole walk. Cost is therefore proportional to the number of leaves in either mode:
 
-- **`deep: false`** (default) - fans out one RPC per shard (`IShardRootGrain.GetDiagnosticsAsync`). Each shard computes `LiveKeys` from its persisted shard-level count and skips a full leaf walk. Fast.
-- **`deep: true`** - each shard walks its entire leaf chain to count tombstones exactly. Cost is proportional to the number of leaves per shard; expect this to be slower on large trees.
+- **`deep: false`** (default) - each leaf reports its live-key count only, so `Tombstones` and `TombstoneRatio` stay `0`.
+- **`deep: true`** - each leaf also counts its tombstones, populating `Tombstones` and `TombstoneRatio`.
 
 Use shallow reports for routine health probing; reach for deep reports when you suspect tombstone bloat or are diagnosing a compaction issue.
 
@@ -61,16 +61,16 @@ Set `DiagnosticsCacheTtl = TimeSpan.Zero` to disable caching entirely - every ca
 
 ## Recent splits
 
-`RecentSplits` is a bounded (32-entry) ring buffer of the most recent adaptive-split commits observed by the diagnostics grain. Each entry carries the source `ShardIndex` and the UTC commit time. The buffer survives grain activations for the lifetime of the diagnostics grain's activation and is useful for correlating shard-count changes with recent traffic bursts.
+`RecentSplits` is a bounded (32-entry) ring buffer of the most recent adaptive-split commits observed by the diagnostics grain. Each entry carries the source `ShardIndex` and the UTC commit time. The buffer lives in memory for the lifetime of the diagnostics grain's activation - it is not persisted, so it starts empty again if that activation is collected - and is useful for correlating shard-count changes with recent traffic bursts.
 
 Splits are pushed to the diagnostics grain on a best-effort, fire-and-forget basis from the split-coordinator's commit path, so a split may occasionally be missing from the buffer if the push RPC fails - the split itself still completes and is reflected in `ShardCount`/`Shards` on the next full report.
 
 ## Cancellation
 
-`DiagnoseAsync` honours its `CancellationToken` cooperatively. A pre-cancelled token throws `OperationCanceledException` immediately; cancellation during fan-out aborts outstanding shard RPCs at the next Orleans turn boundary.
+`DiagnoseAsync` honours its `CancellationToken` cooperatively. A pre-cancelled token throws `OperationCanceledException` immediately. Cancellation during the fan-out is observed between a shard's bounded batches and once the fan-out completes; shard calls already in flight are not aborted.
 
 ## Operational notes
 
 - `DiagnoseAsync` is safe to call at any time, including during an ongoing resize or reshard - per-shard reports whose fan-out fails are returned as empty entries rather than failing the whole report.
 - The returned DTOs are `readonly record struct` types with `[Immutable]` serialization - they are cheap to copy and log.
-- Do not call `DiagnoseAsync` on a hot path. For routing or capacity decisions inside the data plane, use the dedicated public APIs (`GetRoutingAsync`, `CountAsync`) rather than decoding a diagnostics report.
+- Do not call `DiagnoseAsync` on a hot path. For routing or capacity decisions inside the data plane, use the dedicated public APIs (`CountAsync`, `CountPerShardAsync`) rather than decoding a diagnostics report.

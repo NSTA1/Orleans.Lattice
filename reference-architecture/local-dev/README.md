@@ -159,9 +159,13 @@ and, once tenancy is enabled, the tenant you act as - per call:
 
   The MCP head authenticates the request as the subject named in the bearer token
   and forwards it to the silo; fail-closed tool discovery then advertises only the
-  tools that identity's grants allow. `data-reader` sees the read tools; `auditor`
-  sees the telemetry tools; `region-operator` sees the data read/write tools;
-  `platform-admin` sees everything; an unlisted id (or no token) sees nothing.
+  tool groups that identity's grants reach. Discovery is per group, so a group's
+  mutating tools are listed alongside its reads and refused at call time for a
+  caller who lacks them. `data-reader` sees the state and data tools; `auditor`
+  sees the telemetry tools; `region-operator` sees the state, data, auth, and
+  tree-administration tools; `platform-admin` sees everything; an unlisted id
+  sees only the `lattice_capabilities` meta-tool, and a call with no token sees
+  nothing.
 
 - **Explorer:** the console opens at its sign-in dialog. Enter any identity id as
   the **username** (the password is ignored) to browse as that identity - start
@@ -219,9 +223,11 @@ and, once tenancy is enabled, the tenant you act as - per call:
 
 1. `docker compose up --build` and wait for both silos to report healthy.
 2. `tools/list` on region A's MCP (port 9090) as `platform-admin` - full tool set.
-3. Repeat as `data-reader` - only the read tools. As `auditor` - only telemetry. As
-   `region-operator` - read/write data tools but no backup/schema/replication. As an
-   unlisted id such as `nobody`, or with no bearer - zero tools.
+3. Repeat as `data-reader` - the state and data tools (the data group's write tools
+   are listed too; step 4 shows them refused). As `auditor` - only telemetry. As
+   `region-operator` - the state, data, auth, and tree-administration tools, but no
+   backup, telemetry, or replication. As an unlisted id such as `nobody` - only the
+   `lattice_capabilities` meta-tool; with no bearer - zero tools.
 4. Try a write as `data-reader` (call a data write tool) - it is denied by the
    per-subject access gate, even though the transport let the call through.
 
@@ -353,6 +359,7 @@ environment or a `.env` file next to this compose file:
 | `BACKUP_BLOB_CONNECTION_STRING` | Azurite emulator string | The one shared backup Blob sink, identical in both regions (region A is backup-primary and owns the scheduler; region B is DR standby). |
 | `TENANCY_ENABLED` | `false` | Opt-in multi-tenancy. When `true`, both silos register the tenant registry + tenant-admin API and seed the demo tenants from `identities.json`, and both MCP heads dial the tenant-admin facade and advertise the tenant self-awareness tools. Off leaves the stack byte-for-byte single-tenant. |
 | `TENANCY_CONTROL` | `false` | When `true` (and `TENANCY_ENABLED=true`), the MCP heads also advertise the mutating tenant-administration tools. Ignored when tenancy is off. |
+| `NUGET_CONFIG_FILE` | `./nuget.config` | The `NuGet.Config` the image builds restore with (the `nugetcfg` build secret). Point it at your own for a private or offline feed; it never lands in an image layer. |
 
 Two per-region values are deliberately **not** `.env` knobs, because pointing either
 across the region boundary would make the harness lie about its isolation: each

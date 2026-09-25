@@ -9,9 +9,10 @@ key on `site-a` **only** and watches it converge onto `site-b` - with no direct
 write to `site-b`. The `orders` tree is opted into replication as a
 last-writer-wins register; each site ships its mutations to the other.
 
-This is the one sample that hosts two clusters and the only one that runs on an
-ASP.NET Core / Kestrel pipeline, because the gRPC replication receiver is served
-over HTTP/2 (here plaintext h2c on loopback).
+Like the [CrossClusterAuthorization](../CrossClusterAuthorization/README.md)
+sample, it hosts both clusters in one process, each on its own ASP.NET Core /
+Kestrel pipeline, because the gRPC replication receiver is served over HTTP/2
+(here plaintext h2c on loopback).
 
 ## Run it
 

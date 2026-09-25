@@ -53,15 +53,24 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 
 ## Requirements
 
-- **Same shard count**: the source and destination trees must have the same
-  `ShardCount` configuration. The snapshot grain validates this and throws
-  `InvalidOperationException` if they differ.
+- **Same shard count (automatic)**: the snapshot registers the destination
+  tree itself, pinned to the source tree's shard count, so the two always
+  match - there is no destination shard count to configure or mismatch.
 - **Destination must not exist**: the destination tree ID must not already be
-  registered in the tree registry. Choose a new tree ID for each snapshot.
-- **No system prefix**: the destination tree ID must not start with the reserved
-  `_lattice_` prefix. This umbrella namespace covers the registry tree itself
-  and the `_lattice_replog_` prefix reserved for the `Orleans.Lattice.Replication`
-  package's internal write-ahead-log trees.
+  registered in the tree registry (`InvalidOperationException` otherwise).
+  Choose a new tree ID for each snapshot.
+- **Destination must differ from the source**: a destination equal to the
+  source tree ID is rejected with `ArgumentException`.
+- **No reserved namespace**: the destination tree ID must not start with the
+  reserved `_lattice_` prefix - the umbrella namespace covering the registry
+  tree itself and the `_lattice_replog_` prefix reserved for the
+  `Orleans.Lattice.Replication` package's internal write-ahead-log trees - or
+  the `sys-` system-data prefix, and must not name another tenant's
+  `t/{tenant}/` namespace. `SnapshotAsync` rejects any of them with
+  `LatticeReservedTreeNamespaceException` (an `InvalidOperationException`).
+- **One snapshot per source at a time**: while a snapshot of the source is in
+  flight, a request with different parameters throws
+  `InvalidOperationException`; repeating the same request is a no-op.
 
 ## Crash Safety
 
@@ -112,10 +121,11 @@ integration tests that drive snapshot passes deterministically.
 
 ## Relationship to Resize
 
-`ResizeAsync` uses an offline snapshot internally to create a new physical tree
-with the desired sizing. After the snapshot completes, a tree alias is set to
-redirect reads and writes to the new tree. This reuses the entire snapshot
-infrastructure (crash safety, per-shard bulk load, idempotent operation IDs)
-and avoids duplicating drain/rebuild logic. See
+`ResizeAsync` uses an online snapshot internally to create a new physical tree
+with the desired sizing, so the tree keeps serving reads and writes while the
+copy runs (live writes are shadow-forwarded to the new tree). After the snapshot
+completes, a tree alias is set to redirect reads and writes to the new tree. This
+reuses the entire snapshot infrastructure (crash safety, per-shard drain,
+idempotent operation IDs) and avoids duplicating drain/rebuild logic. See
 [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree)
 for details.

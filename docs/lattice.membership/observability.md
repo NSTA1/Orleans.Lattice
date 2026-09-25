@@ -12,6 +12,8 @@ orleans.lattice.membership
 
 Recording is guarded by each instrument's `Enabled` flag: when no listener is attached the resolution cache does no measurement work, so the meter is zero-cost on the resolution hot path when nobody is listening.
 
+Every instrument on this meter carries a single tag, `tenant` (`LatticeTenantLabel.TagTenant`), fixed to the platform sentinel `_platform_`: subject resolution and directory search belong to no tenant. All five instruments are charted by the bundled `Orleans.Lattice - Identity & Authorization` Grafana dashboard; see the [metrics-to-panel map](../lattice.dashboards/metrics-to-panel-map.md#orleanslatticemembership-meter).
+
 ## Instruments
 
 | Instrument | Name | Kind | Meaning |
@@ -29,13 +31,15 @@ The per-silo cache turns the credential a caller presents into a resolved subjec
 - A **hit** is counted when the cache serves a warm subject without re-authenticating or reading the directory.
 - A **miss** is counted when there is no live entry (never cached, expired past the TTL, past the token's `exp`, or flushed by a membership change) and the cache resolves the subject afresh.
 
+Three boundaries shape the ratio. A call that presents no credential at all resolves to the anonymous subject before the cache is consulted, so it counts neither a hit nor a miss. A credential that resolves to the anonymous subject (unrecognised, invalid, or expired) is never cached, so it counts a miss on every call. And the cache holds at most 4,096 subjects per silo; once it is full, a new subject is not cached until an entry expires or the cache is flushed, so its calls keep counting misses. With `ResolutionCacheTtl` set to `TimeSpan.Zero` every credentialed resolution is a miss.
+
 Together they give the cache's hit ratio, which is the signal for tuning `ResolutionCacheTtl`: a low ratio under steady traffic means the TTL is too short (or tokens are short-lived), while a high ratio confirms a burst of calls from the same caller is not re-expanding its group closure every time.
 
 The counters live on the membership meter, not the authorization meter, because the cache they measure lives in this package. `Orleans.Lattice.Membership` sits **below** `Orleans.Lattice.Auth` in the package graph, so sourcing the signal here keeps the layering acyclic - membership never references the authorization meter.
 
 ### What the directory search instruments measure
 
-The identity directory (`ILatticeIdentityDirectory`) turns a search term into a bounded page of directory principals - the signal behind the Explorer subject picker's typeahead and the fail-closed create flow. The access-administration facade records one measurement per search around the provider call only, so the histogram isolates directory latency from the facade's mapping and authorization work:
+The identity directory (`ILatticeIdentityDirectory`) turns a search term into a bounded page of directory principals - the signal behind the Explorer subject picker's typeahead and the fail-closed create flow. The access-administration facade records one measurement per completed search around the provider call only, so the histogram isolates directory latency from the facade's mapping and authorization work; a search whose provider call throws records nothing:
 
 - **Latency** (`directory.search.duration`) times each provider-backed search in milliseconds. For the in-memory static provider this is near-zero; for the Entra Graph provider it reflects the round trip to Microsoft Graph.
 - A **hit** (`directory.search.hits`) is counted when a search returns at least one matching principal; a **miss** (`directory.search.misses`) when it returns none. Their ratio is the picker's find-rate, useful for spotting a mis-scoped directory (many misses) or a slow tenant (rising p99 latency).

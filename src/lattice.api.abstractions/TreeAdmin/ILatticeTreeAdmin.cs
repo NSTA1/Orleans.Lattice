@@ -362,9 +362,8 @@ public interface ILatticeTreeAdmin
     /// Appends one <paramref name="chunkIndex"/>-ordered chunk of a bulk-load stream
     /// to <paramref name="treeId"/>, after authorizing the whole-tree
     /// <see cref="LatticeOperation.BulkLoad"/> capability fail-closed. The chunk's
-    /// entries must be in <b>strictly ascending key order</b>, and each chunk must
-    /// continue the ascending order of the whole stream; an out-of-order chunk is
-    /// rejected with <see cref="BulkLoadOrderException"/> before any entry is
+    /// entries must be in <b>strictly ascending key order</b>; an out-of-order
+    /// entry within the chunk is rejected with <see cref="BulkLoadOrderException"/> before any entry is
     /// applied. Re-driving the same <paramref name="chunkIndex"/> under the same
     /// <paramref name="operationId"/> is an idempotent no-op.
     /// </summary>
@@ -539,19 +538,19 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Undoes the most recent completed <b>online resize</b> of
-    /// <paramref name="treeId"/> by swapping the registry alias back to the tree's
-    /// pre-resize physical tree and restoring its original sizing, after authorizing the
-    /// whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed.
-    /// Only available while the pre-resize physical tree is still within its
-    /// soft-delete recovery window (before purge completes). Reserved system tree ids
-    /// are rejected.
+    /// Undoes an in-flight or recently completed <b>online resize</b> of
+    /// <paramref name="treeId"/> by coordinating a return to the tree's pre-resize
+    /// physical tree and original sizing, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. Available
+    /// while a resize is still in progress, or while the pre-resize physical tree is
+    /// still within its soft-delete recovery window (before purge completes). Reserved
+    /// system tree ids are rejected.
     /// </summary>
     /// <param name="treeId">The tree whose last resize to undo. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's resize status after the undo.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">No completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
+    /// <exception cref="InvalidOperationException">No in-flight or recoverable completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
     Task<TreeResizeStatus> UndoTreeResizeAsync(
         string treeId,

@@ -1,5 +1,5 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**"
 ---
 
 # Security Boundaries and Invariants
@@ -72,13 +72,17 @@ gate will tell you if you forget.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
   widen the ungated set.
 
-### Telemetry metric-name allow-list (`src/lattice.api.mcp.telemetry`)
+### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,
   ambiguous, or non-exact-match `__name__` matcher is treated as **not** on the
   allow-list (deny), never as a bypass. Label-matcher parsing must not offer a path
   that evades the allow-list.
 - Match `__name__` label names via span comparison; only allocate a substring on the
   actual matched-name path, never for every in-brace label.
+- The allow-list (`TelemetryMetricAccessPolicy`) and the PromQL matcher parsing
+  (`PromQlMetricExtractor`) live in the telemetry facade and are applied through
+  `TelemetryQueryAuthorizer`. The MCP telemetry tools and the facade's query catalogue
+  both authorize through that one authorizer, so harden it there, not in a binding.
 
 ### Replication receiver enrollment gate (`src/lattice.replication`)
 - The receiver gate lives at the **applier seam** (`ReplicationApplier.ApplyAsync` /
@@ -120,8 +124,10 @@ gate will tell you if you forget.
 
 When labelling or writing changelog/PR prose for a change on these surfaces, judge
 "breaking" by whether the change alters **previously shipped behaviour**, not by the
-change's surface area. Every package in the family has now shipped a release tag (the
-`8.0.0` wave), so verify a package's shipped versions with
+change's surface area. Most packages in the family have shipped a release tag, but not
+all: `lattice.api.mcp.repocontext` and `lattice.api.mcp.repocontext.replication` are
+still unreleased (see `PACKAGES.md`), and `lattice.membership.oidc` first shipped at
+9.5.0. So verify a package's shipped versions with
 `git tag | Select-String <package>` and reserve the `breaking` label for a behavioural
 or API change that alters behaviour a released version already exposed. An opt-in
 change (guarded by a default-off flag, like `ValidationRequired`) is additive, not

@@ -17,12 +17,17 @@ presents one complete surface.
 
 - **Capability probe.** The package exposes a fail-closed capability probe: a
   caller asks which whole-tree administration operations it may perform on a given
-  tree. Individual lifecycle verbs (bulk-load, delete, resize, reshard, and the
-  rest) are added to the facade as they become available, each with its own probe
-  flag.
-- **Discoverable from day one.** The facade is registered, discoverable through the
-  MCP capability advertisement, and probe-answerable, so a management surface can
-  bind to it before any operation exists.
+  tree, answered with one advisory flag per distinct grant (`CanAdministerTree`,
+  `CanManageTreeLifecycle`, `CanBulkLoad`, `CanRestore`, and `CanViewDiagnostics`)
+  alongside the composed schema capabilities.
+- **The whole-tree operation set.** Read-only diagnostics and storage accounting;
+  explicit tree creation, existence, alias, and per-tree configuration; soft-delete,
+  recover, and purge; chunked bulk load; restore into a tree or as a backup set, and
+  revert; online reshard, resize (with undo), and point-in-time snapshot; WAL
+  placement inspection, audit, and partition moves; orphaned-leaf audit, survey, and
+  repair; materialised-view and tag-index administration; and shard compaction and
+  durable-history retention - each delegated to the subsystem that owns it and
+  authorized through the fail-closed access gate.
 
 ## Security
 

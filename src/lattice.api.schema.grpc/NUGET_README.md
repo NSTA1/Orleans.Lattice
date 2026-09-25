@@ -28,6 +28,8 @@ to sign in before it holds a credential.
 
 Every mutating RPC also authorizes fail-closed inside the facade on
 `SchemaAdmin` authority; every read (policy / version inspection, dead letters,
-the compliance audit, and the capability probe) authorizes on ordinary `Read`
-authority. Authorization runs before the schema admin plane is touched, so an
-unauthorized caller can never observe or change schema state.
+and the compliance audit) authorizes on ordinary `Read` authority. The
+capability probe evaluates both grants without side effects and reports them as
+advisory flags instead of refusing. Authorization runs before the schema admin
+plane is touched, so an unauthorized caller can never observe or change schema
+state.

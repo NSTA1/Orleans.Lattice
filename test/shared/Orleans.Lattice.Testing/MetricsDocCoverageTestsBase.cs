@@ -71,9 +71,13 @@ public abstract class MetricsDocCoverageTestsBase
         _sourceLiteralRegex ??= new Regex(
             "\"(" + Regex.Escape(InstrumentNamePrefix) + "(?:\\.[a-z0-9_]+)+)\"", RegexOptions.Compiled);
 
+    // The leading lookbehind, rather than \b, refuses a match that starts inside a longer
+    // dotted name. \b is satisfied between a '.' and a letter, so under the "repocontext"
+    // prefix it lifted "repocontext.memory.restore" out of the unrelated instrument
+    // "lattice.repocontext.memory.restore" and reported a name no source declares.
     private Regex DocNameRegex =>
         _docNameRegex ??= new Regex(
-            @"\b" + Regex.Escape(InstrumentNamePrefix) + @"(?:\.[a-z0-9_]+)+\b", RegexOptions.Compiled);
+            @"(?<![A-Za-z0-9_.])" + Regex.Escape(InstrumentNamePrefix) + @"(?:\.[a-z0-9_]+)+\b", RegexOptions.Compiled);
 
     /// <summary>
     /// Repository-root-relative directories (forward-slash separated) whose

@@ -57,13 +57,10 @@ public enum LatticeApiMcpGroup
 
     /// <summary>
     /// The tree-administration control-plane facade (<c>ILatticeTreeAdmin</c>):
-    /// whole-tree lifecycle administration, presented by composing the existing
-    /// single-responsibility facades (it wraps <c>ILatticeSchemaControl</c>).
-    /// Advertised when the caller holds an administrator grant
-    /// (<c>Admin</c>) or the distinct destructive / structural
-    /// <c>TreeLifecycle</c> grant. This foundation
-    /// group is discoverable but ships no operations yet; the whole-tree lifecycle
-    /// tools land in later work.
+    /// whole-tree lifecycle, bulk-load, restore, and maintenance administration.
+    /// Advertised when the caller holds an administrator grant (<c>Admin</c>) or
+    /// the narrower tree-lifecycle, bulk-load, or restore grants that map to its
+    /// tool families.
     /// </summary>
     TreeAdmin,
 
@@ -74,16 +71,15 @@ public enum LatticeApiMcpGroup
     /// codebase, served as MCP tools over dedicated Lattice trees. It is a
     /// data-plane surface, so it is advertised when the caller holds a data
     /// read-or-write grant (the same mask that makes the <see cref="Data"/> group
-    /// usable); its mutating tools are contributed only when the host opts writes
-    /// in. This foundation group is discoverable but ships only a health probe
-    /// tool yet; the capture, maintenance, and retrieval tools land in later work.
+    /// usable); its mutating capture, maintenance, claim, and workspace tools are
+    /// contributed only when the host opts writes in.
     /// </summary>
     RepoContext,
 
     /// <summary>
     /// The tenant-administration control-plane facade
-    /// (<c>ILatticeTenantAdmin</c>): the tenant lifecycle - create, suspend,
-    /// resume, and delete (delete cascading the tenant's trees). Advertised only
+    /// (<c>ILatticeTenantAdmin</c>): tenant lifecycle, status, listing, active-tenant
+    /// assertion, and owned-tree listing. Advertised only
     /// when the caller holds an administrator grant (<c>Admin</c>). The tenant
     /// lifecycle is all-mutating, so the group contributes tools only when the
     /// host opts tenant-admin control in; a cluster that does not opt in exposes

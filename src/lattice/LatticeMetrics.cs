@@ -1009,8 +1009,8 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of the concurrent registry-call count observed at the moment a
-    /// new <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/> read is
-    /// admitted to the grain body, tagged with <see cref="TagOperation"/>. The
+    /// new registry operation is admitted to the grain body, tagged with
+    /// <see cref="TagOperation"/>. The
     /// recorded value excludes the arriving call, so it is zero on the first
     /// concurrent call, one on the second, and so on - the same convention as
     /// <see cref="LeafCommitInFlight"/>.
@@ -1290,14 +1290,15 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter incremented once per terminal transition of an <c>AtomicWriteGrain</c>
-    /// saga. Tagged with <see cref="TagOutcome"/> = <c>committed</c> (all writes
-    /// applied), <c>compensated</c> (prepare / execute failure rolled back via LWW),
-    /// <c>failed</c> (post-compensation surrogate failure), or <c>shutdown_refused</c>
-    /// (the saga's batched dispatch tripped the writer-side drain refusal
-    /// because the silo is shutting down; the saga short-circuited the retry loop
-    /// and the compensate-broadcast pass and surfaced
-    /// <see cref="LatticeShuttingDownException"/> to the caller without persisting
-    /// post-detection state).
+    /// saga. Tagged with <see cref="TagOutcome"/> = <c>committed</c> (the commit
+    /// decision was recorded and every write became visible), <c>failed</c> (the
+    /// saga recorded an abort decision after a prepare or execute failure it
+    /// captured as a failure message; an abort issues no per-key rollback
+    /// writes), or <c>compensated</c> (an abort with no captured failure message,
+    /// such as a cross-tree finalize abort). The mapping also names a
+    /// <c>shutdown_refused</c> value, but no code path currently produces it: a
+    /// shutdown refusal throws <see cref="LatticeShuttingDownException"/> to the
+    /// caller without reaching a terminal transition, so it is not counted here.
     /// </summary>
     public static readonly Counter<long> AtomicWriteCompleted =
         Meter.CreateCounter<long>("orleans.lattice.atomic_write.completed", unit: "{saga}",
@@ -1311,10 +1312,10 @@ public static class LatticeMetrics
     /// <c>AtomicWritePhase.Prepare</c> ran (persisted on the saga state
     /// so it survives a silo crash) to the time the saga reached
     /// <c>AtomicWritePhase.Completed</c>. Tagged with <see cref="TagOutcome"/>
-    /// = <c>committed</c>, <c>compensated</c>, <c>failed</c>, or
-    /// <c>shutdown_refused</c> so operators can plot rollback-path latency
-    /// separately from happy-path latency, and shutdown-coincidence sagas
-    /// separately from genuine commit-conflict sagas.
+    /// = <c>committed</c>, <c>compensated</c>, or <c>failed</c> (see
+    /// <see cref="AtomicWriteCompleted"/>; its <c>shutdown_refused</c> value is
+    /// never produced) so operators can plot abort-path latency separately from
+    /// happy-path latency.
     /// <para>
     /// Combine with <see cref="AtomicWriteBatchSize"/> when building dashboards:
     /// duration is meaningful only relative to the size of the batch that
@@ -1332,8 +1333,8 @@ public static class LatticeMetrics
     /// an <c>AtomicWriteGrain</c> saga next to <see cref="AtomicWriteCompleted"/>.
     /// The value is the entry count submitted to <c>SetManyAtomicAsync</c>
     /// (or the per-entry list length on apply-mode sagas). Tagged with
-    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>,
-    /// <c>failed</c>, or <c>shutdown_refused</c>. Lets operators interpret
+    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
+    /// <c>failed</c> (see <see cref="AtomicWriteCompleted"/>). Lets operators interpret
     /// <see cref="AtomicWriteDuration"/>
     /// in context - a 10-entry batch and a 1000-entry batch both appear as one
     /// data point on the duration histogram, and only the batch-size histogram
@@ -1634,12 +1635,13 @@ public static class LatticeMetrics
             description: "WAL entries consumed by the zero-observable-writes snapshot-leaf replay engine.");
 
     /// <summary>
-    /// Name of the observable gauge reporting the number of live WAL retention
-    /// pins registered by snapshot cursors against
-    /// <see cref="IWalCursorRegistry"/>, tagged with <see cref="TagTree"/> and
-    /// the tenant label. Published by
-    /// <see cref="BPlusTree.Grains.SnapshotPinCensus"/>, which derives the value
-    /// from the registry's live pin set for the tree.
+    /// Name of the observable gauge reporting the number of snapshot-cursor
+    /// registrations in <see cref="IWalCursorRegistry"/> for a tree, tagged with
+    /// <see cref="TagTree"/> and the tenant label, derived from the registry's
+    /// live registration set for the tree. A snapshot cursor currently
+    /// registers at a zero cursor with no blocked floor, which the WAL GC skips,
+    /// so these registrations do not hold back trimming today; the cursor's
+    /// pages are served from frozen per-shard baselines.
     /// <para>
     /// This was an <c>UpDownCounter</c> until issue #2700. A counter is
     /// process-lifetime state, and the <c>+1</c> / <c>-1</c> were guarded by a
@@ -8833,11 +8835,13 @@ public static class LatticeMetrics
     /// The dispatch is the writer-side cross-grain RPC into the per-shard
     /// WAL grain; it was historically unbounded on the writer side, so a
     /// wedged shard activation would hold every caller's dispatch parked
-    /// until the Orleans response deadline (default 3 minutes) expired.
+    /// until the Orleans response deadline (30 seconds by default) expired.
     /// A non-zero value attributes the wedge to a specific
-    /// <c>(tree, shard)</c> pair in O(<see cref="Orleans.Lattice.LatticeOptions.WalAppendDispatchTimeout"/>)
-    /// time rather than O(response timeout) time, and the parked dispatch
-    /// is faulted as a <see cref="TimeoutException"/> so the request
+    /// <c>(tree, shard)</c> pair and bounds the parked dispatch at
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalAppendDispatchTimeout"/>; this is
+    /// shorter than the Orleans response timeout only on hosts that raise the
+    /// latter above its default. The dispatch is faulted as a
+    /// <see cref="TimeoutException"/> so the request
     /// pipeline releases its slot rather than back-filling behind the
     /// wedge. Sustained non-zero counts on a specific
     /// <c>(tree, shard)</c> identify the wedged shard for follow-up
@@ -9610,8 +9614,8 @@ public static class LatticeMetrics
     /// <summary>
     /// Histogram of the dirty-leaf snapshot size pulled from each shard
     /// root at the start of every compaction shard pass. Tagged with
-    /// <see cref="TagTree"/>. A value of <c>0</c> means the shard
-    /// activated only its shard-root grain on the pass; a non-zero
+    /// <see cref="TagTree"/>. A value of <c>0</c> means the dirty-leaf
+    /// snapshot was empty; the coordinator may still chain-walk the shard. A non-zero
     /// value reflects the count of leaves the coordinator activated
     /// via the dirty-leaves fast path. Capacity-planning signal for the
     /// "<c>O(shards + dirty_leaves)</c>" pass-cost target.
@@ -9972,7 +9976,9 @@ public static class LatticeMetrics
             description: "Views force-evicted (WAL unpinned and rebuilt) because they exceeded their configured MaxLagBudget.");
 
     /// <summary>
-    /// Counter of background drain passes that observed the source tree under WAL
+    /// Counter of view drain passes, whatever triggered them (timer tick,
+    /// keepalive reminder, activation, or a read-your-writes barrier drain),
+    /// that observed the source tree under WAL
     /// saturation back-pressure and consequently reduced their footprint - a
     /// scaled-down batch size and, for a background timer tick, a deferral of the
     /// next pass - so the asynchronous maintainer hands client concurrency back to

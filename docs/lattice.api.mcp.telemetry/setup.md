@@ -45,7 +45,7 @@ services.AddTelemetryTools(o =>
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll` exposes every backend metric; `DenyAllExceptAllowed` restricts the surface to `AllowedMetrics`. |
 | `AllowedMetrics` | `IList<string>` | empty | Exact names and/or `*`-wildcard patterns permitted under `DenyAllExceptAllowed`. Ignored under `ReadAll`. |
 
-The options are validated at startup: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric.
+The options are validated when they are first resolved - the binding registers no start-up validation, so a misconfiguration surfaces as an `OptionsValidationException` on first use rather than at host start: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric.
 
 ## Backend authentication
 

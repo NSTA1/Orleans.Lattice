@@ -9,9 +9,10 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 public enum ExplorerTransportMode
 {
     /// <summary>
-    /// Secure by default: a non-loopback endpoint must use TLS (<c>https</c>),
-    /// and anonymous access to a non-loopback endpoint is rejected (the user must
-    /// sign in). This is the default for any newly configured endpoint.
+    /// Secure by default: a non-loopback endpoint must use TLS (<c>https</c>).
+    /// This is the default for any newly configured endpoint; sign-in requirements
+    /// are enforced by the endpoint's advertised authentication and authorization
+    /// configuration.
     /// </summary>
     Secure = 0,
 

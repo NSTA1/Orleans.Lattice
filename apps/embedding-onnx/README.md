@@ -109,19 +109,22 @@ client never sends, so "no prefix" is the reference behaviour for this caller.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `EMBED_PROVIDER` | `cpu` | `cpu`, `cuda` (aliases `gpu`, `nvidia`), or `dml`. Unknown values fall back to `cpu`. |
+| `EMBED_PROVIDER` | `cpu` | `cpu`, `cuda` (aliases `gpu`, `nvidia`), or `dml` (alias `directml`). Unknown values fall back to `cpu`. |
 | `EMBED_PORT` | `9000` | HTTP listen port. |
 | `EMBED_MODEL_PATH` | `/app/assets/model.onnx` | ONNX weights. |
 | `EMBED_VOCAB_PATH` | `/app/assets/vocab.txt` | WordPiece vocabulary (committed gzipped, decompressed at build time). |
 | `EMBED_MAX_CONTEXT_LENGTH` | `512` | Hard token ceiling; a larger request is clamped. |
-| `EMBED_INTRA_THREADS` | the enforced cgroup CPU quota | CPU intra-op threads. `0` hands the decision back to ONNX Runtime. See below. |
+| `EMBED_INTRA_THREADS` | the enforced cgroup CPU quota (the processor count when none is enforced) | CPU intra-op threads: `auto` or a non-negative integer. `auto` and leaving it unset both derive the count; `0` hands the decision back to ONNX Runtime. See below. |
 | `EMBED_DEVICE_ID` | `0` | Device ordinal for an accelerated provider. |
 
-An unknown `EMBED_PROVIDER`, or an unparseable number, falls back to the default
-rather than aborting startup: a container that boots on the CPU is strictly more
-useful than one that refuses to boot. A missing or unreadable model or
-vocabulary **is** fatal, because serving wrong vectors is worse than serving
-none.
+An unknown `EMBED_PROVIDER`, or an unparseable `EMBED_PORT`, `EMBED_DEVICE_ID`, or
+`EMBED_MAX_CONTEXT_LENGTH`, falls back to the default rather than aborting
+startup: a container that boots on the CPU is strictly more useful than one that
+refuses to boot. Two things **are** fatal. A missing or unreadable model or
+vocabulary is, because serving wrong vectors is worse than serving none. So is an
+`EMBED_INTRA_THREADS` that is present but is neither `auto` nor a non-negative
+integer (issue #2887): that knob selects an operating mode, and deriving silently
+from a typo would be indistinguishable from leaving it unpinned on purpose.
 
 ### Why the intra-op thread count is not left to ONNX Runtime
 
@@ -138,8 +141,10 @@ freeze landing mid-barrier stalls the whole operator rather than one thread.
 
 So this server derives the count from `/sys/fs/cgroup/cpu.max` itself. It reads
 the quota rather than `Environment.ProcessorCount` because `DOTNET_PROCESSOR_COUNT`
-overrides the latter and wins over the quota, and that variable is set on the
-sibling repository-context service for an unrelated purpose. When the two figures
+overrides the latter and wins over the quota, and that variable can be set on the
+sibling repository-context service for an unrelated purpose (the sample's tuning
+overlay declares it there by name only, so it is absent unless the environment
+supplies a value). When the two figures
 disagree the server logs a `CPU GRANT MISMATCH` warning naming both.
 
 The resolved count is logged once at startup, marked `DECLARED` when an operator

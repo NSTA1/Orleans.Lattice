@@ -68,13 +68,17 @@ await tree.BulkLoadAsync(entries);
 ```
 
 It is a **one-shot initial-import primitive**: every shard must be empty when
-it is called. Calling it against a tree that already holds data throws
-`InvalidOperationException`. The call is idempotent on retry - re-issuing the
-same load after it has completed is a no-op rather than an error - so a crash
-mid-import can be retried safely. For append-style ingestion that re-flushes
-batches over time, use `SetAsync`, `SetManyAsync`, or the streaming extension
-below; `BulkLoadAsync` is not intended to be called repeatedly against a
-continuously-fed tree.
+it is called. The call fans out to every physical shard, including shards this
+load has no entries for, and a shard that already has a root node - one that
+has ever been written, even if every key has since been deleted - rejects it
+with `InvalidOperationException`. It is **not** re-drivable: each call mints a
+fresh operation id, so re-issuing a load after it (or part of it) has
+completed fails on the shards that already hold data. Only the per-shard retry
+inside a single call is idempotent, so after a crash mid-import restart
+against a fresh tree, or drive the import through the resumable chunk protocol
+below. For append-style ingestion that re-flushes batches over time, use
+`SetAsync`, `SetManyAsync`, or the streaming extension below; `BulkLoadAsync`
+is not intended to be called repeatedly against a continuously-fed tree.
 
 ## Streaming bulk load (extension method)
 
@@ -99,10 +103,14 @@ await tree.BulkLoadAsync(
 The extension buffers entries per shard and flushes each shard's buffer
 independently once it reaches `chunkSize` (default `10_000`). Flushes to
 different shards run in parallel; flushes to the same shard are sequential so
-key order is preserved. Each chunk is committed independently and is safe to
-retry on failure. The streaming extension appends each chunk to the right
-edge of the tree, so entries must arrive in ascending key order (as the
-example's comment notes).
+key order is preserved. Each chunk is committed independently, but the
+extension does not resume: a failure surfaces from the call with the chunks
+already flushed left in place, and re-running the extension mints fresh chunk
+ids, so restart against a fresh tree - or drive the chunks yourself through
+`BulkAppendChunkAsync` (below) when an import has to resume. The streaming
+extension appends each chunk to the right edge of the tree, so entries must
+arrive in ascending key order (as the example's comment notes); it validates
+neither that order nor that the tree is empty.
 
 ## Resumable chunked bulk load (`BulkAppendChunkAsync`)
 
@@ -110,7 +118,8 @@ example's comment notes).
 loses the in-flight position. When an import must survive that - a multi-hour
 load, or one driven from an external orchestrator that owns its own
 checkpointing - drive the chunks yourself through `ILattice.BulkAppendChunkAsync`,
-which is the idempotent, resumable primitive the streaming extension is built on.
+which runs the same per-shard right-edge append the streaming extension uses,
+but under an operation id you supply and can safely re-drive.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -134,6 +143,13 @@ Throws `ArgumentException` when `operationId` is null or empty, and
 `ArgumentNullException` when `sortedEntries` is null. An empty chunk is a
 no-op that returns `0`.
 
+For a loader that runs out of process, the tree-administration facade wraps
+this primitive in a `BeginBulkLoadAsync` / `AppendBulkLoadAsync` /
+`CommitBulkLoadAsync` session that adds an emptiness probe counting tombstones
+as well as live keys, within-chunk order validation, and a server-acknowledged
+chunk index; see
+[Migrating from an External Store](external-store-migration.md#choosing-an-ingest-path).
+
 ## Efficiency compared with `SetManyAsync`
 
 The dataset is the same in both cases, but the work done to land it differs.
@@ -151,7 +167,7 @@ of the finished tree exactly once, committing each shard a single time.
 | Leaf occupancy | partially filled after splits | packed to the configured capacity |
 | Commits per shard | one per batch call | one for the whole load |
 | Re-applies to an existing tree | yes | no - empty shards only |
-| Atomic | no | one-shot per shard, idempotent on retry |
+| Atomic | no | one-shot per shard; only the per-shard retry inside one call is idempotent |
 
 Because `BulkLoadAsync` produces fully-packed leaves, the resulting tree also
 has fewer, denser leaves than the same data inserted incrementally, which

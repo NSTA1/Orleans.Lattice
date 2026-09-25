@@ -21,9 +21,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// applied inside <c>EnsureRootSlowWithDeadlineAsync</c>; this helper does
 /// not add a wall-clock timeout of its own. Backoff between attempts is
 /// linear at 1 s, 2 s (after attempts 1 and 2). Worst-case wall on defaults
-/// is approximately <c>3 x 15 s + 3 s = ~48 s</c>, comfortably under the
-/// 3-minute Orleans response deadline that originally motivated the seed
-/// bound.
+/// is approximately <c>3 x 15 s + 3 s = ~48 s</c>. That is under the
+/// 3-minute response timeout the test cluster fixture configures, which is
+/// what originally motivated the seed bound, but it exceeds the Orleans
+/// default response timeout of 30 seconds, so on a host that keeps the
+/// Orleans default a caller's await can time out before this envelope is
+/// exhausted.
 /// </para>
 /// <para>
 /// <b>Transient silo-membership churn.</b> In addition to the cold-start

@@ -41,7 +41,7 @@ Start Azurite on the default development endpoint, then run the chaos category f
 dotnet test test\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "TestCategory=Chaos"
 ```
 
-If Azurite is not reachable, the suite reports inconclusive instead of failing. This keeps normal developer machines from failing only because the emulator is absent.
+If Azurite is not reachable, the suite reports inconclusive instead of failing. This keeps normal developer machines from failing only because the emulator is absent - but it is also a false-green trap: NUnit counts an inconclusive result as neither passed, nor failed, nor skipped, so the console banner still reads `Passed!` with `Skipped: 0` and only the `Total` / `Passed` counts drop. Confirm the suite actually executed from those counts rather than from the banner (see [Starting Azurite](../../.github/instructions/testing.instructions.md#starting-azurite---and-why-a-green-run-without-it-is-a-false-green)). In CI every test leg runs an Azurite service container, and a package shard that executes zero tests fails the build rather than being reported as passed.
 
 ## See also
 

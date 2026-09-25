@@ -318,14 +318,23 @@ mid-task.
   authority for an onboarding still in progress, and a repo surfaces in
   `list_repos` only once its structural records materialise.
 - **Fields.** `repocontext_list_repos` reports one row per repo, but the fields
-  it returns depend on ingest state: expect at least `repoId` and
-  `embeddedVectorCount` (how many **sources** - files and captured symbols - have
-  a landed embedding, so it can exceed the file count once symbols are embedded),
-  and treat a per-repo `lastIngested` / `fileCount` as **best-effort - they can be
-  absent while an ingest is still running**. Do not rely on `list_repos` alone to
-  judge staleness. The dependable freshness signals are the per-hit `lastIngested`
-  on `search` results and `index_status`'s `updatedAt` (see "Health and degraded
-  mode").
+  it returns depend on ingest state. Expect `repoId` always, and read
+  `indexedRoot` - the root the records were actually walked from - before you
+  trust the id: a worktree registered from the wrong workspace root indexes under
+  the base repository's id, and only the root tells the two apart. It is absent
+  for a repository never indexed or whose index was reset. `embeddedVectorCount`
+  is how many **sources** - files, captured symbols, and embedded memory entries -
+  have a landed embedding, so it can exceed the file count; it is served from the
+  last completed membership scan, is absent (not zero) until one completes, and
+  `embeddedVectorCountPending` is `true` while a refresh is outstanding, which is
+  the normal state throughout an active ingest. `indexedCommit` is set only for a
+  git-ref-sourced repository. Treat a per-repo `lastIngested` / `fileCount` as
+  **best-effort - they can be absent while an ingest is still running**; once
+  present, `lastIngested` is re-stamped by every completed indexing pass,
+  including one that found nothing to change, so it reads as when the index was
+  last verified current. Do not rely on `list_repos` alone to judge staleness.
+  The dependable freshness signals are the per-hit `lastIngested` on `search`
+  results and `index_status`'s `updatedAt` (see "Health and degraded mode").
 
 ## Retrieval
 
@@ -343,10 +352,16 @@ mid-task.
     you see `keyword`, prefer distinctive identifier-like terms, and fall back to
     `grep` only if the terms you have are too generic.
   - `empty` - no matches.
-- Hits carry `key`, `path`, `fields` (`digest`, `language`, `sizeBytes`,
-  `lastIngested`), `tags`, `links` (structural cross-references between
-  records - informational; there is no client tool to set them), and `reasons`
-  (see next bullet). **`search` does not return file contents** - `view` the file
+- Each hit carries a `score`, its `reasons` (see next bullet), the hydrated
+  `entry` - `key`, `kind`, `path`, `fields`, `tags`, and `links` - and, on a
+  `semantic` hit, the matched `vectorId`. A file hit's `fields` are `digest`,
+  `language`, `sizeBytes`, and `lastIngested`; a memory hit's are its `kind`,
+  `title`, `body`, `author`, `provenance`, and `createdAt`. `links` is populated
+  only on a memory entry - its knowledge-linking edges, written with `addLinks` /
+  `removeLinks` - and is empty on a structural record. **`search` does not return
+  live file contents**: a keyword hit on a file's content projection
+  (`kind: Content`) does carry that file's bounded, last-ingested body text in
+  `fields.text`, but that is the indexed copy, so per guardrail 1 `view` the file
   (or `recall` the record) for the body.
 - **Every hit carries a `reasons` list explaining why it ranked** - server-derived,
   deterministic, ordinal-ordered, bounded, and never null. A `semantic` hit lists
@@ -799,9 +814,11 @@ anywhere to explain it.
 
 ## Write-tool safety
 
-- Every write tool (`add_repo`, `remove_repo`, `remember`, `update`, `forget`)
-  is **destructive and fail-closed** - offered only when the host opted writes
-  in. Never call one speculatively.
+- Every write tool (`add_repo`, `remove_repo`, `reset_index`, `remember`,
+  `update`, `forget`, the claim trio `claim` / `renew_claim` / `release_claim`,
+  and, in single-repository mode, `bootstrap`) is **destructive and
+  fail-closed** - offered only when the host opted writes in. Never call one
+  speculatively.
 - Do not write memory without a clear durable reason, and never `remove_repo`
   the repo you are working in.
 - **`remove_repo` requires explicit user consent, and is not the tool for repairing an index.** It drops a repository's
@@ -815,8 +832,8 @@ anywhere to explain it.
   the code index and every derived plane but preserves the memory tree, so the
   repository stays queryable through its notes and a follow-up `add_repo`
   rebuilds the code index from the working files. A reset repository **stays in
-  `list_repos`**, reporting a null `lastIngested`, `fileCount`, and
-  `indexedCommit` until it is re-onboarded - which is what distinguishes
+  `list_repos`**, reporting a null `lastIngested`, `fileCount`, `indexedCommit`,
+  and `indexedRoot` until it is re-onboarded - which is what distinguishes
   "index just reset, memory intact" from "never onboarded", and is why the
   preserved memory stays discoverable rather than reachable only by an id you
   already knew. `reset_index` is a
@@ -876,9 +893,12 @@ a minute.
 
 So before concluding a run is stuck, **check the one counter that is independent
 of the progress channel**: `embeddedVectorCount` on `repocontext_list_repos`. It
-counts landed embeddings for **sources** - files *and* captured symbols - so it
-rises while the symbol arm works whether or not anything is reporting. Two
-readings a few minutes apart settle it:
+counts landed embeddings for **sources** - files, captured symbols, *and*
+embedded memory entries - so it rises while the symbol arm works whether or not
+anything is reporting. It is served from the last completed membership scan and
+refreshed out of band, so while `embeddedVectorCountPending` is `true` a reading
+can trail the store by up to one refresh; allow for that before calling it flat.
+Two readings a few minutes apart settle it:
 
 - `embeddedVectorCount` rising, `updatedAt` frozen -> the job is **alive** and
   working an arm that is not the file arm. Wait; do not re-onboard.
@@ -901,7 +921,13 @@ sum against a single term is what made a working index look dead.
   reports `available: true` while capture, recall, and scan keep working. A
   `retrievalPhase` of `building` means searches are answered by degraded keyword
   recall and results are incomplete; `keyword_only` is an intended deployment
-  with no embedding provider bound and IS ready.
+  with no embedding provider bound and IS ready. The full set is five values:
+  `serving`, `keyword_only`, and `nothing_registered` (no repository onboarded
+  yet) are ready; `building` and `saturated_unavailable` are not.
+  `saturated_unavailable` means an admission gate has refused the vector plane's
+  open past its declared bound - searches are degraded keyword recall, the open
+  keeps retrying, and it clears by itself once admission recovers, so the remedy
+  is capacity rather than a restart.
 - `repocontext_index_status {repoId}` - `status` / `phase` / counters
   (`filesScanned`, `filesEmbedded`, `chunksCommitted`, `updatedAt`, `attempt`).
   Note `attempt` is a **cumulative run-start tally**, not a retry or failure

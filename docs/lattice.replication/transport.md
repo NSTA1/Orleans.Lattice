@@ -22,6 +22,8 @@ public readonly record struct ReplicationBatch
     public string TreeName { get; init; }
     public string OriginClusterId { get; init; }
     public ReadOnlyMemory<byte> Payload { get; init; }
+    public ReplicationBatchEnvelope? Envelope { get; init; }
+    public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }
 }
 
 public readonly record struct ReplicationAck
@@ -31,23 +33,31 @@ public readonly record struct ReplicationAck
     public HybridLogicalClock? BlockedAtHlc { get; init; }
     public int? SuggestedBatchSize { get; init; }
     public int? PauseForMs { get; init; }
+    public int? SupportedWireVersion { get; init; }
+    public uint[]? AdvertisedDictionaryIds { get; init; }
+    public AdvertisedCompressionDictionary[]? AdvertisedDictionaries { get; init; }
 }
 ```
 
 | `ReplicationBatch` member | Semantics |
 |---|---|
 | `TargetClusterId` | Stable identifier of the destination cluster. Implementations route the call by this value. Required: must be non-`null` and non-empty. |
-| `TreeName` | Name of the local tree this batch was drawn from. Receivers dispatch their per-tree apply pipeline on this id; the per-origin high-water-mark dedup key is `(TreeName, OriginClusterId)`. Required: must be non-`null` and non-empty. |
+| `TreeName` | Name of the local tree this batch was drawn from. Receivers dispatch their per-tree apply pipeline on this id and keep their per-origin high-water mark per `(TreeName, OriginClusterId)`. Required: must be non-`null` and non-empty. |
 | `OriginClusterId` | Stable identifier of the local (sending) cluster. Stamped on every captured `WalRecord` at commit time and surfaced on the batch so transports that frame entries themselves do not need to re-derive the origin from the payload. Required: must be non-`null` and non-empty. |
 | `Payload` | Opaque, framed batch payload. The byte layout is the responsibility of the binary-framing seam (typically Orleans-serializer-encoded `WalRecord` records inside a versioned envelope). Implementations treat this as a black box - they do not parse, peek into, or otherwise interpret the bytes. May be empty (heartbeat or keep-alive batch). |
+| `Envelope` | Optional pre-built typed envelope. A transport that frames entries itself sends it verbatim instead of decoding `Payload`. The anti-entropy repair path (leaf re-replay and the bootstrap fallback) populates it alongside `Payload`. |
+| `EncodedEnvelope` | Optional pre-encoded framing: a fixed header plus the per-entry segments exactly as the WAL stored them. The shipper populates only this slot - see [Framing-only ship path](#framing-only-ship-path). |
 
 | `ReplicationAck` member | Semantics |
 |---|---|
-| `Accepted` | `true` when the receiver successfully received and processed the batch. Note that `Accepted` is `true` even when every entry in the batch was de-duplicated by the per-origin high-water-mark - dedup is a successful idempotent apply, not a rejection. `false` when the receiver rejected the batch outright (transport-level error, schema mismatch, unknown tree). |
-| `HighestAppliedHlc` | The per-origin high-water-mark for `(TreeName, OriginClusterId)` after the receiver finished processing the batch. The sender advances its per-peer cursor strictly to this value when `Accepted` is `true`; when `Accepted` is `false` this value is undefined and the sender must not consume it. |
+| `Accepted` | `true` when the receiver processed the batch - including when every entry was discarded as a repeat of an already-applied record, dropped because the tree is not enrolled on the receiver, or parked on the dead-letter queue. The canonical gRPC receiver returns `false` only when it deferred the batch because a coordinated-restore receive fence holds the tree (with a bounded `PauseForMs`); an apply fault surfaces as a failed call (the send throws), not as `Accepted = false`. The default no-op transport always returns `false`. |
+| `HighestAppliedHlc` | The highest HLC the receiver advanced its per-origin high-water-mark to while processing the batch. On an accepted ack the sender advances its per-peer cursor to this value, or to the last shipped entry's HLC when this value is at or below the current cursor (every entry deduplicated or dropped); when `Accepted` is `false` the sender does not consume it. |
 | `BlockedAtHlc` | Optional receiver-side blocked-floor pin (lowest HLC across every partially-staged atomic batch). The sender publishes this value to its local `IWalCursorRegistry` so the producer-side WAL GC AND-s `entry.Timestamp < blockedFloor` into its trim predicate; `null` means the receiver has no in-flight admissions for this tree (or is pre-Phase-9 and never stamped the slot). Strictly additive on the wire. |
 | `SuggestedBatchSize` | Optional receiver-side flow-control hint: the largest per-tick batch the receiver would like the sender to ship next, in entries. The sender clamps to `[1, options.ShipBatchSize]`; `null` (or any value `<= 0`) means "no preference" and the sender resumes at its configured `ShipBatchSize` (the canonical re-acceleration signal). Strictly additive on the wire. |
 | `PauseForMs` | Optional receiver-side flow-control hint: number of milliseconds the sender should pause before its next pump tick. Composes with the shipper's exponential-backoff retry budget via `max(currentBackoffDeadline, now + PauseForMs)` - a receiver-requested pause never shortens an in-progress backoff. `null` or `<= 0` means "no pause requested". Strictly additive on the wire. |
+| `SupportedWireVersion` | Optional: the highest framing wire version this receiver can decode. An opted-in sender negotiates its target version from it (see [Wire Format](wire-format.md)); `null` means the receiver did not advertise a capability. Strictly additive on the wire. |
+| `AdvertisedDictionaryIds` | Optional: the shared compression-dictionary ids this receiver can resolve, so an opted-in sender only compresses with a dictionary the peer can decode. `null` means no capability advertised; an empty array means the capability exists but no dictionary is held. Strictly additive on the wire. |
+| `AdvertisedDictionaries` | Optional fingerprint-bearing successor to `AdvertisedDictionaryIds`: `(id, fingerprint)` pairs, so two clusters that map one id to different bytes never negotiate a match. Strictly additive on the wire. |
 
 `ReplicationBatch` is intentionally **not** Orleans-serialisable: it is the in-process call argument, not the on-the-wire envelope. Wire-format hardening - versioned envelopes, content framing, compression - happens inside `Payload` and is the binary-framing seam's concern. `ReplicationAck` **is** Orleans-serialisable (alias `olr.ak`) because the receiver returns it to the sender across whatever transport is in use, including in-cluster Orleans RPC bridges.
 
@@ -57,17 +67,17 @@ Three concerns the transport composes for every call:
 
 ### 1. Idempotency at the batch boundary
 
-Receivers de-duplicate re-deliveries by the per-origin `(TreeName, OriginClusterId, hlc)` high-water-mark, so a transport that retries a batch on transient failure must not cause double-apply. Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
+Receivers de-duplicate re-deliveries by record identity - an exact `(origin, hlc, key, op)` match in a bounded recent-apply cache, backed by an idempotent leaf-level apply for a repeat that has aged out of the cache - so a transport that retries a batch on transient failure does not cause double-apply. (The per-origin high-water mark is not the drop threshold; only a snapshot-pinned floor from a bootstrap drops entries outright, because everything at or below it is already in the snapshot.) Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
 
 ### 2. Advance-cursor-on-ack
 
-The sender advances its per-peer cursor strictly to `ReplicationAck.HighestAppliedHlc` when the ack is accepted - never to a value the sender chose locally. This is the canonical at-least-once-delivery, at-most-once-apply contract: a batch may be re-delivered, but the receiver's HWM is the only source of truth for "how far is this peer caught up?" The sender's cursor never overruns the receiver's actual progress.
+The sender advances its per-peer cursor only when the ack is accepted: to `ReplicationAck.HighestAppliedHlc`, or - when that frontier is at or below the current cursor because the receiver deduplicated or dropped every entry - to the last shipped entry's HLC, so the same batch is not re-shipped forever. A rejected ack leaves the cursor in place and the batch is retried after a backoff. This is the canonical at-least-once-delivery, at-most-once-apply contract: a batch may be re-delivered, and the receiver's record-identity dedup is what keeps a re-delivery from applying twice.
 
-A receiver that partial-applies a batch (some entries succeeded, some failed) returns the highest HLC it actually advanced its HWM to, and the sender resumes from there on the next call. There is no separate partial-apply error code on the ack envelope - the `HighestAppliedHlc` value already encodes the resume point.
+There is no partial-apply signal on the ack. The receiver either finishes the batch - an entry that exhausts its `MaxApplyRetries` budget is parked on the dead-letter queue rather than failing the call - and returns an accepted ack, or an earlier apply fault escapes and the call fails, which leaves the sender's cursor in place so the batch is retried after a backoff. On an accepted ack the sender's per-partition cursors advance past every entry it drained for that batch.
 
 ### 3. Concurrency
 
-Implementations are required to be safe for concurrent invocation across distinct `(TargetClusterId, TreeName)` pairs - the canonical outbound shipper fans out across peers and trees in parallel. Concurrent invocation against the *same* `(TargetClusterId, TreeName)` pair is implementation-defined; the canonical shipper serialises calls per pair and relies only on cross-pair concurrency, so transports do not need to add internal serialisation for that case.
+Implementations are required to be safe for concurrent invocation across distinct `(TargetClusterId, TreeName)` pairs - the canonical outbound shipper fans out across peers and trees in parallel. Concurrent invocation against the *same* `(TargetClusterId, TreeName)` pair is implementation-defined. With the default `ShipMaxInFlight` of `1` the canonical shipper serialises calls per pair; raising `ShipMaxInFlight` makes it issue up to that many concurrent sends per pair (see [Receiver Flow Control](receiver-flow-control.md#sender-side-pipelining)), so a transport used with pipelining must tolerate concurrent calls for one pair.
 
 ## Validation
 
@@ -112,7 +122,7 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 
 ## Framing-only ship path
 
-The shipper's outbound path is unconditionally framing-only. Every batch the shipper hands to `SendAsync` carries a populated `ReplicationBatch.EncodedEnvelope` (a fixed 32-byte header plus length-prefixed pre-encoded entry segments produced by `IReplicationBatchEncoder.EncodeFraming`). Each entry's bytes are the verbatim segment the WAL stored at append time via `IWalStorageProvider.ReadShippingAsync` - no per-tick re-encode through an envelope-level Orleans serializer call, and no producer-side typed-envelope path. `ReplicationBatch.Payload` and `ReplicationBatch.Envelope` remain on the contract for receiver-side and test-fixture compatibility, but the producer-side shipper writes only `EncodedEnvelope`.
+The shipper's outbound path is unconditionally framing-only. Every batch the shipper hands to `SendAsync` carries a populated `ReplicationBatch.EncodedEnvelope` (a fixed 32-byte header plus length-prefixed pre-encoded entry segments produced by `IReplicationBatchEncoder.EncodeFraming`). Each entry's bytes are the verbatim segment the WAL stored at append time, read back through the WAL partition's shipping read path - no per-tick re-encode through an envelope-level Orleans serializer call, and no producer-side typed-envelope path. `ReplicationBatch.Payload` and `ReplicationBatch.Envelope` remain on the contract for receiver-side and test-fixture compatibility, and the anti-entropy repair path still ships them (a typed envelope plus its encoded `Payload`), but the producer-side shipper writes only `EncodedEnvelope`.
 
 Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (the default no-op transport, host-supplied HTTP-framed transports) lift the framing bytes off `EncodedEnvelope` and forward them as-is.
 
@@ -175,7 +185,7 @@ public readonly record struct ContentManifestResponse
 
 1. **Sender builds a manifest.** When `LatticeReplicationOptions.ContentHashDedupEnabled` and `ContentHashDedupElisionEnabled` are both set, the shipper hashes the value-carrying point-`Set` entries in the drained batch (FNV-1a 64-bit over op + key + range + value, the same digest the measurement uses) and advertises a `ContentManifestRequest` to the peer. Only eligible entries are manifested - range deletes, saga terminal marks, prepared atomic-batch entries, and zero-HLC entries are never placed in the manifest and always ship verbatim, so atomic-batch boundaries, causal-dependency gating, and per-origin FIFO are preserved.
 2. **Receiver answers with the missing set.** For each manifest entry the receiver compares the advertised content hash against the content it has already applied for that key. An entry the receiver does not hold (or holds with a different hash) is reported in `MissingEntryIndices`. An entry the receiver already holds byte-identical is *not* missing - and if the manifest entry's `Hlc` is newer than the receiver's recorded clock for that key (the idempotent re-set of an identical value), the receiver advances its per-origin high-water-mark via a metadata-only apply and reports the advanced clock in `AdvancedHlc`, all without the payload travelling.
-3. **Sender ships only the missing payloads.** The shipper drops every elided entry from the outbound batch and ships the remainder through the ordinary `IReplicationTransport.SendAsync` push, then advances its per-peer cursor past the whole originally-drained range (the receiver advanced its high-water-mark for the elided entries during the exchange). When every entry is elided no batch is shipped at all. The shipper records the sender side of the exchange on three counters tagged `tree` and `peer`: `ship.manifest_exchanges` (one per outbound batch that advertised a manifest and received a pull-missing reply), `ship.elided_payloads` (set-entry payloads dropped from the batch), and `ship.elided_payload_bytes` (their summed pre-encoded value-byte length).
+3. **Sender ships only the missing payloads.** The shipper drops every elided entry from the outbound batch and ships the remainder through the ordinary `IReplicationTransport.SendAsync` push, then advances its per-peer cursor past the whole originally-drained range (the receiver advanced its high-water-mark for the elided entries during the exchange). When every entry is elided no batch is shipped at all. The shipper records the sender side of the exchange on three counters tagged `tree`, `peer`, and `tenant`: `ship.manifest_exchanges` (one per outbound batch that advertised a manifest and received a pull-missing reply), `ship.elided_payloads` (set-entry payloads dropped from the batch), and `ship.elided_payload_bytes` (their summed pre-encoded value-byte length).
 
 ### Default-off and rolling-upgrade safety
 
@@ -189,7 +199,7 @@ The `Orleans.Lattice.Replication.Grpc` sub-package binds `ExchangeContentManifes
 
 A peer that has not bound the method answers `Unimplemented`, and a peer that is momentarily unreachable answers `Unavailable`; the client invoker catches both and returns `ContentManifestResponse.NotSupported`, so the sender's existing capability-latch falls back to shipping the full batch verbatim with no per-hop wire-version pre-check. This makes enabling elision on one side of a peering rolling-upgrade safe.
 
-On the receiver, the gRPC service handler resolves the durable per-origin high-water-mark grain for the tree, projects the receiver's **applied-content index** onto the manifest's keys, and computes the missing set with the same pure planner the in-process path uses. For an entry the receiver already holds whose `Hlc` is newer than the recorded high-water-mark, the handler performs a durable metadata-only `TryAdvanceAsync` on the high-water-mark grain (no payload travels) and reports the advanced clock in `AdvancedHlc`. The handler increments three receiver-side counters tagged `tree` and the origin `peer`: `receiver.content_manifest_exchanges` (one per exchange answered), `receiver.content_entries_elided` (entries the receiver reported it already holds), and `receiver.content_hwm_advances` (one per exchange whose durable high-water-mark advance succeeded).
+On the receiver, the gRPC service handler resolves the durable per-origin high-water-mark grain for the tree, projects the receiver's **applied-content index** onto the manifest's keys, and computes the missing set with the same pure planner the in-process path uses. For an entry the receiver already holds whose `Hlc` is newer than the recorded high-water-mark, the handler performs a durable metadata-only `TryAdvanceAsync` on the high-water-mark grain (no payload travels) and reports the advanced clock in `AdvancedHlc`. The handler increments three receiver-side counters tagged `tree`, the origin `peer`, and `tenant`: `receiver.content_manifest_exchanges` (one per exchange answered), `receiver.content_entries_elided` (entries the receiver reported it already holds), and `receiver.content_hwm_advances` (one per exchange whose durable high-water-mark advance succeeded).
 
 ### Receiver applied-content index
 

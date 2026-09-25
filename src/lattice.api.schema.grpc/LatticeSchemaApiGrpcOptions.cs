@@ -21,10 +21,10 @@ public sealed class LatticeSchemaApiGrpcOptions
     /// The inbound request-header (gRPC metadata) name that carries the caller's
     /// credential token, bridged into the ambient Lattice credential so the
     /// schema access gate can resolve the caller's subject and authorize each
-    /// operation. Defaults to <c>authorization</c>. Only consulted when
-    /// auth-backed schema control is active (the <c>Orleans.Lattice.Auth</c>
-    /// add-on is registered); when it is not, no header is read and the schema
-    /// control API behaves exactly as before.
+    /// operation. Defaults to <c>authorization</c>. The default header bridge
+    /// reads this metadata on every call; when auth-backed schema control is not
+    /// active, the core no-op access gate ignores the bridged credential and the
+    /// schema control API behaves exactly as before.
     /// </summary>
     public string CredentialHeaderName { get; set; } = "authorization";
 

@@ -147,9 +147,11 @@ its own. The superseded generation is still reclaimed on the normal grace cadenc
 
 ### Multi-tenancy
 
-With the tenancy add-on enabled, a view is scoped to the tenant that creates it:
-the caller's view name is resolved to the active tenant, so the view materialises
-as `t/{tenant}/view-{name}`. Two tenants can therefore use the same unqualified
+With the tenancy add-on enabled, a view created through the tree-administration
+facade is scoped to the tenant that creates it: the facade resolves the caller's
+view name (and source tree) to the active tenant, so the view materialises as
+`t/{tenant}/view-{name}`. An in-silo `ILatticeViewFactory` call uses the view
+name it is given as-is. Two tenants can therefore use the same unqualified
 view name over their own same-named sources and each reads back only its own view.
 Because the tenant segment is outermost, a tenant's view tree is owned, filtered
 from enumerations, and deleted with the tenant exactly like its other trees.
@@ -238,17 +240,22 @@ public sealed class AdultsViewService(ILatticeViewFactory views, IGrainFactory g
 }
 ```
 
-`RebuildAsync` re-projects current source state. It never exposes a half-built
-or empty view to readers - the rebuild happens off to the side and the live tree
-is swapped in atomically when it is complete.
+`RebuildAsync` re-projects current source state. For a `DeriveLocally` view (the
+default) it never exposes a half-built or empty view to readers - the rebuild
+happens off to the side in a new generation and the live tree is swapped in
+atomically when it is complete. A `ShipView` view is the exception: to keep its
+replicated `view-{name}` tree id stable, the producer clears and re-derives that
+tree in place, so a reader on the producer can briefly observe a partially
+rebuilt view while consumers converge through replication anti-entropy.
+`ReconcileAsync` repairs a drifted `ShipView` view the same way.
 
 ## Deleting a view
 
 `ILatticeViewFactory.DeleteAsync` tears a runtime-created view down completely:
 it stops the maintainer, unregisters the keepalive reminder, releases the source
-WAL cursor pin, soft-deletes the backing view tree, and clears the durable
-checkpoint and runtime registration. After it returns the view name is free to be
-re-created from scratch.
+WAL cursor pin, soft-deletes every backing view-tree generation, and clears the
+durable checkpoint and runtime registration. After it returns the view name is
+free to be re-created from scratch.
 
 ```csharp verify
 public sealed class AdultsViewAdmin(ILatticeViewFactory views)
@@ -262,7 +269,9 @@ Deletion is idempotent: deleting a view that was never created, or re-deleting a
 already-deleted view, is a no-op. A view declared at startup via
 `AddLatticeViews(...)` cannot be deleted this way - the declaration would
 re-create it on the next start - so `DeleteAsync` rejects it with an
-`InvalidOperationException`.
+`InvalidOperationException`. The same rejection applies to a view that a Lattice
+add-on declares over one of its reserved system trees, because the add-on
+re-creates it on the next start as well.
 
 ## Deleting a source tree that has views
 
@@ -434,13 +443,17 @@ siloBuilder.AddLatticeViews(views => views.AddAggregationView(
 ### Reading an aggregate
 
 Each group's reduced value is materialised under its **bare group key**, so
-readers are oblivious to the internal accumulator layout. Decode the bytes with
+readers are oblivious to the internal accumulator layout. Read it through the
+view's `ILatticeView` handle - the backing `view-*` tree rejects direct reads
+(see [Reading a view](#reading-a-view)) - and decode the bytes with
 `LatticeAggregationValue` for the view's kind (a `null` read means the group has
 no live members):
 
 ```csharp verify
-var sums = grainFactory.GetGrain<ILattice>("view-age-sum-by-name");
-byte[]? raw = await sums.GetAsync("Alice", cancellationToken);
+ILatticeView? sums = await client.ServiceProvider
+    .GetRequiredService<ILatticeViewFactory>()
+    .GetAsync("age-sum-by-name", cancellationToken);
+byte[]? raw = sums is null ? null : await sums.GetAsync("Alice", cancellationToken);
 double total = raw is null ? 0 : LatticeAggregationValue.DecodeDouble(raw);
 ```
 
@@ -669,7 +682,10 @@ aborted batch is never surfaced.
 
 A view buffers in-flight atomic writes while it waits for them to commit. Two
 caps bound that buffer; if either is exceeded the view falls back to a rebuild
-from current committed source state. Each backstop trip increments
+from current committed source state. The same fallback fires when the source
+tree sets `LatticeOptions.WalRetention` and the oldest prepared entry of a
+still-unterminated batch is older than that window, because the batch could no
+longer complete before the log trims under it. Each backstop trip increments
 `orleans.lattice.view.atomic_staging_backstop`.
 
 When a completed batch flushes to the view tree, the maintainer carries the
@@ -907,29 +923,32 @@ apply lag, and do not infer rollback from a create-time timeout.
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
-`IOptionsMonitor<LatticeViewOptions>.Get(viewName)`:
+`IOptionsMonitor<LatticeViewOptions>.Get(viewName)`. A registered validator
+rejects an out-of-range value when a view's options are first resolved; each
+row notes its rule:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. |
-| `CoalesceWindow` | 50 ms | Period of the background drain timer. |
+| `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. Must be positive. |
+| `CoalesceWindow` | 50 ms | Period of the background drain timer. Must be greater than zero. |
 | `SourceIdentityBackstopInterval` | 30 s | Safety-net interval after which the maintainer re-resolves its source tree's physical identity from the registry when no alias-change notification has arrived. In steady state the source binding is event-driven (rebound the moment an alias swap commits), so this backstop only covers a missed push. See [Source-identity rebind](#source-identity-rebind). Must be greater than zero. |
-| `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. |
-| `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. |
-| `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. |
-| `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) before the backstop forces a rebuild. |
-| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id before re-resolving it. Bounds the post-swap read-staleness window. |
+| `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. Must be at least 1. |
+| `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. Must not be negative. |
+| `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. Must be at least 1. |
+| `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) before the backstop forces a rebuild. Must be at least 1. |
+| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id before re-resolving it. Bounds the post-swap read-staleness window. Must be greater than zero. |
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
-| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. |
+| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must be non-empty, and `ReplicationMode` must be `ShipView`. |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
 | `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated. |
-| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Clamped to `[0, 1]`; the effective batch is clamped to `[1, BatchSize]`. |
+| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Must be within `[0, 1]`; the effective batch (rounded up) is clamped to `[1, BatchSize]`. |
 | `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
-| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Clamped to `[1, BatchSize]`. |
+| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Must be at least 1; the effective batch is capped at `BatchSize`. |
 | `SaturatedPauseMs` | 500 | Milliseconds background drain ticks are skipped after a pass that saw a `Saturated` source. `<= 0` disables the deferral. |
+| `HistoryHybridFullValueWindow` | 5 min | [Durable per-key history views](history-views.md) under `Hybrid` retention only: the maximum apply-time age of a revision that keeps its full value bytes; an older revision is stored as metadata only. A non-positive value degrades `Hybrid` to metadata-only. The unnamed (default) instance's value also shapes `Hybrid` reads from the write-ahead-log history fallback of a tree that has no history view. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -944,20 +963,20 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 ## Metrics
 
 The maintainer publishes the following instruments on the `orleans.lattice`
-meter, each tagged with the view name:
+meter, each tagged `view` (the view name) plus the derived `tenant` label:
 
 | Instrument | Kind | Meaning |
 |------------|------|---------|
 | `orleans.lattice.view.apply_lag` | Histogram | Apply lag (committed-but-unapplied source entries) sampled at the end of each drain pass. |
 | `orleans.lattice.view.backlog_depth` | Histogram | WAL entries read in the drain pass. |
 | `orleans.lattice.view.applied` | Counter | View writes applied to the view tree. |
-| `orleans.lattice.view.key_collisions` | Counter | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation). |
+| `orleans.lattice.view.key_collisions` | Counter | View keys that two or more distinct source keys re-mapped to in a drain batch (injectivity violation), counted once per view key per batch. |
 | `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view. |
 | `orleans.lattice.view.aggregation_rejected` | Counter | Aggregation contributions dropped for producing a reserved (empty or NUL-prefixed) group key. |
 | `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
 | `orleans.lattice.view.cross_tree_joint_violation` | Counter | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
 | `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
-| `orleans.lattice.view.source_backpressure` | Counter | Background drain passes that throttled themselves because the source tree was under WAL saturation back-pressure. Also tagged with the observed source regime (`throttled` / `saturated`). |
+| `orleans.lattice.view.source_backpressure` | Counter | Drain passes of any trigger - read-your-writes barrier drains included, not only background ticks - that shrank their batch because the source tree was under WAL saturation back-pressure. Also tagged `state` with the observed source regime (`throttled` / `saturated`). |
 
 ## Durable per-key history
 

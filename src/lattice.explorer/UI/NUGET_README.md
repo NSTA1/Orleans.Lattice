@@ -2,9 +2,10 @@
 
 The shared **Razor component class library** (RCL) for the
 [Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice). Holds every
-routable page, the layout, and the navigation, detail, backup, access, and
-authentication components, so each explorer head (web, desktop) renders an
-identical UI.
+routable page, the layout, and the navigation, detail, configuration, appearance,
+and authentication components, so each explorer head (web, desktop) renders an
+identical UI. The admin areas (Backups, Access, Schema, Tenant administration, My
+tenant, Telemetry) ship in their own plugin packages.
 
 ## What it provides
 
@@ -16,19 +17,29 @@ identical UI.
   primitives (buttons, badges, modals, navigation, tab strips) come from
   [`Orleans.Lattice.Explorer.DesignSystem`](https://www.nuget.org/packages/Orleans.Lattice.Explorer.DesignSystem)
   instead, so a plugin composes them without referencing this package.
-- The packaged **static web assets** (css, favicon). A referencing app serves
-  them automatically at `_content/Orleans.Lattice.Explorer.UI/` with no extra
-  wiring.
+- The packaged **static web assets** (the shell and appearance stylesheets, the
+  first-paint appearance script, and the favicon). A referencing app serves them
+  automatically at `_content/Orleans.Lattice.Explorer.UI/` with no extra wiring.
 
 ## Usage
 
 Normally consumed transitively through a head package such as
 [`Orleans.Lattice.Explorer.Web`](https://www.nuget.org/packages/Orleans.Lattice.Explorer.Web),
 which maps the components with an interactive server render mode. Reference the
-static assets from the host document:
+static assets from the host document. The appearance script must stay a classic,
+blocking script in `<head>` (no `defer` or `async`), so the chosen theme is on
+the document at first paint:
 
 ```html
 <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-shell.css" />
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.css" />
+<script src="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.js"></script>
+```
+
+and, first thing in `<body>`, stamp the chosen density:
+
+```html
+<script>window.latticeAppearance && window.latticeAppearance.stamp();</script>
 ```
 
 See the

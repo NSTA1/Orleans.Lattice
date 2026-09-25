@@ -17,8 +17,9 @@ evaluates a flat, uniform group set. Nested (group-in-group) membership is
 supported, and token-asserted groups are themselves expanded through the
 directory closure.
 
-The directory dogfoods reserved `sys-membership-*` `ILattice` trees (users,
-groups, and each membership edge stored for forward/reverse scans), so every
+The directory dogfoods reserved `sys-membership-*` `ILattice` trees (a groups
+tree, and an edges tree that stores each membership edge in both directions for
+forward/reverse scans - there is no separate user record), so every
 record is readable through the ordinary scan / change-feed surface and every
 mutation is durably auditable through an auto-enabled per-key history view.
 Resolution is served from a per-silo cache bounded by the minimum of the

@@ -180,7 +180,7 @@ flowchart TD
     App["Applications<br/>knowledge systems, AI memory, digital twins, search,<br/>control planes, multi-tenant SaaS, collaboration"]
 
     App --> Explorer["Explorer console<br/>(in progress)"]
-    App --> Apis["API facades<br/>state, data, auth, schema,<br/>backup, tree admin, tenant admin"]
+    App --> Apis["API facades<br/>state, data, auth, schema, backup,<br/>replication, tree admin, tenant admin"]
     App --> Mcp["MCP server<br/>tools for AI agents"]
 
     Explorer --> Core
@@ -337,7 +337,7 @@ For internals (the "how"):
 - [Verified WAL](docs/lattice/verified-wal.md) - the proven-core pattern and Coyote concurrency tier behind the WAL shipping, GC-trim, cursor-registry, move-fence, shutdown-drain, offset-allocation, blocked-floor, and move-resume seams.
 - [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
-- [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table backend.
+- [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table and local-file backends.
 - [WAL Tuning](docs/lattice/wal-tuning.md) - how `WalMaxPendingBatches` and `WalPartitions` interact with a durable backend's throughput envelope; default sizing rules and the storage-account ceiling above which the cap stops helping.
 - [WAL Saturation Signal](docs/lattice/wal-saturation-signal.md) - the per-tree, three-state back-pressure surface (`IWalSaturationSignal`, `IWalSaturationObserver`) that lets callers throttle offered load before silent queueing on the writer-side admission gate.
 
@@ -363,7 +363,7 @@ Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wik
 
 With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
 
-Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md).
+Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md), and how throughput responds as silos are added is in the [multi-silo scaling guide](docs/lattice/performance-multi-silo.md).
 
 ## Releases
 

@@ -23,7 +23,7 @@ internal enum FallOffLogDecision
     /// A fall-off-log trigger fired (WAL trimmed past checkpoint,
     /// replay budget exceeded, or projection older than
     /// <see cref="LatticeOptions.LeafProjectionRetention"/>) and the
-    /// configured policy selects the snapshot-then-WAL recovery path.
+    /// configured policy is the snapshot-then-WAL recovery path; genuine WAL loss currently surfaces <see cref="LeafProjectionStaleException"/>.
     /// </summary>
     SnapshotThenWal = 1,
 
