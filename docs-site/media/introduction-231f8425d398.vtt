@@ -1,240 +1,245 @@
 WEBVTT
 
 1
-00:00:01.500 --> 00:00:05.873
+00:00:01.500 --> 00:00:06.454
 Orleans.Lattice, in three minutes: why it
 exists, what it is, and where to start.
 
 2
-00:00:06.873 --> 00:00:10.900
+00:00:07.454 --> 00:00:11.450
 Almost every application has
 to remember things: what is in a basket,
 
 3
-00:00:10.900 --> 00:00:13.935
+00:00:11.450 --> 00:00:14.461
 who may open a document,
 how often a page is viewed.
 
 4
-00:00:14.285 --> 00:00:16.375
+00:00:14.811 --> 00:00:16.654
 Developers call that memory state.
 
 5
-00:00:17.375 --> 00:00:20.355
+00:00:17.654 --> 00:00:20.510
 Many applications run
 in more than one place at once,
 
 6
-00:00:20.355 --> 00:00:22.773
+00:00:20.510 --> 00:00:22.828
 so that they keep going
 if one place fails.
 
 7
-00:00:23.123 --> 00:00:26.280
+00:00:23.178 --> 00:00:27.089
 Then two places can change the same thing
 at the same moment.
 
 8
-00:00:26.630 --> 00:00:30.229
+00:00:27.439 --> 00:00:31.095
 The usual answer is to make them
 take turns, with a lock or a vote,
 
 9
-00:00:30.229 --> 00:00:33.990
+00:00:31.095 --> 00:00:34.915
 and to keep the memory in a separate
 database, beside the application.
 
 10
-00:00:34.340 --> 00:00:36.721
+00:00:35.265 --> 00:00:37.580
 Orleans.Lattice takes
 a different approach.
 
 11
-00:00:36.721 --> 00:00:39.545
+00:00:37.580 --> 00:00:40.325
 It keeps the working memory
 inside the application.
 
 12
-00:00:39.895 --> 00:00:44.035
+00:00:40.675 --> 00:00:44.750
 And it records each change so
 that every place reaches the same answer,
 
 13
-00:00:44.035 --> 00:00:46.192
+00:00:44.750 --> 00:00:46.873
 in whatever order the changes arrive.
 
 14
-00:00:46.192 --> 00:00:47.533
+00:00:46.873 --> 00:00:48.193
 Neither waits its turn.
 
 15
-00:00:47.883 --> 00:00:50.428
+00:00:48.543 --> 00:00:50.916
 It runs on one machine
 with no cloud account,
 
 16
-00:00:50.428 --> 00:00:52.917
+00:00:50.916 --> 00:00:53.236
 and grows to many regions
 without a rewrite.
 
 17
-00:00:53.917 --> 00:00:58.191
+00:00:54.236 --> 00:00:58.687
 In technical terms, Orleans.Lattice
 is a platform for building durable,
 
 18
-00:00:58.191 --> 00:01:01.021
+00:00:58.687 --> 00:01:01.634
 distributed state systems
 on Microsoft Orleans.
 
 19
-00:01:01.371 --> 00:01:05.945
+00:01:01.984 --> 00:01:06.724
 At its centre is a sorted key-value store
 that runs inside your own cluster,
 
 20
-00:01:05.945 --> 00:01:09.435
+00:01:06.724 --> 00:01:10.341
 with no external database,
 coordinator or queue beside it.
 
 21
-00:01:09.785 --> 00:01:11.364
+00:01:10.691 --> 00:01:12.273
 It takes three positions.
 
 22
-00:01:13.564 --> 00:01:15.816
+00:01:14.473 --> 00:01:16.623
 First: the store lives in the cluster.
 
 23
-00:01:15.816 --> 00:01:19.964
+00:01:16.623 --> 00:01:20.584
 State is held by grains, in the same
 cluster as the code that uses it.
 
 24
-00:01:20.314 --> 00:01:24.268
+00:01:20.934 --> 00:01:25.237
 So a read is a grain call, not a round
 trip to a separate database tier
 
 25
-00:01:24.268 --> 00:01:26.607
+00:01:25.237 --> 00:01:27.782
 with its own scaling and its own failures.
 
 26
-00:01:27.607 --> 00:01:30.317
+00:01:28.782 --> 00:01:31.819
 Second: conflict resolution is algebraic.
 
 27
-00:01:30.667 --> 00:01:32.809
+00:01:32.169 --> 00:01:34.668
 Two clusters write at the same time.
 
 28
-00:01:32.809 --> 00:01:35.785
+00:01:34.668 --> 00:01:38.139
 Cluster A adds three,
 and cluster B, concurrently,
 
 29
-00:01:35.785 --> 00:01:37.748
+00:01:38.139 --> 00:01:40.429
 adds five, each to its own count.
 
 30
-00:01:37.748 --> 00:01:39.712
+00:01:40.429 --> 00:01:42.720
 Neither state is above the other.
 
 31
-00:01:40.062 --> 00:01:44.179
+00:01:43.070 --> 00:01:47.294
 Each merges the other's update
 by taking the larger value per replica,
 
 32
-00:01:44.179 --> 00:01:46.825
+00:01:47.294 --> 00:01:50.010
 so both arrive at the same state:
 their join.
 
 33
-00:01:47.175 --> 00:01:49.841
+00:01:50.360 --> 00:01:53.244
 Deliver that update twice,
 and nothing changes.
 
 34
-00:01:50.191 --> 00:01:55.022
-Merges are commutative, associative
-and idempotent, so any cluster can accept
+00:01:53.594 --> 00:01:57.655
+Merges are commutative,
+associative and idempotent.
 
 35
-00:01:55.022 --> 00:01:59.350
-a write to any key, with no lock manager
-and no consensus round trip.
+00:01:58.005 --> 00:02:00.793
+So any cluster can accept
+a write to any key,
 
 36
-00:01:59.350 --> 00:02:01.797
-For plain values, the last writer wins.
+00:02:00.793 --> 00:02:03.829
+with no lock manager
+and no consensus round trip.
 
 37
-00:02:02.797 --> 00:02:04.877
-Third: everything else is a seam.
+00:02:03.829 --> 00:02:06.245
+For plain values, the last writer wins.
 
 38
-00:02:04.877 --> 00:02:08.534
+00:02:07.245 --> 00:02:09.319
+Third: everything else is a seam.
+
+39
+00:02:09.319 --> 00:02:12.964
 Storage, identity, governance,
 replication, administration
 
-39
-00:02:08.534 --> 00:02:12.631
+40
+00:02:12.964 --> 00:02:17.049
 and observability are companion
 packages behind documented seams.
 
-40
-00:02:12.981 --> 00:02:17.589
+41
+00:02:17.399 --> 00:02:21.897
 A host takes only what it registers, and
 a capability it leaves out costs nothing.
 
-41
-00:02:18.589 --> 00:02:21.171
+42
+00:02:22.897 --> 00:02:25.670
 So a deployment can grow
 without a rewrite.
 
-42
-00:02:21.171 --> 00:02:23.752
+43
+00:02:25.670 --> 00:02:28.443
 Start local: one machine,
 no cloud account.
 
-43
-00:02:24.102 --> 00:02:27.643
+44
+00:02:28.793 --> 00:02:32.826
 Add a team: identity,
 authorization, schemas and tenants.
 
-44
-00:02:27.993 --> 00:02:32.751
-Go global: active-active across regions,
+45
+00:02:33.176 --> 00:02:38.298
+Go global: active in every region at once,
 with backup and an autoscaling signal.
 
-45
-00:02:33.101 --> 00:02:35.999
+46
+00:02:38.648 --> 00:02:41.750
 At every stage,
 the programming model is the same.
 
-46
-00:02:35.999 --> 00:02:38.434
+47
+00:02:41.750 --> 00:02:44.355
 Your code resolves ILattice, and calls it.
 
-47
-00:02:39.434 --> 00:02:41.461
+48
+00:02:45.355 --> 00:02:47.841
 The documentation has three ways in.
 
-48
-00:02:41.811 --> 00:02:44.371
+49
+00:02:48.191 --> 00:02:51.551
 Build,
 if you are writing code against ILattice.
 
-49
-00:02:44.721 --> 00:02:47.281
+50
+00:02:51.901 --> 00:02:54.956
 Evaluate,
 if you are deciding whether it fits.
 
-50
-00:02:47.631 --> 00:02:49.591
+51
+00:02:55.306 --> 00:02:58.162
 Operate, if you are running an estate.
 
-51
-00:02:49.591 --> 00:02:50.468
-Pick your way in.
+52
+00:02:58.162 --> 00:02:58.989
+You choose.

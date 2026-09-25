@@ -177,14 +177,21 @@ narrative and diagram, code walkthrough, and concept animation.
    `## Narration` heading, one paragraph per cue, `### <scene>` headings to
    label scenes, HTML comments for direction notes. Written form, plain ASCII,
    British spelling. The Docs agent fact-checks it against the corpus before it
-   is locked, and `npm run phonemes -- <slug>` shows how the voice will read
-   it, flagging words with two readings.
+   is locked. For the Kokoro engine, `npm run phonemes -- <slug>` shows how
+   its phonemizer will read it, flagging words with two readings.
 3. **Narration** - `npm run narrate -- <slug>`: one clip per cue in the series
-   voice, cached by what it says so a re-run speaks only the cues that changed;
-   the cues joined on a timeline and mastered to the series loudness; and
-   WebVTT captions. A `<!-- pause N -->` comment in the script adds N seconds
-   of silence, and a new scene waits a little longer than the next cue in a
-   scene does (`voice/voice.json`).
+   voice, cached by what it says so a re-run speaks only the cues that changed,
+   and each heard back by two local speech recognisers and made again when it
+   does not say what the script says; the cues joined on a timeline and
+   mastered to the series loudness; and WebVTT captions. A `<!-- pause N -->`
+   comment in the script adds N seconds of silence, and a new scene waits a
+   little longer than the next cue in a scene does (`voice/voice.json`). Then
+   listen to the narration alone (`npm run review -- <slug> --audio`). Where a
+   line reads wrongly - a word said wrong, a statement that rises like a
+   question - make several takes of it and pick one by ear
+   (`npm run audition -- <slug> <cue>`), and narrate again to master the
+   picked take in. Takes and picks stay on the machine; only the published
+   cut is committed.
 4. **Storyboard** - `episodes/<slug>/STORYBOARD.md`: what is on screen for each
    cue.
 5. **Composition** - `episodes/<slug>/composition.html`, built from the shared
@@ -224,7 +231,8 @@ What is in place, and why.
 | No network at render time | a render that fetches is neither reproducible nor local-first | GSAP and its plugins from `node_modules`; local media; font stacks limited to the site's self-hosted faces, because the renderer fetches any other named family from Google Fonts; `--docker` for byte-reproducible renders |
 | The site's design system and words, read rather than copied | the videos must look like the documentation, say what it says, and follow it when it changes | `tools/hf.js` copies `docs-site/template/public` (tokens, fonts, mark), `docs-site/figures/join-figures.json`, the home page's words (`docs-site/pages/index.md`) and the package catalogue (`PACKAGES.md`) into an ignored folder before every render; [shared/brand/brand.css](shared/brand/brand.css) imports it and adds only camera sizes and the notation; [shared/brand/motion.js](shared/brand/motion.js) reads the site's eases; scenes quote the site through `site:` variables, the seams are generated, and the join figure reads each CRDT's scenario from the site |
 | Compiled code on screen | a snippet that compiles today can rot tomorrow; the repository already compiles every verify fence | `npm run snippets`, `npm run snippets:check` |
-| A local voice pipeline | one consistent voice, no account or key, reproducible from the script | [voice/](voice/), `npm run voice:samples`, `npm run narrate` |
+| A local voice pipeline | one consistent voice, no account or key, reproducible from the script | [voice/](voice/), `npm run narrate`, [tools/voice_worker.py](tools/voice_worker.py) |
+| Narration heard back | a generative voice can drop, add or slip a word, and nobody can listen to every take | each clip is transcribed by two local recognisers and compared with the script word for word; a clip that is not heard exactly is made again with the next seed ([tools/lib/verify.js](tools/lib/verify.js)) |
 | Loudness as delivered | every episode at -16 LUFS with the true peak below -1 dBTP, measured on the stereo track a viewer hears | `npm run narrate` masters the joined narration with one gain and a peak limiter, then measures it again ([tools/lib/loudness.js](tools/lib/loudness.js)) |
 | Timing stamped from the narration | HyperFrames reads timing statically from the HTML, and hand-typed timings drift from the words | `npm run timeline -- <slug>` writes every clip's window, its beats and the narration track; `--check` fails when they are out of date |
 | One folder per episode, one place for what is shared | the series will have dozens of episodes, and a scene fixed once must be fixed everywhere | `episodes/<slug>/` and `shared/`, defined once in [tools/lib/layout.js](tools/lib/layout.js) and guarded by a test that keeps episode material off the root |
@@ -236,32 +244,72 @@ What is in place, and why.
 
 ## Voice
 
-- **Engine:** Kokoro-82M, run locally by the HyperFrames CLI. It needs no
-  account or key, and no network once the CLI has downloaded the model on the
-  first narration run; it costs nothing, and the same script and settings
-  give the same narration, so audio is as reproducible as the pictures.
-  Hosted voices (HeyGen, ElevenLabs) are richer but need a key, and neither is
-  reproducible.
-- **The series voice is Emma** (`bf_emma`, British English), chosen by
-  audition from eight candidates. `npm run voice:samples` renders the same
-  script in every candidate voice under `renders/voice-samples/`, and the
-  choice is recorded in [voice/voice.json](voice/voice.json). Changing it later
-  means re-narrating every episode, so it changes rarely.
+- **The series voice is Emma, read by Chatterbox.** Emma (`bf_emma`, British
+  English) was chosen by audition from eight Kokoro-82M voices, and the pilot
+  was narrated with Kokoro. Kokoro reads through a phonemizer and has no control
+  of stress or intonation, so its narration was even and flat, with no weight
+  on the words that carry a point. Since the introduction's second cut the
+  engine is **Chatterbox** (Resemble AI, MIT licence), cloned from
+  [voice/reference.wav](voice/reference.wav): 12 seconds of Kokoro's Emma
+  reading the introduction's opening. It keeps her timbre and accent, and reads
+  as a person does, stressing what the sentence means. Measured on the same
+  passage, its pitch moves about 30% more than Kokoro's.
+- **Settings:** [voice/voice.json](voice/voice.json) records the model, pinned to
+  one revision, and how it reads: exaggeration 0.75 and CFG weight 0.35 (the
+  expressive end of its range, chosen by ear against the defaults and against
+  Chatterbox Turbo) at temperature 0.8. It runs on the CPU, in a Python 3.11
+  environment pinned by [voice/requirements.txt](voice/requirements.txt), with
+  no account or key, and no network once the models are downloaded. On a laptop
+  it takes eight to twenty times as long as the speech it makes, so a
+  three-minute episode takes the better part of an hour; clips are cached, so
+  a change to one cue re-speaks only that cue.
+- **Heard back:** a generative voice can drop, add or slip a word (Chatterbox
+  once said "Neither awaits its turn"). Every clip is transcribed by two local
+  recognisers (faster-whisper `base.en` and `small.en`) and compared with the
+  script word for word, forgiving only what a recogniser cannot know:
+  capitals, punctuation, numerals, spelling variants and its guesses at the
+  product's names. A clip that either recogniser does not hear exactly, or
+  that is implausibly slow or fast for its length, is made again with the
+  next seed, up to four times; `cues.json` records what was heard, and any
+  cue that never passed is listed at the end of the run to be listened to.
+  Each seed comes from the clip's name, so a run is repeatable on the same
+  machine; across machines the audio can differ in detail.
+- **Picked by ear where it matters:** the checks catch a wrong or missing
+  word and a stray sound, not a word said with the wrong stress or a
+  statement that rises like a question. When a line reads wrongly, `npm run
+  audition` makes several takes of it (take n is narration's attempt n, so
+  the kept take is among them), each checked, on a page to listen and pick
+  from, and `--pick` makes the chosen take the cue's clip; a picked take
+  stands whatever the recognisers heard. Takes live in `renders/takes/` and
+  are never committed: the published cut is the record of what was chosen.
+- **Listened for, too:** recognisers ignore sounds that are not speech, and
+  Chatterbox sometimes fails to stop cleanly, adding a squeal or a burst
+  after its last word (the introduction's first Chatterbox cut had one at
+  1:52). Every clip is inspected frame by frame: a sound that follows a
+  silence after the last word is cut off, keeping 150 ms of the silence, and a
+  burst louder than the speech or a squeak far above the voice inside it
+  makes the clip fail, so it is made again. Chatterbox also pauses at a
+  hyphen ("active... active"), so a hyphen between two letters is read as a
+  space (`readingFor` in [tools/lib/lexicon.js](tools/lib/lexicon.js)).
 - **Pronunciation:** [voice/lexicon.json](voice/lexicon.json) maps written forms
-  to spoken ones. "Orleans" is said or-LEENZ, with the stress on the second
-  syllable, so the lexicon respells it "Or-leens"; left alone, the phonemizer
-  says OR-lee-unz. Other entries spell out initialisms ("CRDTs", "gRPC").
-  Captions keep the written form. Prefer rewording a script to adding an entry,
-  and check a new entry by ear with `npm run voice:samples -- --voices bf_emma`.
-- **Words with two readings:** the phonemizer picks one reading of a heteronym
-  without looking at the sentence. It reads "lives" as the plural of life
-  everywhere, so the pilot's "the store lives in the cluster" came out wrong,
-  and the lexicon now respells the verb ("livs"). Before narrating a script, run
-  `npm run phonemes -- <slug>`: it prints each cue's spoken form and phonemes
-  exactly as the voice will receive them, and flags the words in
-  [voice/heteronyms.json](voice/heteronyms.json) so their reading can be
-  confirmed. The phonemizer's British English also gives BATH words a short
-  vowel ("answer", "last"); that is the voice's accent, not a misreading.
+  to spoken ones, with a form per engine where engines read differently.
+  "Orleans" is said or-LEENZ, with the stress on the second syllable: Kokoro
+  gets "Or-leens" and Chatterbox "Orleens", because Chatterbox pauses at a
+  hyphen. Kokoro's other respellings ("livs", "Cluster Eh", "idem-potent")
+  repaired its phonemizer, and Chatterbox reads those words from context, so
+  it gets them as written. Other entries spell out initialisms ("CRDTs",
+  "gRPC"). Captions keep the written form. Prefer rewording a script to adding
+  an entry.
+- **Chatterbox watermarks what it makes.** Every clip carries Resemble AI's
+  Perth watermark, which cannot be heard and identifies the audio as
+  generated. It is kept.
+- **Kokoro remains an engine** (`"provider": "kokoro"` in `voice.json`), for
+  auditions and comparison. Its phonemizer picks one reading of a heteronym
+  without looking at the sentence, so `npm run phonemes -- <slug>` prints each
+  cue's phonemes as Kokoro will receive them, and flags the words in
+  [voice/heteronyms.json](voice/heteronyms.json). `npm run voice:samples`
+  renders the audition script in every Kokoro candidate under
+  `renders/voice-samples/`.
 
 ## Open decisions
 

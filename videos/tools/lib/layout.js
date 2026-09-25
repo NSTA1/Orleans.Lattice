@@ -56,6 +56,7 @@ export function episodePaths(slug) {
     metadata: path.join(dir, "episode.json"),
     assets: path.join(dir, "assets"),
     narration: path.join(rendersDir, "narration", slug),
+    takes: path.join(rendersDir, "takes", slug),
   };
 }
 

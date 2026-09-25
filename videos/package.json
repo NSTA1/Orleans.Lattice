@@ -23,6 +23,7 @@
     "publish": "node tools/publish.js",
     "voice:samples": "node tools/voice-samples.js",
     "narrate": "node tools/narrate.js",
+    "audition": "node tools/audition.js",
     "phonemes": "node tools/phonemes.js",
     "timeline": "node tools/timeline.js",
     "review": "node tools/review.js",

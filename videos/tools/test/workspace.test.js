@@ -56,13 +56,24 @@ test("every audition candidate names a voice, a language and a description", () 
   }
 });
 
-test("the series voice is local, and is either not yet chosen or one of the auditioned candidates", () => {
+test("the series voice is local, on an engine the workspace runs, with each engine's settings complete", () => {
   const voice = readJson("voice/voice.json");
   const { candidates } = readJson("voice/candidates.json");
-  assert.equal(voice.provider, "kokoro");
-  assert.equal(typeof voice.speed, "number");
-  assert.ok(voice.voice === null || candidates.some((candidate) => candidate.voice === voice.voice));
-  if (voice.voice !== null) {
-    assert.equal(voice.lang, candidates.find((candidate) => candidate.voice === voice.voice).lang);
-  }
+  assert.ok(["chatterbox", "kokoro"].includes(voice.provider), voice.provider);
+  assert.ok(voice[voice.provider], `voice.json has no settings for its provider '${voice.provider}'`);
+
+  const { kokoro } = voice;
+  assert.equal(typeof kokoro.speed, "number");
+  const candidate = candidates.find((c) => c.voice === kokoro.voice);
+  assert.ok(candidate, `the Kokoro voice ${kokoro.voice} is one of the auditioned candidates`);
+  assert.equal(kokoro.lang, candidate.lang);
+
+  const { chatterbox } = voice;
+  assert.match(chatterbox.revision, /^[0-9a-f]{40}$/, "the Chatterbox model is pinned to one revision");
+  assert.ok(existsSync(path.join(workspaceRoot, chatterbox.reference)), "the voice's reference clip is in the repository");
+  for (const setting of ["exaggeration", "cfgWeight", "temperature"]) assert.equal(typeof chatterbox[setting], "number", setting);
+  assert.ok(Number.isInteger(chatterbox.attempts) && chatterbox.attempts >= 1);
+  assert.ok(chatterbox.recognisers.length > 0, "every clip is heard back by at least one recogniser");
+  assert.ok(chatterbox.secondsPerWord.min < chatterbox.secondsPerWord.max);
+  assert.ok(existsSync(path.join(workspaceRoot, "voice", "requirements.txt")), "the voice's Python environment is pinned");
 });

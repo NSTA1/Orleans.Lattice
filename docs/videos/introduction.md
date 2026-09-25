@@ -9,12 +9,12 @@ and how a deployment grows from one machine to many regions with the same
 programming model. It ends at the three ways into the documentation.
 
 <!-- The video block is written by `npm run companions` in videos/, and the documentation site replaces it with the player. -->
-<!-- video:begin episode="introduction" path="front-door" order="1" length="2:52" cut="dc2de3eb792f" -->
+<!-- video:begin episode="introduction" path="front-door" order="1" length="3:01" cut="231f8425d398" -->
 
 > [!NOTE]
 > Watch it on the [documentation site](https://nsta1.github.io/Orleans.Lattice/docs/videos/introduction.html),
-> or [download it](../../docs-site/media/introduction-dc2de3eb792f.mp4)
-> (MP4, 2:52, 11.6 MB).
+> or [download it](../../docs-site/media/introduction-231f8425d398.mp4)
+> (MP4, 3:01, 11.6 MB).
 
 <!-- video:end -->
 
@@ -71,7 +71,9 @@ Each merges the other's update by taking the larger value per replica, so both a
 
 Deliver that update twice, and nothing changes.
 
-Merges are commutative, associative and idempotent, so any cluster can accept a write to any key, with no lock manager and no consensus round trip. For plain values, the last writer wins.
+Merges are commutative, associative and idempotent.
+
+So any cluster can accept a write to any key, with no lock manager and no consensus round trip. For plain values, the last writer wins.
 
 ### Everything else is a seam
 
@@ -85,7 +87,7 @@ So a deployment can grow without a rewrite. Start local: one machine, no cloud a
 
 Add a team: identity, authorization, schemas and tenants.
 
-Go global: active-active across regions, with backup and an autoscaling signal.
+Go global: active in every region at once, with backup and an autoscaling signal.
 
 At every stage, the programming model is the same. Your code resolves ILattice, and calls it.
 
@@ -97,7 +99,7 @@ Build, if you are writing code against ILattice.
 
 Evaluate, if you are deciding whether it fits.
 
-Operate, if you are running an estate. Pick your way in.
+Operate, if you are running an estate. You choose.
 
 <!-- transcript:end -->
 

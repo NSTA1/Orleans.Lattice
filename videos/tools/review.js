@@ -5,6 +5,7 @@
 // is output (renders/review/<slug>.html) and never committed.
 //
 //   npm run review -- <slug> [--video renders/<file>.mp4]
+//   npm run review -- <slug> --audio     the narration alone, to approve by ear before rendering
 //
 // Serve the workspace to watch it, for example:
 //   python -m http.server 8765    then open http://localhost:8765/renders/review/<slug>.html
@@ -13,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import path from "node:path";
 import { workspaceRoot } from "./lib/hyperframes.js";
 import { episodePaths, rendersDir } from "./lib/layout.js";
+import { listeningPage } from "./lib/listening.js";
 import { parseScript } from "./lib/narration.js";
 import { escapeHtml } from "./lib/snippets.js";
 
@@ -22,10 +24,32 @@ try {
   paths = episodePaths(args.find((arg, i) => !arg.startsWith("--") && args[i - 1] !== "--video"));
 } catch (error) {
   console.error(`review: ${error.message}`);
-  console.error("usage: npm run review -- <episode-slug> [--video renders/<file>.mp4]");
+  console.error("usage: npm run review -- <episode-slug> [--video renders/<file>.mp4] [--audio]");
   process.exit(2);
 }
 const { slug } = paths;
+const reviewDir = path.join(rendersDir, "review");
+const fromReview = (file) => path.relative(reviewDir, file).split(path.sep).join("/");
+// A re-render keeps its file name, so the page names the version it was
+// written for: a browser that has the previous render cached fetches this one.
+const versioned = (file) => `${fromReview(file)}?v=${Math.round(statSync(file).mtimeMs)}`;
+const title = /^#\s+(.+?)(?:\s+-\s+script)?\s*$/m.exec(readFileSync(paths.script, "utf8"))?.[1] ?? slug;
+const brandSheets = ["tokens.css", "fonts.css"].map((file) => fromReview(path.join(workspaceRoot, "shared", "brand", "site", file)));
+
+if (args.includes("--audio")) {
+  const manifestFile = path.join(paths.narration, "cues.json");
+  const narration = path.join(paths.narration, "narration.wav");
+  if (!existsSync(manifestFile) || !existsSync(narration)) {
+    console.error(`review: '${slug}' has no mastered narration; run 'npm run narrate -- ${slug}' first`);
+    process.exit(1);
+  }
+  const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+  mkdirSync(reviewDir, { recursive: true });
+  writeFileSync(path.join(reviewDir, `${slug}-narration.html`), listeningPage({ title, manifest, audioSrc: versioned(narration), stylesheets: brandSheets }));
+  console.log(`review: renders/review/${slug}-narration.html, the narration alone (${manifest.cues.length} cues)`);
+  process.exit(0);
+}
+
 const chosen = args.includes("--video") ? args[args.indexOf("--video") + 1] : null;
 const candidates = chosen ? [chosen] : [`renders/${slug}-high.mp4`, `renders/${slug}.mp4`, `renders/${slug}-draft.mp4`];
 const video = candidates.map((file) => path.join(workspaceRoot, file)).find((file) => existsSync(file));
@@ -37,7 +61,6 @@ if (!video) {
 const manifestFile = path.join(paths.narration, "cues.json");
 const manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, "utf8")) : null;
 const { cues } = parseScript(readFileSync(paths.script, "utf8"), `episodes/${slug}/SCRIPT.md`);
-const title = /^#\s+(.+?)(?:\s+-\s+script)?\s*$/m.exec(readFileSync(paths.script, "utf8"))?.[1] ?? slug;
 
 // What the delivered file measures, from the file itself.
 const probe = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration,size,bit_rate:stream=codec_name,width,height", "-of", "json", video], {
@@ -49,10 +72,6 @@ const measured = /Integrated loudness:\s*I:\s*(-?[\d.]+)\s*LUFS[\s\S]*True peak:
   loudness.stderr.slice(loudness.stderr.lastIndexOf("Summary:")),
 );
 
-const fromReview = (file) => path.relative(path.join(rendersDir, "review"), file).split(path.sep).join("/");
-// A re-render keeps its file name, so the page names the version it was
-// written for: a browser that has the previous render cached fetches this one.
-const versioned = (file) => `${fromReview(file)}?v=${Math.round(statSync(file).mtimeMs)}`;
 const megabytes = (statSync(video).size / 1e6).toFixed(1);
 const duration = probed ? Number(probed.format.duration) : manifest?.duration;
 const facts = [
