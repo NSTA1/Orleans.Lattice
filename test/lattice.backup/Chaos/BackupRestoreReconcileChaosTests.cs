@@ -1,6 +1,10 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Hosting;
 using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Runtime;
+using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Backup.Tests.Chaos;
 
@@ -9,7 +13,7 @@ namespace Orleans.Lattice.Backup.Tests.Chaos;
 /// A tag index is maintained inline in a sibling index tree, so a shadow-cutover
 /// restore that reverts the subject tree's contents leaves membership rows for
 /// keys absent from the restored point-in-time until a reconcile runs. The
-/// restore fires a prompt reconcile; this suite drives that path under a large
+/// restore awaits a prompt reconcile; this suite drives that path under a large
 /// working set, repeated restores to successively earlier point-in-times, and a
 /// concurrent reader continuously issuing tag queries, and pins that membership
 /// converges to exactly the restored subject with no orphaned rows surviving.
@@ -47,10 +51,13 @@ public sealed class BackupRestoreReconcileChaosTests
     // A single shadow-cutover restore over a large tagged working set, with a
     // concurrent reader hammering the tag query, must reconcile away every
     // membership row absent from the restored point-in-time.
-    [Test]
-    public async Task Restore_reconciles_large_tag_membership_under_concurrent_reads()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Restore_reconciles_large_tag_membership_under_concurrent_reads(bool abortRegistryEnumeration)
     {
-        await _fixture.InitializeAsync();
+        await _fixture.InitializeAsync(builder =>
+            builder.AddSiloBuilderConfigurator<RegistryEnumerationAbortConfigurator>());
+        var abortFilter = _fixture.SiloServices.GetRequiredService<RegistryEnumerationAbortFilter>();
 
         // Point-in-time: 20 'keep' keys only.
         const string source = "chaos-recon-src";
@@ -85,13 +92,21 @@ public sealed class BackupRestoreReconcileChaosTests
             }
         });
 
-        var result = await _fixture.Restore.RestoreAsync(
-            new LatticeRestoreRequest(backup.BackupId, target, mode: LatticeRestoreMode.ShadowCutover));
-        Assert.That(result.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
+        try
+        {
+            if (abortRegistryEnumeration) abortFilter.Arm();
+            var result = await _fixture.Restore.RestoreAsync(
+                new LatticeRestoreRequest(backup.BackupId, target, mode: LatticeRestoreMode.ShadowCutover));
+            Assert.That(result.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
+        }
+        finally
+        {
+            readerCts.Cancel();
+            await reader;
+        }
 
-        readerCts.Cancel();
-        await reader;
-
+        Assert.That(abortFilter.InjectedCount, Is.EqualTo(abortRegistryEnumeration ? 1 : 0),
+            "The abort case must exercise registry scan recovery during the restore's tag-index discovery.");
         var after = await RedKeysAsync(index);
         Assert.That(after, Is.EquivalentTo(kept),
             "The reconcile fired by the restore must drop every membership row absent from the restored subject.");
@@ -100,6 +115,61 @@ public sealed class BackupRestoreReconcileChaosTests
         foreach (var k in gone)
         {
             Assert.That(await live.GetAsync(k), Is.Null, $"Restored subject must not contain '{k}'.");
+        }
+    }
+
+    private sealed class RegistryEnumerationAbortConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder)
+        {
+            siloBuilder.Services.AddSingleton<RegistryEnumerationAbortFilter>();
+            siloBuilder.Services.AddSingleton<IIncomingGrainCallFilter>(services =>
+                services.GetRequiredService<RegistryEnumerationAbortFilter>());
+        }
+    }
+
+    // Issue 3233: an aborted catalog scan used to be swallowed by the restore's
+    // best-effort trigger, leaving every orphan intact. Only the trigger's tag-
+    // prefixed discovery is marked, so a background catalog scan cannot consume
+    // the injection and make the restore regression pass without exercising it.
+    private sealed class RegistryEnumerationAbortFilter : IIncomingGrainCallFilter
+    {
+        private const string DiscoveryScopeKey = "test.restore-tag-index-discovery";
+        private int _remainingAborts;
+        private int _injectedCount;
+
+        internal int InjectedCount => Volatile.Read(ref _injectedCount);
+
+        internal void Arm() => Volatile.Write(ref _remainingAborts, 1);
+
+        public async Task Invoke(IIncomingGrainCallContext context)
+        {
+            if (context.InterfaceMethod?.Name == nameof(ILatticeRegistry.GetAllTreeIdsAsync)
+                && context.Request.GetArgumentCount() == 1
+                && context.Request.GetArgument(0) is "tag-")
+            {
+                RequestContext.Set(DiscoveryScopeKey, true);
+                try
+                {
+                    await context.Invoke();
+                }
+                finally
+                {
+                    RequestContext.Remove(DiscoveryScopeKey);
+                }
+                return;
+            }
+
+            if (context.InterfaceMethod?.Name == "MoveNext"
+                && context.TargetContext?.GrainId.Key.ToString() == LatticeConstants.RegistryTreeId
+                && RequestContext.Get(DiscoveryScopeKey) is true
+                && Interlocked.Exchange(ref _remainingAborts, 0) == 1)
+            {
+                Interlocked.Increment(ref _injectedCount);
+                throw new EnumerationAbortedException();
+            }
+
+            await context.Invoke();
         }
     }
 
