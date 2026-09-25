@@ -439,11 +439,12 @@ internal sealed partial class BPlusLeafGrain
     /// and runs <see cref="CompleteSplitAsync"/> + <see cref="PersistAsync"/>
     /// only if the in-progress state is still observed. Returns
     /// <see langword="null"/> when a concurrent turn already finished
-    /// the recovery; the caller still has stable
+    /// the recovery; the caller then routes its own write by the declared
+    /// span, which is correct either way. It must not route by
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitKey"/> /
-    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitSiblingId"/> fields to
-    /// route its own write across the donor / sibling boundary, so
-    /// the post-gate routing in the caller is correct either way.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitSiblingId"/>:
+    /// a new division can start before the caller resumes, and those fields
+    /// would then name its not-yet-initialised sibling (issue #3583).
     /// <para>
     /// This recovery acquire stays <em>blocking</em> (unlike the
     /// non-blocking acquire in <see cref="SplitIfNeededUnderGateAsync"/>)
