@@ -108,3 +108,7 @@ The dominant cost is the value payload, confirming the framing that the
 for bounding it; the candidate-1 value-payload-only LRU is the only eviction
 policy that preserves the four correctness contracts while shrinking that
 dimension.
+
+That policy has since shipped as the opt-in `LatticeOptions.MaxCacheValueBytes`
+budget (default `null`, unbounded). The probe leaves it unset, so it still
+measures the unbounded default.

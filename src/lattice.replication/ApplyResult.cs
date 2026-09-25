@@ -6,9 +6,9 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Outcome of an <see cref="IReplicationApplier.ApplyAsync(WalRecord, CancellationToken)"/>
 /// invocation. Returned to give callers visibility into whether the
-/// entry was actually merged onto the local tree (versus deduped by
-/// the per-origin high-water-mark) and where the HWM stands after the
-/// call.
+/// entry was actually merged onto the local tree (versus filtered by a pinned
+/// snapshot floor, the recent exact-identity cache, or a local-origin guard) and
+/// where the HWM stands after the call.
 /// </summary>
 [GenerateSerializer]
 [Alias(ReplicationTypeAliases.ApplyResult)]
@@ -18,9 +18,8 @@ public readonly record struct ApplyResult
     /// <summary>
     /// <c>true</c> when the receiver merged the entry onto the local
     /// tree; <c>false</c> when the entry was filtered out as a
-    /// re-delivery (its <see cref="WalRecord.Timestamp"/> was at or
-    /// below the per-origin high-water-mark) or rejected as
-    /// inapplicable (for example, an entry whose
+    /// re-delivery by the pinned-floor gate or recent exact-identity cache, or
+    /// rejected as inapplicable (for example, an entry whose
     /// <see cref="WalRecord.OriginClusterId"/> matches the local
     /// cluster id and would therefore loop locally).
     /// </summary>

@@ -132,8 +132,10 @@ internal sealed class MyExceptionCopier : IDeepCopier<MyException>
 }
 ```
 
-`[RegisterCopier]`, `IDeepCopier<T>`, and `CopyContext` live in
-`Orleans.Serialization.Cloning`. The `SerializableExceptionDeepCopyContractTests`
+`IDeepCopier<T>` and `CopyContext` live in `Orleans.Serialization.Cloning`;
+`[RegisterCopier]` is `Orleans.RegisterCopierAttribute`, which any file declared
+under an `Orleans.*` namespace resolves without a `using`. The
+`SerializableExceptionDeepCopyContractTests`
 guard (backed by the shared testing library) audits every `[GenerateSerializer]`
 exception per package by reflection and fails CI on any type that lacks this
 coverage, so no per-type same-silo test is needed. The guard is enrolled per test
@@ -201,10 +203,11 @@ loudly anyway": that reading is the argument for deleting the guard, and it is
 wrong. The guard compares declaration positions and never inspects which
 reference is used, which is precisely why it catches both shapes.
 
-The silent shape is one field away, not hypothetical. Six sites in `src/`
-(`TagIndexReconcileGrain`, `WalSaturationSignal`) already create instruments
+The silent shape is one field away, not hypothetical. Fifteen sites across
+eight types in `src/` - among them the tag-index reconcile grain, the WAL
+saturation signal, and the leaf grain's own gauges - already create instruments
 through `LatticeMetrics.Meter` from another type, so the cross-type form is
-idiomatic here; they are safe only because those classes declare no `Meter`
+idiomatic here; they are safe only because those types declare no `Meter`
 field of their own, leaving nothing to match and nothing to be null. Adding one
 for subscriber convenience would introduce the silent shape. `GrainIndexMetrics`
 is the standing candidate, being the only production class whose `Meter` is an
@@ -219,7 +222,7 @@ source, not a guarantee.
 `MeterFieldDeclarationOrderTests` enforces the ordering across `src/` and fails
 loudly if its own scan matches nothing, so it cannot go vacuous. It scans the
 classes that declare **both** a `Meter` field and an instrument field. Nine
-classes in `src/` declare a `Meter`; the two that declare no instrument
+classes in `src/` declare a static `Meter` field; the two that declare no instrument
 (`LatticeTenantMetrics`, `LatticeScalingMetrics`) are outside that set, and the
 guard's silence on them is **correct, not a gap** - there is no ordering to
 check until an instrument exists, and it begins covering them the moment one is
@@ -426,16 +429,17 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   - **CI runs on epic-targeted and release-line pull requests.**
     `.github/workflows/ci.yml` triggers on
     `pull_request: branches: [main, '*/epic/**', 'release/**']`, and the
-    advisory `explorer-ci.yml` and `ui-tests.yml` lanes mirror that branch list
-    behind their own `paths:` filters. Without the second pattern a pull request
+    advisory `explorer-ci.yml`, `ui-tests.yml`, and `videos.yml` lanes mirror that
+    branch list behind their own `paths:` filters. Without the second pattern a
+    pull request
     into an epic branch would run no checks at all, which trades serialisation
     for no validation; without the third, neither would a patch wave assembled
     on a release line, which is the least safe place to have none because a
     patch ships straight to NuGet without ever being built on trunk - keep both
     when editing any of those triggers. (`docs.yml` has
     no `branches:` filter and so already covers every base; `coverage.yml` runs
-    nightly on a schedule and `publish.yml` is push-triggered, so neither is
-    affected.)
+    nightly on a schedule, `publish.yml` is push-triggered, and
+    `ci-serial-old.yml` is manual-dispatch only, so none of them is affected.)
   - **An epic branch must never carry branch protection, and in particular
     never a required status check with `strict` (require branches to be up to
     date before merging).** That setting on `main` is precisely what serialises
@@ -499,8 +503,9 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
       time only the first existed - which is precisely the asymmetry that let
       completed work sit open with no signal anywhere.
     - **The member half.** The `Guard - inert closing keywords` step fails a
-      pull request whose base is not the default branch and whose body carries
-      a closing keyword GitHub would honour, so writing `Closes #N` on a member
+      pull request whose base is not the default branch and whose body - or any
+      of its own commit messages - carries a closing keyword GitHub would honour,
+      so writing `Closes #N` on a member
       pull request is caught rather than merged. Its predicate mirrors GitHub's
       own parser rather than approximating it: fenced blocks, blockquotes, and
       inline code spans are stripped first, because GitHub does not act on a

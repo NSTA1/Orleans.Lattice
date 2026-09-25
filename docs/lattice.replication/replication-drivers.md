@@ -1,7 +1,7 @@
 # Replication drivers
 
 This document describes the **production drivers** that turn the dormant
-replication primitives - the change feed, the WAL storage provider, the
+replication primitives - the tree's partitioned write-ahead log, the WAL storage provider, the
 WAL garbage collector, and the fall-off-the-log detector - into a running
 end-to-end pipeline. Without these drivers, calling `AddLatticeReplication`
 yields the seam set but emits nothing on the wire and trims nothing from
@@ -22,7 +22,7 @@ migration on silo loss without leader election.
 
 | Driver | Key | Cadence | Purpose |
 |---|---|---|---|
-| Per-peer shipper | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
+| Per-peer shipper | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the tree's WAL partitions from the per-peer partition cursors, applies producer-side filters and the local-origin-only cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks batches whose framing header cannot be built on the per-tree DLQ. |
 | Per-tree maintenance | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
 
 The shipper is per-peer because per-peer back-pressure isolation must not
@@ -131,9 +131,12 @@ reads it.
 
 ##### Membership-sensitive consumers
 
-These are the four consumers whose behaviour depends on which peers
+These are the four drivers whose behaviour depends on which peers
 are currently reachable. Every one of them reads
-`IReplicationTopology` and nothing else:
+`IReplicationTopology` and nothing else (other membership-sensitive
+paths - the anti-entropy digest probe, the source-identity rebind, and
+the coordinated-restore saga's dispatcher and write fence - also read
+`CurrentPeers` live on each pass):
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
@@ -247,24 +250,46 @@ primary surface; the reverse change would be a breaking one.
 
 Every phase tick (default 100 ms, `LatticeReplicationOptions.ShipPhaseTimerPeriod`) the shipper:
 
-1. Honours the backoff budget set by the previous failed attempt - if
-   `_nextRetryAtUtc > now`, the tick returns immediately.
-2. Drains a batch up to `LatticeReplicationOptions.ShipBatchSize` entries
-   past the persisted cursor from the change feed.
+1. Returns immediately while a coordinated restore saga has paused
+   shipping for the pair, or while the backoff deadline set by a
+   previous failed attempt (or extended by a receiver `PauseForMs`
+   hint) has not yet passed.
+2. Drains a batch of up to the effective batch cap - `ShipBatchSize`,
+   lowered by the adaptive controller and by any receiver
+   `SuggestedBatchSize` hint - from the tree's WAL partitions, resuming
+   each partition from its durable sequence cursor and merging the
+   partitions by HLC (see [Partition resume cursor](#partition-resume-cursor)).
 3. Filters each entry through the producer-side filter chain:
-   - **Cycle-break:** skip entries whose `OriginClusterId` matches the
-     peer's own cluster id (peer never receives its own writes back).
+   - **Durability-only and maintenance entries:** skip entries with no
+     `OriginClusterId` and tombstone-reap envelopes, neither of which has
+     receiver-side meaning.
+   - **Cycle-break (local origin only):** skip every entry whose
+     `OriginClusterId` is not the local `ClusterId`. Entries this cluster
+     applied on behalf of another origin are never re-shipped, which
+     subsumes "a peer never receives its own writes back".
    - **`KeyFilter`:** skip entries whose key fails the configured
      predicate.
    - **`KeyPrefixes`:** skip entries whose key does not start with any
      configured prefix.
-4. Encodes the batch via the configured `IReplicationBatchEncoder` into
-   an activation-scoped `ArrayBufferWriter<byte>` (see "Buffer reuse"
-   below).
-5. Calls `IReplicationTransport.SendAsync` with the framed batch.
-6. On positive ack, advances the durable cursor to
-   `min(ack.HighestAppliedHlc, lastShippedHlc)` and reports the new
-   cursor through the `IWalCursorRegistry`.
+
+   Saga terminal marks (`TxCommit` / `TxAbort`) bypass `KeyFilter` and
+   `KeyPrefixes`, so a saga whose prepared keys passed the filters always
+   receives its terminal.
+4. Coalesces redundant same-key versions and, when opted in, elides
+   payloads the receiver already holds (see [Pre-ship coalescing](#pre-ship-coalescing)
+   and [Content-hash dedup measurement](#content-hash-dedup-measurement)),
+   then stamps a framing header over the pre-encoded WAL entry segments -
+   no entry is re-encoded (see "Buffer reuse" below).
+5. Calls `IReplicationTransport.SendAsync` with the framed batch in
+   `ReplicationBatch.EncodedEnvelope`.
+6. On an accepted ack, advances the cursor to the ack's
+   `HighestAppliedHlc` - or to the last shipped entry's HLC when that
+   frontier does not pass the current cursor (a fully deduplicated
+   batch) - folds the per-partition resume cursors forward, and reports
+   the durable cursor through `IWalCursorRegistry` once it has been
+   persisted (see [Deferred cursor persistence](#deferred-cursor-persistence)).
+   A rejected ack (`Accepted = false`) is treated as transient: the
+   cursor stays put and the shipper backs off.
 
 A successful round-trip resets `ConsecutiveFailures` to `0` and clears
 the backoff budget.
@@ -286,8 +311,8 @@ and durably folded per shipped batch (deferred-persisted on the
 mid-tick.
 
 At the start of every tick the pump primes one shipping page per WAL
-partition before the k-way HLC merge (the change feed is sharded into
-`ReplogPartitions` partitions per tree). These priming reads are issued
+partition before the k-way HLC merge (the tree's WAL is sharded into
+`ReplogPartitions` partitions). These priming reads are issued
 **concurrently** and awaited once, not serialized one partition at a
 time: each read is an independent WAL-shard grain call that writes only
 its own partition's scratch slot, so an N-partition tree primes in a
@@ -428,9 +453,9 @@ purposes, not cryptographic.
 
 ### Permanent encode failure: dead-letter routing
 
-When `IReplicationBatchEncoder.Encode` throws an `ArgumentException` or
-`InvalidOperationException` - schema-shape failures the bytes can never
-recover from in their current form - the shipper:
+When building the outbound framing header throws an `ArgumentException`
+or `InvalidOperationException` - schema-shape failures the batch can
+never recover from in its current form - the shipper:
 
 1. Parks every entry in the offending batch on the per-tree
    dead-letter store tagged with
@@ -467,7 +492,7 @@ shipper writes per tick.
 
 ### Partition resume cursor
 
-The steady-state ship loop bypasses `IChangeFeed` and reads each WAL
+The ship loop never uses `IChangeFeed`: it reads each WAL
 partition directly via the per-shard WAL grain's sequence-ranged read (from a sequence lower bound)
 starting at a durable per-partition resume cursor stored on
 the shipper's persisted partition-cursor state. Per pump tick the shipper
@@ -478,28 +503,33 @@ canonical single-partition case.
 
 Sequence-based (not HLC-based) resume converts every pump tick from an
 O(N) rescan-from-zero walk over the WAL into an O(page) read past the
-last successfully shipped offset. `IChangeFeed` is retained verbatim
-for bootstrap, test, and future-materialiser consumers that have no
-notion of partition routing.
+last successfully shipped offset. `IChangeFeed` remains a public seam
+for tests and host-built consumers that have no notion of partition
+routing; neither the drivers nor the bootstrap path consume it.
 
-A defensive HLC predicate at the top of the merge loop drops any entry
-whose timestamp is at-or-below the durable HLC `Cursor`. This is the
-single insurance line that handles the legacy-state-decode case (an
-upgraded shipper resuming with a populated HLC cursor but an empty
-partition-cursor dictionary), the bootstrap case (the receiver
-applies a snapshot that pushes the HLC cursor past pending WAL
-entries), and the cross-shipper-HWM case (another peer advanced the
-receiver's frontier past ours and the next ack reflects that). Steady
-state never matches the predicate because partition cursors move
-strictly forward on every positive ack.
+The durable per-partition sequence cursor is the exactly-once resume
+token: the merge presents each WAL sequence once, and a partition
+cursor moves past a sequence only on an accepted ack. The shipper
+therefore does **not** drop an entry merely because its HLC is at or
+below the scalar HLC cursor. Source HLCs are stamped per leaf and a
+partition interleaves many leaves, so a genuinely new write routinely
+sits below the running maximum, and dropping it would silently strand
+it. A scalar-HLC drop survives only for the one-time legacy migration
+tick - state persisted by a build that predates partition cursors, with
+a non-zero HLC cursor but an empty partition-cursor map - so an
+upgraded shipper does not re-ship its whole already-shipped prefix; even
+then zero-HLC range deletes and prepared atomic-batch entries are never
+dropped. The receiver's shadow-forward identity cache and per-key
+last-writer-wins guard make any re-shipped duplicate a no-op.
 
 Wire-compat is additive: the new `[Id(2)]` partition-cursor slot on
 the shipper's persisted state decodes as the empty dictionary for legacy
 persisted state, which the cold-start path treats identically to a
 fresh activation. Setting `ReplogPartitions=1` reduces the merge to a
-single read per tick; the shipping default is `8` (kept in lockstep
-with `LatticeOptions.WalPartitions` so the shipper reads every
-partition the commit-log writer fanned across).
+single read per tick; the shipping default is `8`, and the value must
+equal `LatticeOptions.WalPartitions` so the shipper reads every
+partition the commit-log writer fans across (see
+[`ReplogPartitions`](configuration.md#replogpartitions)).
 
 ### Deferred cursor persistence
 
@@ -524,12 +554,16 @@ empty-drain path), so a stream that goes completely silent still
 checkpoints within the time bound. (A graceful deactivation also
 flushes - see below.)
 
-Receiver-side apply is HLC-monotonic and dedupes on
-`(originClusterId, originHlc)`, so a silo crash inside the
-deferred-persist window costs at most `ShipCursorWriteInterval × ShipBatchSize`
-entries of wasteful re-shipping - the receiver no-ops the duplicates
-and no data is lost. Lowering `ShipCursorWriteMaxDelay` only ever makes
-the durable cursor fresher; it can never widen that bound.
+Re-shipping is safe because the receiver absorbs repeats without relying
+on its per-origin high-water mark, which drops nothing: an entry at or
+below the snapshot-pinned causal floor is dropped, a recently applied
+`(origin, HLC, key, op)` identity is suppressed by the shadow-forward
+identity cache, and anything else re-applies idempotently under per-key
+last-writer-wins. A silo crash inside the deferred-persist window
+therefore costs at most `ShipCursorWriteInterval x ShipBatchSize`
+entries of wasteful re-shipping and no data is lost. Lowering
+`ShipCursorWriteMaxDelay` only ever makes the durable cursor fresher; it
+can never widen that bound.
 
 Setting `ShipCursorWriteInterval=1` recovers the persist-every-ack
 behaviour for hosts that prefer the smaller replay window over the
@@ -600,13 +634,14 @@ HLC and the sender advances its durable cursor to
 `ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
 the receiver's stored timestamp behind the sender's cursor and change
 LWW/HLC convergence against concurrent foreign-origin writes. Eliding
-safely requires the receiver to advertise which content hashes it
-already holds (the manifest/pull exchange), which needs an
-additive-but-new request/response shape on `IReplicationTransport`.
-That elision (`ContentHashDedupElisionEnabled`) is deliberately kept
-opt-in and deferred until wire-version capability negotiation lands, so
-the default build ships the measurement that justifies the round trip
-without any wire-format, serialization, `[Id]`, or
+safely requires the receiver to report which content it already holds.
+That is the separate opt-in `ContentHashDedupElisionEnabled` (default
+`false`, and it requires this master switch): before each batch ships
+the shipper runs a content-manifest exchange over the digest-probe
+transport (`IReplicationDigestProbeTransport.ExchangeContentManifestAsync`),
+and the exchange composes with the bounded-pipelining window - see
+[Content-manifest payload elision](observability.md#content-manifest-payload-elision).
+The measurement itself needs no wire-format, serialization, `[Id]`, or
 `[Alias]` change. Because the counters fire as entries are framed onto
 the wire, a batch re-shipped after a transient transport failure counts
 its entries again - correct, since a re-ship is itself a redundant wire
@@ -627,8 +662,10 @@ alters the bytes shipped - coalescing actually elides entries.
 
 The pass handles both last-writer-wins and recognised CRDT trees, by
 different mechanics. For a tree whose declared `LatticeMergeMode` is
-`LwwRegister` the receiver applies each entry by last-writer-wins on the
-value bytes ordered by `(HybridLogicalClock, OriginClusterId)`, so within
+`LwwRegister` the receiver applies each entry by last-writer-wins
+ordered by HLC (an exact HLC tie falls to the replica-invariant
+tombstone, expiry, and value-byte fields before the observer-relative
+origin id), so within
 one drained batch only the highest-HLC version per key survives
 convergence and the earlier ones are invisible after apply. Because the
 shipper only ever drains its own cluster's authored writes (the
@@ -689,13 +726,19 @@ change, and no wire-version bump (fewer / merged entries of the existing
 shape). When the flag is off the drain/ship path is byte-identical to
 before and none of the counters fire.
 
-### `ShipMaxInFlight` is v1-inert
+### Bounded pipelining (`ShipMaxInFlight`)
 
-The validator accepts any value `>= 1`, but the shipper grain hard-codes
-strict serial sends per `(tree, peer)` in this release. Multi-batch
-pipelining is gated on the typed-envelope transport seam (which removes
-the sender-side decode round-trip the gRPC push transport currently pays)
-and on multi-batch in-flight WAL flush landing first.
+`ShipMaxInFlight` (default `1`, validated `>= 1`) is live. At `1` the
+shipper is strictly serial per `(tree, peer)`; above `1` it keeps up to
+that many shipped-but-unacknowledged batches in flight, consumes acks in
+strict FIFO order, and advances the durable cursor past a batch only
+once every lower-HLC batch before it has been acknowledged. A receiver
+`SuggestedBatchSize` hint collapses the window back to `1` for the tick,
+and the content-manifest elision exchange runs inline before each batch
+without collapsing it. A window above `1` issues concurrent
+`IReplicationTransport.SendAsync` calls for one pair, so the transport
+must tolerate that. The live depth is the `peer.ship_in_flight` gauge;
+see [Sender-side pipelining](receiver-flow-control.md#sender-side-pipelining).
 
 ---
 
@@ -708,14 +751,19 @@ last-run timestamps in persistent state:
 
 - **GC pass** - calls `ILatticeWalGc.RunOnceAsync(treeName)` every
   `MaintenanceGcInterval` (default 5 s). The GC consults the
-  cursor registry for the slowest-ack frontier across `IChangeFeed`
-  consumers and trims the WAL up to that frontier (or the
-  `WalRetention` TTL ceiling, whichever is later).
-- **Fall-off-the-log probe** - calls
+  cursor registry for the slowest-ack frontier across registered
+  consumers - every per-peer shipper reports its durable cursor there -
+  and trims the WAL up to that frontier (or the `WalRetention` TTL
+  ceiling, whichever is later).
+- **Fall-off-the-log probe** - every `MaintenanceFallOffCheckInterval`
+  (default 30 s) reads the oldest retained HLC per data origin from the
+  local WAL (`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`)
+  and, for each current topology peer that authored at least one
+  retained entry, calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
-  every `MaintenanceFallOffCheckInterval` (default 30 s) for each
-  configured peer. The sender-oldest HLC is computed via
-  `ILatticeWalIntrospection.GetOldestAvailableHlcAsync`. On positive
+  with that peer's own oldest HLC. A peer with no retained authored
+  entries is skipped - probing it against another origin's entries was
+  the source of a false-positive re-bootstrap loop. On positive
   detection, the detector drives the bootstrap kickoff itself -
   the maintenance grain is a pure scheduler.
 
@@ -723,7 +771,9 @@ last-run timestamps in persistent state:
 
 The cadence stamp advances **only on a successful pass**. A thrown
 `RunOnceAsync` or probe pass is logged as a warning and retried on the
-next phase tick rather than waiting a full cadence interval. The keepalive
+next phase tick rather than waiting a full cadence interval; a failure
+probing one peer is logged and skipped without failing the pass, so that
+peer is retried on the next cadence. The keepalive
 reminder (60 s) is the backstop against a deterministically-failing pass
 so the activation cannot stall indefinitely.
 
@@ -738,17 +788,21 @@ condition clears.
 | Option | Default | Validator | Purpose |
 |---|---|---|---|
 | `ShipBatchSize` | 256 | `>= 1` | Maximum entries per ship loop iteration. |
-| `ShipMaxInFlight` | 1 | `>= 1` | **v1-inert.** Reserved for future multi-batch pipelining. |
+| `ShipMaxInFlight` | 1 | `>= 1` | Shipped-but-unacknowledged batches per `(tree, peer)`; `1` is strictly serial. See [Bounded pipelining](#bounded-pipelining-shipmaxinflight). |
 | `ShipBackoffInitial` | 100 ms | `> TimeSpan.Zero` | Base delay on first transient failure. |
 | `ShipBackoffMax` | 30 s | `>= ShipBackoffInitial` | Upper bound on backoff regardless of consecutive failure count. |
 | `ShipBackoffJitter` | 0.2 | `[0.0, 1.0]` | Symmetric jitter multiplier. |
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
 | `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
-| `PreShipCoalescingEnabled` | `true` | - | On by default; set to `false` per tree to opt out. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (OR-Map / opaque deltas ship individually). |
+| `PreShipCoalescingEnabled` | `true` | - | On by default; set to `false` per tree to opt out. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (an unregistered OR-Map shape or an opaque delta ships individually). |
 
-All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
-so per-tree overrides are honoured.
+Every option in the table except `ShipDoorbellEnabled` resolves via
+`IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so per-tree
+overrides are honoured. `ShipDoorbellEnabled` (read by the commit-time
+doorbell sink) and `ShipPhaseTimerPeriod` (read when a shipper
+activation arms its timer) come from the cluster-wide options instance
+only.
 
 ### Receiver-side flow control
 
@@ -771,26 +825,24 @@ shows which driver is the source of each.
 
 | Metric | Source | When it fires |
 |---|---|---|
-| `wal.entries_shipped` | Shipper grain via `IReplicationTransport.SendAsync` | Outbound batch acknowledged. |
+| `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Outbound batch acknowledged (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
-| `ship.duration` | Shipper grain via `IReplicationTransport.SendAsync` | Every send call (success or failure). |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector confirms peer's HWM precedes sender's oldest HLC. |
+| `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest retained entry that peer authored in the local WAL. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
-| `dead_letter.enqueued` (reason=schema) | Shipper grain (permanent encode failure) | Schema-shape encode throw. |
-| `dead_letter.removed` | (already wired) | Operator discards/replays. |
+| `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
+| `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
 
 ---
 
-## Local-apply materialiser reuses the same scheduler
+## The local materialiser shares the cursor registry, not the scheduler
 
-The shipper grain is the canonical scheduler skeleton for the
-**local-apply materialiser** in the core library - the
-same `IChangeFeed` consumer shape, the same per-consumer cursor on
-`IWalCursorRegistry`, the same phase-timer + doorbell +
-reminder triad. The materialiser is just another change-feed consumer
-with its own cursor; the `IReplicationTransport.SendAsync` call is
-replaced with a local `IReplicationApplier.ApplyAsync` call (or the
-commit-log apply seam) and the rest of the scheduling skeleton is
-verbatim. The maintenance grain is similarly the natural home for any
-future per-tree background pass (compaction, snapshot pruning, projection
-rebuild) without inventing a third scheduler shape.
+The core library's local materialiser does not run on the shipper's
+scheduler. Each leaf replays the write-ahead log entries past its
+projection checkpoint when it activates and, after every checkpoint it
+persists, reports the highest HLC it has applied into the same
+`IWalCursorRegistry` the per-peer shippers report their durable cursors
+to. Absent a `WalRetention` ceiling, the WAL garbage collector
+therefore trims only below the slowest consumer of either kind - a
+lagging leaf checkpoint or a lagging peer. Neither the leaf materialiser
+nor the shipper consumes `IChangeFeed`.

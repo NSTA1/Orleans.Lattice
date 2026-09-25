@@ -24,6 +24,7 @@ The reserved tree ids and their merge modes are the public contract on
 | `sys-membership-edges` | `LatticeSystemTreeNames.MembershipEdges` | LWW-Register | always |
 | `sys-auth-policy` | `LatticeSystemTreeNames.AuthPolicy` | LWW-Register | always |
 | `sys-auth-audit` | `LatticeSystemTreeNames.AuthAudit` | OR-Set | opt-in only |
+| `sys-replication-config` | `LatticeSystemTreeNames.ReplicationConfig` | OR-Map | not by this call - enrolled by `AddLatticeReplication(..., enableRuntimeConfig: true)`; see [Runtime Replication Config](runtime-config.md) |
 
 Membership and policy trees replicate **last-writer-wins**: each group, edge,
 and rule is an independent key whose latest HLC-stamped write wins on convergence,

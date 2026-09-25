@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication API reference
 
-The package exposes one registration entry point, one public options type, and a set of model records. The control contract itself, `ILatticeReplicationControl`, is defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
+The package exposes one registration entry point and one public options type. The control contract itself, `ILatticeReplicationControl`, and the model records it returns are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
 
 ## Registration
 
@@ -69,6 +69,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 |---|---|
 | `LatticeAuthorizationDeniedException` | The caller is not authorized for the `LatticeOperation.Replication` capability on the target tree. |
 | `ArgumentException` | `treeId` is null or empty. |
+| `LatticeTenantAccessDeniedException` | The tenancy add-on is registered and the caller has no valid active tenant, or may not act as the tenant it asserted, so the tenant-local `treeId` cannot be resolved. (Defined in `Orleans.Lattice`.) |
 | `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree. Carries `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for enabling replication was not met (for example a flag-based merge mode without a configured local replica). (Defined in `Orleans.Lattice.Replication`.) |
 

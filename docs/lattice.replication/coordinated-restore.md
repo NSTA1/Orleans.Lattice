@@ -21,7 +21,7 @@ The decision is a function of the **target tree's current replication
 membership**, never of where the backup was originally captured:
 
 - **Target tree is replicated** - the restore runs as a coordinated saga across
-  the union of the target tree's current peer set. A backup captured on a
+  the local cluster and every current replication peer. A backup captured on a
   single cluster and restored into a replicated tree still runs the saga,
   because it is the target that must stay consistent across clusters.
 - **Target tree is not replicated** (or the backup package is deployed
@@ -30,8 +30,15 @@ membership**, never of where the backup was originally captured:
 
 A **backup set** (multiple trees captured together) restores as one unit: if any
 member tree is replicated, the whole set restores under a single saga spanning
-the union of the replicated members' peer sets, so every member tree flips
+the local cluster and every current replication peer, so every member tree flips
 together on every participating cluster or none does.
+
+Before any cluster prepares, the coordinator probes every current peer over the
+saga control channel and refuses to start - with a
+`LatticeRestoreValidationException` naming the unreachable peers - if any peer
+cannot be reached, because a partial coordinated restore is never allowed. An
+aborted saga likewise surfaces to the caller as a
+`LatticeRestoreValidationException`, after every cluster has been compensated.
 
 ## The saga phases
 
@@ -67,13 +74,16 @@ Two guarantees make this safe under failure:
 
 ## Reliability under duress
 
-Restoring a large tree onto a small cluster is admitted only when it can
-actually succeed. An infeasible target (a tree that cannot fit the target
-cluster) is **refused at admission**, before any shadow build starts, so the
-saga fails fast with a clear vote rather than exhausting capacity mid-build. A
-participant whose build exhausts its bounded retry budget votes to abort and
-garbage collects its partial shadow, leaving no orphaned shadow state; the whole
-saga then rolls back all-or-nothing.
+Every participant runs an **admission pre-flight** before any shadow build
+starts: it probes the backup's self-describing size and topology and votes to
+abort if that probe fails or its capacity check refuses the target, so the saga
+fails fast with a clear vote rather than failing mid-build. The shipped capacity
+check admits every target, so today the pre-flight catches an unprobeable
+backup rather than a tree too large for the cluster. A participant whose build
+fails permanently (a missing backup or base in the chain) or exhausts its
+bounded retry budget votes to abort and garbage collects its partial shadow,
+leaving no orphaned shadow state; the whole saga then rolls back
+all-or-nothing.
 
 ## The sink must be shared, and that is checked at capture time
 
@@ -116,8 +126,8 @@ using Orleans.Lattice.Backup;
 
 // Restore an entire captured backup set as one coordinated unit. When any member
 // tree is replicated this runs as a single all-or-nothing cross-cluster saga
-// across the union of the replicated members' peer sets; otherwise it runs as a
-// plain local per-member restore.
+// across the local cluster and every current replication peer; otherwise it
+// runs as a plain local per-member restore.
 var restoreService = client.ServiceProvider.GetRequiredService<ILatticeBackupRestoreService>();
 IReadOnlyList<LatticeRestoreResult> results =
     await restoreService.RestoreSetAsync("your-backup-set-id", cancellationToken);

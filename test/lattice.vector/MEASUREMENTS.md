@@ -22,8 +22,9 @@ stream rather than `Random`, so the same corpus is generated on any runtime.
 
 ## The recall contract
 
-At the default configuration - partitions derived as `sqrt(n)`, probes derived as
-`2 * sqrt(partitions)` - the published floors are:
+At the default configuration - partitions derived as `round(sqrt(n))`, probes as
+`2 * ceil(sqrt(partitions))`, at least 8 and never more than the partition count -
+the published floors are:
 
 | Corpus geometry | recall@10 floor | measured |
 |---|---|---|
@@ -157,10 +158,11 @@ of the corpus.
 
 ## Allocation
 
-Asserted by `VectorIndexAllocationTests`, which follows the same four-part probe
-rule as the durable fixture below: differential rather than absolute, a
-**full-size** warm-up, the **minimum** kept across repeats, and set-up kept
-outside the measured window. Its battery test proves the probe can fail, with a
+Asserted by `VectorIndexAllocationTests`, which follows the four-part probe rule
+its own summary spells out - differential rather than absolute, a **full-size**
+warm-up, the **minimum** kept across repeats, and set-up kept outside the
+measured window - the rule the durable fixture below also applies to its
+synchronous paths. Its battery test proves the probe can fail, with a
 sink that provably escapes. The synchronous query and mutation paths use
 `GC.GetAllocatedBytesForCurrentThread`; training uses
 `GC.GetTotalAllocatedBytes(precise: true)`, because it may hand its assignment
@@ -212,9 +214,14 @@ building is dominated by a training pass that loading does not repeat.
 
 Persisted size tracks resident size almost exactly - 1,579 bytes per vector at
 384 dimensions against 1,549 in memory - because a chunk stores the vector and
-its key and nothing else. The record count is the corpus divided by the chunk
-size, plus one commit record per partition, so no single record grows with the
-corpus.
+its key and nothing else. The record count is one identifier-mapping record per
+vector, plus the chunk records that hold each partition's vectors, plus one commit
+record per partition and a handful of index-level records, so no single record
+grows with the corpus.
+
+The table predates byte-bounded chunk records: a chunk record is now also capped
+at 64 KiB, so at 384 dimensions it carries at most 42 vectors rather than 1,024,
+and a re-run of this sweep would write more, smaller chunk records.
 
 ### Lazy load
 
@@ -278,44 +285,56 @@ Asserted by `Persistence/DurableVectorIndexAllocationTests`, which follows the
 three-part probe rule this epic settled after three separate false negatives, all
 of which look exactly like a passing test:
 
-1. **Differential, never absolute.** Each path runs at two loop sizes after a
-   **full-size** warm-up - the largest window that will be measured - and the
-   assertion is on the growth, so a one-off tiered-JIT or pool-priming cost lands
-   in both samples and cancels.
+1. **Differential on the synchronous paths.** Each synchronous path runs at two
+   loop sizes after a **full-size** warm-up - the largest window that will be
+   measured - and the assertion is on the growth, so a one-off tiered-JIT or
+   pool-priming cost lands in both samples and cancels. The asynchronous flush
+   and load measurements are deliberately not differential; see below.
 2. **The battery test's allocation provably escapes.** It stores `new object()`
    into a **static field**. That escape is load-bearing: substituting the
    non-escaping `new long[1].Length` form makes the JIT elide the allocation
    entirely and the battery test then reports zero, becoming the false negative it
    exists to prevent. Verified by doing exactly that and watching it fail.
 3. **No short circuit on one sample.** Every measurement is repeated and the
-   **minimum** is kept, clamped at zero. A single noisy attempt where the small
-   window absorbed more noise than the large one would otherwise report a
-   genuinely allocating loop as allocation-free.
+   **minimum** is kept - clamped at zero for the synchronous differential. A
+   single noisy attempt where the small window absorbed more noise than the
+   large one would otherwise report a genuinely allocating loop as
+   allocation-free.
 
 The per-thread counter is used only on paths that never await, where it excludes
 unrelated threads' noise and makes the differential tighter; everything
 asynchronous uses `GC.GetTotalAllocatedBytes(precise: true)`, because a
 continuation may resume on another thread and the per-thread figure is then not
-merely noisy but wrong.
+merely noisy but wrong. Other threads can only add to that process-wide
+counter, so subtracting one sample from another can land below the truth, and a
+minimum across attempts would then select exactly that attempt (issue #3419).
+The flush and load figures therefore keep the smallest *absolute* window of the
+loop instead - an upper bound that noise can raise but never lower - and a
+window that reads negative is refused as a broken counter rather than clamped to
+zero.
 
 Every figure below was produced twice, under default tiering and under
 `DOTNET_TieredCompilation=0` (which forces full optimisation from the first call,
 where escape analysis is most aggressive), with identical results.
 
-Every figure below also requires a **Release** build, and the asynchronous ones
-require it absolutely rather than approximately. Roslyn emits an async state
-machine as a struct under `<Optimize>` and as a class without it, so a Debug
-build heap-allocates one on every call to every async method whether or not it
+The figures below are **Release** measurements, and on an asynchronous path the
+build configuration changes the answer outright rather than approximately.
+Roslyn emits an async state machine as a struct under `<Optimize>` and as a
+class without it, so a Debug build heap-allocates one on every call to every
+async method whether or not it
 suspends. That cost is deterministic and per-iteration, so it survives the
 differential, the minimum across attempts, and the warm-up alike, and it lands as
 a clean non-zero constant that is easily misread as a per-iteration allocation in
 the code under test. Because a state machine is either heap-allocated or it is
 not, the two builds produce a bimodal split rather than a spread - `0.0` against
-`232.0` bytes per run for the warm lazy search - which then looks like a
-difference between machines rather than between build configurations. Issue #2540
-was that misreading. The fixture now asserts the precondition through
-`AllocationContract.RequireOptimizedBuild` and skips visibly rather than failing
-when it is not met, so the trap cannot be sprung again.
+`232.0` bytes per run for the warm lazy search, when it still ran inside an
+asynchronous frame - which then looks like a difference between machines rather
+than between build configurations. Issue #2540 was that misreading. The fixture
+no longer depends on the build configuration: the flush and load budgets are
+wide enough to absorb a Debug build's state machine, and the warm lazy search
+now answers a fully resident query before it enters an asynchronous frame, so it
+allocates no state machine in either configuration and is measured with the
+synchronous probe and asserted at exactly zero (issue #2450).
 
 | path | allocated |
 |---|---|
@@ -324,7 +343,7 @@ when it is not met, so the trap cannot be sprung again.
 | Looking up a key by identifier, 2,000 calls | **0 bytes** |
 | Re-embedding a known identifier, 1,000 updates | **0 bytes** |
 | A flush with nothing dirty | 1,176 bytes per flush, 2 KB budget |
-| A warm lazy search | **0 bytes** measured, 64 byte budget |
+| A warm lazy search | **0 bytes**, asserted exactly |
 | Loading a 2,000 vector index | under 6x the cells it retains |
 
 The re-embed figure is the one that matters for a maintenance loop: an identifier

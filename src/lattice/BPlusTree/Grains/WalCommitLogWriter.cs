@@ -773,7 +773,7 @@ internal sealed class WalCommitLogWriter(
             // IWalShardGrain RPC is the outermost observable seam on the
             // write pipeline; without a writer-side bound a wedged shard
             // activation holds every caller's dispatch parked until the
-            // Orleans response timeout (default 3 minutes) expires.
+            // Orleans response timeout (30 seconds by default) expires.
             //
             // The bound is enforced via a deadline-CTS linked to the
             // caller's token, and that linked token is passed INTO the

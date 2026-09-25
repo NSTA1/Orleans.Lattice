@@ -9,14 +9,12 @@ namespace Orleans.Lattice.Dashboards;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every dashboard targets the <c>orleans.lattice</c> meter
-/// (and, for <see cref="LatticeDashboardKind.Replication"/>, the
-/// <c>orleans.lattice.replication</c> meter; for
-/// <see cref="LatticeDashboardKind.Authorization"/>, the
-/// <c>orleans.lattice.auth</c> and <c>orleans.lattice.membership</c>
-/// meters; for <see cref="LatticeDashboardKind.Backup"/>, the
-/// <c>orleans.lattice.backup</c> meter) over a Prometheus data source. Import the JSON in Grafana via
-/// <em>Dashboards → New → Import</em> or drop it into a
+/// Dashboards target the <c>orleans.lattice</c>,
+/// <c>orleans.lattice.replication</c>, <c>orleans.lattice.replication.grpc</c>,
+/// <c>orleans.lattice.auth</c>, <c>orleans.lattice.membership</c>,
+/// <c>orleans.lattice.backup</c>, <c>orleans.lattice.scaling</c>, and
+/// <c>orleans.lattice.tenancy</c> meters over a Prometheus data source. Import
+/// the JSON in Grafana via <em>Dashboards - New - Import</em> or drop it into a
 /// provisioning directory referenced by
 /// <c>Provisioning/dashboards.yaml</c>.
 /// </para>
@@ -24,9 +22,8 @@ namespace Orleans.Lattice.Dashboards;
 /// The dashboards reference metric names by their published instrument
 /// names. A regression test in the companion test project asserts
 /// every referenced name resolves to a live instrument on
-/// <c>LatticeMetrics.Meter</c> (or <c>LatticeReplicationMetrics.Meter</c>
-/// for the Replication dashboard), so a future rename in the core or
-/// replication package fails CI before the dashboard ships stale.
+/// the package meters covered by the bundled dashboards, so a future rename
+/// in a source package fails CI before the dashboard ships stale.
 /// </para>
 /// </remarks>
 public static class LatticeDashboards

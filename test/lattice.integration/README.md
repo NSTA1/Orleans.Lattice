@@ -11,6 +11,12 @@ The suite is categorized as `Integration` and `AzureStorageEmulator`. A single
 scenario uses its own pre-minted LWW-register tree, so durable state can remain
 in place for the whole fixture without tests depending on execution order.
 
+The project also holds two materialised-view topology fixtures, described under
+[Materialised-view topologies](#materialised-view-topologies):
+`MaterialisedViewTopologyTests`, which stands up its own instance of the same
+two-site fixture, and `MaterialisedViewTopologyStartupIntegrationTests`, which
+needs no Azurite.
+
 ## Topology
 
 Each site is a separate `TestCluster` with its own cluster identity and service
@@ -102,8 +108,10 @@ sequenceDiagram
 ## Fixture lifecycle
 
 - `OneTimeSetUp` probes Azurite and starts both sites once.
-- All eight tree IDs are registered on both sites before startup, allowing the
-  production replication activation service to start every shipper.
+- All eight scenario tree IDs, plus the replicated source and view trees of the
+  three materialised-view topologies, are placed in both sites' replicated-tree
+  map before startup, allowing the production replication activation service
+  to start every shipper.
 - A cold restart disposes and rebuilds a site's `TestCluster` with the same
   cluster ID, service ID, and table names. Only process-local state is lost.
 - Per-test teardown heals partitions, releases one-shot gates, clears transient
@@ -124,6 +132,27 @@ sequenceDiagram
 | `Shipper_cursor_and_receiver_hwm_recover_across_restart_without_data_loss` | Eight Site A writes -> receiver applies first batch -> acknowledgement rejected and A -> B partitioned -> cold restart both sites -> heal -> replay unresolved delivery -> verify all keys and exact counts -> write from Site B. | Uncertain delivery across a double restart, duplicate replay tolerance, final state consistent with recovered replication metadata, no data loss, and post-recovery progress in the reverse direction. The test observes behavior rather than reading the internal HWM directly. |
 | `Replication_resumes_after_restart_without_manual_shipper_wake` | Stop Site B -> create two-entry backlog on Site A -> cold restart Site A while B remains down -> start Site B -> wait without additional writes or internal wake calls. | Startup driver activation, shipper phase-timer recovery, durable backlog across sender and receiver outages, and convergence without operator or test-side re-priming. |
 
+## Materialised-view topologies
+
+`MaterialisedViewTopologyTests`, categorized `Integration` and
+`AzureStorageEmulator`, writes one row into the source tree of each supported
+view replication topology on Site A, activates and drains every view on both
+sites, and asserts which site maintains which view:
+
+| Topology | Expected behaviour |
+|---|---|
+| `LatticeViewReplicationMode.DeriveLocally` | The source tree replicates, and each site derives the view independently from its own copy; both sites hold a view cursor pin on the source. |
+| `LatticeViewReplicationMode.ShipView`, producer inferred | The source is not replicated, so only Site A holds it: Site A derives the view and ships the view tree, and the source-less Site B receives the view without deriving it or pinning a cursor. |
+| `LatticeViewReplicationMode.ShipView` with `LatticeViewOptions.ShipViewProducerClusterId` naming Site A | The source replicates to Site B, but only the named producer derives the view; Site B receives the shipped view and pins no cursor. |
+
+`MaterialisedViewTopologyStartupIntegrationTests`, categorized `Integration`
+only, starts a single-silo `TestCluster` against in-memory storage once per
+rejected topology and asserts that silo start fails with the expected message:
+a `DeriveLocally` view whose view tree is also replicated, a `ShipView` view
+whose view tree is not replicated, a replicated `ShipView` source with no
+`ShipViewProducerClusterId`, and a source-less `ShipView` that nevertheless
+names a producer. It needs no Azurite, so the filter below does not select it.
+
 ## Running locally
 
 Start Azurite with its default development-storage endpoints, then run:
@@ -135,7 +164,9 @@ dotnet test test\lattice.integration\Orleans.Lattice.Integration.Tests.csproj `
 ```
 
 If Azurite is unreachable, the fixture reports the suite as inconclusive rather
-than substituting in-memory storage. The suite runs after merges in the coverage
-workflow and before package publication. Pull-request CI never selects it for
-test execution; it is compiled only when change discovery chooses the
-whole-solution build.
+than substituting in-memory storage. Pull-request CI selects this project like
+any other package, through the test-only package allow-list in
+`.github/workflows/select-test-packages.sh`, so a change to the suite or to a
+project it references plans it onto a test leg that runs an Azurite service. The
+nightly coverage workflow runs it as well, and `publish.yml` runs it once more
+as a post-merge gate before package publication.

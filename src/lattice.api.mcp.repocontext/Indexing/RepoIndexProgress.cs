@@ -130,7 +130,7 @@ public sealed record RepoIndexProgress
     /// </para>
     /// <para>
     /// <c>list_repos</c>'s <c>embeddedVectorCount</c> counts sources of every kind
-    /// - files and symbols together - which is why it can be seen rising while
+    /// - files, symbols, and memory entries together - which is why it can be seen rising while
     /// <see cref="FilesEmbedded"/> stays at zero. That is not a contradiction
     /// between the two surfaces: it is the sum being observed against only one of
     /// its terms. This field supplies the missing term.

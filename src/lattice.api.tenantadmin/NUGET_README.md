@@ -37,15 +37,25 @@ tenant namespace, and exposes tree create, existence check, delete, recover,
 purge, deletion status, and schema-policy get / set / clear - so a tenant
 administers its own trees without ever naming another tenant's.
 
+`ILatticeTenantAccessAdmin` lists, adds, and removes a tenant's tenant-admin
+subjects (a tenant can never be left without one), `ILatticeTenantGrantAdmin`
+administers the two-step cross-tenant grant agreement (the granting tenant offers,
+the grantee approves or rejects, and either party may revoke), and the read-only
+`ILatticeTenantQuotaUsage` reports a tenant's per-dimension consumption against its
+quota ceilings.
+
 ## Fail-closed by design
 
 Every administrative operation authorizes the caller through the Lattice access
-gate (the cluster-wide administrative operation) **before** it reads or writes
-the registry, and an explicitly supplied admin subject is validated against the
-identity directory when one is configured. An unauthenticated or unauthorized
+gate **before** it reads or writes the registry - the tenant lifecycle and the
+allowed-region set as a cluster-wide administrative operation, the tenant-tier
+operations (residency, admin subjects, cross-tenant grants, usage) for the platform
+operator or a live admin subject of the tenant - and an explicitly supplied admin
+subject is validated against the identity directory when one is configured. An unauthenticated or unauthorized
 caller is refused without learning whether a tenant exists. The reserved default
-tenant can never be suspended or deleted, and a tenant id that shadows a reserved
-namespace is rejected.
+tenant can never be suspended, deleted, given quotas, have its admin subjects
+changed, or be named in a cross-tenant grant offer, and a tenant id that shadows a
+reserved namespace is rejected.
 
 The add-on is **opt-in**: a cluster that does not register it exposes no tenant
 administration and behaves exactly as before.

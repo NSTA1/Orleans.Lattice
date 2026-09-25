@@ -48,10 +48,10 @@ correct and exact.
 ## Guarantees
 
 - **Zero steady-state query allocation.** Results are written into a
-  caller-owned span, probe scratch is stack-allocated up to 128 partitions and
-  pooled beyond, and no metric needs a normalised copy of the query. The build
-  path allocates only the contiguous backing block (once, when `EnsureCapacity`
-  is called up front) and pooled training scratch.
+  caller-owned span, probe scratch is stack-allocated for up to 128 probed
+  partitions and pooled beyond, and no metric needs a normalised copy of the
+  query. The build path allocates only the contiguous backing block (once, when
+  `EnsureCapacity` is called up front) and pooled training scratch.
 - **Contiguous storage.** Each cell holds its members in one flat `float` block,
   never as a per-vector object graph and never as an index into a shared block. A
   delete backfills the hole with the cell's last member, so a block stays dense
@@ -81,7 +81,7 @@ var index = await DurableVectorIndex.OpenAsync(
 await index.BuildStepAsync();                 // one bounded, resumable slice
 await index.UpsertAsync("doc-1", vector);     // in place, no rebuild
 await index.RemoveAsync("doc-2");             // journalled, survives a crash
-await index.FlushAsync();                     // only the cells that moved
+await index.FlushAsync();                     // only the chunks that changed
 ```
 
 At 250,000 vectors a restart costs **1.1 s to reload** against **24.8 s to

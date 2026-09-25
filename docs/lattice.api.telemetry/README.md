@@ -52,7 +52,7 @@ transport binding layered on top neither repeats nor reconfigures it.
 |---|---|---|---|
 | `BackendAddress` | `Uri?` | `null` | The Prometheus-compatible endpoint. Must be absolute. Unset means no backend is configured, and every query reports as unoffered. |
 | `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
-| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer`, `Basic`, or `MutualTls`. Required whenever `AuthMode` is not `None`. |
+| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer`, `Basic`, or `MutualTls`. Required for those three modes; not consulted under `None` or `DynamicBearer`. |
 | `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. |
 | `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
 | `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
@@ -118,7 +118,7 @@ If this method were ever changed so that a backend fault could escape it, that c
 
 `TelemetryTenantScopeResolver` decides the effective scope from the caller's own
 identity. A request may state a *preference*; the resolver may refuse it. The
-response reports what actually happened:
+response's `Scope` (a `TelemetryTenantScope`) reports what actually happened:
 
 | Field | Meaning |
 |---|---|

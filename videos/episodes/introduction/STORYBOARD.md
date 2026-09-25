@@ -17,7 +17,7 @@ here are the ones they meet again later.
 | In more than one place | `many-places` | 4 | Two places, "Place A" and "Place B", each a frame holding its copy of `page/views 20`. As "if one place fails" is said, Place B dims and Place A keeps going. |
 | | | 5 | Place B returns. Both change the value at the same moment: A counts 3 more views (23), B 5 more (25); both nodes turn concurrent blue, joined by a dashed line, "at the same moment". |
 | | | 6 | The usual answer: B's change "waits its turn" and its node empties; as "a separate database" is said, a pale node of that name appears below, with long dashed round trips to both places, and the values inside the places fade. |
-| | | 7 | The heading becomes "A different approach"; as "inside the application itself" is said, the database and its round trips go, and the memory is back inside both places; B's change is live again. |
+| | | 7 | The heading becomes "A different approach"; as "keeps the working memory inside the application" is said, the database and its round trips go, and the memory is back inside both places; B's change is live again. |
 | | | 8 | Each change travels to the other place; on arrival both read 28, and both nodes fill with the marker - the join - and pulse. "The same count in both places, and neither waits." |
 | | | 9 | The places give way to an ink chain: "One machine" (no cloud account) to "Many regions" (without a rewrite). |
 | What it is | `store-overview` | 10 | "A sorted key-value store, in your cluster": the frame "Your Orleans cluster" appears as the platform is named. |

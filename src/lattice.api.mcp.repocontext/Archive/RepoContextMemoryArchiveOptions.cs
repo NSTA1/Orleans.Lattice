@@ -39,9 +39,10 @@ internal enum RepoContextMemoryArchiveRestoreMode
 /// <para>
 /// <b>What this is not.</b> It is not a backup product and it does not make the
 /// container self-healing beyond one narrow case. It protects memory only as far as
-/// the last successful export, it covers only the memory tree, and it restores only
-/// under <see cref="RepoContextMemoryArchiveRestoreMode.Auto"/> into an empty store
-/// or on an explicit <see cref="RepoContextMemoryArchiveRestoreMode.Always"/>. A
+/// the last successful export, it covers only the memory tree, and auto restore
+/// runs only into an empty store or over a store whose durable marker records a
+/// partial restore; <see cref="RepoContextMemoryArchiveRestoreMode.Always"/>
+/// imports every startup. A
 /// scheduled whole-store backup with manifests, retention, and an operator-driven
 /// restore is a separate concern served by the backup package.
 /// </para>

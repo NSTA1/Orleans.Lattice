@@ -14,7 +14,7 @@ HLC = (WallClockTicks, Counter)
 ```
 
 - **Tick** - advances the clock for a local event. If the physical clock has moved forward, the counter resets to 0. Otherwise the counter increments.
-- **Merge** - given two HLC values, returns a new value strictly greater than both. The merge is commutative and associative.
+- **Merge** - given two HLC values, returns a new value strictly greater than both (saturating at the counter's integer ceiling). The merge is commutative but deliberately *not* a join: it advances the counter past the winning input so the result is a successor of both, which makes it neither idempotent (`Merge(a, a) != a`) nor associative. The join-semilattice merges below compare timestamps rather than advancing them.
 
 This gives every write a totally-ordered timestamp without requiring a central clock service.
 
@@ -38,6 +38,8 @@ These three properties make `LwwValue` a join-semilattice - two divergent replic
 
 Deletes are represented as **tombstones** (an `LwwValue` with `IsTombstone = true` and a timestamp). A tombstone with a higher timestamp than a live value wins; a live value with a higher timestamp than a tombstone "resurrects" the key.
 
+When two entries carry exactly the same timestamp, the merge falls back to a fixed order that reads the same on every replica - a tombstone beats a live value, then the later expiry wins, then the larger value bytes, with the writing cluster's identity and a migration marker as the final tie-breaks - so replicas converge whatever order they observe the writes in.
+
 **Example use case:** a user-profile store where each field (display name, avatar URL, theme) is overwritten by the most recent edit and you are happy to drop a losing concurrent write rather than show the user a conflict prompt. This is the default semantics for plain `SetAsync` / `GetAsync` on the tree.
 
 ## Monotonic Split State
@@ -54,7 +56,7 @@ stateDiagram-v2
 
 The merge operation is `max()` - once a node reaches `SplitComplete`, no message can revert it to an earlier state. This means:
 
-- If a grain crashes between `SplitInProgress` and `SplitComplete`, on reactivation it detects the incomplete split and resumes the cross-grain phase (`CompleteSplitAsync`). The sibling operations (`MergeEntriesAsync`, `InitializeAsync`) are idempotent, and the parent's `AcceptSplitAsync` guards against duplicate `(separatorKey, childId)` pairs.
+- Because the state only ever advances, a node that has completed one split reads complete for the rest of its life, so the state alone cannot say whether a *later* split was interrupted. Each node therefore also persists an in-flight marker beside its split intent (on a leaf, a dedicated flag; on an internal node, the right half of the children it is handing over), cleared only when that split completes. A node that crashes mid-split finds the marker on its next write (leaf) or next accepted promotion (internal node) and resumes the cross-grain phase instead of starting a second split. The sibling seeding and entry transfer are idempotent, and a parent skips a duplicate `(separatorKey, childId)` pair it is asked to accept.
 - If two messages arrive out of order (one carrying `SplitInProgress`, one carrying `SplitComplete`), the result is simply `SplitComplete`.
 - After recovery, the caller's original operation (a write for leaves, a split promotion for internal nodes) is routed to the correct node based on the split key - ensuring no operations are silently dropped.
 
@@ -78,37 +80,44 @@ Merge({r1->10, r2->5}, {r1->8, r3->3}) = {r1->10, r2->5, r3->3}
 
 This is commutative, associative, and idempotent - making it safe for uncoordinated consumers to merge version vectors from multiple sources.
 
-**Example use case:** a read-through cache or a downstream replica that periodically asks "what's changed since I last looked?" The caller hands its current version vector to the leaf and gets back only the entries newer than that point, so a sidecar projector can keep an external search index up to date without re-scanning the whole tree on every poll.
+**Example use case:** a downstream replica that periodically asks "what's changed since I last looked?" The caller hands its current version vector to the leaf and gets back only the entries newer than that point, so a sidecar projector can keep an external search index up to date without re-scanning the whole tree on every poll.
 
 ## State Deltas
 
-A `StateDelta` is a snapshot of changes extracted from a leaf:
+A state delta is a snapshot of changes extracted from a leaf:
 
 ```
-StateDelta = {
-    Entries:  { key -> LwwValue }   // only entries newer than the caller's version
-    Version:  VersionVector          // the leaf's version at extraction time
-    SplitKey: string?                // non-null if the leaf has split since the caller's version
+Delta = {
+    Entries:   { key -> LWW entry }   // changed entries, tombstones included
+    Version:   VersionVector          // the leaf's version at extraction time
+    SplitKey:  string?                // non-null if the leaf has split
+    MovedAway: int[]?                 // virtual slots migrated to another shard, with the slot count they index
+    Cursor:    (epoch, sequence)      // the leaf's delivery cursor at extraction time
 }
 ```
 
-When `SplitKey` is present, it signals that the leaf has split and all entries >= `SplitKey` have moved to a new sibling. Consumers (e.g. `LeafCacheGrain`) use this to **prune** stale entries from their local cache that now belong to the sibling.
+When a split key is present, it signals that the leaf has split and all entries >= the split key have moved to a new sibling; moved-away slots mark keys whose virtual slot now belongs to another physical shard. The read-through leaf cache uses both to **prune** entries from its local copy that the leaf no longer owns.
 
-The delta extraction flow:
+The cache does not ask for "every entry newer than my version vector". Entry timestamps follow last-writer-wins order, and a write replicated from another cluster can arrive carrying a source timestamp below one the leaf has already published, so a timestamp filter would skip it. Instead each leaf numbers its writes with an activation-scoped delivery cursor - an epoch minted when the leaf activates, plus a per-write sequence - and the cache presents the cursor it last saw:
 
 ```mermaid
 sequenceDiagram
-    participant Cache as LeafCacheGrain
-    participant Leaf as BPlusLeafGrain
+    participant Cache as Leaf cache
+    participant Leaf as Leaf
 
-    Cache->>Leaf: GetDeltaSinceAsync(myVersion)
-    Leaf->>Leaf: Compare each entry timestamp against myVersion
-    Leaf-->>Cache: StateDelta { changed entries + current version }
-    Cache->>Cache: For each entry: LwwValue.Merge(cached, delta)
+    Cache->>Leaf: Changes since my cursor (epoch, sequence)
+    alt Same epoch, cursor not ahead of the leaf
+        Leaf-->>Cache: Entries written after that sequence + current cursor
+    else Epoch changed, or cursor ahead of the leaf
+        Leaf-->>Cache: Every entry (full snapshot) + current cursor
+        Cache->>Cache: Clear the local copy
+    end
+    Cache->>Cache: Prune by split key and moved-away slots
+    Cache->>Cache: For each entry: LWW merge(cached, delta)
     Cache->>Cache: version = VersionVector.Merge(version, delta.Version)
 ```
 
-Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, applying the same delta twice is a no-op. This makes the protocol tolerant of duplicate deliveries and message reordering.
+Because both the per-entry last-writer-wins merge and `VersionVector.Merge` are lattice operations, applying the same delta twice is a no-op. This makes the protocol tolerant of duplicate deliveries and message reordering. Version-vector extraction - "every entry newer than this vector" - remains available on the leaf; the tree's own bulk drains (tree merge, shard split, and shard consolidation) use it with an empty vector to take a full copy.
 
 **Example use case:** the wire format for incremental sync between a leaf and its caches or replicas. If the network drops a delta and the consumer retries, replaying the same delta is harmless; if two deltas arrive out of order, applying them in either order produces the same result.
 
@@ -345,7 +354,8 @@ Every built-in primitive implements `ICrdt<TSelf>` so they can compose recursive
 OrMapEntry<TValue> = (ReplicaId, Counter, Value)
 OrMap<TKey, TValue> = {
     Adds:       { TKey -> { OrMapEntry<TValue> } },   // surviving dots and their values
-    Tombstones: { TKey -> { OrSetDot } }              // observed-and-removed dots
+    Tombstones: { TKey -> { OrSetDot } },             // observed-and-removed dots
+    Context:    { replicaId -> highestCounter }       // cache for minting the next local dot; merge ignores it
 }
 ```
 
@@ -374,7 +384,7 @@ Use `ILattice.OrMap<TKey, TValue>(key)` to obtain the typed accessor; see `docs/
 
 ```
 RgaNode = (ReplicaId, Counter, ParentDot, Value, IsTombstone)
-Rga = { Nodes: { RgaNode } }
+Rga = { Nodes: { RgaNode }, Context: { replicaId -> highestCounter } }   // Context only picks the next local dot; merge ignores it
 ```
 
 The materialised order is a depth-first walk from the virtual root in which **sibling children of any parent are visited in descending `(Counter, ReplicaId)` order**. That is the standard RGA tie-break: the highest counter wins, the highest replica id breaks counter ties, and every replica that has observed the same node set converges on the same resolved sequence regardless of merge arrival order. Tombstoned nodes are traversed (so their descendants still resolve) but are not emitted.

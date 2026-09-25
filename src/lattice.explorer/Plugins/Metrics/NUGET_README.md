@@ -2,7 +2,8 @@
 
 The live-metrics per-selection surface for the Orleans.Lattice Explorer, shipped
 as a self-contained plugin: lifecycle, shard count, live keys, tombstones, depth
-and split tiles for the selected tree or view, plus its per-shard hotness table.
+and split tiles for the selected tree or view - plus view-count and total
+view-lag tiles when the tree reports them - and its per-shard hotness table.
 
 Register it on a head with:
 

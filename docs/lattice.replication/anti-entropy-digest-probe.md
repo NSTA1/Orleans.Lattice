@@ -83,8 +83,8 @@ Counters on the `orleans.lattice.replication` meter chart cross-cluster divergen
 
 | Metric | Tags | Emitted |
 |---|---|---|
-| `orleans.lattice.replication.digest_probe.compared` | `tree`, `shard`, `peer`, `outcome` | Once per shard/peer comparison, every pass. |
-| `orleans.lattice.replication.digest_probe.mismatch` | `tree`, `shard`, `peer` | Only when the outcome is `Mismatch`. |
+| `orleans.lattice.replication.digest_probe.compared` | `tree`, `shard`, `peer`, `outcome`, `tenant` | Once per shard/peer comparison, every pass. |
+| `orleans.lattice.replication.digest_probe.mismatch` | `tree`, `shard`, `peer`, `tenant` | Only when the outcome is `Mismatch`. |
 
 A non-zero, *sustained* mismatch rate for a `(tree, shard, peer)` triple is the signal that those two clusters have genuinely diverged for that shard and need remediation. A burst of `outcome=version_skew` during a rolling upgrade is expected and self-clears once both sides run the same contribution-function version. A steady `outcome=remote_unavailable` simply means the peer has digesting turned off for that tree.
 

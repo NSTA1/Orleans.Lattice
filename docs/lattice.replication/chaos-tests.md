@@ -40,6 +40,7 @@ site has converged.
 | OR-Set convergence | Three sites issue concurrent adds (and observed-removes) against one set-valued key under partition; after drain, every site observes exactly the union of authored adds minus the union of authored removes. |
 | PN-Counter convergence | Three sites issue concurrent increments and decrements against one counter under partition; after drain, every site reads the same algebraic sum. |
 | MV-Register convergence | Three sites issue concurrent `Set` operations against one multi-value-register key under partition; after drain, every site observes the same dot-tagged value set, with concurrent writes preserved and observed predecessors collapsed. |
+| VersionVector convergence | Several sites concurrently tick one shared version-vector key under a mid-workload partition; after heal and drain, every site observes the same vector - the pointwise-max-per-replica join of every site's contribution - compared entry by entry and by mutual domination. Exercises the `LatticeMergeMode.VersionVector` typed-delta (`VersionVectorDelta`) dispatch. |
 | OR-Map convergence | Three sites concurrently mutate one `OrMap` key (each site authoring a disjoint family of map keys, each value a counter) under a partition that isolates one site mid-workload, then heals. After drain, every site converges to the union of authored map keys, and every per-key counter equals the algebraic sum of authored deltas. Exercises the producer-side typed-delta path (`OrMapAccessor`) and the receiver-side per-tree CRDT merge dispatch (`LatticeMergeMode.OrMap`). |
 | G-Counter convergence | Several sites concurrently increment one shared grow-only counter under a mid-workload partition; after heal and drain, every site reads the same converged total - the pointwise-max-per-replica join of every site's contribution. Because the counter is commutative, associative, and idempotent, the total is independent of delivery order and duplicate delivery. Exercises the `LatticeMergeMode.GCounter` typed-delta (`GCounterDelta`) dispatch. |
 | G-Set convergence | Several sites concurrently add distinct elements to one shared grow-only set under a mid-workload partition; after heal and drain, every site observes the union of all additions. Because the set is add-only and merge is set union, the outcome is order- and timing-independent. Exercises the `LatticeMergeMode.GSet` typed-delta (`GSetDelta`) dispatch. |
@@ -80,10 +81,10 @@ The gRPC transport and the Azure Table WAL backend ship their own chaos suites i
 their own packages, each driving the real registration and pipeline code paths
 in-process:
 
-- The gRPC transport chaos suite exercises the transport under transient channel
-  faults - mid-shipment failures, idle-channel reconnection, and slow-receiver
-  back-pressure - and converges with no batch loss and no duplicate apply, with
-  the receiver hosted on an in-memory ASP.NET Core test server. See
+- The gRPC transport chaos suite exercises the transport under per-call transient
+  channel faults (15 and 30 percent of calls) with bounded caller retries and
+  asserts that no shipped key is lost, with the receiver hosted on an in-memory
+  ASP.NET Core test server. See
   [Orleans.Lattice.Replication.Grpc chaos tests](../lattice.replication.grpc/chaos-tests.md).
 - The Azure Table WAL chaos suite drives the durable provider under concurrent
   append and read load against the local Azurite emulator, asserting append-batch

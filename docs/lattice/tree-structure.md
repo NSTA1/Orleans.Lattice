@@ -32,7 +32,7 @@ Routing walks the separator list from right to left and picks the first child wh
 
 ### Leaf Nodes
 
-Each leaf grain holds its live entries in a per-activation in-memory cache (a `SortedDictionary<string, LwwValue<byte[]>>` rebuilt from the WAL on activation; not part of the persisted leaf state row). Every leaf also maintains `NextSibling` and `PrevSibling` pointers forming a doubly-linked list for forward and reverse range scans:
+Each leaf grain holds its live entries in a per-activation in-memory cache - a sorted map from each key to its last-writer-wins entry - that is not part of the persisted leaf state row. On activation the cache is rebuilt from the leaf's persisted snapshot when that snapshot is newer than the leaf's checkpoint, followed by a replay of the WAL beyond it; with no usable snapshot the leaf replays the whole readable WAL window, filtered to its own key range (see [Projection Rebuild](projection-rebuild.md)). Every leaf also maintains next- and previous-sibling pointers forming a doubly-linked list for forward and reverse range scans:
 
 ```mermaid
 flowchart LR
@@ -53,59 +53,62 @@ flowchart LR
 
 ## Leaf Splits
 
-When a leaf exceeds `MaxLeafKeys` (128) entries after an insert, it splits using a **two-phase** pattern that is crash-safe:
+When a leaf holds more than `MaxLeafKeys` (128 by default) entries after a write, or - while it holds at least two entries - its keys and values together exceed `LatticeOptions.MaxLeafBytes` (64 MiB by default), it splits using a **two-phase** pattern that is crash-safe. A leaf found over the byte bound when its snapshot is next captured is divided then, even if it takes no further writes.
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Root as ShardRootGrain
-    participant Leaf as LeafGrain (original)
-    participant New as LeafGrain (new sibling)
-    participant Parent as InternalGrain
+    participant Root as Shard root
+    participant Leaf as Leaf (donor)
+    participant New as Leaf (new sibling)
+    participant Parent as Parent internal node
 
-    Client->>Root: SetAsync("key", value)
-    Root->>Leaf: SetAsync("key", value)
+    Client->>Root: write("key", value)
+    Root->>Leaf: write("key", value)
 
-    Note over Leaf: Entry count > 128 → split triggered
+    Note over Leaf: Over capacity, split triggered
 
     rect rgb(240, 248, 255)
     Note over Leaf: Phase 1 - persist intent
-    Leaf->>Leaf: SplitState = SplitInProgress
-    Leaf->>Leaf: Record SplitKey, SplitSiblingId, OldNextSibling, NextSibling = SplitSiblingId
-    Leaf->>Leaf: WriteStateAsync()
+    Leaf->>Leaf: Pick an admissible median pivot and mint the sibling identity
+    Leaf->>Leaf: Persist split key, sibling id, old successor, successor = sibling, in-flight marker
     end
 
     rect rgb(240, 255, 240)
-    Note over Leaf: Phase 2 - cross-grain ops (CompleteSplitAsync)
-    Leaf->>New: InitializeSiblingAsync seeds the sibling in one RPC
-    Leaf->>New: MergeEntriesAsync right-half entries
-    Leaf->>New: SetCheckpointOffsetHintsAsync sets partition heads in one RPC
-    Leaf->>Leaf: Remove right-half keys from local cache
-    Leaf->>Leaf: HighKeyExclusive = splitKey then SplitState = SplitComplete
+    Note over Leaf: Phase 2 - cross-grain ops
+    Leaf->>New: Seed range, sibling pointers and WAL heads in one call
+    loop Bounded batches of keys at or above the split key
+        Leaf->>New: Merge the batch
+        Leaf->>Leaf: Drop the batch from the local cache
+    end
+    Leaf->>New: Set per-partition checkpoint hints in one call
+    Leaf->>Leaf: Sweep stragglers, narrow the high bound, clear the marker, mark complete
     end
 
-    Leaf-->>Root: SplitResult { PromotedKey, NewSiblingId }
-    Root->>Parent: AcceptSplitAsync(promotedKey, newSiblingId)
+    Leaf-->>Root: Split result (promoted key, new sibling, any forwarded divisions)
+    Root->>Root: Record the owed link durably
+    Root->>Parent: Accept the separator (parent found by a fresh descent)
 
     Note over Parent: Inserts new separator + child reference
 
     alt Parent also overflows
-        Parent-->>Root: SplitResult (cascading)
-        Root->>Root: PromoteRootAsync - create new root above
+        Parent-->>Root: Its own split result
+        Root->>Root: Record it, then link it one level up or promote a new root
     end
 ```
 
-1. **Phase 1 (persist intent):** The leaf picks the **median key** from its in-memory cache, allocates the new sibling's `GrainId`, and persists the split metadata (`SplitState = SplitInProgress`, `SplitKey`, `SplitSiblingId`, `OldNextSibling`, and `NextSibling` redirected to the new sibling) in a single `WriteStateAsync` call. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2.
-2. **Phase 2 (cross-grain ops, `CompleteSplitAsync`):** The donor seeds every birth-time metadata slot on the new sibling - tree id, shard index, ownership key range, and the next/prev sibling pointers - in a single `InitializeSiblingAsync` round-trip (one gate acquire and one `WriteStateAsync` on the sibling, replacing the five separate gated setter RPCs the donor used to issue serially). It then populates the sibling via `MergeEntriesAsync` (an idempotent bulk merge of every key `>= splitKey`), applies the per-partition projection-checkpoint hints in a single `SetCheckpointOffsetHintsAsync` round-trip (replacing the per-WAL-partition fan-out), removes the right-half keys from its local cache, advances its own `HighKeyExclusive` to the split key, and transitions `SplitState` to `SplitComplete`. The per-partition WAL-head capture that feeds the checkpoint hints is fanned out in parallel across the independent replay-coordinator grains rather than read serially. `InitializeSiblingAsync` keeps the same idempotent semantics as the individual setters - the write-once slots (tree id, shard index, key-range low bound) are skipped when already seeded - so a crash-recovery re-call against a partially seeded sibling is safe.
-3. A `SplitResult` containing the promoted key and new sibling's `GrainId` is returned up the call stack.
-4. The parent internal node inserts the new separator. If *it* overflows, the split cascades further (internal nodes use the same two-phase pattern).
-5. If the split reaches the shard root, a new internal root is created above the old one via a two-phase `PromoteRootAsync`, increasing tree depth by one.
+1. **Phase 1 (persist intent):** The leaf picks the **median key** as its pivot, read from the leaf's ordinal index without materialising any payload whenever its cached frame allows. Each half must own part of the leaf's declared range, so a pivot outside that range is replaced by another admissible key, and the split is declined (and counted) when there is none. The leaf allocates the new sibling's `GrainId`, captures the head of every WAL partition in parallel, and persists the split intent - the split key, the sibling's identity, its current successor, its successor pointer redirected to the sibling, and a durable in-flight marker - in a single state write. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2. The in-flight marker is what recovery keys on: the split lifecycle state only ever advances, so a leaf that has completed one split reports complete from then on and could not otherwise tell a later interrupted division from a finished one (issue [#3265](https://github.com/NSTA1/Orleans.Lattice/issues/3265)).
+2. **Phase 2 (cross-grain ops):** The donor seeds every birth-time slot on the new sibling - tree id, shard index, the ownership range `[splitKey, donor's old high bound)`, the next/previous sibling pointers, any moved-away slot seal, and the WAL heads the sibling's materialiser pin starts from - in a single round-trip, while repointing its old successor's previous-sibling pointer at the sibling in parallel. It then moves every key `>= splitKey` across in bounded batches through an idempotent last-writer-wins merge, dropping each batch from its own cache before reading the next (a row that a concurrent write changed mid-transfer stays behind rather than being discarded), stamps the sibling's per-partition projection-checkpoint hints in a single round-trip, and sweeps again for rows written at or above the split key while the batches were moving. Only when that sweep finds nothing does it narrow its own high bound to the split key, clear the in-flight marker and mark the split complete, in one synchronous step, before advancing its own checkpoints to the captured WAL heads. The sibling's write-once slots (tree id, shard index, key-range low bound) are skipped when already seeded, so a crash-recovery re-run against a partially completed split is safe.
+3. The leaf returns a split result carrying the promoted key and the new sibling's `GrainId`. A write the leaf forwarded to a neighbour - because it arrived mid-split, or fell outside the leaf's declared span (see [Span Admission](#span-admission)) - can divide that neighbour too, and every such division is carried back in the same result rather than discarded, because only the shard root can link it (issue [#3523](https://github.com/NSTA1/Orleans.Lattice/issues/3523)).
+4. **The shard root links every division from a durable record.** Before it asks any parent to accept a separator, the shard root records the link it owes in its own persisted state, and it retires the record only once the separator has landed. A link interrupted part-way is replayed at the start of the shard root's next operation, and the parent's duplicate detection (below) makes the replay safe. Links are delivered one at a time per shard, each by a fresh descent from the current root that bypasses the routing cache, rather than along the path captured on the way down: a concurrent batch write can split a node on that path or promote the root in the meantime, and a separator delivered to a parent whose range no longer covers it would be accepted and routed to by nothing.
+5. The parent internal node inserts the new separator. If *it* overflows, it splits in turn (internal nodes use the same two-phase pattern), and the shard root records that division and links it one level up before any other link still owed at the lower level.
+6. If the division is of the root itself, the shard root creates a new internal root above the old one via a two-phase root promotion - persist the intent, then create the root under a deterministic identity - increasing tree depth by one.
 
-**Recovery:** If a grain crashes between Phase 1 and Phase 2, the next call to `SetAsync` detects `SplitState == SplitInProgress` and resumes Phase 2 (`CompleteSplitAsync`). After recovery completes, the caller's write is routed to the correct leaf - locally if the key falls below the split key, or forwarded to the new sibling otherwise. This ensures **no writes are lost** during a crash mid-split.
+**Recovery:** If a leaf crashes between Phase 1 and Phase 2, its next write detects the durable in-flight marker and resumes Phase 2, and a further split attempt resumes the same division rather than minting a second sibling. After recovery completes, the caller's write is routed to the correct leaf - locally if the key falls below the split key, or forwarded to the new sibling otherwise - and any split that write causes is returned alongside the recovered one. This ensures **no writes are lost** during a crash mid-split.
 
 ## Idempotent Split Propagation
 
-`AcceptSplitAsync` on internal nodes checks for duplicate `(separatorKey, childId)` pairs before inserting. If the same split result is delivered twice (e.g. crash recovery, message retry), the duplicate is detected and skipped. Combined with the monotonic `SplitState` on leaf and internal nodes, this makes the entire split protocol idempotent end-to-end.
+An internal node checks each separator it is asked to accept for a duplicate `(separatorKey, childId)` pair before inserting it. If the same split result is delivered twice (e.g. a replayed pending link, crash recovery, message retry), the duplicate is detected and skipped. Combined with the durable in-flight marker on leaves, and its internal-node counterpart (the right half of an unfinished split, recorded beside the intent and cleared on completion), which make an interrupted division resume rather than re-mint, this makes the entire split protocol idempotent end-to-end.
 
 Internal nodes themselves use the same two-phase split pattern as leaves. If an internal node crashes mid-split, the next `AcceptSplitAsync` call resumes the incomplete split before processing the caller's promotion - routing it to the correct node (locally or to the new sibling) based on the split key.
 

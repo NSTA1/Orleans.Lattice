@@ -65,12 +65,14 @@ Three positions, taken from the README's "Why it exists":
 
 ## Operating Context
 
-- The corpus: 259 markdown documents under `docs/<package>/` across 47 package
-  directories, plus root pages (README, FEATURES, PACKAGES,
+- The corpus: 258 markdown documents under `docs/<package>/` across 47 package
+  directories, plus `docs/RELEASING.md`, the video companion pages under
+  `docs/videos/`, root pages (README, FEATURES, PACKAGES,
   reference-architecture, CHANGELOG) and sample, spec, and benchmark READMEs.
-  About 4 MB of markdown containing roughly 690 tables, 477 compiled C# snippets
-  (` ```csharp verify ` fences checked by a Roslyn harness), 44 mermaid diagrams,
-  300 blockquotes, and no images.
+  The `docs/` tree is about 4 MB of markdown containing roughly 690 tables, 446
+  compiled C# snippets (` ```csharp verify ` fences checked by a Roslyn
+  harness), 44 mermaid diagrams, about 60 blockquotes and callouts, and no
+  images.
 - The pipeline: `docs-site/stage.ps1` stages the untouched repository markdown
   into a DocFX source tree, rewrites links that have no site counterpart to
   github.com, and generates the navigation from the groupings in PACKAGES.md
@@ -101,9 +103,12 @@ Three positions, taken from the README's "Why it exists":
 ## Brand Commitments
 
 - The name is **Orleans.Lattice**; "Lattice" is the short form.
-- No binding visual assets (confirmed). The existing mark - a B+ tree (root, two
-  internal nodes, four leaves) in white on .NET purple `#512BD4`, reused from the
-  Explorer favicon - may be redrawn.
+- No binding visual assets (confirmed). The documentation site's mark is the
+  four-element lattice drawn as a Hasse diagram
+  (`docs-site/template/public/lattice-mark.svg`, described in DESIGN.md). It
+  replaced the earlier mark - a B+ tree (root, two internal nodes, four leaves)
+  in white on .NET purple `#512BD4`, reused from the Explorer favicon, which
+  the Explorer still uses.
 - Voice (inferred from the corpus; stated during init without objection):
   precise and engineering-rigorous, British English spelling ("centre",
   "behaviour"), plain ASCII hyphens, and claims backed by tests, specifications,

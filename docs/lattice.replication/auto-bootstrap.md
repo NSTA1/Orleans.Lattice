@@ -42,6 +42,14 @@ A future transport revision will fold the sender's oldest HLC into the batch
 envelope so each inbound apply naturally populates the parameter; until then,
 co-located callers can use `ILatticeWalIntrospection` directly.
 
+The per-tree replication maintenance pass also runs the check on its own
+cadence, every `LatticeReplicationOptions.MaintenanceFallOffCheckInterval`
+(default 30 seconds): for each current peer it takes the oldest retained entry
+that peer authored in the local WAL
+(`ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync`) and passes it to
+`CheckAndTriggerAsync`. A peer with no authored entries in the local WAL is
+skipped, and the local cluster is never probed against its own origin.
+
 ## Configuration
 
 `LatticeReplicationOptions.AutoBootstrapOnFallOffLog` (default `true`) gates
@@ -53,9 +61,9 @@ bootstrap kickoff is the operator's responsibility.
 ## Observability
 
 The `peer.fell_off_log` counter on the `orleans.lattice.replication` meter is
-incremented exactly once per fresh detection, tagged `tree` and `origin`. An
-alert on `rate(peer.fell_off_log) > 0` flags a receiver that has lost
-incremental ground against a peer.
+incremented exactly once per fresh detection, tagged `tree`, `origin`, and
+`tenant`. An alert on `rate(peer.fell_off_log) > 0` flags a receiver that has
+lost incremental ground against a peer.
 
 While a bootstrap is already draining for the same `(tree, sourceClusterId)`,
 the detector consults `ILatticeBootstrapCoordinator.GetStatusAsync` first and

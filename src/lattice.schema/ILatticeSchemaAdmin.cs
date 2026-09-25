@@ -3,10 +3,9 @@ namespace Orleans.Lattice.Schema;
 /// <summary>
 /// The schema-management control plane: the set / clear / inspect verbs for a
 /// tree's enforcement policy and its strict-mode dead-letter queue. These verbs
-/// are the <see cref="LatticeOperation.SchemaAdmin"/>-gated surface (distinct from
-/// data-plane <see cref="LatticeOperation.Admin"/>): changing a policy or replaying
-/// dead letters authorizes on <see cref="LatticeOperation.SchemaAdmin"/>, while the
-/// read verbs stay on ordinary read authority.
+/// are intended to be exposed through a facade that gates changes with
+/// <see cref="LatticeOperation.SchemaAdmin"/> and leaves read verbs on ordinary
+/// read authority.
 /// </summary>
 public interface ILatticeSchemaAdmin
 {

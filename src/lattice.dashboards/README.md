@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry. Sibling package - install when you want operator dashboards bundled with the library version.
+Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry, and for the add-on packages that chart their own surfaces (the gRPC replication transport, auth, membership, backup, scaling, tenancy and grain index). Sibling package - install when you want operator dashboards bundled with the library version.
 
 ## What's in the box
 
@@ -9,7 +9,7 @@ Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as embed
 | Kind | Focus |
 |------|-------|
 | `Overview` | Per-tree throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes. |
-| `CommitPath` | Foreground commit path: `leaf.commit.duration{step=wal|apply|observer|digest}` percentiles. |
+| `CommitPath` | Foreground commit path: `leaf.commit.duration{step=wal\|apply\|observer\|digest}` percentiles. |
 | `Replication` | Cross-cluster replication: ship / apply / lag, WAL append-vs-trim, dead-letter churn, apply violations, dependency wait, fell-off-log, per-peer cursor lag, cross-cluster atomic-batch staging. |
 | `AtomicWrites` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, and a dedicated saga-failure-rate panel. |
 | `MaterialisedViews` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. |
@@ -17,6 +17,8 @@ Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as embed
 | `Backup` | Backup and restore: capture / restore throughput and duration percentiles, per-backup size / artifact / entry distributions, retention reclaim and prune rates, incremental lag (entries and age), capture / restore failure rates by reason, scheduler skipped / overrun counters, cross-tree fence selection / drain counters, and inventory gauges (tracked count, chain depth, catalog bytes, oldest / newest age, per-scope last-run status and last-success age). Sources the `orleans.lattice.backup` meter. |
 | `Scaling` | Autoscaling signal: smoothed vs raw scale value, the three normalised compute-pressure dimensions (activation / resource / WAL-dispatch), recommended replica count, and the storage-axis stats (WAL accounts over threshold, rebalance recommended). Sources the `orleans.lattice.scaling` meter. |
 | `ReplicationGrpc` | Replication transport (gRPC) security: insecure (plaintext) channel construction total and per-second rate broken out by peer cluster id and transport (push / saga_control / snapshot), surfacing an accidental `AllowPlaintextEndpoints` downgrade. Sources the `orleans.lattice.replication.grpc` meter. |
+| `Tenancy` | Per-tenant observability: the registered-tenant count and, dimensioned by tenant, usage (stored bytes, live keys, resident memory, owned trees), quota ceilings and burst headroom, and the metered overage series. Sources the `orleans.lattice.tenancy` meter. |
+| `GrainIndex` | Grain-index operator view: backfill lifecycle state and percent complete, processed-versus-total crawl progress, live entry count, onboarding throughput by route, projection-latency percentiles, and index-write failure rates by route. Sources the shared `orleans.lattice` meter, which the grain-index package publishes onto. |
 
 Plus Grafana provisioning templates under `Provisioning/`:
 
@@ -25,7 +27,7 @@ Plus Grafana provisioning templates under `Provisioning/`:
 
 ## Drift guard
 
-The companion test project `Orleans.Lattice.Dashboards.Tests` parses every embedded dashboard JSON, extracts every metric name referenced in panel `expr` strings, and asserts each name resolves to a live instrument on `LatticeMetrics.Meter` (or `LatticeReplicationMetrics.Meter`). A future rename in either meter fails CI before the dashboard ships stale.
+The companion test project `Orleans.Lattice.Dashboards.Tests` parses every embedded dashboard JSON, extracts every metric name referenced in panel `expr` strings, and asserts each name resolves to an instrument declared in the library source on whichever meter owns it, and that every instrument it can observe on `LatticeMetrics.Meter` and `LatticeReplicationMetrics.Meter` is referenced by at least one panel, apart from a short allow-list left uncharted on purpose. The add-on meters' coverage is enforced from their owning packages' tests. A future rename fails CI before the dashboard ships stale.
 
 ## Why a separate package
 

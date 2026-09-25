@@ -91,9 +91,10 @@ public static class LatticeBackupApiGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the backup control-API RPC routes (the unary capture / list /
-    /// describe / delete / restore / revert / auth-scheme RPCs plus the
-    /// server-streaming <c>StreamBackups</c> and <c>ExportArtifact</c> RPCs) on
+    /// Maps the backup control-API RPC routes: capture, backup-set capture,
+    /// schedule management, catalog listing and streaming, describe, delete,
+    /// restore / revert, artifact export, capability probing, auth-scheme
+    /// advertisement, scope status, and backup-health RPCs on
     /// the supplied <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeBackupApiGrpc"/> and must expose
     /// <c>Orleans.Lattice.Api.Backup.ILatticeBackupControl</c> (via

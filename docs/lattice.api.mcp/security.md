@@ -89,7 +89,7 @@ Because the bridge resolves the caller's subject, the per-session discovery conf
 
 ## Least privilege by default
 
-The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
+The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration, replication control, schema management, tree lifecycle and control, and tenant lifecycle and residency) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
 
 ## OAuth discovery is anonymous by design
 

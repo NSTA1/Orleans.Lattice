@@ -2,21 +2,20 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Saga coordinator for atomic multi-key writes. One grain activation
-/// per in-flight batch, keyed by <c>{treeId}/{operationId}</c>. Applies each
-/// write sequentially through <see cref="ILattice"/>, persists progress after
-/// every step, and compensates already-committed keys when a step throws.
+/// per in-flight batch, keyed by <c>{treeId}/{operationId}</c>. Stages the
+/// whole batch as prepared writes readers cannot see, then records a single
+/// commit or abort decision in the tree's transaction registry and broadcasts
+/// the matching terminal to every participating shard.
 /// <para>
-/// Compensation rewrites the pre-saga value (or tombstones the key when it was
-/// absent before the saga) with a freshly-ticked <c>HybridLogicalClock</c>, so
-/// LWW merge semantics guarantee the rollback wins over the partial write.
-/// Crash recovery is reminder-driven: on reactivation the grain consults its
-/// persisted <see cref="State.AtomicWriteState.Phase"/> and resumes.
+/// An abort issues no per-key rollback writes: the recorded decision and the
+/// abort terminals discard the prepared writes, so every key keeps its
+/// pre-saga value. Crash recovery is reminder-driven: on reactivation the
+/// grain consults its persisted <see cref="State.AtomicWriteState.Phase"/>
+/// and resumes.
 /// </para>
 /// <para>
-/// Readers may observe a brief partial-visibility window between the first
-/// and last committed write; callers needing strict isolation should layer
-/// version-guarded reads (<see cref="ILattice.GetWithVersionAsync"/> +
-/// <see cref="ILattice.SetIfVersionAsync"/>) on top.
+/// Readers never observe a partial batch: the staged writes stay hidden until
+/// the commit decision is recorded.
 /// </para>
 /// </summary>
 [Alias(TypeAliases.IAtomicWriteGrain)]
@@ -25,8 +24,10 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// <summary>
     /// Starts (or resumes) the atomic write saga for <paramref name="entries"/>
     /// against the tree identified by <paramref name="treeId"/>. Returns when
-    /// every entry has been committed. Throws the originating exception after
-    /// successful compensation if any step fails mid-flight.
+    /// the batch has been committed. After the saga has recorded its abort
+    /// decision following a failed step, throws an
+    /// <see cref="InvalidOperationException"/> carrying the original failure's
+    /// message.
     /// </summary>
     /// <param name="treeId">Logical tree ID to write into.</param>
     /// <param name="entries">Key-value pairs to commit atomically. Must not contain duplicate keys.</param>

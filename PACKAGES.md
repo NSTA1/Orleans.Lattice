@@ -84,7 +84,7 @@ RepoContext, an AI codebase-memory system built entirely on the platform. It is 
 
 | Package | NuGet | Description | Docs |
 |---|---|---|---|
-| `Orleans.Lattice.Api.Mcp.RepoContext` | Unreleased | Opt-in MCP tools that give an AI agent durable, conflict-free context and memory about a codebase - repository bootstrap, structural and symbol recall, free-form memories with optional TTL, and exact-kNN semantic search - stored in the CRDT B+ tree and served fail-closed, with a container host for local use. **Not yet published to NuGet** - distributed as a ready-to-run Docker container and consumed from source today; see the [container sample](samples/RepoContextContainer/README.md). | [README](docs/lattice.api.mcp.repocontext/README.md) |
+| `Orleans.Lattice.Api.Mcp.RepoContext` | Unreleased | Opt-in MCP tools that give an AI agent durable, conflict-free context and memory about a codebase - repository bootstrap, structural and symbol recall, free-form memories with optional TTL, and semantic search (approximate nearest-neighbour by default, or an exact scan when configured) - stored in the CRDT B+ tree and served fail-closed, with a container host for local use. **Not yet published to NuGet** - distributed as a ready-to-run Docker container and consumed from source today; see the [container sample](samples/RepoContextContainer/README.md). | [README](docs/lattice.api.mcp.repocontext/README.md) |
 | `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | Unreleased | Opt-in multi-cluster add-on for the repository-context store: `EnableRepoContextMultiCluster(...)` turns on cross-cluster replication for every repository-context tree with the correct per-tree merge mode - the vector-membership presence tree pinned to the add-wins `OrFlag` CRDT so active-active convergence can never silently drop an embedding, the agent-memory tree pinned to `MvRegister` so concurrent cross-cluster memory writes both survive and fold, other trees defaulting to last-writer-wins. A `LATTICE_REPOCONTEXT_INDEXING_ROLE` hub/spoke gate keeps exactly one cluster indexing, and a startup guard rejects an unsafe topology. Takes the `Orleans.Lattice.Replication` dependency so the repo-context core need not. **Not yet published to NuGet** - consumed from source alongside the repository-context package today. | [README](docs/lattice.api.mcp.repocontext.replication/README.md) |
 
 ## Explorer (in progress)
@@ -149,7 +149,7 @@ Cross-cluster active-active replication and its transport.
 
 ## Storage
 
-Durability backends behind the storage seams. The core ships an in-memory write-ahead log; these replace it for production.
+Durability backends behind the storage seams. The core ships an in-memory write-ahead log, which the two write-ahead-log backends replace for production; the other two back the backup sink and a distributed cache.
 
 | Package | NuGet | Description | Docs |
 |---|---|---|---|
@@ -166,7 +166,7 @@ Backup, autoscaling, and dashboards.
 |---|---|---|---|
 | `Orleans.Lattice.Backup` | [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice.Backup)](https://www.nuget.org/packages/Orleans.Lattice.Backup) | Causally consistent backup and restore: full and incremental capture, scheduling and chain retention, an optional cross-tree causal fence, and a fail-closed permission model over a pluggable sink. | [README](docs/lattice.backup/README.md) |
 | `Orleans.Lattice.Scaling` | [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice.Scaling)](https://www.nuget.org/packages/Orleans.Lattice.Scaling) | Cluster-aggregate autoscaling signal: a compute-axis replica-demand scalar for KEDA plus an advisory, signal-only storage-axis WAL rebalance recommendation, served over an HTTP endpoint and an ASP.NET Core health check. | [README](docs/lattice.scaling/README.md) |
-| `Orleans.Lattice.Dashboards` | [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice.Dashboards)](https://www.nuget.org/packages/Orleans.Lattice.Dashboards) | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
+| `Orleans.Lattice.Dashboards` | [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice.Dashboards)](https://www.nuget.org/packages/Orleans.Lattice.Dashboards) | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters. | [README](docs/lattice.dashboards/README.md) |
 
 ## Related
 

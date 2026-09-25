@@ -47,8 +47,13 @@ walks the whole thing with `az` commands. In short:
    $env:LATTICE_ENTRA_CLIENT_ID = "<app-client-id>"
    ```
 
-If either variable is unset, or a token cannot be acquired, the sample prints the
-setup steps and exits with a non-zero code rather than silently doing nothing.
+   The token is requested for the scope `api://<app-client-id>/.default`. If your
+   app exposes a specific delegated scope instead, set the optional
+   `LATTICE_ENTRA_SCOPE` variable to override it.
+
+If either required variable is unset, or a token cannot be acquired, the sample
+prints the setup steps and exits with a non-zero code rather than silently doing
+nothing.
 
 ## Run it
 

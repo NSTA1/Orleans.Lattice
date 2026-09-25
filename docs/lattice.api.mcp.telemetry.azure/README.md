@@ -50,4 +50,4 @@ services.AddAzureTelemetryBackendToken(o =>
 | `Scope` | `string` | `ManagedPrometheusScope` | The scope the token is audienced for. Defaults to the Azure Monitor managed-Prometheus query scope. Must be non-empty. |
 | `RefreshSkew` | `TimeSpan` | 5m | How long before expiry the provider proactively re-acquires, so an in-flight query never presents an about-to-expire token. Must be non-negative. |
 
-The options are validated at startup: a credential must be supplied, the scope must be non-empty, and the refresh skew must not be negative.
+The options are validated when they are first resolved - on the first token request, since no start-up validation is registered: a credential must be supplied, the scope must be non-empty, and the refresh skew must not be negative.

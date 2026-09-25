@@ -19,7 +19,7 @@ An internal expiry helper is pure and `TimeProvider`-driven - no I/O - so every 
 - **IsExpired** compares the effective instant to now.
 - **Slide** advances the effective expiry by the sliding window on each read, capped at the absolute expiration, and returns null when there is nothing to slide.
 
-Enforcement is **lazy on read**. `Get`/`Refresh` download the entry, and if it is expired they best-effort delete it and report a miss; otherwise a sliding entry has its effective expiry advanced. There is no background sweeper, so an entry written and never read again lingers until overwritten or removed. That is acceptable for the low-churn, per-subject workloads (a token cache) this backend targets, and it keeps the implementation free of a timer or lease.
+Enforcement is **lazy on read**. `Get` downloads the entry (content and expiry metadata in one call) and `Refresh` reads only its properties; if the entry is expired, either best-effort deletes it and reports a miss, and otherwise a sliding entry has its effective expiry advanced. There is no background sweeper, so an entry written and never read again lingers until overwritten or removed. That is acceptable for the low-churn, per-subject workloads (a token cache) this backend targets, and it keeps the implementation free of a timer or lease.
 
 ## Container lifecycle
 

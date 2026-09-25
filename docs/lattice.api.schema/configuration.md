@@ -21,6 +21,7 @@ When the remote binding is installed, `AddLatticeSchemaApiGrpc(configure)` binds
 | `RequireAuthorization` | `bool` | `true` | Whether the authorization interceptor enforces the transport authorization gate on protected inbound calls. Set to `false` only when an outer authentication boundary already guards the endpoint. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound request-header name carrying the caller's credential token. |
 | `CredentialScheme` | `string` | `Bearer` | The authentication scheme stamped on the bridged credential. A matching scheme prefix on the header value is stripped before the remaining token is used. |
+| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | The inbound request-header name carrying the caller's asserted active tenant, lifted onto the ambient active-tenant scope for the call so tenant-scoped tree names resolve into the caller's namespace. Set to `null` or an empty string to disable it. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | The auth schemes advertised from the unauthenticated `GetAuthScheme` RPC. Each descriptor must carry only public configuration - never a secret. |
 
 See the [gRPC configuration](../lattice.api.schema.grpc/configuration.md) page for client transport setup and the full fail-closed default behaviour.

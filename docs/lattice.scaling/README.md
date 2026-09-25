@@ -32,8 +32,9 @@ storage-axis pressure as an operator recommendation that maps onto the
 
 - **Compute axis (`ComputePressure`)** - normalised activation, host-resource,
   and WAL-dispatch pressure (each `0.0` idle to `1.0` saturated), plus the
-  worst-case `WalSaturationState` observed across every tree and partition. The
-  dominant dimension times the current replica count is the raw replica demand.
+  worst-case `WalSaturationState` the answering silo has observed across its
+  trees. The dominant dimension times the current replica count is the raw
+  replica demand.
 - **Storage axis (`StoragePressure`)** - whether aggregate retained WAL bytes
   crossed the configured threshold, the aggregate retained bytes, a
   per-catalogue-key breakdown (`WalAccountPressure`) that classifies each

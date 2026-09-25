@@ -18,6 +18,6 @@ services.AddExplorerEntraAuth(options =>
 });
 ```
 
-When the State API advertises its Entra authority, tenant, client id, and audience, those advertised values take precedence and the static options can be omitted.
+When the State API advertises its Entra authority, tenant, client id, and audience, the static options can be omitted: an advertised value is used only for what is left unset, so a configured value always takes precedence. Because the advertisement arrives over an unauthenticated call from the endpoint that will receive the token, an advertised authority is admitted only when it is `https` and its host is allow-listed: the well-known Entra login hosts by default, or exactly the hosts in `AllowedAuthorityHosts` when that list is non-empty (a non-empty list replaces the default set).
 
 See the Orleans.Lattice documentation for connecting to an auth-enabled State API.

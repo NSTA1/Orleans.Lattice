@@ -10,7 +10,7 @@ dotnet test --filter "TestCategory!=Chaos"
 
 ## gRPC transport suite (`test/lattice.replication.grpc/Chaos/`)
 
-`GrpcTransportChaosTests` hosts a real `MapLatticeReplicationGrpc` receiver on ASP.NET Core test infrastructure, sends batches through the public `IReplicationTransport` seam, injects channel faults, retries at the caller boundary, and asserts that every distinct key reaches the receiver exactly once in the applied-key set.
+`GrpcTransportChaosTests` hosts a real `MapLatticeReplicationGrpc` receiver on ASP.NET Core test infrastructure, sends batches through the public `IReplicationTransport` seam, injects channel faults, retries at the caller boundary, and asserts that every distinct key is present in the receiver's applied-key set. The receiver's `IReplicationApplier` is a recording test double that stores keys in a set, and the receiver runs with shared-secret authentication disabled.
 
 | Test | Fault model | What it proves |
 |---|---|---|
@@ -31,7 +31,7 @@ dotnet test --filter "TestCategory!=Chaos"
 ### Invariants under test
 
 1. **No batch loss.** Every record the sender keeps retrying is eventually observed by the receiver within the bounded attempt budget.
-2. **No duplicate apply effect.** Redeliveries are expected under fault injection, but the receiver-side high-water-mark behaviour collapses them to one applied-key observation.
+2. **Redelivery is tolerated.** Redeliveries are expected under fault injection; the recording applier collapses them to one applied-key observation per key, and the suite asserts key presence, not apply-call count. The production receiver-side dedup is not exercised here - see [Replication Apply](../lattice.replication/replication-apply.md).
 3. **Non-vacuous faults.** Each test asserts that at least one channel fault was injected before accepting the run.
 4. **Real endpoint mapping.** The receiver path uses the public endpoint mapping helper rather than a fake transport.
 
@@ -39,5 +39,5 @@ dotnet test --filter "TestCategory!=Chaos"
 
 - [Architecture](architecture.md) - the sender, endpoint, applier, and ack topology.
 - [API Reference](api.md) - public registration helpers and transport seams.
-- [Replication Apply](../lattice.replication/replication-apply.md) - high-water-mark dedup and causal apply.
+- [Replication Apply](../lattice.replication/replication-apply.md) - receiver-side dedup and causal apply.
 - [Core chaos tests](../lattice/chaos-tests.md) - the single-cluster and cross-package chaos overview.

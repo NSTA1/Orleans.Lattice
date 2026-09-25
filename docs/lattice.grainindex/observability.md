@@ -15,11 +15,18 @@ up with no configuration change.
 |---|---|---|
 | `index` | the logical index name | every instrument |
 | `tenant` | always `_platform_` | every instrument |
-| `path` | `activation`, `backfill`, `outbox` | `grains_enrolled`, `write_failures` |
+| `path` | `activation`, `backfill`, `outbox` | `write_failures` (all three); `grains_enrolled` (`activation` and `backfill` only) |
 
 The `path` tag names the route that did the work: `activation` is the activation
 and mutation path that physically writes a grain's entries, `backfill` is the
 background crawl, and `outbox` is a deferred or retried index write.
+
+The two `grains_enrolled` series are not additive. Every enrolment is performed -
+and counted - by the grain's own activation path, the first time the grain
+crosses into the index; the `backfill` series additionally counts the
+enrolments the crawl caused. A crawl-driven grain therefore appears on both, so
+chart the series side by side rather than summing them. The outbox drain records
+no enrolments, only its `write_failures`.
 
 Every series also carries the repository-wide derived `tenant` dimension, which
 is emitted on tenancy-on and tenancy-off clusters alike so an index telemetry
@@ -49,9 +56,12 @@ grain, so a scrape never recomputes progress and only the silo hosting a crawl's
 activation - the one that knows where the crawl has reached - publishes its
 series.
 
-`backfill.total` and `backfill.percent_complete` publish a series only for the
-indexes whose key source implements `TryGetApproximateCountAsync`. Without that
-denominator they stay silent rather than reporting a misleading figure. See
+`backfill.total` publishes a series only for an index whose key source returns
+an approximate count from `TryGetApproximateCountAsync` (the default
+implementation returns none), and `backfill.percent_complete` only when that
+count is positive - or once the crawl has completed, which reports `100` whatever
+its key source. Without a denominator they stay silent rather than reporting a
+misleading figure, and `backfill.processed` is the progress signal. See
 [The optional count](backfill.md#the-optional-count).
 
 ### Backfill state values
@@ -73,11 +83,18 @@ denominator they stay silent rather than reporting a misleading figure. See
   are queued in the [outbox](architecture.md#the-outbox) - but the index is
   stale for those grains until the drain catches up. A sustained rise on the
   `outbox` path means the drain itself is failing.
-- **`backfill.state` at `4` (`Failed`)** means a crawl stopped and will not
-  resume without intervention.
-- **`backfill.percent_complete` flat** while the state is `Running` means the
-  crawl is making no progress, typically a key source that is throwing or
-  yielding nothing.
+- **`backfill.state` at `4` (`Failed`)** means a pass faulted as a whole (the
+  error is in the status's `FailureMessage`). The crawl is held at its checkpoint
+  and the one-minute reminder heartbeat returns it to `Running` on its next tick,
+  so an index that keeps returning to `4` has a persistent fault to fix rather
+  than a crawl that merely needs resuming.
+- **`backfill.processed` or `backfill.percent_complete` flat** while the state
+  is `Running` means the crawl is not advancing. Either each pass is a no-op -
+  the silo hosting the crawl has no key source registered for the index, or does
+  not declare it, so the pass logs a warning and returns - or nothing is driving
+  the passes at all (`BackfillEnabled = false` with no caller of
+  `RunBackfillPassAsync`). A key source that throws moves the state to `Failed`
+  instead, and one that yields nothing completes the crawl.
 - **`projection.duration` p99 climbing** means the projection path is becoming a
   latency contributor to the grain's own write path under the default
   synchronous projection mode.

@@ -11,11 +11,10 @@ namespace Orleans.Lattice.Api.State;
 public static class LatticeApiStateServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the read-only cluster state API to the silo. At the scaffolding
-    /// stage this only binds an (empty) <see cref="LatticeApiStateOptions"/>
-    /// instance and registers an idempotency marker; it adds no query,
-    /// observe, or transport behaviour and imposes zero cost on the
-    /// read/write path.
+    /// Adds the read-only cluster state API to the silo: the query facade, live
+    /// change observer, shared metrics sampler, metrics observer, options, and an
+    /// idempotency marker. It contributes no transport binding by itself; gRPC,
+    /// MCP, and Explorer heads adapt over the registered facades.
     /// <para>
     /// Must be called <i>after</i>
     /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>:

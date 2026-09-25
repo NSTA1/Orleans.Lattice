@@ -85,7 +85,7 @@ public sealed class RepoContextClaimConflictException : McpException
 
     /// <summary>
     /// The machine-readable refusal reason: <c>StaleToken</c>, <c>ClaimRequired</c>,
-    /// <c>ClaimReleased</c>, or <c>ForeignRegion</c>.
+    /// <c>ClaimReleased</c>, <c>ForeignRegion</c>, or <c>UnissuedToken</c>.
     /// </summary>
     public string Reason { get; }
 

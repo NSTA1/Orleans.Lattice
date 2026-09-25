@@ -8,7 +8,7 @@ The package is a thin, dependency-light delivery vehicle for operator dashboards
 
 - **Bundled, version-pinned dashboards.** Operator dashboards for the overview, commit path, replication, replication gRPC transport security, atomic writes, materialised views, identity/authorization, backup/restore, autoscaling-signal, per-tenant observability, and grain-index surfaces ship as embedded Grafana JSON, each retrieved by a typed kind. They move in lockstep with the library version, so a dashboard never references an instrument the installed library does not emit.
 - **No replication dependency.** The package takes a runtime dependency only on `Orleans.Lattice` (the core library). The replication dashboard's queries reference instruments on the `orleans.lattice.replication` meter, but the package does not link against `Orleans.Lattice.Replication`; that meter is only emitted when the replication package is registered on the silo separately. Local-only deployments install the dashboards without pulling in replication and simply omit the replication dashboard.
-- **Drift-guarded coverage.** Every metric name a dashboard references resolves to a live instrument, and every instrument the guard can discover is referenced by at least one panel - both directions are enforced by a CI test so a rename or a new unpaneled instrument fails the build before it ships stale. The forward direction reaches only instruments declared on the two static metric classes; see [Architecture](architecture.md#the-bidirectional-drift-guard) for the one gap this leaves and the instruments currently outside it.
+- **Drift-guarded coverage.** Every metric name a dashboard references resolves to a live instrument, and every instrument the guard can discover is referenced by at least one panel, apart from a short allow-list left uncharted on purpose - both directions are enforced by a CI test so a rename or a new unpaneled instrument fails the build before it ships stale. The forward direction reaches only instruments declared on the two static metric classes; see [Architecture](architecture.md#the-bidirectional-drift-guard) for the one gap this leaves and the instruments currently outside it.
 
 ## Core Properties
 
@@ -21,8 +21,8 @@ The package is a thin, dependency-light delivery vehicle for operator dashboards
 | Dashboard | Source meter | Focus |
 |---|---|---|
 | `Overview` | `orleans.lattice` | Throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes, and top-of-stack read-path latency envelopes. Includes a row of atomic-write panels (saga duration p50/p95/p99, batch size p50/p95/p99, and a saga-failure-rate panel with 1% / 5% threshold lines). |
-| `CommitPath` | `orleans.lattice` | WAL-only commit path: per-step latency (`wal` / `apply` / `observer`), activation replay duration and entries by recovery outcome, storage-provider IOPS contribution, compaction. |
-| `Replication` | `orleans.lattice.replication` | Ship / apply / lag percentiles, WAL append vs trim throughput, dead-letter queue churn, apply FIFO and causal violations, dependency-wait histogram, fell-off-log events, per-peer entries / bytes behind, last contact, consecutive errors. |
+| `CommitPath` | `orleans.lattice` | WAL-only commit path: per-step latency (`wal` / `apply` / `observer` / `digest`), activation replay duration and entries by recovery outcome, storage-provider IOPS contribution, compaction. |
+| `Replication` | `orleans.lattice.replication`, plus `orleans.lattice` for its WAL, WAL-compaction and WAL GC panels | Ship / apply / lag percentiles, WAL append vs trim throughput, dead-letter queue churn, apply FIFO and causal violations, dependency-wait histogram, fell-off-log events, per-peer entries / bytes behind, last contact, consecutive errors. |
 | `AtomicWrites` | `orleans.lattice` | Dedicated `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration p50/p95/p99 and p95 by outcome, batch size p50/p95/p99 and p95 by outcome, per-tree committed throughput, range-window non-committed saga count, and a separate saga-failure-rate panel. The right home for incident triage and SLO drill-down; the `Overview` row is the at-a-glance teaser. |
 | `MaterialisedViews` | `orleans.lattice` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. Keyed by view name (and cluster); deliberately offers no per-silo filter, because a view's maintainer is a single grain activation that migrates between silos, so the dashboard aggregates across the whole cluster. Needs only the core meter, not the replication package. |
 | `Authorization` | `orleans.lattice.auth`, `orleans.lattice.membership` | Identity and authorization operator view: enforcement-gate decision throughput (by `effect` and `operation`), decision-latency percentiles, compiled-snapshot rebuild rate and the snapshot `epoch` / `age` gauges, alongside the subject-resolution cache hit-ratio and hit / miss throughput. Useful only when the authentication / authorization packages are registered on the silo. |
@@ -40,7 +40,7 @@ Install the package:
 <PackageReference Include="Orleans.Lattice.Dashboards" Version="<X.Y.Z>" />
 ```
 
-Wire up the meters the dashboards read:
+Wire up the meters the core dashboards read. `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard (`ReplicationGrpc`, `Authorization`, `Backup`, `Scaling`, `Tenancy`) also needs its own meter registered by name - see [Configuration](configuration.md#1-register-the-meters):
 
 ```csharp
 builder.Services.AddOpenTelemetry()
@@ -87,20 +87,26 @@ exporter are load-bearing, and a scrape that lacks either renders the affected
 panels empty rather than wrong, which is the harder failure to notice.
 
 **Unit suffixes are part of the series name.** The exporter derives a suffix from
-the instrument's declared unit and appends it to the family name, so a histogram
+the instrument's declared unit and appends it to the family name - unless the
+name already ends with it, so `orleans.lattice.storage.wal.stored_bytes` stays
+`orleans_lattice_storage_wal_stored_bytes_total` - and so a histogram
 declared `unit: "ms"` is exported as `<name>_milliseconds`, and one declared
 `unit: "s"` as `<name>_seconds`. That is why the panels read, for example,
 `orleans_lattice_atomic_write_duration_milliseconds_bucket` and not
 `orleans_lattice_atomic_write_duration_bucket`. A panel that omits the suffix
-names a series no exporter emits; it does not fall back to the unsuffixed family.
+names a series that exporter does not emit; it does not fall back to the
+unsuffixed family.
 An annotation unit such as `{entry}` is documentation rather than a dimension and
 contributes no suffix. `DashboardBucketUnitSuffixTests` in `test/lattice.dashboards`
-asserts every bundled panel against this rule, so a panel and its instrument
-cannot drift apart silently.
+asserts every `_bucket` token a bundled panel reads against this rule, so a
+bucket panel and its instrument cannot drift apart silently. Tokens without a
+`_bucket` suffix are outside that gate, and 22 of them currently follow the
+unsuffixed spelling instead - see
+[How an instrument name becomes a PromQL series name](metrics-to-panel-map.md#how-an-instrument-name-becomes-a-promql-series-name).
 
-**Quantile panels need a real histogram exporter.** Roughly 185 bundled panels
-call `histogram_quantile` over `_bucket` series, which only an exporter that
-publishes bucket boundaries can satisfy.
+**Quantile panels need a real histogram exporter.** 87 bundled panels, carrying
+191 `histogram_quantile` expressions between them, read `_bucket` series, which
+only an exporter that publishes bucket boundaries can satisfy.
 
 Not every Lattice endpoint is such an exporter, and the difference is easy to miss
 because both return `200`. The repository-context container serves its own

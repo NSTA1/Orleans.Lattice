@@ -10,7 +10,7 @@ Typed grain indexing for [Orleans.Lattice](../../README.md). Declare that a grai
 - **Typed predicate queries.** `index.Where(u => u.Age >= 18).ToGrainsAsync()` streams back the matching grain references. The predicate is the same dialect the core [predicate operations](../lattice/predicated-operations.md) surface uses, so the filtering runs in the tree shards rather than in the caller.
 - **Two onboarding routes that converge.** A grain enrols itself the moment it activates or writes state, and a rate-limited, reminder-driven background crawl onboards the grains that are dormant. Both routes write through the same projection path, so they converge on one duplicate-free index.
 - **Drift is detected, not absorbed.** The effective definition is fingerprinted into an internal registry tree. A later change that would silently invalidate the entries already written is rejected at startup instead of quietly returning wrong answers.
-- **No silent index loss.** An index write that fails is surfaced to the caller and leaves a durable pending-projection marker that is retried until it lands, so a committed state change can never leave an invisible hole in the index.
+- **No silent index loss.** An index write that fails leaves a durable pending-projection marker that is retried until it lands - and, under the default synchronous projection mode, is surfaced to the caller of the state write - so a committed state change can never leave an invisible hole in the index.
 
 ## Core properties
 

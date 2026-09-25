@@ -199,8 +199,8 @@ public class LatticeOptions
     /// that triggers an out-of-cycle compaction pass for the leaf's shard,
     /// in addition to the regular reminder-driven cadence governed by
     /// <see cref="TombstoneGracePeriod"/>. The ratio is computed as
-    /// <c>tombstones / max(liveKeys + tombstones, 1)</c> on each leaf
-    /// commit; when it crosses the threshold, the leaf asks its tree's
+    /// <c>tombstones / max(liveKeys + tombstones, 1)</c> after each point or
+    /// range delete on the leaf; when it crosses the threshold, the leaf asks its tree's
     /// compaction grain to schedule a pass for the affected shard.
     /// Set to <c>0.0</c> (the default) to disable ratio-based pre-emption -
     /// only the regular reminder fires.
@@ -214,7 +214,8 @@ public class LatticeOptions
     /// <see cref="MinTombstoneRatioForCompaction"/>: a small leaf at high
     /// ratio is reaped through the ratio trigger, while a large leaf that
     /// has accumulated tombstones (even at low ratio) is reaped through
-    /// this trigger. Only fires when the leaf actually contains at least
+    /// this trigger. Like the ratio trigger it is evaluated only after a
+    /// point or range delete on the leaf. Only fires when the leaf actually contains at least
     /// one tombstone or expired entry. Set to <c>0</c> (the default) to
     /// disable size-based pre-emption.
     /// </summary>
@@ -300,8 +301,9 @@ public class LatticeOptions
     /// survives silo crashes the same way the shard cursor does.
     /// <para>
     /// This is the dominant control on **peak concurrent leaf activations**
-    /// during a pass. Within a shard the leaf walk runs back-to-back; the
-    /// tick gap applies only between shards. Without batching, a full pass
+    /// during a pass. Each timer tick walks at most one batch of this many
+    /// leaves from one shard, so the tick gap applies between batches within a
+    /// shard as well as between shards. Without batching, a full pass
     /// activates every leaf in the tree at least once, and a pass that
     /// completes inside one <c>GrainCollectionOptions.CollectionAge</c>
     /// window has effectively activated the entire leaf set at once.
@@ -1316,8 +1318,8 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Fail-safe admission bound on the size of the per-tree
-    /// <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>'s persisted row, in estimated
+    /// Fail-safe admission bound on the size of the per-tree transaction
+    /// registry's persisted row, in estimated
     /// serialised bytes. The registry persists its whole state as one grain-state
     /// row, rewritten on every group-committed write, and that row carries one
     /// tombstone per saga completed within <see cref="TxDecisionRetention"/>. It
@@ -1360,11 +1362,11 @@ public class LatticeOptions
     public const long DefaultTxRegistryAdmissionBudgetBytes = 768 * 1024;
 
     /// <summary>
-    /// Hard cap on how long the per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>
-    /// will retain a point-in-time snapshot pin recorded for a
-    /// <see cref="LatticeCursorSpec.PointInTime"/> cursor. The cursor grain
-    /// refreshes its pin on every step (<c>Next*Async</c> /
-    /// <c>DeleteRangeStepAsync</c>); a cursor that misses a refresh window
+    /// Hard cap on how long the per-tree transaction registry will retain a
+    /// point-in-time snapshot pin recorded for a
+    /// <see cref="LatticeCursorSpec.PointInTime"/> cursor. The cursor refreshes
+    /// its pin on every <c>Next*Async</c> step (a delete-range cursor cannot be
+    /// point-in-time); a cursor that misses a refresh window
     /// past this TTL has its pin expired by the registry's own prune pass,
     /// and the next step throws
     /// <see cref="LatticeCursorSnapshotExpiredException"/>. Acts as a
@@ -1384,8 +1386,8 @@ public class LatticeOptions
     /// <summary>
     /// Absolute footprint cap on the union of saga decisions pinned by all
     /// active <see cref="LatticeCursorSpec.PointInTime"/> cursors against
-    /// the per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>. A new
-    /// <c>OpenAsync(PointInTime: true)</c> whose snapshot would push the
+    /// the per-tree transaction registry. Opening a new point-in-time cursor
+    /// (a <see cref="LatticeCursorSpec"/> with <c>PointInTime</c> set) whose snapshot would push the
     /// total pinned-decision footprint over this cap throws
     /// <see cref="LatticeCursorRegistryPinExhaustedException"/> rather than
     /// silently degrading or growing unbounded. <c>Next*Async</c> on an
@@ -1398,25 +1400,21 @@ public class LatticeOptions
     public const int DefaultMaxPinnedSagaDecisions = 100_000;
 
     /// <summary>
-    /// Per-shard cap on the projected WAL-replay record count consulted
-    /// at <c>OpenSnapshot*Async</c> time. The open fan-out reads each
-    /// touched shard's <c>GetMaterialiserLagAsync</c> and fails fast
-    /// with <see cref="LatticeSnapshotReplayBudgetExceededException"/>
-    /// when any shard's projected lag exceeds this cap, so a snapshot
-    /// cursor cannot be opened against a tree whose materialiser is
-    /// far enough behind that replay would dominate the open call.
-    /// Operators tune this against the steady-state apply rate and
-    /// the materialiser-checkpoint cadence
-    /// (<see cref="MaterialiserCheckpointInterval"/>,
-    /// <see cref="MaterialiserCheckpointEntries"/>): a healthy
-    /// materialiser sits well below the cap; a sustained excursion
-    /// surfaces as the open-time fail-fast.
+    /// Per-shard cap on the rows a zero-observable-writes snapshot cursor
+    /// materialises, checked at <c>OpenSnapshot*Async</c> time. The open
+    /// fan-out captures a frozen baseline of every touched shard's
+    /// projection and fails fast with
+    /// <see cref="LatticeSnapshotReplayBudgetExceededException"/> when the
+    /// deepest shard's baseline row count exceeds this cap, so a snapshot
+    /// cursor cannot be opened against a shard whose projection is too
+    /// large to hold for the cursor. The cost is the materialised baseline
+    /// row count rather than the captured WAL head, because after a WAL GC
+    /// trim the head can be arbitrarily large while the projection is
+    /// small. A value of zero or less disables the gate.
     /// <para>
     /// The cap is the snapshot analogue of
     /// <see cref="MaxLeafReplayEntries"/>, which bounds activation-
-    /// time replay on a single leaf. Default 10 000 000 records,
-    /// matching the conservative-but-non-degenerate sizing typical
-    /// production WAL retention windows admit at the per-shard scale.
+    /// time replay on a single leaf. Default 10 000 000 records.
     /// </para>
     /// </summary>
     public long MaxSnapshotReplayEntries { get; set; } = DefaultMaxSnapshotReplayEntries;
@@ -1427,20 +1425,22 @@ public class LatticeOptions
     /// <summary>
     /// Idle-eviction window for transient per-shard snapshot leaf
     /// grains materialised by a zero-observable-writes snapshot
-    /// cursor. A snapshot leaf rebuilds the shard's projection on
-    /// first read by replaying the captured WAL prefix, then stays
-    /// activated for further pages against the same shard. After
-    /// this window elapses without activity the grain self-evicts;
-    /// the next <c>Next*Async</c> transparently rebuilds it on
-    /// demand (the underlying WAL prefix is held alive by the
-    /// snapshot's <see cref="MaxCursorSnapshotPinTtl"/> pin, so the
-    /// rebuild is always feasible until the cursor is closed or
-    /// expires).
+    /// cursor. A snapshot leaf is seeded at open time with its shard's
+    /// frozen baseline, then stays activated for further pages against
+    /// the same shard. After this window elapses without activity the
+    /// grain self-evicts; the next <c>Next*Async</c> transparently
+    /// rebuilds it by reloading the same durable frozen baseline, with
+    /// no WAL replay, so the rebuild is unaffected by WAL trimming. The
+    /// exception is a leaf evicted before the cursor's first page made
+    /// the baseline durable: the unread snapshot is lost and the next
+    /// step throws <see cref="LatticeSnapshotExpiredException"/>, so the
+    /// caller reopens it.
     /// <para>
-    /// Decoupled from <see cref="CursorIdleTtl"/> because the
-    /// snapshot-leaf state is purely a replay-cost cache, not part
-    /// of the cursor's correctness boundary - evicting it earlier
-    /// only trades a replay re-run for memory. Default 30 minutes.
+    /// Decoupled from <see cref="CursorIdleTtl"/> because, once the
+    /// baseline is durable, the snapshot-leaf activation is purely a
+    /// reload-cost cache, not part of the cursor's correctness
+    /// boundary - evicting it earlier only trades a baseline reload for
+    /// memory. Default 30 minutes.
     /// </para>
     /// </summary>
     public TimeSpan SnapshotLeafIdleTtl { get; set; } = DefaultSnapshotLeafIdleTtl;
@@ -1477,11 +1477,12 @@ public class LatticeOptions
 
     /// <summary>
     /// Optional retention window for <see cref="Orleans.Lattice.VersionVector"/>
-    /// entries.
-    /// <see cref="Orleans.Lattice.VersionVector.PruneOlderThan(long)"/> with
-    /// <c>UtcNow - VersionVectorRetention</c>, replica entries whose
-    /// wall-clock tick falls before the cutoff are dropped to bound the
-    /// vector's memory footprint.
+    /// entries. <b>Currently inert:</b> no code path reads this option, so
+    /// setting it prunes nothing. The pruning primitive it describes,
+    /// <see cref="Orleans.Lattice.VersionVector.PruneOlderThan(long)"/>, drops
+    /// replica entries whose wall-clock tick falls before a cutoff (for
+    /// example <c>UtcNow - VersionVectorRetention</c>) and can be called
+    /// directly.
     /// <para>
     /// Defaults to <see cref="Timeout.InfiniteTimeSpan"/> (no pruning) to
     /// preserve wire and state compatibility. Pruning must be applied
@@ -2065,9 +2066,10 @@ public class LatticeOptions
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults
     /// to <see cref="DefaultWalPartitions"/> (8) - the multi-partition
-    /// fan-out shape. Existing trees pin the value in force at first
-    /// WAL write into the tree registry, so a future default flip is
-    /// non-breaking for already-registered trees.
+    /// fan-out shape. A tree pins the value in force when it is first
+    /// registered (on first use, before any data is written) into the
+    /// tree registry, so a later change - including a future default
+    /// flip - does not affect already-registered trees.
     /// </summary>
     public int WalPartitions { get; set; } = DefaultWalPartitions;
 
@@ -2089,9 +2091,10 @@ public class LatticeOptions
     /// <see cref="DefaultWalMaterialiserPinShards"/> (8). Set to <c>1</c> to
     /// restore the historical single-activation shape. Changing this value is
     /// a durable-store migration: pins written under the previous shard count
-    /// are re-seeded on the next leaf activation / checkpoint, and the WAL GC
-    /// also dual-reads the legacy single-activation key during the transition
-    /// so no trim floor is lost.
+    /// are re-seeded on the next leaf activation / checkpoint. The WAL GC reads
+    /// every shard under the current count plus the legacy single-activation
+    /// key, so raising the count loses no trim floor; lowering it leaves pins
+    /// held by the dropped shards unread until their consumers re-pin.
     /// </summary>
     public int WalMaterialiserPinShards { get; set; } = DefaultWalMaterialiserPinShards;
 
@@ -3275,7 +3278,7 @@ public class LatticeOptions
     /// parks behind the held gate, the lattice grain's per-shard fan-out
     /// saturates at its in-flight limit, and the whole write pipeline
     /// wedges with no fault and no activation recycle until the
-    /// caller-side Orleans response deadline (default 3 minutes) expires.
+    /// caller-side Orleans response deadline (30 seconds by default) expires.
     /// With the ceiling the parked seed faults cleanly, the gate's
     /// <c>finally</c> releases, and the existing transient-exception retry
     /// envelope on every mutation path re-runs the seed against refreshed
@@ -3301,21 +3304,21 @@ public class LatticeOptions
     /// <c>ChildDigestSnapshot</c> propagation that a
     /// <c>BPlusInternalGrain</c> issues to its parent after folding a
     /// child's digest) may park before it is abandoned. The publish is a
-    /// cross-grain RPC held under the internal node's non-reentrant split
-    /// gate while it recurses up the internal-node chain toward the shard
-    /// root; a parent that is itself mid-mutation can leave the await
-    /// neither completing nor faulting, pinning the gate on this
-    /// activation with no ceiling and wedging every subsequent mutating
-    /// turn behind it. With the ceiling the parked publish faults cleanly
-    /// and the gate is released; the digest is staleness-tolerant, so the
+    /// cross-grain RPC that recurses up the internal-node chain toward the
+    /// shard root. It is sent only after the internal node has released its
+    /// non-reentrant split gate, and a parent whose gate is busy parks the
+    /// incoming snapshot for the gate holder to fold rather than waiting for
+    /// the gate, but an upward await can still be left neither completing nor
+    /// faulting. With the ceiling the parked publish faults cleanly; the
+    /// digest is staleness-tolerant, so the
     /// next mutation's dirty-flag publish re-drives convergence and no
     /// data or digest-count accuracy is lost (the exact-count invariant is
     /// preserved because the abandoned publish never partially applied at
     /// the parent). Defaults to
     /// <see cref="DefaultDigestPublishTimeout"/> (15 seconds) - above the
-    /// worst-case legitimate per-hop digest-fold RPC envelope, yet well
-    /// below the Orleans response timeout so a true park is caught before
-    /// the activation wedges. Set to
+    /// worst-case legitimate per-hop digest-fold RPC envelope, yet below the
+    /// Orleans default response timeout (30 seconds) so a true park is caught
+    /// before the activation wedges. Set to
     /// <see cref="Timeout.InfiniteTimeSpan"/> to disable the ceiling and
     /// restore the historical unbounded-await behaviour; the registered
     /// options validator rejects any other non-positive value at
@@ -3337,8 +3340,8 @@ public class LatticeOptions
     /// observable seam on the write pipeline and was historically
     /// unbounded on the writer side, so a wedged shard activation would
     /// hold every caller's dispatch parked until the Orleans response
-    /// deadline (default 3 minutes) expired - a 180-second blind hang
-    /// with no per-shard attribution. Bounding the dispatch converts
+    /// deadline (30 seconds by default) expired - a blind hang with no
+    /// per-shard attribution. Bounding the dispatch converts
     /// that blind hang into a structured fault with per-shard counter
     /// attribution (<see cref="Orleans.Lattice.LatticeMetrics.WalAppendDispatchTimeouts"/>),
     /// so a wedged shard surfaces immediately and the request pipeline
@@ -4322,7 +4325,11 @@ public class LatticeOptions
 
     /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
-    /// of every public <see cref="ILattice"/> mutating call. When
+    /// of the single-key and range <see cref="ILattice"/> mutations -
+    /// <c>SetAsync</c> (with and without a TTL), <c>SetIfVersionAsync</c>,
+    /// <c>GetOrSetAsync</c>, <c>DeleteAsync</c>, <c>ApplyCrdtDeltaAsync</c>,
+    /// <c>DeleteRangeAsync</c>, and <c>DeleteRangeWherePredicateAsync</c>.
+    /// The batch, atomic, and bulk-load paths never enter the policy. When
     /// <c>null</c> (the default), the library preserves today's
     /// throw-and-revert contract: a failed grain write surfaces
     /// verbatim to the caller and the grain's in-memory state is

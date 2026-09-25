@@ -9,8 +9,9 @@ core.
 ## What it provides
 
 - **The descriptor.** A plugin declares a stable `string` plugin id, a display
-  label, an ordering hint, and the surface it occupies - `Area` for the
-  top-level switcher, `Selection` for the per-selection tier. One model serves
+  label, an ordering hint, the surface it occupies - `Area` for the top-level
+  rail, `Selection` for the per-selection tier - and, for a selection plugin,
+  the selection kinds (tree, view, tag index) it applies to. One model serves
   both navigation tiers.
 - **A four-state access model.** A plugin supplies its own access gate, whose
   probe resolves to `Allowed`, `Denied` (advisory grey-out), `AuthenticationRequired`
@@ -35,8 +36,12 @@ Register the host machinery once, then one call per plugin:
 
 ```csharp
 services.AddExplorerPluginHost();
-services.AddExplorerPlugin<BackupsPlugin>();
+services.AddExplorerPlugin<MyAreaPlugin>(); // your IExplorerPlugin implementation
 ```
+
+`AddExplorerPlugin` also registers the host machinery itself, and every
+registration is idempotent. A shipped plugin package wraps this call in its own
+helper - for example `AddExplorerBackupsPlugin()` - so a head calls that instead.
 
 Access gating is advisory on the client. The server remains the sole
 enforcement point, so every plugin action must still handle a runtime denial.

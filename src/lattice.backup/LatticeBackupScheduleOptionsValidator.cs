@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// Validates <see cref="LatticeBackupScheduleOptions"/> at silo start: rejects a
+/// Validates <see cref="LatticeBackupScheduleOptions"/> when options are first resolved: rejects a
 /// non-positive schedule interval, a keep-last count below one, and a
 /// non-positive retention age window.
 /// </summary>

@@ -19,11 +19,14 @@ package.
   and `expanded`, declared once and referenced by name. This is the only
   stylesheet in the product permitted to carry a width media query; a test guard
   fails the build if any other file grows one.
-- **Adaptive shell primitives**: `LatticeAdaptiveNav` (persistent sidebar,
+- **Adaptive shell primitives**: `LatticeAdaptiveRoot` (the viewport owner that
+  cascades the current breakpoint), `LatticeAdaptiveNav` (persistent sidebar,
   dismissible drawer, or bottom-and-overflow navigation), `LatticeAdaptiveTabs`
-  (a tab strip that collapses to an overflow menu rather than scrolling
-  off-screen), and `LatticeAdaptiveTable<TItem>` (tabular on wide viewports, a
-  card list on compact).
+  (the one tab primitive, horizontal or vertical, in underlined, segmented, and
+  subordinate variants, that collapses to an overflow menu rather than scrolling
+  off-screen), `LatticeAdaptiveTable<TItem>` (tabular on wide viewports, a card
+  list on compact), and `LatticeHelp` (a keyboard-focusable, touch-usable
+  explanation attached to its target for assistive technology).
 - **Shared UI primitives** (`lattice-primitives.css`): the button family
   (`lx-btn` with `lx-btn-primary`, `lx-btn-danger`, `lx-btn-icon` and
   `lx-btn-link`), the `lx-badge` label, and the `lx-modal` dialog with its

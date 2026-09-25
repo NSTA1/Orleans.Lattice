@@ -10,9 +10,10 @@ namespace Orleans.Lattice.Replication;
 /// Implementations are responsible for:
 /// </para>
 /// <list type="bullet">
-/// <item>filtering re-delivery via the per-origin high-water-mark
-/// (an entry whose timestamp is at or below
-/// <c>HWM[(treeId, originClusterId)]</c> is a no-op),</item>
+/// <item>filtering entries that fall at or below the snapshot-pinned floor and
+/// suppressing recent exact re-deliveries by <c>(originClusterId, timestamp,
+/// key, op)</c>; older repeats re-apply idempotently under the tree's merge
+/// semantics,</item>
 /// <item>routing the entry through the apply seam exposed by
 /// <c>Orleans.Lattice</c> so the persisted
 /// <c>LwwValue&lt;byte[]&gt;</c> carries the source HLC and origin

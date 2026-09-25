@@ -1,6 +1,6 @@
 # Orleans.Lattice.Backup configuration
 
-The package has three public options types: `LatticeBackupOptions` (catalog history and cross-tree-set fence behaviour), `LatticeBackupScheduleOptions` (per-scope scheduling and retention), and `LatticeBackupHealthOptions` (cluster-wide periodic health monitoring). All three are bound through the `AddLatticeBackup` / `ConfigureLatticeBackupSchedule` / `ConfigureLatticeBackupHealth` registration extensions and validated at silo start.
+The package has three public options types: `LatticeBackupOptions` (catalog history and cross-tree-set fence behaviour), `LatticeBackupScheduleOptions` (per-scope scheduling and retention), and `LatticeBackupHealthOptions` (cluster-wide periodic health monitoring). All three are bound through the `AddLatticeBackup` / `ConfigureLatticeBackupSchedule` / `ConfigureLatticeBackupHealth` registration extensions. `LatticeBackupOptions` and `LatticeBackupScheduleOptions` carry validators that reject the out-of-range values noted in the tables below when the options are first resolved (a scope's schedule options when that scope's scheduler first reads them); `LatticeBackupHealthOptions` has no validator - an interval below its `MinimumInterval` is clamped up rather than rejected.
 
 ## `LatticeBackupOptions`
 
@@ -12,7 +12,7 @@ Configures the durable per-key history retained on the reserved `sys-backup-cata
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | The age after which a catalog history revision row expires, or `null` for no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable per-key history materialised view over the catalog tree so catalog changes remain auditable beyond the source write-ahead-log window. |
 | `EnableBackupCatalogIndexView` | `bool` | `true` | Whether to create the backup-catalog index materialised view over the catalog tree. The index re-keys each catalogued backup so the catalog listing can be filtered, ordered newest-first, and paged efficiently by scanning the index rather than the whole catalog. When disabled, the listing falls back to a full catalog scan. |
-| `CrossTreeFenceDrainTimeout` | `TimeSpan` | `30s` | The maximum total wall-clock time a cross-tree-consistent backup-set fence waits for in-flight cross-tree atomic sagas to drain before it gives up and fails the capture. Must be strictly positive. Single-tree and non-flagged backups never consult it. |
+| `CrossTreeFenceDrainTimeout` | `TimeSpan` | `30s` | The maximum wall-clock time one fence attempt's drain waits for in-flight cross-tree atomic sagas to drain before it gives up and fails the capture. The budget restarts on each of the `MaxCrossTreeFenceAttempts` attempts, so it bounds a single drain rather than the whole capture. Must be strictly positive. Single-tree and non-flagged backups never consult it. |
 | `CrossTreeFencePollInterval` | `TimeSpan` | `25ms` | The poll interval between successive in-flight observations while the fence waits for sagas to drain. Must be strictly positive. |
 | `MaxCrossTreeFenceAttempts` | `int` | `5` | The maximum number of fence attempts a cross-tree-consistent capture makes before failing. Each attempt drains, captures, and re-observes; an attempt is retried when a cross-tree saga registers on the set during the capture window. Must be at least 1. |
 | `SinkSharingEnforcement` | `BackupSinkSharingEnforcement` | `Warn` | How a positively refuted cross-cluster backup sink is enforced at silo start. See [Cross-cluster sink sharing](#cross-cluster-sink-sharing). |
@@ -40,13 +40,13 @@ Whether an external sink is genuinely shared is a deployment fact, not a locally
 | `Warn` (default) | Probe, log a loud warning, and annotate every affected backup's health report - but let the silo start. |
 | `FailFast` | A `NotShared` verdict throws at start, so the silo refuses to come up rather than capture un-restorable backups. |
 
-`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log and in the Explorer Backups tab's HEALTH column. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
+`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log, and in the Explorer Backups tab's HEALTH column as soon as each affected backup is next verified. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
 
 The guard costs nothing when it cannot apply. A deployment with no replicated tree, no peers, or no replication package performs **no** sink or network I/O at all and reports `NotApplicable`.
 
 Two faults are distinguished. A replicated tree backed by the default in-cluster sink is rejected outright at start regardless of `SinkSharingEnforcement`, because an in-cluster sink dogfoods a per-cluster reserved tree and is provably invisible to a peer - that needs no probe. An external sink is what the probe tests.
 
-The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default), which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Observability](observability.md) for how the verdict reaches the health surface.
+The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default), which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Disaster recovery](disaster-recovery.md#un-restorable-backups-a-sink-that-is-not-shared) for how the verdict reaches each backup's health report.
 
 ## `LatticeBackupHealthOptions`
 
@@ -85,9 +85,9 @@ Per-scope configuration for scheduled backup triggering and backup-chain retenti
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `FullBackupScheduleEnabled` | `bool` | `false` | Whether a recurring full-backup schedule is enabled for the scope. |
-| `FullBackupInterval` | `TimeSpan` | `DefaultFullBackupInterval` (1 day) | Cadence between scheduled full backups. Clamped up to `MinimumInterval` when the reminder is registered. |
+| `FullBackupInterval` | `TimeSpan` | `DefaultFullBackupInterval` (1 day) | Cadence between scheduled full backups. Must be strictly positive. Clamped up to `MinimumInterval` when the reminder is registered. |
 | `IncrementalBackupScheduleEnabled` | `bool` | `false` | Whether a recurring incremental-backup schedule is enabled for the scope. |
-| `IncrementalBackupInterval` | `TimeSpan` | `DefaultIncrementalBackupInterval` (1 hour) | Cadence between scheduled incremental backups. Clamped up to `MinimumInterval` when the reminder is registered. |
+| `IncrementalBackupInterval` | `TimeSpan` | `DefaultIncrementalBackupInterval` (1 hour) | Cadence between scheduled incremental backups. Must be strictly positive. Clamped up to `MinimumInterval` when the reminder is registered. |
 | `RetentionEnabled` | `bool` | `false` | Whether backup-chain retention is enabled. When enabled, retention runs after every scheduled capture and can be invoked on demand. |
 | `RetentionKeepLast` | `int?` | `null` | Keep at most this many of the most recent backups, or `null` to not bound by count. Must be at least 1 when supplied. |
 | `RetentionMaxAge` | `TimeSpan?` | `null` | Retain backups captured within this window, or `null` to not bound by age. Must be strictly positive when supplied. |

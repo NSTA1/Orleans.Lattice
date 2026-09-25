@@ -11,6 +11,8 @@ The MCP server binds the `Orleans.Lattice.Api.*` facades, so the facades a tool 
 - Backup tools need `AddLatticeBackupApi()` (which itself follows `AddLatticeBackup(...)`).
 - Auth tools need `AddLatticeAuthApi()` (which itself follows `AddLatticeAuth(...)`).
 - Replication tools need `AddLatticeReplicationApi()` (which itself follows `AddLatticeReplication(..., enableRuntimeConfig: true)`).
+- Tree-administration tools need `AddLatticeTreeAdminApi()` (which itself follows `AddLatticeSchemaApi(...)`; the schema tools resolve that schema control facade directly).
+- Tenant self-awareness and tenant-admin tools need `AddLatticeTenantAdminApi()` (which itself follows `AddLatticeTenancy(...)`).
 
 Only register the facades whose tool modules you intend to expose.
 
@@ -55,7 +57,7 @@ app.MapLatticeMcp();
 | `CredentialScheme` | `string` | `Bearer` | The scheme stamped on the bridged credential; a case-insensitive scheme prefix (for example `"Bearer "`) is stripped from the header value before the remaining token is used. |
 | `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | The inbound header carrying the caller's asserted active tenant, bridged onto the ambient active-tenant scope so per-tenant write admission and quota enforcement reach the caller's tenant. The assertion is re-validated against the caller's membership downstream; an absent, blank, or invalid header asserts no tenant. Set empty to disable header-based tenant selection. |
 | `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` / `EnableReplicationTools` / `EnableReplicationControlTools` / `EnableTreeAdminSchemaControlTools` / `EnableTreeAdminLifecycleTools` / `EnableTenantAdminTools` / `EnableTenantAdminControlTools` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. The tree-administration group is registered by `AddTreeAdminTools(...)`; these two flags opt in its mutating schema-management and lifecycle/control tools. The tenant-administration group is registered by `AddTenantAdminTools(...)`; `EnableTenantAdminTools` advertises the `tenantadmin` capability and `EnableTenantAdminControlTools` opts in its mutating tenant-lifecycle tools. |
-| `ProtectedResourceMetadata` | `LatticeApiMcpProtectedResourceMetadata?` | `null` | Opt into OAuth 2.0 Protected Resource Metadata (RFC 9728). When set, an anonymous metadata document is served at `/.well-known/oauth-protected-resource` and the `401` bearer challenge carries a `resource_metadata` hint. See [OAuth discovery](#oauth-discovery-rfc-9728). |
+| `ProtectedResourceMetadata` | `LatticeApiMcpProtectedResourceMetadata?` | `null` | Opt into OAuth 2.0 Protected Resource Metadata (RFC 9728). When set, an anonymous metadata document is served at its `WellKnownPath` (default `/.well-known/oauth-protected-resource`) and the `401` bearer challenge carries a `resource_metadata` hint. See [OAuth discovery](#oauth-discovery-rfc-9728). |
 
 ## Add the tool modules
 
@@ -63,7 +65,7 @@ The server exposes no tools until a module is added. See [Tools](tools.md) for t
 
 ## OAuth discovery (RFC 9728)
 
-By default the server is a plain bearer-token resource: a caller must already hold a token. Set `ProtectedResourceMetadata` to opt into OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself. `MapLatticeMcp` then serves an anonymous metadata document at `/.well-known/oauth-protected-resource`, and the binding appends a `resource_metadata` hint to the `401` bearer challenge on the transport path. The feature is scheme-agnostic - it augments whatever bearer challenge the host's authentication handler emits - so it needs no dependency on a specific auth library. `Resource` is this server's public, canonical URL as clients reach it (for example the CDN or ingress edge).
+By default the server is a plain bearer-token resource: a caller must already hold a token. Set `ProtectedResourceMetadata` to opt into OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself. `MapLatticeMcp` then serves an anonymous metadata document at `/.well-known/oauth-protected-resource` (the default `WellKnownPath`), and the binding appends a `resource_metadata` hint to the `401` bearer challenge on the transport path. The feature is scheme-agnostic - it augments whatever bearer challenge the host's authentication handler emits - so it needs no dependency on a specific auth library. `Resource` is this server's public, canonical URL as clients reach it (for example the CDN or ingress edge).
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();
@@ -80,6 +82,16 @@ builder.Services.AddLatticeMcp(o =>
     };
 });
 ```
+
+`LatticeApiMcpProtectedResourceMetadata` properties:
+
+| Property | Type | Default | Purpose |
+|---|---|---|---|
+| `Resource` | `Uri?` | `null` (required) | This server's public, canonical base URL, emitted as the document's `resource` field and used to derive the absolute `resource_metadata` hint URL. `MapLatticeMcp` throws when it is unset. |
+| `AuthorizationServers` | `IList<Uri>` | empty | The authorization-server issuer URLs a client should use, emitted as `authorization_servers`; omitted when empty. |
+| `ScopesSupported` | `IList<string>` | empty | The scopes a client should request, emitted as `scopes_supported`; omitted when empty. |
+| `BearerMethodsSupported` | `IList<string>` | `["header"]` | The supported ways of sending the bearer token, emitted as `bearer_methods_supported`; omitted when cleared. |
+| `WellKnownPath` | `string` | `/.well-known/oauth-protected-resource` (`DefaultWellKnownPath`) | The path the anonymous document is served at. Must be a root-absolute path starting with `/`; `MapLatticeMcp` throws otherwise. |
 
 ## Next
 

@@ -41,14 +41,20 @@ sequenceDiagram
 ```csharp verify
 var beta = tree.OrFlag("tenant:5:beta");
 
-// Cluster A turns the flag on; cluster B concurrently turns it off without
-// having observed A's enable.
+// Cluster A turns the flag on.
 await beta.EnableAsync("cluster-A", cancellationToken);
-await beta.DisableAsync(cancellationToken);
+
+// Meanwhile cluster B turned it off before A's enable had reached it, so its
+// disable observed no enable dots and cancelled nothing. Replication delivers
+// B's flag; MergeAsync stands in for that here. (A DisableAsync on this cluster,
+// after the enable, would observe A's dot and turn the flag off.)
+var fromB = new OrFlag();
+fromB.Disable();
+await beta.MergeAsync(fromB, cancellationToken);
 
 // The disable only cancels the enable dots it saw, so a concurrent enable
 // survives - the flag converges ENABLED.
-bool isOn = await beta.IsEnabledAsync(cancellationToken);
+bool isOn = await beta.IsEnabledAsync(cancellationToken); // true
 ```
 
 ## Marking many flags at once
@@ -57,7 +63,7 @@ Enabling flags one at a time costs two round trips per key - a read to mint the
 enable dot, then the apply. `EnableManyAsync` reads every current flag in one
 batched call, mints all the deltas against that snapshot, and applies them through
 a single batched CRDT write, so a presence- or membership-marking pass costs one
-round trip per leaf rather than two per key.
+read and one write per leaf rather than two round trips per key.
 
 The snapshot is treated as possibly incomplete. A batched read reports an absent
 key by omission, so a row it did not return is indistinguishable from a row that

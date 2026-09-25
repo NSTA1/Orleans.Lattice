@@ -31,13 +31,12 @@ exactly one proceeding, with the loser observing a clean refusal rather than
 duplicated work.
 
 The **data model you operate over is not yours and is not restated here.** It
-lives in [`backlog-protocol.md`](backlog-protocol.md), section
-[`## The agent-operated backlog`](backlog-protocol.md),
+lives in [`backlog-protocol.md`](backlog-protocol.md),
 which is authoritative for the item schema, the attribute tags, the seven-relation
 vocabulary, the ready-set algorithm, the defect conditions, the grouping model,
 branch inheritance, the mirroring split, and entry gating. Read it before you
 act. This file describes **behaviour over that model**. Where the two ever appear
-to disagree, the instructions file wins and you report the discrepancy rather
+to disagree, the protocol wins and you report the discrepancy rather
 than resolving it yourself.
 
 Two other files own things you must not fork:
@@ -223,7 +222,7 @@ obligation** that runs alongside phases 5 through 7.
 ## Phase 0 - Orient
 
 Run the standard repocontext session-start protocol from
-[[`backlog-protocol.md`](backlog-protocol.md)](backlog-protocol.md)
+[the repocontext instructions](../../../.github/instructions/repocontext.instructions.md#the-session-protocol---the-four-moments)
 in full before you touch anything. Concretely:
 
 1. **Authenticate as {ghAccount}** (principle 11). Do this first; a `gh` call under the
@@ -254,7 +253,7 @@ edit it: the index does not contain uncommitted edits.
 
 ## Phase 1 - Compute the ready set
 
-Follow the ready-set algorithm in the instructions file exactly. It is always a
+Follow the ready-set algorithm in the protocol exactly. It is always a
 topic scan plus per-candidate depth-1 checks, and **never** one graph query:
 `repocontext_neighbors` walks outbound edges only, and there is no reverse index
 over memory links, so "who is blocked by me?" cannot be asked. Do not design
@@ -277,8 +276,8 @@ reading of a pull request.
 
 **Do not match on the two literals.** The recognised values are defined in one
 place, [The `state:` tag
-vocabulary](backlog-protocol.md#the-state-tag-vocabulary) in the instructions
-file, and that section is authoritative over this outline. A computation that
+vocabulary](backlog-protocol.md#the-state-tag-vocabulary) in the protocol,
+and that section is authoritative over this outline. A computation that
 drops exactly `state:complete` and `state:parked` reads every other `state:`
 value as *no state at all*, so an item tagged `state:delivered`, `state:done` or
 `state:in-review` is offered to you as live and claimable and you redo merged
@@ -321,7 +320,7 @@ Order the surviving candidates by `(priority, createdAt, id)` and take from the
 top. Because `repocontext_claim` wraps a FIFO-fair lock and gives **real mutual
 exclusion**, a collision now costs a clean refusal rather than duplicated work,
 so you do not need to randomise your pick to stay correct. Randomising within
-the top few candidates remains harmless and is what the instructions file
+the top few candidates remains harmless and is what the protocol
 documents; either is acceptable, and a deterministic pick is not a defect.
 **Never rely on jitter for correctness** - correctness comes from the claim.
 
@@ -458,7 +457,7 @@ Rules, all of which follow from how the surface actually behaves:
   `repocontext_remember`, `repocontext_update` and `repocontext_forget` that
   touches the item. A claimed record refuses an unfenced write with
   `ClaimRequired`, and a stale token is refused with `StaleToken`.
-- The `claims` **edge** described in the instructions file is an optional audit
+- The `claims` **edge** described in the protocol is an optional audit
   record of who tried, not a lock. If you author one, put it on a short-lived,
   TTL'd per-run worker record pointing at the item, never on the item and never
   on a long-lived record, because OR-Set dots accumulate per add.
@@ -945,6 +944,6 @@ least durable channel will keep paying that cost.
 - **Does not restate or fork the backlog data model.** That model lives in
   [`backlog-protocol.md`](backlog-protocol.md); if it appears wrong or
   incomplete, report that rather than editing around it.
-- **Edits to this agent's own meta file** under `` may be raised
+- **Edits to this agent's own meta file** under `.github/agents/` may be raised
   directly (label `documentation`) when the user explicitly requests it, as they
   are protocol changes rather than backlog work.

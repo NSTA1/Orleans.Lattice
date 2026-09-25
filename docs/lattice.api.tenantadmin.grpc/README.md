@@ -4,14 +4,16 @@ The code-first gRPC **binding** and public **clients** for the
 [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) tenant
 lifecycle and region-residency control facades and their read-only tenant
 self-service companion. It exposes `ILatticeTenantAdmin`,
-`ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` over a network
-transport as thin adapters - the control and scoping semantics live in the
-facades, this package only marshals them.
+`ILatticeTenantRegionAdmin`, `ILatticeTenantAccessAdmin`,
+`ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, and
+`ILatticeTenantSelfService` over a network transport as thin adapters - the control
+and scoping semantics live in the facades, this package only marshals them.
 
 ## What is it?
 
-A `protobuf-net.Grpc` code-first binding that hosts the tenant-administration facade
-as a gRPC service and ships strongly-typed clients for calling it remotely. It
+A code-first gRPC binding - `Grpc.AspNetCore` method definitions whose messages are
+marshalled with the Orleans binary serializer, with no hand-written `.proto` - that
+hosts the tenant-administration facades as a gRPC service and ships strongly-typed clients for calling it remotely. It
 mirrors the [TreeAdmin gRPC binding](../lattice.api.treeadmin.grpc/README.md)
 packaging exactly: server-side registration + endpoint mapping extensions, a
 `LatticeTenantAdminApiGrpcClient`, a read-only `LatticeTenantSelfServiceApiGrpcClient`,
@@ -21,8 +23,9 @@ auth-scheme advertisement RPC so a client can discover how to authenticate.
 ## Core properties
 
 - **Thin adapter.** Each RPC forwards one-to-one to an `ILatticeTenantAdmin`,
-  `ILatticeTenantRegionAdmin`, or `ILatticeTenantSelfService` method; no control
-  logic lives here.
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantAccessAdmin`,
+  `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, or
+  `ILatticeTenantSelfService` method; no control logic lives here.
 - **Default-deny out of the box.** With `RequireAuthorization` left at its `true`
   default, the server interceptor consults the registered
   `ILatticeTenantAdminApiAuthorizer` on every admin RPC - and the registered default
@@ -106,7 +109,7 @@ rather than failing container construction at startup.
 ### Status mapping
 
 Every domain failure maps to an explicit status rather than falling through to a
-generic fault. The RPC groups (lifecycle, region residency, self-service) share the
+generic fault. The RPC groups (lifecycle, quota usage, region residency, tenant-admin subjects, cross-tenant grants, self-service) share the
 same vocabulary; the last column notes where an arm applies to only some of them.
 
 | Exception | gRPC status | Why |
@@ -115,7 +118,10 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `TenantAlreadyExistsException` | `AlreadyExists` | `CreateTenant` was called for an id already registered. Lifecycle only. |
 | `TenantRegionNotAllowedException` | `FailedPrecondition` | The requested residency is outside the operator-authored allowed set, or the revoked region is still resident. The caller must change state first, then retry. Region residency only. |
 | `TenantLastRegionException` | `FailedPrecondition` | The change would remove the tenant's last resident region. Region residency only. |
-| `ReservedTenantOperationException` | `FailedPrecondition` | The operation targets the reserved `default` tenant (suspend, delete, or set-quotas). |
+| `TenantLastAdminSubjectException` | `FailedPrecondition` | The removal would leave the tenant with no admin subjects. Tenant-admin subjects only. |
+| `TenantGrantNotFoundException` | `NotFound` | No such cross-tenant grant has been offered - reported identically when the granting tenant is not registered. Cross-tenant grants only. |
+| `TenantGrantTransitionException` | `FailedPrecondition` | The grant's lifecycle forbids the requested transition (for example approving a rejected or revoked grant). Cross-tenant grants only. |
+| `ReservedTenantOperationException` | `FailedPrecondition` | The operation targets the reserved `default` tenant (suspend, delete, set-quotas, an admin-subject add / remove, or a cross-tenant grant offer). |
 | `InvalidOperationException` | `FailedPrecondition` | A lifecycle or residency precondition the facade refuses on a well-formed request. |
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller does not hold the required tier. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the caller's asserted active tenant. Deliberately not `Internal`, which a client would retry. |

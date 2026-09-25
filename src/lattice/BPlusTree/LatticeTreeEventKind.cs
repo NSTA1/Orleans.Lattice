@@ -12,7 +12,7 @@ public enum LatticeTreeEventKind
     /// <summary>A key was written via <c>SetAsync</c>, <c>SetIfVersionAsync</c>, <c>GetOrSetAsync</c>, <c>SetManyAsync</c>, or a saga write.</summary>
     Set = 0,
 
-    /// <summary>A key was tombstoned via <c>DeleteAsync</c> or saga compensation.</summary>
+    /// <summary>A key was tombstoned via <c>DeleteAsync</c> (only when the key existed).</summary>
     Delete = 1,
 
     /// <summary>A lexicographic range-delete completed. <see cref="LatticeTreeEvent.Key"/> carries <c>"startInclusive..endExclusive"</c>.</summary>
