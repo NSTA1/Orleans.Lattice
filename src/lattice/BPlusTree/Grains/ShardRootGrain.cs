@@ -301,7 +301,8 @@ internal sealed partial class ShardRootGrain(
             // re-enters. Wrapped because a unit test with a substituted
             // IGrainContext has no runtime to schedule against, and the suspension
             // path must stay exercisable there - matching how both flush timers are
-            // armed. Point writes are fenced first (#812).
+            // armed. Fence immediately, but keep callbacks runnable until all
+            // admitted point and batch writes have drained (#3546).
             RequestDeactivationFencingPointWrites();
         }
         catch (Exception deactivateFailure)
@@ -1089,62 +1090,70 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        await PrepareForOperationAsync();
-        // Reject-check up-front so the batch fails fast rather than partially applying.
-        ThrowIfRejectedForAnyKey(entries);
-        RecordWrite(entries.Count);
-
-        if (entries.Count == 0) return;
-
-        // Online-resize shadow-forward: forward the whole batch once in parallel
-        // with the local apply. Without batched forward, a single SetManyAsync
-        // of N entries would pay N sequential shadow-forward RTTs. Mirrors
-        // MergeManyAsync's pattern. LWW on the destination absorbs any
-        // interleaving with the drain reader.
-        var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
-
-        // Preserve the local exception as the primary diagnostic. The
-        // older shape (try { local } finally { await forwardTask; }) would
-        // replace a local failure with a forward-path failure if both
-        // happened to fail on the same call. The tracker's fault-logger
-        // continuation already observes any forward fault asynchronously,
-        // so when the local loop throws we rethrow its exception and let
-        // the continuation log the forward side separately.
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
-        var localApplyTs = Stopwatch.GetTimestamp();
+        BeginBatchWrite();
         try
         {
-            await SetManyLocalOnlyAsync(entries);
-        }
-        catch (Exception ex)
-        {
-            localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
-        }
-        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
-            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            LatticeTenantLabel.ForTree(TreeId));
+            await PrepareForOperationAsync();
+            // Reject-check up-front so the batch fails fast rather than partially applying.
+            ThrowIfRejectedForAnyKey(entries);
+            RecordWrite(entries.Count);
 
-        if (localFailure is null)
-        {
-            // Local succeeded - surface any forward failure to the caller.
-            var forwardTs = Stopwatch.GetTimestamp();
+            if (entries.Count == 0) return;
+
+            // Online-resize shadow-forward: forward the whole batch once in parallel
+            // with the local apply. Without batched forward, a single SetManyAsync
+            // of N entries would pay N sequential shadow-forward RTTs. Mirrors
+            // MergeManyAsync's pattern. LWW on the destination absorbs any
+            // interleaving with the drain reader.
+            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
+
+            // Preserve the local exception as the primary diagnostic. The
+            // older shape (try { local } finally { await forwardTask; }) would
+            // replace a local failure with a forward-path failure if both
+            // happened to fail on the same call. The tracker's fault-logger
+            // continuation already observes any forward fault asynchronously,
+            // so when the local loop throws we rethrow its exception and let
+            // the continuation log the forward side separately.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+            var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                await forwardTask;
+                await SetManyLocalOnlyAsync(entries);
             }
-            finally
+            catch (Exception ex)
             {
-                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
-                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    LatticeTenantLabel.ForTree(TreeId));
+                localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
             }
-            return;
-        }
+            LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+                Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
 
-        // Local failed - the continuation will observe / log any forward fault.
-        localFailure.Throw();
+            if (localFailure is null)
+            {
+                // Local succeeded - surface any forward failure to the caller.
+                var forwardTs = Stopwatch.GetTimestamp();
+                try
+                {
+                    await forwardTask;
+                }
+                finally
+                {
+                    LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                        Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        LatticeTenantLabel.ForTree(TreeId));
+                }
+                return;
+            }
+
+            // Local failed - the continuation will observe / log any forward fault.
+            localFailure.Throw();
+        }
+        finally
+        {
+            EndBatchWrite();
+        }
     }
 
     /// <summary>
