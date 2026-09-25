@@ -559,12 +559,46 @@ the ceiling is greater than one; memory-pressure withholding can reduce the
 shared capacity further. At a ceiling of one, drives and activations still
 share that single permit.
 
-When no permit is immediately available, or the GC share is occupied, a drive
-raises `LatticeSaturatedException` with source `ReplayPermitAdmission` before
-replay starts. The GC sweep records the unsuccessful touch and retries after
-its cooldown; the refusal neither advances nor retires the leaf's retention
-pin. The activation queue's depth and drain policy are unchanged. Per-tree
-touch limits alone cannot bound the aggregate load of many trees on this
+Two callers request drives, and they do not compete for that share on
+equal terms (issue #3575):
+
+- the WAL GC's blocked-leaf sweep, the only caller that lifts a pin holding
+  a tree's cursor floor, may use the whole share;
+- a leaf's own coverage-lag timer, which drives a leaf that has never
+  checkpointed or whose checkpoint has stopped advancing, never takes the
+  last free slot: it is admitted only while at least two slots of the share
+  are free, so however many drives hold the others, one slot is always free
+  for the sweep. Where the share is a single slot there is nothing to
+  reserve, so the timer instead leaves that slot to a sweep drive that was
+  refused it, until the sweep is admitted again or five minutes have passed.
+
+The timer reaches every stalled leaf on a fixed cadence, so without this it
+won the share by volume: on one deployment the sweep was refused about nine
+touches in ten, and the WAL of the trees it was trying to clear grew without
+being reclaimed.
+
+When no permit is immediately available, or the drive's part of the GC
+share is occupied, the drive raises `LatticeSaturatedException` with source
+`ReplayPermitAdmission` before replay starts. The refusal neither advances
+nor retires the leaf's retention pin, and neither caller treats it as a
+fault:
+
+- the sweep records the touch as `outcome=admission_refused` on
+  `orleans.lattice.wal.gc.blocked_leaf_reactivations`, logs it at `Debug`
+  without a stack, and does not charge it against the consumer's attempt
+  budget, so a consumer the sweep never managed to drive is never
+  abandoned. It retries after a jittered delay of one to one and a half
+  minutes that doubles with each consecutive refusal, up to its ordinary
+  fifteen-minute cooldown;
+- the timer counts it as `reason=recheck_drive_refused` on
+  `orleans.lattice.leaf.snapshot.driver.declines` instead of letting it
+  escape the timer callback, and backs off: it skips its next drive
+  opportunities, counting each as `reason=recheck_drive_deferred` - one
+  after a first refusal, rising to four to seven after repeated ones,
+  jittered per leaf. A drive that is admitted ends the backoff.
+
+The activation queue's depth and drain policy are unchanged. Per-tree touch
+limits alone cannot bound the aggregate load of many trees on this
 process-wide gate (issue #3480).
 
 ### A live leaf whose projection has gone stale
