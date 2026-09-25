@@ -111,7 +111,7 @@ internal sealed partial class BPlusInternalGrain(
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
 
         await FlushUpwardPublishAsync();
@@ -175,7 +175,7 @@ internal sealed partial class BPlusInternalGrain(
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
 
         await FlushUpwardPublishAsync();
@@ -359,7 +359,7 @@ internal sealed partial class BPlusInternalGrain(
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
 
         // Digest publish outside the gate and failure-contained (issue #3523):

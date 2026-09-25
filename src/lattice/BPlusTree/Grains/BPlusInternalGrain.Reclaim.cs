@@ -31,7 +31,7 @@ internal sealed partial class BPlusInternalGrain
         }
         finally
         {
-            _splitGate.Release();
+            await ReleaseSplitGateAsync();
         }
 
         // The removal is durable; report it whatever the publish does, so the
