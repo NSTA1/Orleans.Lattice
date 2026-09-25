@@ -96,6 +96,8 @@ param(
 	# round-robin per client, so 4x N makes full coverage overwhelmingly
 	# likely rather than merely possible.
 	[int] $ClientsPerSilo = 4,
+	# 0 lets the producer use its own Environment.ProcessorCount.
+	[ValidateRange(0, 1024)][int] $GeneratorParallelism = 0,
 	# The silo default of 30s turns a transient queue depth into a flood of
 	# grain-rpc-deadline failures and reports collapse where Layer 2 would
 	# have reported latency, so this tier raises it as Layer 2 does.
@@ -428,6 +430,7 @@ try {
 		"BENCH_WAL_PARTITIONS=$WalPartitions",
 		"BENCH_SHARD_COUNT=$ShardCount",
 		"BENCH_CLIENT_COUNT=$ClientCount",
+		"BENCH_GENERATOR_PARALLELISM=$GeneratorParallelism",
 		"BENCH_INFLIGHT_TAIL_BUDGET_SEC=$InFlightTailBudgetSec",
 		"BENCH_RESPONSE_TIMEOUT_SEC=$ResponseTimeoutSec",
 		# Wall-clock ceiling on the producer's warm-up retry loop. The attempt

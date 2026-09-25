@@ -145,6 +145,68 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys (the silo reads the producer's variable; 0, its default there, skips the pre-seed). |
 | `get-many` | `GetManyAsync` over the same pre-seeded keyspace. |
 
+## Parallel Layer 3 producer
+
+The Orleans-client producer uses `BENCH_GENERATOR_PARALLELISM` workers (default
+`Environment.ProcessorCount`; `0` also means automatic), capped at the vehicle
+count. `run-cohort-aca.ps1 -GeneratorParallelism K` pins it for a cohort; omission
+resets any previous pin to automatic. Workers own disjoint vehicle slices and
+retain the per-vehicle tick pacing: total offered load is still vehicles x Hz,
+not K times that rate. An in-progress tick finishes at the duration boundary.
+
+Keys are formatted once before measurement. `get-point` and `get-many` pass
+empty values directly to the ingest engine, which reads only their keys; write
+modes still serialize the same telemetry JSON with a fresh tick timestamp.
+The TCP producer and its JSON wire protocol are unchanged. The client generator
+transfers up to 1,024 entries per channel item (64 bounded items), avoiding a
+shared channel lock per key. The engine still receives individual entries and
+retains its own batching, flush concurrency, and single pre-seed pass. In
+addition to the channel, each worker and the reader can hold one chunk.
+
+Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
+
+- `genBlockedFrac` is generator-seconds spent waiting for channel capacity,
+  divided by elapsed seconds x worker count. It excludes CPU/scheduling lateness:
+  a high value is consumer/cluster back-pressure, not a slow generator. Periodic
+  values cover the reporting interval; `DONE` covers the full run. Live blocked
+  writes remain observable.
+- `slipMaxMs` is the run-wide maximum schedule slip across workers, including
+  overrun of an unfinished tick, not just the last completed tick.
+
+`performance-report.ps1` warns and renders `>= X` only when the same `DONE` line
+reports slip above 1,000 ms AND `genBlockedFrac` below 0.2. High slip with high
+channel-wait time is consistent with a saturated cluster and is NOT marked
+producer-bound, even when achieved throughput is below offered load. Slip still
+includes lateness accumulated during channel waits; the wait fraction is what
+distinguishes that case from generation falling behind without back-pressure.
+The rule uses paired full-run totals, never maxima from different windows.
+Legacy logs without both fields, and logs without `DONE`, cannot establish a
+producer bottleneck and are not flagged. Re-run known producer-limited legacy
+cells with the new producer before making a cluster-ceiling claim.
+
+Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
+and charts omit affected workload curves rather than plot a misleading plateau.
+An omission note appears only when a curve was actually excluded. Resume and
+dry-run aggregation re-read retained logs; paired evidence is retained in cohort
+state as `producerSlipMaxMs` and `producerGenBlockedFrac`.
+
+For a local generator-only measurement, build the Producer project in Release,
+then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,
+and pre-seeding, but drains the same channel adapter into a no-op sink:
+
+```powershell
+$env:BENCH_WORKLOAD_MODE = 'get-many'
+$env:BENCH_VEHICLE_COUNT = '1000000'
+$env:BENCH_TICK_HZ = '10'
+$env:BENCH_DURATION_SEC = '10'
+$env:BENCH_GENERATOR_PARALLELISM = '4' # Repeat with 1, keeping load unchanged.
+dotnet benchmark\azure-throughput\Producer\bin\Release\net10.0\VehicleFleetSimulator.AzureThroughput.Producer.dll --dry-run
+```
+
+Compare `DONE avg` and verify `dry-run drained` equals `DONE total`. This measures
+local generation/queue capacity, not cluster throughput or a guaranteed parallel
+speedup. No producer replicas or sliced pre-seeding are required by this path.
+
 ## Auto-shutdown safety net
 
 The Bicep deploys a DevTestLab `shutdown-computevm-<vm>` schedule that fires at

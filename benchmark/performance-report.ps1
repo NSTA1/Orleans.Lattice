@@ -1475,6 +1475,7 @@ function Invoke-Layer3Cohorts {
 						offerBound      = $false
 						executionState  = 'unknown'
 					}
+					Set-Layer3ProducerEvidence -Cohort $entry -LogPath $expectedLog
 					Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed of {3} offered ({4} steady-mean, failed={5})" -f $parsed.Verdict, $mode, $parsed.FinalThroughput, $offered, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
 
 					# Only the first cohort of a cell escalates, so every cohort
@@ -1482,6 +1483,7 @@ function Invoke-Layer3Cohorts {
 					# that is not HEALTHY is not evidence of headroom either way,
 					# so it never escalates.
 					$reachedOffered = ($SaturationRatio -gt 0) -and ($parsed.Verdict -eq 'HEALTHY') -and ($null -ne $parsed.FinalThroughput) -and ([double]$parsed.FinalThroughput -ge ($SaturationRatio * $offered))
+					if ($entry.producerBound) { $accepted = $entry; break }
 					if (-not $reachedOffered) { $accepted = $entry; break }
 					if ($cohortList.Count -gt 0 -or $escalations -ge $MaxRungEscalations) {
 						$entry.offerBound = $true
@@ -1542,6 +1544,12 @@ function Aggregate-Layer3Cells {
 		foreach ($key in @($byCount.Keys)) {
 			$cohorts = @($byCount[$key])
 			if ($cohorts.Count -eq 0) { continue }
+			foreach ($cohort in $cohorts) {
+				$log = Get-StateOr $cohort 'siloLog' $null
+				if ($log -and (Test-Path $log)) {
+					Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
+				}
+			}
 			# Same HEALTHY-only rule as Layer 2: a wedged cohort's reporter
 			# often closes on a single sample, so its quantiles collapse to
 			# one wildly inflated value and its steady mean is depressed by
@@ -1603,6 +1611,7 @@ function Aggregate-Layer3Cells {
 				# the escalation budget ran out: the cell is a lower bound on
 				# the cluster's throughput, and the table says so.
 				offerBound          = (@($healthy | Where-Object { -not (Get-StateOr $_ 'offerBound' $false) }).Count -eq 0)
+				producerBound       = (@($healthy | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -gt 0)
 			}
 		}
 		if ($perCount.Count -eq 0) { continue }
@@ -1615,7 +1624,9 @@ function Aggregate-Layer3Cells {
 		$anchor = if ($perCount.ContainsKey('1')) { $perCount['1'].sustainedThroughput } else { $null }
 		foreach ($key in @($perCount.Keys)) {
 			$cell = $perCount[$key]
-			if ($anchor -and $anchor -gt 0) {
+			if ($anchor -and $anchor -gt 0 -and
+				-not (Get-StateOr $perCount['1'] 'producerBound' $false) -and
+				-not (Get-StateOr $cell 'producerBound' $false)) {
 				$cell['speedup']    = [math]::Round($cell.sustainedThroughput / [double]$anchor, 2)
 				$cell['efficiency'] = [math]::Round(($cell.sustainedThroughput / [double]$anchor) / [double]$cell.siloCount, 2)
 			} else {
@@ -1626,6 +1637,38 @@ function Aggregate-Layer3Cells {
 		$rows[$row.Label] = $perCount
 	}
 	return $rows
+}
+
+function Set-Layer3ProducerEvidence {
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $Cohort,
+		[Parameter(Mandatory)][string] $LogPath
+	)
+	$slip = $null
+	$blocked = $null
+	# Use paired full-run totals, never maxima drawn from different windows.
+	# Slip alone (including legacy logs) cannot distinguish a slow generator
+	# from one that fell behind because the cluster held its channel full.
+	$line = Select-String -Path $LogPath -Pattern '^\[producer\] DONE ' | Select-Object -Last 1
+	if ($line) {
+		if ($line.Line -match 'slipMaxMs=\s*([\d.]+)') {
+			$slip = [double]$Matches[1]
+		}
+		if ($line.Line -match 'genBlockedFrac=\s*([\d.]+)') {
+			$blocked = [double]$Matches[1]
+		}
+	}
+	$offered = [double](Get-StateOr $Cohort 'rungVehicles' 0) * [double](Get-StateOr $Cohort 'rungTickHz' 0)
+	$achieved = Get-StateOr $Cohort 'finalThroughput' $null
+	$bound = ($null -ne $slip -and $slip -gt 1000) -and
+		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2)
+	$Cohort['producerSlipMaxMs'] = $slip
+	$Cohort.Remove('producerGenBlockedFracMax')
+	$Cohort['producerGenBlockedFrac'] = $blocked
+	$Cohort['producerBound'] = $bound
+	if ($bound) {
+		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure; rendering a lower bound, not a cluster ceiling."
+	}
 }
 
 function Read-SiloLogStats {
@@ -2262,7 +2305,7 @@ function Render-Layer3Table {
 		foreach ($k in $keys) {
 			$cell = $byCount[$k]
 			$thr = Format-Throughput (Get-StateOr $cell 'sustainedThroughput') (Get-StateOr $row 'ThroughputUnit' 'keys/s')
-			if (Get-StateOr $cell 'offerBound' $false) { $thr = '>= ' + $thr }
+			if ((Get-StateOr $cell 'offerBound' $false) -or (Get-StateOr $cell 'producerBound' $false)) { $thr = '>= ' + $thr }
 			$off = Format-Throughput (Get-StateOr $cell 'offeredKeysPerSec') (Get-StateOr $row 'ThroughputUnit' 'keys/s')
 			$sp  = Get-StateOr $cell 'speedup'
 			$ef  = Get-StateOr $cell 'efficiency'
@@ -2272,6 +2315,9 @@ function Render-Layer3Table {
 			$p99 = Format-Layer2Latency (Get-StateOr $cell 'perCallP99Ms')
 			[void]$sb.Append(('| {0} | {1} | {2} | **{3}** | {4} | {5} | {6} | {7} |' -f $row.Label, $cell.siloCount, $off, $thr, $spS, $efS, $p50, $p99)).Append($nl)
 		}
+	}
+	if (@($RowsAgg.Values | ForEach-Object { $_.Values } | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -gt 0) {
+		[void]$sb.Append($nl).Append('Producer-bound cells are lower bounds (>=), not cluster ceilings. Speedup and efficiency are unavailable when the cell or its 1-silo anchor is producer-bound.')
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
 }
@@ -2333,10 +2379,17 @@ function Render-Layer3Chart {
 		return ,@($axis)
 	}
 
-	$measured = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
-	if ($measured.Count -eq 0) { return '_No multi-silo cells measured yet._' }
+	$available = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
+	if ($available.Count -eq 0) { return '_No multi-silo cells measured yet._' }
+	$measured = @($available | Where-Object {
+		@($RowsAgg[$_.Label].Values | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -eq 0
+	})
+	if ($measured.Count -eq 0) { return '_No cluster-ceiling curves available; producer-bound lower bounds remain in the table._' }
 
 	$blocks = New-Object System.Collections.Generic.List[string]
+	if ($measured.Count -lt $available.Count) {
+		$blocks.Add('Producer-bound workload curves are omitted; their lower bounds remain in the table.')
+	}
 
 	# 1. Normalised speedup, every workload that has an N=1 anchor.
 	$anchored = @($measured | Where-Object { $RowsAgg[$_.Label].ContainsKey('1') })

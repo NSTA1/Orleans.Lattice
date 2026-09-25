@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\benchmark\azure-throughput\Producer\VehicleFleetSimulator.AzureThroughput.Producer.csproj" />
     <ProjectReference Include="..\..\benchmark\host\Bench.Microbench\Orleans.Lattice.Benchmark.Microbench.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
