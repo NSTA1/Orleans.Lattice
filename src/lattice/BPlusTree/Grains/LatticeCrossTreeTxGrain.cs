@@ -49,6 +49,18 @@ internal sealed class LatticeCrossTreeTxGrain(
     private const string KeepaliveReminderName = "cross-tree-tx-keepalive";
     private const string RetentionReminderName = "cross-tree-tx-retention";
 
+    /// <summary>Grain-type label carried on a translated state-write fault.</summary>
+    private const string StateWriteGrainType = "cross-tree-tx";
+
+    /// <summary>
+    /// Set once a coordinator state write loses an optimistic-concurrency
+    /// (ETag) check (issue #3572). The write may have landed, so the cached
+    /// ETag is stale and every later write would fail the same way: the
+    /// activation has asked to deactivate and fails later commits fast until a
+    /// fresh activation reloads the row.
+    /// </summary>
+    private bool _stateConflicted;
+
     /// <summary>This coordinator's key (the cross-tree operationId).</summary>
     private string OperationId => GrainContext.GrainId.Key.ToString()!;
 
@@ -64,13 +76,19 @@ internal sealed class LatticeCrossTreeTxGrain(
         Logger.LogInformation(
             "Cross-tree saga {OperationId}: retention window expired; clearing state.",
             OperationId);
-        await state.ClearStateAsync();
+        await GrainStateWriteFaults.ClearRecoveringConflictAsync(
+            state,
+            static s => s.Phase == CrossTreeTxPhase.Completed);
     }
 
     /// <inheritdoc />
     protected override async Task OnOtherReminderAsync(string reminderName, TickStatus status)
     {
         if (reminderName != KeepaliveReminderName) return;
+
+        // A conflicted activation is already deactivating; the next tick lands
+        // on a fresh activation that reloads the row (issue #3572).
+        if (_stateConflicted) return;
 
         switch (state.State.Phase)
         {
@@ -109,6 +127,7 @@ internal sealed class LatticeCrossTreeTxGrain(
     public async Task<CrossTreeAtomicWriteOutcome> CommitAsync(List<LatticeTreeBatch> batches)
     {
         ArgumentNullException.ThrowIfNull(batches);
+        ThrowIfStateConflicted();
 
         // Fail-closed authorization of every leg up front, before any staging,
         // prepare, or memoized-outcome re-attach. Each batch's write keys are
@@ -181,7 +200,7 @@ internal sealed class LatticeCrossTreeTxGrain(
                 state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
                 state.State.Phase = CrossTreeTxPhase.Completed;
                 state.State.Outcome = CrossTreeAtomicWriteOutcome.Committed;
-                await state.WriteStateAsync();
+                await WriteCoordinatorStateAsync("vacuous-completed");
                 // Arm retention so the persisted vacuous-commit state is
                 // eventually cleared. This path never registered a keepalive,
                 // so the TTL reminder is the only cleanup trigger.
@@ -195,7 +214,7 @@ internal sealed class LatticeCrossTreeTxGrain(
             state.State.Fingerprint = ComputeFingerprint(participants);
             state.State.Phase = CrossTreeTxPhase.Preparing;
             await RegisterKeepaliveAsync();
-            await state.WriteStateAsync();
+            await WriteCoordinatorStateAsync("preparing");
         }
 
         await RunCoordinatorAsync();
@@ -325,7 +344,7 @@ internal sealed class LatticeCrossTreeTxGrain(
                 : null;
         }
 
-        await state.WriteStateAsync();
+        await WriteCoordinatorStateAsync("decision");
     }
 
     /// <summary>
@@ -354,12 +373,69 @@ internal sealed class LatticeCrossTreeTxGrain(
         await Task.WhenAll(finalizeTasks);
 
         state.State.Phase = CrossTreeTxPhase.Completed;
-        await state.WriteStateAsync();
+        await WriteCoordinatorStateAsync("completed");
 
         EmitCompletionMetrics();
 
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
+    }
+
+    /// <summary>
+    /// Persists the coordinator state, classifying a failed write (issue
+    /// #3572). An optimistic-concurrency conflict means the write may have
+    /// landed while the cached ETag went stale, so the activation marks itself
+    /// conflicted, requests deactivation, and throws a translated
+    /// <see cref="LatticeStateWriteFailedException"/>; the caller's retry (or
+    /// the keepalive reminder) lands on a fresh activation that reloads the row
+    /// and resumes from the durable phase. In-memory state is deliberately not
+    /// reverted: <see cref="GetDecisionAsync"/> interleaves and may already have
+    /// observed it, and the decision is a deterministic function of the
+    /// participants' sticky prepare votes (a parked participant re-votes
+    /// <see cref="CrossTreePrepareVote.Prepared"/>, a failed one re-returns its
+    /// memoized verdict), so a fresh activation that re-decides reaches the
+    /// same verdict and a decision is never flipped or lost.
+    /// </summary>
+    private async Task WriteCoordinatorStateAsync(string phase)
+    {
+        ThrowIfStateConflicted();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            var translated = GrainStateWriteFaults.Translate(StateWriteGrainType, OperationId, ex);
+            if (translated is null)
+            {
+                throw;
+            }
+
+            if (translated.Conflict)
+            {
+                _stateConflicted = true;
+                Logger.LogWarning(
+                    ex,
+                    "Cross-tree saga {OperationId}: the {Phase} state write lost an optimistic-concurrency check (the write may have landed); deactivating so the next call reloads durable state.",
+                    OperationId,
+                    phase);
+                this.DeactivateOnIdle();
+            }
+
+            throw translated;
+        }
+    }
+
+    /// <summary>
+    /// Fails fast once an earlier state write conflicted, so no call drives the
+    /// coordinator from this activation's untrusted state.
+    /// </summary>
+    private void ThrowIfStateConflicted()
+    {
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, OperationId);
+        }
     }
 
     /// <summary>

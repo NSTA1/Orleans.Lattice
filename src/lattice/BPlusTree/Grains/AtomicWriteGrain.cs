@@ -53,6 +53,18 @@ internal sealed class AtomicWriteGrain(
     private const string RetentionReminderName = "atomic-write-retention";
     private const int MaxRetriesPerStep = 1;
 
+    /// <summary>Grain-type label carried on a translated state-write fault.</summary>
+    private const string StateWriteGrainType = "atomic-write";
+
+    /// <summary>
+    /// Set once a saga state write loses an optimistic-concurrency (ETag)
+    /// check (issue #3572). The write may have landed, so this activation's
+    /// in-memory state and cached ETag can no longer be trusted: it has asked
+    /// to deactivate and fails every later call fast, without touching storage,
+    /// until a fresh activation reloads the row.
+    /// </summary>
+    private bool _stateConflicted;
+
     /// <summary>
     /// Sentinel prefix stamped onto
     /// <see cref="State.AtomicWriteState.FailureMessage"/> when the
@@ -199,13 +211,20 @@ internal sealed class AtomicWriteGrain(
         Logger.LogInformation(
             "Atomic-write saga {OperationKey}: retention window expired; clearing state.",
             OperationKey);
-        await state.ClearStateAsync();
+        await GrainStateWriteFaults.ClearRecoveringConflictAsync(
+            state,
+            static s => s.Phase is AtomicWritePhase.Completed or AtomicWritePhase.PreconditionFailed);
     }
 
     /// <inheritdoc />
     protected override async Task OnOtherReminderAsync(string reminderName, TickStatus status)
     {
         if (reminderName != KeepaliveReminderName) return;
+
+        // A conflicted activation's in-memory state may disagree with storage
+        // and its deactivation is already pending; the next tick lands on a
+        // fresh activation that reloads the row (issue #3572).
+        if (_stateConflicted) return;
 
         switch (state.State.Phase)
         {
@@ -261,6 +280,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
@@ -359,6 +379,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: vacuously all-match, nothing to write, commit outcome.
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
@@ -427,6 +448,7 @@ internal sealed class AtomicWriteGrain(
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Empty batch: vacuously prepared, nothing to stage.
         if (entries.Count == 0) return CrossTreePrepareVote.Prepared;
@@ -506,6 +528,18 @@ internal sealed class AtomicWriteGrain(
             // transient blip AND strand this sub-saga parked forever.
             throw;
         }
+        catch (Exception ex) when (GrainStateWriteFaults.IsTranslatedConflict(ex))
+        {
+            // A state write lost an ETag check (issue #3572). The write may
+            // have landed, and this activation has deactivated so the next call
+            // reloads what is durable. Nothing was compensated, so this is NOT a
+            // failed prepare: voting Failed would abort the cross-tree saga
+            // while this sub-saga might still park Prepared on its next attempt,
+            // stranding it outside the coordinator's finalize fan-out, which
+            // only reaches Prepared voters. Propagate so the coordinator stays
+            // Preparing and re-dispatches prepare to a fresh activation.
+            throw;
+        }
         catch (Exception ex)
         {
             // A genuine staging failure self-compensated through RunSagaAsync's
@@ -532,6 +566,7 @@ internal sealed class AtomicWriteGrain(
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+        ThrowIfStateConflicted();
 
         // Only a parked (Prepared) sub-saga can be finalized. Any other phase is
         // a no-op: NotStarted / PreconditionFailed / Completed are already
@@ -587,6 +622,14 @@ internal sealed class AtomicWriteGrain(
                 throw;
             }
         }
+        catch (LatticeStateWriteFailedException conflict) when (conflict.Conflict)
+        {
+            // The paused-phase persist lost an ETag check (issue #3572): this
+            // activation has already deactivated itself, so propagate the
+            // conflict unchanged. It is just as retryable as a park blip, and
+            // keeping its type lets callers recognise it.
+            throw;
+        }
         catch (Exception ex)
         {
             // Both the registry delegation and the paused-phase persist are
@@ -598,16 +641,6 @@ internal sealed class AtomicWriteGrain(
             throw new CrossTreeParkRetryException(ex);
         }
     }
-
-    /// <summary>
-    /// Internal control-flow signal that the cross-tree prepare-and-pause
-    /// <see cref="ParkPreparedAsync"/> step failed on a <b>retryable</b> fault
-    /// (registry delegation RPC or paused-phase persist). Distinguished from a
-    /// genuine staging failure so the coordinator retries prepare instead of
-    /// aborting the whole cross-tree transaction.
-    /// </summary>
-    private sealed class CrossTreeParkRetryException(Exception inner)
-        : Exception("Cross-tree sub-saga park step failed on a retryable fault.", inner);
 
     /// <summary>
     /// Validates the batch: no duplicate keys, no null keys, and a non-null
@@ -3312,11 +3345,22 @@ internal sealed class AtomicWriteGrain(
     /// </param>
     private async Task WriteSagaStateAsync(string phase)
     {
+        ThrowIfStateConflicted();
         var (treeTag, walTag, tenantTag) = GetSagaMetricTags();
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            var translated = OnStateWriteFault(ex, phase);
+            if (translated is null)
+            {
+                throw;
+            }
+
+            throw translated;
         }
         finally
         {
@@ -3329,6 +3373,50 @@ internal sealed class AtomicWriteGrain(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, phase),
                     tenantTag,
                 });
+        }
+    }
+
+    /// <summary>
+    /// Classifies a failed saga state write (issue #3572). An
+    /// optimistic-concurrency conflict means the write may have landed while
+    /// this activation's cached ETag went stale, so every later write would
+    /// fail the same way: the activation marks itself conflicted, requests
+    /// deactivation, and the caller's retry lands on a fresh activation that
+    /// reloads the row and resumes from what is durable. Every persisted step
+    /// is idempotent on resume (the same path crash recovery takes), and the
+    /// commit or abort decision lives in the write-once registry, so the retry
+    /// neither double-applies nor loses a decision. A provider exception type
+    /// is translated so it never crosses the grain boundary; a BCL fault
+    /// propagates unchanged. Returns <see langword="null"/> to rethrow the
+    /// original.
+    /// </summary>
+    private LatticeStateWriteFailedException? OnStateWriteFault(Exception failure, string phase)
+    {
+        var translated = GrainStateWriteFaults.Translate(StateWriteGrainType, OperationKey, failure);
+        if (translated is { Conflict: true })
+        {
+            _stateConflicted = true;
+            Logger.LogWarning(
+                failure,
+                "Atomic-write saga {OperationKey}: the {Phase} state write lost an optimistic-concurrency check (the write may have landed); deactivating so the next call reloads durable state.",
+                OperationKey,
+                phase);
+            this.DeactivateOnIdle();
+        }
+
+        return translated;
+    }
+
+    /// <summary>
+    /// Fails fast once an earlier state write conflicted, so a call that reaches
+    /// this activation before it deactivates neither drives the saga from
+    /// untrusted in-memory state nor retries a write that cannot succeed.
+    /// </summary>
+    private void ThrowIfStateConflicted()
+    {
+        if (_stateConflicted)
+        {
+            throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, OperationKey);
         }
     }
 

@@ -362,6 +362,30 @@ coordinator, the shard root's participant registration and the
 replication receiver retry a failed registry write up to four times, with
 a short doubling backoff, before surfacing it.
 
+**Saga state-write conflicts.** The saga grain, the cross-tree coordinator
+and the leaf-materialiser pin grain each persist their own state with the
+provider's optimistic-concurrency check. A storage SDK can retry a write whose
+first attempt actually landed, and the retry then reports a conflict against the
+ETag the landed attempt produced. The activation's cached ETag is stale from that
+point, so every later write would fail the same way. On such a conflict the grain
+marks the activation conflicted, requests deactivation, and fails every further
+call on it fast rather than writing again with the stale ETag. The next call
+lands on a fresh activation, which reloads the row and resumes from the durable
+phase, exactly as crash recovery does. Resuming is idempotent whether or not the
+conflicted write landed: a persist failure never triggers compensation, the
+decision registry entry is write-once, and the coordinator's verdict is a
+deterministic function of the participants' sticky votes, so a resumed saga never
+applies a batch twice and never flips a decision. `SetManyAtomicAsync` absorbs
+the conflict by retrying on the fresh activation (the retry envelope for
+single-tree writes, and up to three re-attaches by operation id for cross-tree
+writes). A conflict that outlives that budget, or any other provider fault on a
+saga state write, surfaces to the caller as a public, serializable
+`LatticeStateWriteFailedException` that names the grain type, the grain key and
+the provider's fault type, and says whether it was a conflict. The provider
+exception itself never crosses the grain boundary, because its type need not be
+loadable on the client. Faults of types the client can load, such as a
+`TimeoutException`, propagate unchanged.
+
 **Upgrade compatibility.** Transaction ids minted before sharding, or
 while `TxRegistryShardCount` is `1`, are ordinary version-4 UUIDs and
 route to the legacy registry keyed by the bare tree id. Tree-wide reads
