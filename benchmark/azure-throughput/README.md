@@ -145,6 +145,12 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys (the silo reads the producer's variable; 0, its default there, skips the pre-seed). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same pre-seeded keyspace. |
 
+In the four atomic modes each saga is its own flush unit: it takes its own
+`BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
+`failed` on its own, so up to `BENCH_FLUSH_CONCURRENCY` sagas are in flight and
+`inFlight` on the progress line counts sagas. A producer batch used to be one unit
+whose sagas ran in sequence, which reported `ops=0` for minutes at N=4 (#3581).
+
 ## Parallel Layer 3 producer
 
 The Orleans-client producer uses `BENCH_GENERATOR_PARALLELISM` workers (default

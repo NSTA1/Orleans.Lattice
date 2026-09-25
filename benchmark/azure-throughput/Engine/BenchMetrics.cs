@@ -75,7 +75,9 @@ internal static class BenchMetrics
             description: "Wall-clock ms spent in ChannelWriter.WriteAsync per accepted TCP line.");
 
     /// <summary>
-    /// Size of the batch list when <c>DispatchFlushAsync</c> is called.
+    /// Size of the batch list when <c>DispatchFlushAsync</c> is called. In
+    /// the atomic workload modes that is one saga (2, 64, or the atomic
+    /// batch size), because each saga is its own flush unit (#3581).
     /// </summary>
     public static readonly Histogram<int> DrainFlushDispatchSize =
         Meter.CreateHistogram<int>(

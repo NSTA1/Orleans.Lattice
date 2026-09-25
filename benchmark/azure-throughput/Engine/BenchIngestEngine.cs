@@ -322,6 +322,23 @@ internal sealed class BenchIngestEngine(
             _ = task.ContinueWith(t => { lock (flushTasks) { flushTasks.Remove(t); } }, TaskScheduler.Default);
         }
 
+        // #3581: an atomic-mode producer batch is many sagas, and each
+        // saga is its own flush unit - it takes its own flush slot, is
+        // retried on its own, and is booked written or failed on its own.
+        // Handing the whole batch to one slot ran its sagas as a single
+        // sequential chain whose ops only moved when the last saga
+        // returned; at N=4 a 2,000-entry batch was ~1,000 sagas at ~0.6 s
+        // each, so every cohort read ops=0 and wedged. The in-flight saga
+        // bound is unchanged (FlushConcurrency either way). Non-atomic
+        // modes slice to the batch itself, so their dispatch is unchanged.
+        async Task DispatchBatchAsync(List<KeyValuePair<string, byte[]>> ready)
+        {
+            foreach (var unit in BenchWorkloadDispatcher.SliceIntoFlushUnits(settings.WorkloadMode, ready, settings.AtomicBatchSize))
+            {
+                TrackFlush(await DispatchFlushAsync(unit));
+            }
+        }
+
         try
         {
             while (await reader.WaitToReadAsync(ct))
@@ -344,8 +361,7 @@ internal sealed class BenchIngestEngine(
                         // which let the threadpool accumulate thousands
                         // of pending flush tasks while the silo plodded
                         // along at its own rate.
-                        var flushTask = await DispatchFlushAsync(ready);
-                        TrackFlush(flushTask);
+                        await DispatchBatchAsync(ready);
                         nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
                     }
                 }
@@ -354,8 +370,7 @@ internal sealed class BenchIngestEngine(
                 {
                     var ready = batch;
                     batch = new List<KeyValuePair<string, byte[]>>(settings.BatchSize);
-                    var flushTask = await DispatchFlushAsync(ready);
-                    TrackFlush(flushTask);
+                    await DispatchBatchAsync(ready);
                     nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
                 }
             }
@@ -409,8 +424,7 @@ internal sealed class BenchIngestEngine(
                 }
                 else
                 {
-                    var flushTask = await DispatchFlushAsync(ready);
-                    TrackFlush(flushTask);
+                    await DispatchBatchAsync(ready);
                 }
             }
         }
