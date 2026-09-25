@@ -9,6 +9,14 @@ src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passAr
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancellations	unresolved	reason=dimension phase: unrecognised value expression: phase.ToString()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_phaseCancelledDiscardedMs	unresolved	reason=dimension phase: unrecognised value expression: phase.ToString()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextCoverageVerdictReporter.cs#_verdicts	primed	
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_files	primed	
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_filesContentProjected	unresolved	reason=dimension (unread-tag-argument:r): tag argument(s) r are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_filesEmbedded	unresolved	reason=dimension (unread-tag-argument:r): tag argument(s) r are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_filesScanned	unresolved	reason=dimension (unread-tag-argument:r): tag argument(s) r are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_lastCompletedPassAge	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_passDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_passes	primed	
+src/lattice.api.mcp.repocontext/Indexing/RepoContextIngestReporter.cs#_symbolsEmbedded	unresolved	reason=dimension (unread-tag-argument:r): tag argument(s) r are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_corpusCoverage	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	

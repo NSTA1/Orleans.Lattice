@@ -457,6 +457,22 @@ public sealed class TenantMetricDimensionHygieneTests
         // the head, so without a discriminator the re-drive this instrument exists to
         // observe would be unfalsifiable in the deployment it was found in.
         "_symbolWalks",
+        // repocontext.ingest.* - the per-repository ingest and embedding family (files
+        // scanned, planned file outcomes, files and symbols embedded, content projected,
+        // passes and pass duration by outcome), issue #3151. An indexing pass is the same
+        // HOST-PROCESS background loop as _passArmFaults, reconciling process-wide
+        // repocontext trees shared by every registered repository, so ingest progress is
+        // a property of this host and of the repository being indexed, never of a
+        // tenant's traffic. The repository tag carries the discrimination the tenant
+        // label cannot: LatticeTenantLabel.ForTree would resolve every repository on the
+        // host to the same constant.
+        "_files",
+        "_filesContentProjected",
+        "_filesEmbedded",
+        "_filesScanned",
+        "_passDuration",
+        "_passes",
+        "_symbolsEmbedded",
         // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
         // the plane is unavailable for the whole process, not for one tenant.
         "_unavailable",

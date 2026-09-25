@@ -539,8 +539,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await scheduler.StopAsync(CancellationToken.None);
     }
 
-    [Test]
-    public async Task ExecuteAsync_does_not_charge_the_attempt_budget_for_a_faulted_touch()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteAsync_does_not_charge_the_attempt_budget_for_a_faulted_touch(bool replaySaturated)
     {
         // R4, the issue's own named defect. The attempt used to be stamped
         // before the call, so a touch that never reached the leaf - a busy
@@ -553,7 +554,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("silo busy"));
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ =>
+        {
+            if (replaySaturated)
+                throw new LatticeSaturatedException("GC share occupied", StrandedTree, LatticeSaturationSource.ReplayPermitAdmission);
+            throw new TimeoutException("silo busy");
+        });
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);
@@ -575,8 +581,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await scheduler.StopAsync(CancellationToken.None);
     }
 
-    [Test]
-    public async Task ExecuteAsync_caps_the_faulted_touches_a_cycle_will_excuse()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteAsync_caps_the_faulted_touches_a_cycle_will_excuse(bool replaySaturated)
     {
         // R4b, and the boundary that keeps R4 honest. Refunding a fault is
         // right; refunding without limit is not, because a leaf that faults
@@ -588,7 +595,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ => throw new TimeoutException("silo busy"));
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ =>
+        {
+            if (replaySaturated)
+                throw new LatticeSaturatedException("GC share occupied", StrandedTree, LatticeSaturationSource.ReplayPermitAdmission);
+            throw new TimeoutException("silo busy");
+        });
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);

@@ -1261,15 +1261,20 @@ internal sealed partial class BPlusLeafGrain
     /// rather than being cancelled inside the runtime's own frame.
     /// <para>
     /// <paramref name="coverageOverride"/> supplies the per-partition coverage
-    /// claim instead of the current checkpoints. It is supplied only by
-    /// <see cref="TryBankColdReplayProgressAsync"/>, where the honest claim is
-    /// the cold re-read frontier and NOT the checkpoint - see that method.
+    /// claim instead of the current checkpoints. Cold replay banking supplies
+    /// its re-read frontier; warm stale-cache rescue supplies its fixed,
+    /// independently proven cache frontier.
     /// </para>
     /// </summary>
     private async Task CaptureSnapshotCoreAsync(
         CancellationToken cancellationToken,
         long[]? coverageOverride = null)
     {
+        if (_warmRescueInFlight && coverageOverride is null)
+        {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
+            return;
+        }
         // No-op for an uninitialised leaf. TreeId is assigned during
         // SetTreeIdAsync (called by the shard root on first attach);
         // without it the snapshot grain key would be meaningless and
@@ -1461,8 +1466,9 @@ internal sealed partial class BPlusLeafGrain
         // subsequent advisory (activation re-entry or the periodic
         // recheck) will re-evaluate. This prevents an unbounded queue
         // of capture awaits when the snapshot storage provider is
-        // slow.
-        if (_snapshotCaptureInFlight)
+        // slow. Recheck rescue ownership after the options await too, so a
+        // normal capture cannot supply the acknowledgement for a rescue.
+        if (_snapshotCaptureInFlight || (_warmRescueInFlight && coverageOverride is null))
         {
             ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineAlreadyInFlight);
             return;
@@ -1532,14 +1538,16 @@ internal sealed partial class BPlusLeafGrain
             // Two routes are deliberately EXCLUDED, and neither exclusion
             // weakens the self-healing property this guard exists for.
             //
-            // A non-null coverageOverride means this is TryBankColdReplayProgressAsync,
-            // which runs from the OperationCanceledException handler of
+            // A non-null coverageOverride fixes a caller-proven claim.
+            // TryBankColdReplayProgressAsync runs from the OperationCanceledException handler of
             // ReplayWalSinceCheckpointAsync - inside a FAILING activation, on
             // its way to rethrowing. Its claim is a per-partition cold re-read
             // frontier for rows a split would divide across two leaves, and the
             // sibling would inherit the rows without inheriting the claim. That
             // path exists to bank what a cancelled replay already absorbed, so
-            // doing structural work there is against its whole intent.
+            // doing structural work there is against its whole intent. Warm
+            // stale-cache rescue likewise cannot divide its proven rows, and
+            // already owns the topology gate through persistence.
             //
             // An already-cancelled token means a deactivating leaf (issue
             // #1965). Starting a multi-persist division that cannot finish
@@ -1551,6 +1559,12 @@ internal sealed partial class BPlusLeafGrain
             }
 
             captureStartedAt = Stopwatch.GetTimestamp();
+
+            if (_warmRescueInFlight && CheckWarmRescue(partitionCount, captureOwned: true) is { } rescueDecline)
+            {
+                DeclineWarmRescue(rescueDecline);
+                return;
+            }
 
             // Single-threaded copy of the cache rows under the grain
             // turn. EnumerateRows yields the SortedDictionary's
@@ -1779,6 +1793,7 @@ internal sealed partial class BPlusLeafGrain
             // in FlushPendingCheckpointAsync) keeps the pin conservative: it
             // can never license a trim ahead of durable coverage.
             RecordDurableSnapshotCoverage(blob);
+            _snapshotKeptRevision++;
             captureSucceeded = true;
         }
         finally
@@ -3377,6 +3392,9 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
     {
+        if (_warmRescueInFlight)
+            throw new InvalidOperationException("Cannot replace a leaf cache while its warm stale-cache rescue is persisting.");
+        _warmCacheHydrations++;
         if (state.State.TreeId is null)
         {
             return false;
@@ -3890,6 +3908,11 @@ internal sealed partial class BPlusLeafGrain
         // snapshot footprint without re-reading the snapshot grain.
         _lastCapturedSnapshotBytes = blob.SnapshotBytes;
 
+        if (_warmCacheHydrations == 1)
+        {
+            _warmCacheOriginOffsets = blob.SnapshotOffsetsByPartition;
+            _warmCacheOriginScalar = blob.ScalarOffsetOrSentinel();
+        }
         return true;
     }
 

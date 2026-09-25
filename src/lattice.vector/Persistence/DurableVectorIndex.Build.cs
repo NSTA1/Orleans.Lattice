@@ -123,6 +123,13 @@ public sealed partial class DurableVectorIndex
     /// It is synchronous and expensive - the same cost as the build's training
     /// step - so it belongs off the request path.
     /// </para>
+    /// <para>
+    /// A retrain that fails part-way is resumed, not repeated, by calling this
+    /// again. The retrained layout is already in memory, so the retry does not
+    /// train a second time: it writes only what the failed attempt did not
+    /// commit, and when the new generation was committed and only the deletion
+    /// of the one it replaces failed, it only deletes.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the rewrite that follows training.</param>
     /// <exception cref="InvalidOperationException">The index was opened lazily and is read-only.</exception>
@@ -130,12 +137,12 @@ public sealed partial class DurableVectorIndex
     {
         RequireMutable();
 
-        TrainCore();
+        if (!CommitInFlight)
+        {
+            TrainCore();
+        }
 
-        var superseded = _generation;
-        await WritePartitionsAsync(_generation + 1, full: true, cancellationToken).ConfigureAwait(false);
-        await _store.DeletePrefixAsync(
-            VectorIndexStorageKeys.GenerationPrefix(_prefix, superseded), cancellationToken).ConfigureAwait(false);
+        await CommitTrainedGenerationAsync(cancellationToken).ConfigureAwait(false);
 
         _phase = VectorIndexBuildPhase.Ready;
     }
@@ -821,6 +828,10 @@ public sealed partial class DurableVectorIndex
         var trained = _index.Train();
         _updatesSinceTraining = 0;
 
+        // Training redraws every cell, so nothing a partial write committed under
+        // the old cells describes the new ones: the write starts again.
+        AbandonPartialWrite();
+
         if (trained != _index.PartitionCount > 0)
         {
             throw new InvalidOperationException(
@@ -832,16 +843,12 @@ public sealed partial class DurableVectorIndex
 
     private async Task PersistTrainedAsync(CancellationToken cancellationToken)
     {
-        var superseded = _generation;
-        var generation = _generation + 1;
-
         // The trained layout is written beside the untrained one and the manifest
         // is flipped at the end, so a crash anywhere in here leaves the untrained
         // generation loadable and the build resumes at training rather than at
-        // the source.
-        await WritePartitionsAsync(generation, full: true, cancellationToken).ConfigureAwait(false);
-        await _store.DeletePrefixAsync(
-            VectorIndexStorageKeys.GenerationPrefix(_prefix, superseded), cancellationToken).ConfigureAwait(false);
+        // the source. A failure short of a crash leaves the commit's progress
+        // recorded, so the next step resumes it rather than starting it again.
+        await CommitTrainedGenerationAsync(cancellationToken).ConfigureAwait(false);
 
         _phase = VectorIndexBuildPhase.Ready;
         _durableCursor = _cursor;

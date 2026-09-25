@@ -20,6 +20,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     private readonly IRepoIndexRunAuthority _runAuthority;
     private readonly ILogger<RepoIndexRunner> _logger;
     private readonly RepoContextIndexingPacer? _pacer;
+    private readonly RepoContextIngestReporter? _ingest;
 
     /// <summary>Live runs keyed by repository id. The value carries the run's cancellation source and a completion signal.</summary>
     private readonly ConcurrentDictionary<string, RunHandle> _runs =
@@ -32,14 +33,16 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     /// <param name="runAuthority">Resolves the fixed credential every run assumes so a reminder-driven resume writes under the same subject as the original pass. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
     /// <param name="pacer">The silo's indexing pacer, whose reading is overlaid on the progress of a running job, or <see langword="null"/> when the host registers none.</param>
-    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="pacer"/> is null.</exception>
+    /// <param name="ingestReporter">The ingest instrument family every pass is accounted against, or <see langword="null"/> when the host registers none.</param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="pacer"/> or <paramref name="ingestReporter"/> is null.</exception>
     public RepoIndexRunner(
         RepoContextBootstrapService bootstrap,
         IGrainFactory grainFactory,
         IHostApplicationLifetime lifetime,
         IRepoIndexRunAuthority runAuthority,
         ILogger<RepoIndexRunner> logger,
-        RepoContextIndexingPacer? pacer = null)
+        RepoContextIndexingPacer? pacer = null,
+        RepoContextIngestReporter? ingestReporter = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -52,6 +55,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
         _runAuthority = runAuthority;
         _logger = logger;
         _pacer = pacer;
+        _ingest = ingestReporter;
     }
 
     /// <inheritdoc />
@@ -147,7 +151,6 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
         var repoId = request.RepoId;
         var cts = handle.Cts;
         var grain = _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId);
-        var sink = new GrainProgressSink(grain, _logger, repoId);
 
         // Stamp the run's credential onto the ambient context for the whole pass so
         // every structural and vector write - and every progress report - carries a
@@ -160,6 +163,11 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
         using var credentialScope = runCredential is null
             ? NullDisposable.Instance
             : LatticeCredentialContext.With(runCredential);
+
+        // Begun immediately before the try, so every path out of it settles the pass
+        // exactly once: completed, failed or cancelled (issue #3151).
+        var pass = _ingest?.BeginPass(repoId);
+        var sink = new GrainProgressSink(grain, _logger, repoId, pass);
 
         try
         {
@@ -190,6 +198,13 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
                     FilesUnchanged = result.FilesUnchanged,
                 },
                 result.ElapsedMilliseconds).ConfigureAwait(false);
+
+            // Settled only once the grain has durably recorded completion, so the
+            // metric never reports a pass completed that index_status reports failed.
+            // The result lands the plan outcomes a no-change pass never reports as
+            // progress.
+            pass?.Observe(result);
+            pass?.Complete();
         }
         catch (OperationCanceledException)
         {
@@ -197,12 +212,14 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
             // settle the grain: on shutdown the resume reminder restarts the run on
             // the next activation; on removal the grain state is being cleared by
             // the removal path.
+            pass?.Cancel();
             _logger.LogInformation(
                 "Repo {RepoId}: indexing run cancelled; it will resume on the next start.", repoId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Repo {RepoId}: indexing run failed.", repoId);
+            pass?.Fail();
             try
             {
                 await grain.FailAsync(Describe(ex)).ConfigureAwait(false);
@@ -262,14 +279,18 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
     /// <summary>
     /// Forwards progress deltas to the job grain, swallowing a transient report
     /// failure so advisory progress never fails the durable run - but letting a
-    /// cancellation propagate so the run stops promptly.
+    /// cancellation propagate so the run stops promptly. Each delta is accounted
+    /// against the pass's ingest instruments first, so a report the grain drops
+    /// still advances <c>/metrics</c>.
     /// </summary>
     private sealed class GrainProgressSink(
-        IRepoIndexJobGrain grain, ILogger logger, string repoId) : IRepoIndexProgressSink
+        IRepoIndexJobGrain grain, ILogger logger, string repoId, RepoContextIngestPass? pass)
+        : IRepoIndexProgressSink
     {
         public async ValueTask ReportAsync(
             RepoIndexProgressUpdate update, CancellationToken cancellationToken)
         {
+            pass?.Observe(update);
             try
             {
                 await grain.ReportProgressAsync(update).ConfigureAwait(false);

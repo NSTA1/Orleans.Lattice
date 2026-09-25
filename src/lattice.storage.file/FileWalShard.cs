@@ -24,6 +24,7 @@ internal sealed class FileWalShard : IDisposable
     private readonly int _shardIndex;
     private readonly FileWalStorageOptions _options;
     private readonly IWalReadPressureGovernor _governor;
+    private readonly IFileWalFileSystem _fileSystem;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Entries kept sorted ascending by offset. Out-of-order batch arrival
@@ -36,6 +37,7 @@ internal sealed class FileWalShard : IDisposable
     private bool _loaded;
     private bool _disposed;
     private long _writePosition;
+    private IOException? _failStop;
     private long _retainedBytes;
     private long _deadBytes;
     private long _deadEntries;
@@ -75,8 +77,20 @@ internal sealed class FileWalShard : IDisposable
         string treeId,
         int shardIndex,
         IWalReadPressureGovernor governor)
+        : this(directory, options, treeId, shardIndex, governor, PhysicalFileWalFileSystem.Instance)
+    {
+    }
+
+    internal FileWalShard(
+        string directory,
+        FileWalStorageOptions options,
+        string treeId,
+        int shardIndex,
+        IWalReadPressureGovernor governor,
+        IFileWalFileSystem fileSystem)
     {
         _directory = directory;
+        _fileSystem = fileSystem;
         _logPath = Path.Combine(directory, "wal.log");
         _options = options;
         _treeId = treeId;
@@ -662,13 +676,18 @@ internal sealed class FileWalShard : IDisposable
 
     private void EnsureLoaded()
     {
+        if (_failStop is not null)
+        {
+            throw new IOException(_failStop.Message, _failStop.InnerException);
+        }
+
         if (_loaded)
         {
             return;
         }
 
         System.IO.Directory.CreateDirectory(_directory);
-        _stream = new FileStream(_logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        _stream = _fileSystem.OpenLog(_logPath);
         RecoverFromDisk();
         _loaded = true;
         PrimeCompactionCounters();
@@ -907,8 +926,17 @@ internal sealed class FileWalShard : IDisposable
             cursor += FileWalRecordFormat.WriteCommitRecord(buffer.AsSpan(cursor), records.Count);
 
             stream.Seek(_writePosition, SeekOrigin.Begin);
-            stream.Write(buffer, 0, cursor);
-            stream.Flush(_options.FlushToDisk);
+            try
+            {
+                stream.Write(buffer, 0, cursor);
+                stream.Flush(_options.FlushToDisk);
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            {
+                RollBackUnacknowledgedTail(failure);
+                throw;
+            }
+
             _writePosition += cursor;
         }
         finally
@@ -930,9 +958,54 @@ internal sealed class FileWalShard : IDisposable
         Span<byte> buffer = stackalloc byte[FileWalRecordFormat.TrimRecordLength];
         var written = FileWalRecordFormat.WriteTrimRecord(buffer, throughOffsetInclusive);
         stream.Seek(_writePosition, SeekOrigin.Begin);
-        stream.Write(buffer[..written]);
-        stream.Flush(_options.FlushToDisk);
+        try
+        {
+            stream.Write(buffer[..written]);
+            stream.Flush(_options.FlushToDisk);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            RollBackUnacknowledgedTail(failure);
+            throw;
+        }
+
         _writePosition += written;
+    }
+
+    /// <summary>
+    /// Discards bytes written past <see cref="_writePosition"/> by a write or
+    /// flush that failed, so the caller's failure is not contradicted by a
+    /// later recovery (issue #3462).
+    /// <para>
+    /// A batch or trim marker is written whole, trailer included, before it
+    /// is flushed. When that flush throws, the bytes may already be in the
+    /// operating system's cache and can still reach the platter, and
+    /// <see cref="RecoverFromDisk"/> would then roll forward a record whose
+    /// caller was told it failed. Truncating back to the last acknowledged
+    /// end and flushing the truncation removes it. If the rollback itself
+    /// fails the tail's fate is unknown, so the shard fail-stops: every
+    /// later operation throws until the shard is reopened, rather than
+    /// acknowledging new records on top of a tail it could not reconcile.
+    /// </para>
+    /// </summary>
+    /// <param name="writeFailure">The failure that left the unacknowledged tail.</param>
+    private void RollBackUnacknowledgedTail(Exception writeFailure)
+    {
+        var stream = _stream!;
+        try
+        {
+            stream.SetLength(_writePosition);
+            stream.Flush(_options.FlushToDisk);
+        }
+        catch (Exception rollbackFailure) when (rollbackFailure is IOException or UnauthorizedAccessException)
+        {
+            _failStop = new IOException(
+                $"File WAL shard '{_directory}' is fail-stopped: a write failed with "
+                + $"'{writeFailure.Message}' and truncating its unacknowledged tail also failed, "
+                + "so the on-disk log may hold a record that was reported as failed. "
+                + "Reopen the shard to recover.",
+                rollbackFailure);
+        }
     }
 
     private byte[] ReadPayload(in IndexEntry entry)
@@ -995,7 +1068,7 @@ internal sealed class FileWalShard : IDisposable
 
         var newEntries = new IndexEntry[_entries.Count];
         long newWritePosition;
-        using (var temp = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var temp = _fileSystem.CreateCompactionTarget(tempPath))
         {
             var writeBuffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
             try
@@ -1040,8 +1113,8 @@ internal sealed class FileWalShard : IDisposable
         }
 
         stream.Dispose();
-        System.IO.File.Move(tempPath, _logPath, overwrite: true);
-        _stream = new FileStream(_logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        _fileSystem.ReplaceLog(tempPath, _logPath);
+        _stream = _fileSystem.OpenLog(_logPath);
 
         _entries.Clear();
         _entries.AddRange(newEntries);
