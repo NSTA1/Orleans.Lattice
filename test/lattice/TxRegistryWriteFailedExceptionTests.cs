@@ -18,15 +18,15 @@ public sealed class TxRegistryWriteFailedExceptionTests
     [Test]
     public void Constructor_summarises_a_conflict_without_carrying_the_fault()
     {
-        var ex = new TxRegistryWriteFailedException("tree-x~s2", new InconsistentStateException("etag mismatch"), conflict: true);
+        var ex = new TxRegistryWriteFailedException("_lattice_txshard_2_tree-x", new InconsistentStateException("etag mismatch"), conflict: true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex.RegistryKey, Is.EqualTo("tree-x~s2"));
+            Assert.That(ex.RegistryKey, Is.EqualTo("_lattice_txshard_2_tree-x"));
             Assert.That(ex.FaultType, Is.EqualTo(typeof(InconsistentStateException).FullName));
             Assert.That(ex.Conflict, Is.True);
             Assert.That(ex.InnerException, Is.Null);
-            Assert.That(ex.Message, Does.Contain("tree-x~s2").And.Contain("etag mismatch").And.Contain("optimistic-concurrency"));
+            Assert.That(ex.Message, Does.Contain("_lattice_txshard_2_tree-x").And.Contain("etag mismatch").And.Contain("optimistic-concurrency"));
         });
     }
 
@@ -59,7 +59,7 @@ public sealed class TxRegistryWriteFailedExceptionTests
     [Test]
     public void Serialization_round_trip_preserves_the_fault_identity()
     {
-        var original = new TxRegistryWriteFailedException("tree-x~s7", new InconsistentStateException("etag mismatch"), conflict: true);
+        var original = new TxRegistryWriteFailedException("_lattice_txshard_7_tree-x", new InconsistentStateException("etag mismatch"), conflict: true);
 
         using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var serializer = services.GetRequiredService<Serializer<Exception>>();

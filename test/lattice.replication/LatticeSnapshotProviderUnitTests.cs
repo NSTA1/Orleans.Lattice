@@ -128,7 +128,7 @@ public class LatticeSnapshotProviderUnitTests
         var requested = await ExportAndCaptureRegistryKeysAsync(shardHighWater: 3);
 
         Assert.That(requested.Distinct().OrderBy(k => k, StringComparer.Ordinal),
-            Is.EqualTo(new[] { Tree, $"{Tree}~s0", $"{Tree}~s1", $"{Tree}~s2" }),
+            Is.EqualTo(new[] { $"_lattice_txshard_0_{Tree}", $"_lattice_txshard_1_{Tree}", $"_lattice_txshard_2_{Tree}", Tree }),
             "The export must union the decision view of every shard below the durable high-water plus the legacy registry, and nothing beyond it.");
     }
 
