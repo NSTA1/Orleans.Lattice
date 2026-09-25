@@ -54,10 +54,13 @@ public sealed class RestoreClusterFixture
     public Serializer Serializer => SiloServices.GetRequiredService<Serializer>();
 
     /// <summary>Deploys the single-silo cluster.</summary>
-    public async Task InitializeAsync()
+    public Task InitializeAsync() => InitializeAsync(null);
+
+    internal async Task InitializeAsync(Action<TestClusterBuilder>? configure)
     {
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        configure?.Invoke(builder);
         Cluster = builder.Build();
         await Cluster.DeployAsync();
     }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
@@ -58,16 +59,24 @@ public partial class BPlusLeafGrainTests
     /// </summary>
     private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State,
         List<PinPublication> Published, List<long> DurableWrites) CreateCoalescingLeafWithPinCapture(
-        ILeafReplayCoordinatorGrain coordinator)
+        ILeafReplayCoordinatorGrain coordinator,
+        ILatticeFallOffLogDetector? detector = null,
+        ILeafSnapshotStorageGrain? snapshotStore = null,
+        ILogger<BPlusLeafGrain>? logger = null,
+        int partitionCount = 1,
+        TimeSpan? driveBudget = null,
+        Func<Task>? beforePinFlush = null,
+        Action<string>? onCoordinatorLookup = null,
+        Action<long>? onDurablePinFlushed = null)
     {
-        var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
+        var snapshotStub = snapshotStore ?? Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LeafSnapshotBlob?>(new LeafSnapshotBlob
             {
                 SnapshotOffset = 0L,
                 Rows = [],
                 CapturedAtTicks = 1L,
-                SnapshotOffsetsByPartition = [0L],
+                SnapshotOffsetsByPartition = new long[partitionCount],
             }));
 
         var state = new FakePersistentState<LeafNodeState>();
@@ -91,13 +100,15 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Any<IReadOnlyList<MaterialiserPinReport>>(),
                 Arg.Any<CancellationToken>())
-            .Returns(call =>
+            .Returns(async call =>
             {
+                if (beforePinFlush is not null)
+                    await beforePinFlush();
                 foreach (var report in call.ArgAt<IReadOnlyList<MaterialiserPinReport>>(1))
                 {
                     Record(report.CheckpointOffset);
+                    onDurablePinFlushed?.Invoke(report.CheckpointOffset);
                 }
-                return Task.CompletedTask;
             });
         reporter
             .When(r => r.NoteDurableMaterialiserFrontier(
@@ -107,6 +118,14 @@ public partial class BPlusLeafGrainTests
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(reporter);
+        if (detector is not null)
+            sc.AddSingleton(detector);
+        if (logger is not null)
+        {
+            var loggerFactory = Substitute.For<ILoggerFactory>();
+            loggerFactory.CreateLogger(Arg.Any<string>()).Returns(logger);
+            sc.AddSingleton(loggerFactory);
+        }
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
@@ -114,7 +133,11 @@ public partial class BPlusLeafGrainTests
         context.ActivationServices.Returns(services);
 
         var grainFactory = Substitute.For<IGrainFactory>();
-        grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+        grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(call =>
+        {
+            onCoordinatorLookup?.Invoke(call.ArgAt<string>(0));
+            return coordinator;
+        });
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
 
         var optionsResolver = TestOptionsResolver.Create(
@@ -126,7 +149,8 @@ public partial class BPlusLeafGrainTests
                 // persists on every entry and hides the defect entirely.
                 MaterialiserCheckpointInterval = TimeSpan.FromHours(1),
                 MaterialiserCheckpointEntries = 1_000_000,
-                WalPartitions = 1,
+                WalPartitions = partitionCount,
+                StarvationDriveBudget = driveBudget ?? TimeSpan.FromMinutes(1),
                 LeafSnapshotReClassifyEveryNCheckpoints = 1000,
             },
             maxLeafKeys: 128,

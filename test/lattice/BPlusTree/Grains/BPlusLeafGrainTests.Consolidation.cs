@@ -130,6 +130,63 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task UnmarkSlotsMovedAway_re_ships_reclaimed_keys_to_an_at_head_reader()
+    {
+        // Issue #3524: a cache pruned these rows while the slot was sealed and
+        // its cursor is already past their sequences. The lift must record them
+        // again, or they are never delivered and the cache answers null.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var reclaimedKey = KeyInConsolidationSlot(1, "reclaimed-");
+        var stillSealedKey = KeyInConsolidationSlot(3, "still-sealed-");
+        var unsealedKey = KeyInConsolidationSlot(5, "unsealed-");
+        await grain.SetAsync(reclaimedKey, Encoding.UTF8.GetBytes("r"));
+        await grain.SetAsync(stillSealedKey, Encoding.UTF8.GetBytes("s"));
+        await grain.SetAsync(unsealedKey, Encoding.UTF8.GetBytes("u"));
+        await grain.MarkSlotsMovedAwayAsync([1, 3], ConsolidationVirtualShardCount);
+
+        var atHead = (await grain.GetDeltaSinceCursorAsync(default)).DeliveryCursor;
+
+        // Slot 5 is in the request but was never sealed, so no cache pruned it.
+        await grain.UnmarkSlotsMovedAwayAsync([1, 5], ConsolidationVirtualShardCount);
+        var afterLift = await grain.GetDeltaSinceCursorAsync(atHead);
+
+        Assert.That(afterLift.Entries.Keys, Is.EquivalentTo(new[] { reclaimedKey }),
+            "Exactly the keys in slots that were sealed and are now reclaimed are re-shipped.");
+        Assert.That(Encoding.UTF8.GetString(afterLift.Entries[reclaimedKey].Value!), Is.EqualTo("r"));
+        Assert.That(afterLift.MovedAwaySlots, Is.EqualTo(new[] { 3 }).AsCollection);
+    }
+
+    [Test]
+    public async Task UnmarkSlotsMovedAway_ships_nothing_when_the_reclaimed_slots_hold_no_keys()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync(KeyInConsolidationSlot(3, "elsewhere-"), Encoding.UTF8.GetBytes("v"));
+        await grain.MarkSlotsMovedAwayAsync([1], ConsolidationVirtualShardCount);
+        var atHead = (await grain.GetDeltaSinceCursorAsync(default)).DeliveryCursor;
+
+        await grain.UnmarkSlotsMovedAwayAsync([1], ConsolidationVirtualShardCount);
+        var afterLift = await grain.GetDeltaSinceCursorAsync(atHead);
+
+        Assert.That(afterLift.Entries, Is.Empty);
+        Assert.That(afterLift.DeliveryCursor.Sequence, Is.EqualTo(atHead.Sequence + 1),
+            "With nothing to re-ship the lift still advances the cursor exactly once to deliver its signal.");
+    }
+
+    private static string KeyInConsolidationSlot(int slot, string prefix)
+    {
+        for (var i = 0; i < 100_000; i++)
+        {
+            var key = $"{prefix}{i}";
+            if (ShardMap.GetVirtualSlot(key, ConsolidationVirtualShardCount) == slot)
+                return key;
+        }
+
+        throw new InvalidOperationException($"No key found for virtual slot {slot}.");
+    }
+
+    [Test]
     public async Task UnmarkSlotsMovedAway_advances_the_leaf_version_so_caches_observe_the_lift()
     {
         var state = new FakePersistentState<LeafNodeState>();
