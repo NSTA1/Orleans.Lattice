@@ -144,6 +144,55 @@ public sealed class LeafCursorReporterTeardownFallbackTests
     }
 
     [Test]
+    public async Task DirectStore_fallback_routes_by_the_width_recorded_on_bucket_zero()
+    {
+        // Issue #3576: the pin grain widens a shard's layout automatically once
+        // its map outgrows the per-slot byte budget, so the configured bucket
+        // count (one, here: options are null) no longer names the layout. A
+        // teardown write must land in the slot the grain owns at the recorded
+        // width and must never record a narrower width than the one persisted.
+        const int recordedWidth = 32;
+        var (reporter, storage) = Create(new RejectingPinGrain());
+        storage.Put(
+            WalMaterialiserPinRouting.BucketStateName(0),
+            Tree,
+            new WalMaterialiserPinState { PersistedBucketCount = recordedWidth });
+
+        await reporter.FlushDurableMaterialiserFrontierAsync(
+            Tree, Reports((ConsumerA, Hlc(100))), CancellationToken.None);
+
+        var owning = storage.Slot(WalMaterialiserPinRouting.BucketStateName(ConsumerA, recordedWidth), Tree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(owning?.Pins[ConsumerA], Is.EqualTo(Hlc(100)),
+                "the teardown pin must land in the consumer's slot at the recorded width");
+            Assert.That(storage.Slot(WalMaterialiserPinState.StateName, Tree), Is.Null,
+                "a split store must not be written through the legacy slot, which is what outgrew the provider limit");
+            Assert.That(
+                storage.Slot(WalMaterialiserPinRouting.BucketStateName(0), Tree)!.PersistedBucketCount,
+                Is.EqualTo(recordedWidth),
+                "the recorded width must never be lowered: a narrower stamp would hide the slots above it from the next activation");
+        });
+    }
+
+    [Test]
+    public async Task DirectStore_fallback_uses_the_legacy_slot_when_no_bucketed_width_is_recorded()
+    {
+        var (reporter, storage) = Create(new RejectingPinGrain());
+        storage.Put(
+            WalMaterialiserPinRouting.BucketStateName(0),
+            Tree,
+            new WalMaterialiserPinState { PersistedBucketCount = 1 });
+
+        await reporter.FlushDurableMaterialiserFrontierAsync(
+            Tree, Reports((ConsumerA, Hlc(100))), CancellationToken.None);
+
+        Assert.That(storage.TryReadPin(Tree, ConsumerA, out var pinned), Is.True,
+            "a width of one (narrowed back to legacy) routes to the legacy slot");
+        Assert.That(pinned, Is.EqualTo(Hlc(100)));
+    }
+
+    [Test]
     public async Task DirectStore_fallback_serializes_concurrent_writes_to_same_shard()
     {
         var (reporter, storage) = Create(new RejectingPinGrain());
@@ -312,6 +361,11 @@ public sealed class LeafCursorReporterTeardownFallbackTests
             return false;
         }
 
+        public void Put(string stateName, string treeName, WalMaterialiserPinState state) =>
+            _store[MakeKey(stateName, PinGrainId(treeName))] = Clone(state);
+
+        public WalMaterialiserPinState? Slot(string stateName, string treeName) =>
+            _store.TryGetValue(MakeKey(stateName, PinGrainId(treeName)), out var state) ? Clone(state) : null;
         public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             var key = MakeKey(stateName, grainId);
@@ -349,6 +403,7 @@ public sealed class LeafCursorReporterTeardownFallbackTests
             {
                 Pins = new Dictionary<string, HybridLogicalClock>(source.Pins, StringComparer.Ordinal),
                 Offsets = new Dictionary<string, long>(source.Offsets, StringComparer.Ordinal),
+                PersistedBucketCount = source.PersistedBucketCount,
             };
 
         private static string MakeKey(string stateName, GrainId grainId) => $"{stateName}/{grainId}";

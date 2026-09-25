@@ -281,7 +281,11 @@ public partial class BPlusLeafGrainTests
             Assert.That(pending.IsCompleted, Is.False,
                 "the arriving write must park on the contended recovery gate");
 
-            // The gate owner finishes the split while we are parked.
+            // The gate owner finishes the split while we are parked. A real
+            // completion narrows the donor to the split key in the same step
+            // (CompleteSplitAsync), and the parked write is then routed by
+            // that declared span (issue #3583).
+            state.State.HighKeyExclusive = "m";
             state.State.SplitState = SplitState.SplitComplete;
         }
         finally

@@ -2230,17 +2230,36 @@ public class LatticeOptions
     /// independently.
     /// </para>
     /// <para>
+    /// The configured value is a <b>floor</b>, not the layout. A shard widens
+    /// itself above it by powers of two (up to 1,024 slots) whenever a slot's
+    /// estimated serialised size would exceed a 64 KiB budget, and records the
+    /// width it chose in bucket zero, so the durable pin store stays under a
+    /// storage provider's entity limit (983,040 bytes for Azure Table) on a
+    /// large tree at default options (issue #3576). A failing write backs off
+    /// instead of retrying on every flush tick, and a single coalesced flush
+    /// rewrites a bounded number of slots.
+    /// </para>
+    /// <para>
     /// Defaults to <see cref="DefaultWalMaterialiserPinBuckets"/> (1), which
     /// persists to byte-for-byte the same single
     /// <c>wal-materialiser-pins</c> slot as every build before bucketing
-    /// existed, so an existing deployment is completely unaffected until an
-    /// operator opts in. Raising the count is self-healing and needs no
+    /// existed while the shard is small enough to fit one slot's budget.
+    /// Raising the count is self-healing and needs no
     /// migration step: an activation reads the legacy slot alongside its
     /// buckets and merges it, so pins written under the previous layout keep
     /// counting toward the trim floor and are re-persisted into their bucket on
-    /// the next advance. Lowering it again is equally safe for the same reason.
-    /// Size it so <c>expected leaves per tree / (shards * buckets)</c> lands in
-    /// the low hundreds.
+    /// the next advance. Lowering it again is equally safe for the same reason;
+    /// an activation consolidates to the narrower layout only while each slot
+    /// still fits half the budget. Raise it only to start a shard at a wider
+    /// layout than it would reach on its own.
+    /// </para>
+    /// <para>
+    /// Once every bucket holding the legacy slot's pins has been written, the
+    /// legacy slot is emptied, so a consumer removed after a split is not
+    /// resurrected from it. A build that predates the split therefore finds no
+    /// pins at a bucket count of 1: during a rolling upgrade, or a rollback,
+    /// run the older silos at a bucket count of at least 2 (ideally the width
+    /// recorded in bucket zero), or drain them first.
     /// </para>
     /// </summary>
     public int WalMaterialiserPinBuckets { get; set; } = DefaultWalMaterialiserPinBuckets;

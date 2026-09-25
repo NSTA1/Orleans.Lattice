@@ -1034,31 +1034,17 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
+        // The caller's write is then routed by the declared span below, not
+        // by SplitKey / SplitSiblingId. Those fields describe the most recent
+        // division, and a new one can start while this turn is suspended in
+        // the recovery; routing by them would forward to that new sibling
+        // before it is initialised and lose the write (issue #3583). The
+        // recovered split is kept alongside whatever the write produces, so
+        // the shard root links both (issue #3523).
+        SplitResult? recovered = null;
         if (HasInterruptedSplit)
         {
-            var recovered = await CompleteRecoverySplitUnderGateAsync();
-
-            // Apply the caller's write to the correct leaf so it isn't silently dropped.
-            if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
-            {
-                // The key belongs to the new sibling - forward it there.
-                // The sibling publishes its own mutation notification after persist,
-                // so we do not publish one here to avoid a duplicate for the same key.
-                // Its SplitResult is kept, not discarded: the sibling can
-                // divide under this write, and the shard root is the only
-                // party that can link the new leaf (issue #3523).
-                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
-                var forwarded = await sibling.SetAsync(key, value, expiresAtTicks);
-                return SplitResult.Combine(recovered, SplitResult.Forward(forwarded));
-            }
-
-            // The key belongs to this leaf - write it via the WAL-first
-            // commit path so the WAL append and the in-memory projection
-            // update remain consistent with the main path below. The
-            // commit can overflow this leaf again, so its split is kept
-            // alongside the recovered one (issue #3523).
-            var committed = await CommitSetAsync(key, value, expiresAtTicks);
-            return SplitResult.Combine(recovered, committed);
+            recovered = await CompleteRecoverySplitUnderGateAsync();
         }
 
         // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs).
@@ -1074,8 +1060,8 @@ internal sealed partial class BPlusLeafGrain(
             // persist, so none is published here. Its SplitResult is returned
             // for the shard root to link (issue #3523); see
             // SplitResult.Additional.
-            return SplitResult.Forward(await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
-                .SetAsync(key, value, expiresAtTicks));
+            return SplitResult.Combine(recovered, SplitResult.Forward(await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
+                .SetAsync(key, value, expiresAtTicks)));
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1083,7 +1069,7 @@ internal sealed partial class BPlusLeafGrain(
             RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
-        return await CommitSetAsync(key, value, expiresAtTicks);
+        return SplitResult.Combine(recovered, await CommitSetAsync(key, value, expiresAtTicks));
     }
 
     /// <summary>
@@ -1386,18 +1372,31 @@ internal sealed partial class BPlusLeafGrain(
             return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
         }
 
+        // Recovery: complete an interrupted split before admission, as
+        // SetManyAdmittingSpanAsync does, so an out-of-span entry is forwarded
+        // by the narrowed span rather than to OldNextSibling, which a reclaim
+        // may have folded into the initialised new sibling and retired
+        // (issue #3583). The recovered split rides on the result for the shard
+        // root to link.
+        SplitResult? recovered = null;
+        if (HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         // Admission precedes the guard: see the remarks above. On a leaf with
         // no declared span - the steady state - this returns on its first line,
         // so the common path pays nothing.
-        if (ContainsOutOfSpanKey(entries))
-        {
-            return await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate);
-        }
+        var result = ContainsOutOfSpanKey(entries)
+            ? await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate)
+            // Every entry is in span, so the guard's "absent means non-matching"
+            // inference is sound for all of them and the matched set cannot
+            // straddle the span either.
+            : await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
 
-        // Every entry is in span, so the guard's "absent means non-matching"
-        // inference is sound for all of them and the matched set cannot
-        // straddle the span either.
-        return await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
+        return recovered is null
+            ? result
+            : result with { Split = SplitResult.Combine(recovered, result.Split) };
     }
 
     /// <summary>
@@ -1899,6 +1898,23 @@ internal sealed partial class BPlusLeafGrain(
         using var _mutationScope = EnterMutationScope();
         var isPrepared = LatticePreparedContext.Current;
 
+        // Recovery: complete an interrupted split before routing, as SetCoreAsync
+        // does, so the forward below is resolved against the narrowed span. An
+        // interrupted division otherwise sends a key at or above the pre-split
+        // bound to OldNextSibling, and once the new sibling is initialised a
+        // reclaim can fold that successor into it and retire it (issue #3583).
+        // The untracked shape does not recover: it has no way to report a split,
+        // and a recovered split that is not reported leaves the new sibling
+        // chained but unreachable by descent, since no later write sees the
+        // split as interrupted (see Split.cs). It keeps the OldNextSibling
+        // forward and leaves the split for a tracked write to complete and
+        // report; it is reached only from a rolling-upgrade caller.
+        SplitResult? recovered = null;
+        if (tracked && HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs). This
         // runs ahead of the absent-row short-circuit below: the row this delete
         // targets lives on the leaf that declares the key, so short-circuiting
@@ -1914,7 +1930,7 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             var forwarded = await sibling.DeleteTrackedAsync(key);
-            return forwarded with { Split = SplitResult.Forward(forwarded.Split) };
+            return forwarded with { Split = SplitResult.Combine(recovered, SplitResult.Forward(forwarded.Split)) };
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1930,7 +1946,7 @@ internal sealed partial class BPlusLeafGrain(
         // captured separately by the saga coordinator).
         if (!isPrepared && (!Cache.TryGetRow(key, out var existing) || existing.IsTombstone))
         {
-            return default;
+            return new LeafDeleteResult { Split = recovered };
         }
 
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
@@ -2013,7 +2029,8 @@ internal sealed partial class BPlusLeafGrain(
             StoreAdmittedEntry(key, tombstone, ref stranded);
             if (stranded is not null)
             {
-                relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+                relocatedSplit = await RelocateStrandedAsync(
+                    stranded, isCrossShardMigration: false, completeInterruptedSplit: tracked);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -2045,7 +2062,7 @@ internal sealed partial class BPlusLeafGrain(
         // both knobs hold their defaults.
         EvaluateCompactionTrigger();
 
-        return new LeafDeleteResult { Deleted = true, Split = relocatedSplit };
+        return new LeafDeleteResult { Deleted = true, Split = SplitResult.Combine(recovered, relocatedSplit) };
     }
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
@@ -3801,65 +3818,23 @@ internal sealed partial class BPlusLeafGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
         // Recovery: if a previous split was interrupted, complete it first.
+        // The batch is then routed by the declared span below, not by
+        // SplitKey / SplitSiblingId: a new division can start while this turn
+        // is suspended in the recovery, and those fields would then name its
+        // sibling before it is initialised, losing every entry forwarded there
+        // (issue #3583). The span forward also carries the shadow markers for
+        // the rows it moves (#3117), as the removed recovery-only forward did.
+        // The recovered split is kept alongside whatever the batch produces
+        // (issue #3523).
+        SplitResult? recovered = null;
         if (HasInterruptedSplit)
         {
-            var recovered = await CompleteRecoverySplitUnderGateAsync();
-
-            // Re-merge entries that belong to the new sibling.
-            var siblingEntries = new Dictionary<string, LwwValue<byte[]>>();
-            var localEntries = new Dictionary<string, LwwValue<byte[]>>();
-            foreach (var (key, lww) in entries)
-            {
-                if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
-                    siblingEntries[key] = lww;
-                else
-                    localEntries[key] = lww;
-            }
-
-            if (siblingEntries.Count > 0)
-            {
-                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
-                // Carry this leaf's shadow markers for the re-routed keys
-                // across before the rows themselves, for the same reason the
-                // span forward does (see ForwardOutOfSpanMergeAsync): a
-                // forwarded row keeps its IsMigrated flag and so will be
-                // gated on the sibling, but the marker that gates it lives
-                // here and would otherwise be stranded, leaving the sibling
-                // serving a pre-saga value ungated (#3117). Markers first, so
-                // the sibling never holds the row without its gate.
-                await TransferShadowMarkersToSiblingAsync(sibling, siblingEntries.Keys);
-                // Forward the caller's migration intent verbatim - a cross-shard migration
-                // import that arrives during split recovery is still a migration on the sibling.
-                // The sibling's split is kept for the shard root to link (issue #3523).
-                recovered = SplitResult.Combine(
-                    recovered,
-                    SplitResult.Forward(await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration)));
-            }
-
-            // Merge remaining local entries via the WAL-routed path so the
-            // surviving foreground commit invariant holds across split
-            // recovery too. The topology-only `PersistAsync()` above
-            // captures the split-complete state row; the local merge
-            // entries themselves flow through `ICommitLogWriter` inside
-            // `MergeIntoStateAsync` rather than re-using the legacy
-            // state-row persist.
-            if (localEntries.Count > 0)
-            {
-                var strandedLocal = await MergeIntoStateAsync(localEntries, isCrossShardMigration);
-                if (strandedLocal is not null)
-                {
-                    recovered = SplitResult.Combine(
-                        recovered,
-                        await RelocateStrandedAsync(strandedLocal, isCrossShardMigration));
-                }
-            }
-
-            return recovered;
+            recovered = await CompleteRecoverySplitUnderGateAsync();
         }
 
         if (entries.Count == 0)
         {
-            return null;
+            return recovered;
         }
 
         // Declared-span admission (see BPlusLeafGrain.SpanAdmission.cs).
@@ -3901,7 +3876,7 @@ internal sealed partial class BPlusLeafGrain(
             (entries, forwardedSplit) = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
             if (entries.Count == 0)
             {
-                return forwardedSplit;
+                return SplitResult.Combine(recovered, forwardedSplit);
             }
         }
 
@@ -3921,7 +3896,7 @@ internal sealed partial class BPlusLeafGrain(
                 await RelocateStrandedAsync(stranded, isCrossShardMigration));
         }
 
-        return SplitResult.Combine(splitResult, forwardedSplit);
+        return SplitResult.Combine(recovered, SplitResult.Combine(splitResult, forwardedSplit));
     }
 
     /// <summary>
