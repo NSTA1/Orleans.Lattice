@@ -307,7 +307,9 @@ public sealed class LatticeWalGcOffsetEntitlementTests
         // path. An unreachable pin store is already instrumented
         // (WalGcOffsetFloorUnavailable); what matters here is that the swallowed
         // failure removes the offset entitlement rather than leaving a stale or
-        // assumed floor behind to trim against.
+        // assumed floor behind to trim against. Since issue #3576 it removes
+        // more than that: the whole pass fails closed and never enters the trim
+        // scan, so no stop reason is recorded at all.
         var provider = await SeededProviderAsync();
         var registry = await FlatLeafRegistryAsync();
         var sut = FlatFrontierGc(provider, checkpointOffset: 3, registry, throwOnOffsetRead: true);
@@ -316,7 +318,8 @@ public sealed class LatticeWalGcOffsetEntitlementTests
 
         Assert.That(report.EntriesTrimmed, Is.Zero,
             "A pin-store failure must remove the offset entitlement, not be trimmed through on a remembered floor.");
-        Assert.That(stops, Is.EqualTo(new[] { "cursor_floor" }));
+        Assert.That(stops, Is.Empty,
+            "An unreadable offset census skips the trim scan entirely rather than scanning on the HLC floor.");
     }
 
     [Test]
