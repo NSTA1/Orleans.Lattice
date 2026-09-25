@@ -47,6 +47,11 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     // ownership proofs, and stale entries can only cause an optimistic retry.
     private readonly Dictionary<GrainId, (Guid Epoch, long Generation)> _leafRoutingStamps = new();
 
+    // Old-wire leaves and key-specific proof suppression must not add a probe
+    // to every serial read. Routing invalidation clears this bounded backoff.
+    private const long LeafOwnershipProbeRetryMilliseconds = 30_000;
+    private readonly Dictionary<GrainId, long> _unstampedLeafProbeRetryAfter = new();
+
     private RoutingMutationScope EnterRoutingMutation()
     {
         BeginRoutingMutation();
@@ -313,7 +318,12 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         if (result.LeafRoutingEpoch == Guid.Empty || result.LeafRoutingGeneration <= 0
             || expectedStamp != (result.LeafRoutingEpoch, result.LeafRoutingGeneration))
         {
-            _leafRoutingStamps.Remove(leafId);
+            // An unstamped key says nothing about its siblings' ownership.
+            // Only a different, usable generation invalidates the leaf-wide proof.
+            // A delayed reply must not evict a replacement warmed in the meantime.
+            if (result.LeafRoutingEpoch != Guid.Empty && result.LeafRoutingGeneration > 0
+                && _leafRoutingStamps.TryGetValue(leafId, out var cachedStamp) && cachedStamp == expectedStamp)
+                _leafRoutingStamps.Remove(leafId);
             return SerialRetry(result.Value is null
                 && (result.LeafRoutingEpoch == Guid.Empty || result.LeafRoutingGeneration <= 0)
                 ? LatticeMetrics.OutcomeOptimisticReadAbsentTag

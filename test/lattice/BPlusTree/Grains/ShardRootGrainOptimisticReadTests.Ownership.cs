@@ -73,9 +73,8 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             Assert.That((await grain.TryGetOptimisticAsync("k")).IsValidated, Is.False);
             await grain.GetAsync("k");
         }
-        // Only the three serial warmups reached the leaf: default stamps were
-        // never admitted into the cache.
-        await leaf.Received(3).GetWithVersionAsync("k");
+        // The first failed warmup suppresses further probes, never validation.
+        await leaf.Received(1).GetWithVersionAsync("k");
     }
 
     [TestCase(false)]
