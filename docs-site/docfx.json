@@ -12,12 +12,22 @@
     "resource": [
       {
         "files": [
-          "media/**"
+          "media/**",
+          "figures/**",
+          "llms.txt",
+          "llms-full.txt"
         ],
         "src": "src"
       }
     ],
+    "sitemap": {
+      "baseUrl": "https://nsta1.github.io/Orleans.Lattice/",
+      "changefreq": "weekly"
+    },
     "output": "_site",
+    "globalMetadataFiles": [
+      "obj/site-metadata.json"
+    ],
     "template": [
       "default",
       "modern",
@@ -28,14 +38,11 @@
       "_appTitle": "Orleans.Lattice",
       "_appLogoPath": "public/lattice-mark.svg",
       "_appFaviconPath": "public/favicon.svg",
-      "_appFooter": "<div class=\"lt-footer\"><p class=\"lt-footer-note\"><span class=\"lt-footer-id\"><svg class=\"lt-mark\" viewBox=\"0 0 32 32\" aria-hidden=\"true\" focusable=\"false\"><path class=\"lt-mark-edge\" d=\"M16 27.5 L5.5 16 M16 27.5 L26.5 16 M5.5 16 L16 4.5 M26.5 16 L16 4.5\" fill=\"none\" stroke-width=\"2\" stroke-linecap=\"round\"/><circle class=\"lt-mark-node\" cx=\"5.5\" cy=\"16\" r=\"3.3\"/><circle class=\"lt-mark-node\" cx=\"26.5\" cy=\"16\" r=\"3.3\"/><circle class=\"lt-mark-bottom\" cx=\"16\" cy=\"27.5\" r=\"3.1\" stroke-width=\"1.8\"/><circle class=\"lt-mark-join\" cx=\"16\" cy=\"4.5\" r=\"4\" stroke-width=\"1.8\"/></svg>Orleans.Lattice</span>A platform for durable, distributed state systems on Microsoft Orleans. Released under the MIT licence; this site documents the newest published release.</p><ul class=\"lt-footer-links\"><li><a href=\"https://github.com/NSTA1/Orleans.Lattice\">GitHub</a></li><li><a href=\"https://www.nuget.org/packages/Orleans.Lattice\">NuGet</a></li><li><a href=\"https://github.com/NSTA1/Orleans.Lattice/issues\">Issues</a></li><li><a href=\"https://github.com/NSTA1/Orleans.Lattice/blob/main/llms.txt\">llms.txt</a></li><li><a href=\"https://dotnet.github.io/docfx\">Built with DocFX</a></li></ul></div>",
+      "_appFooter": "<div class=\"lt-footer\"><p class=\"lt-footer-note\"><span class=\"lt-footer-id\"><svg class=\"lt-mark\" viewBox=\"0 0 32 32\" aria-hidden=\"true\" focusable=\"false\"><path class=\"lt-mark-edge\" d=\"M16 27.5 L5.5 16 M16 27.5 L26.5 16 M5.5 16 L16 4.5 M26.5 16 L16 4.5\" fill=\"none\" stroke-width=\"2\" stroke-linecap=\"round\"/><circle class=\"lt-mark-node\" cx=\"5.5\" cy=\"16\" r=\"3.3\"/><circle class=\"lt-mark-node\" cx=\"26.5\" cy=\"16\" r=\"3.3\"/><circle class=\"lt-mark-bottom\" cx=\"16\" cy=\"27.5\" r=\"3.1\" stroke-width=\"1.8\"/><circle class=\"lt-mark-join\" cx=\"16\" cy=\"4.5\" r=\"4\" stroke-width=\"1.8\"/></svg>Orleans.Lattice</span>A platform for durable, distributed state systems on Microsoft Orleans. Released under the MIT licence; this site documents the newest published release.<!-- lattice:docs-version --></p><ul class=\"lt-footer-links\"><li><a href=\"https://github.com/NSTA1/Orleans.Lattice\">GitHub</a></li><li><a href=\"https://www.nuget.org/packages/Orleans.Lattice\">NuGet</a></li><li><a href=\"https://github.com/NSTA1/Orleans.Lattice/issues\">Issues</a></li><li><a href=\"https://nsta1.github.io/Orleans.Lattice/llms.txt\">llms.txt</a></li><li><a href=\"https://dotnet.github.io/docfx\">Built with DocFX</a></li></ul></div>",
       "_lang": "en-GB",
       "_description": "Documentation for Orleans.Lattice: a sorted, durable, conflict-free key-value store that runs inside your own Orleans cluster, and the companion packages that fill its seams.",
       "_enableSearch": true,
-      "_disableContribution": true,
-      "_gitContribute": {
-        "repo": "https://github.com/NSTA1/Orleans.Lattice"
-      }
+      "_disableContribution": true
     }
   }
 }

@@ -399,8 +399,10 @@ benchmark/history/grafana-data/
 
 # Documentation site build artifacts. docs-site/ holds the DocFX tooling
 # (docfx.json, the staging script, the template override) which is tracked;
-# the staged corpus copy and the rendered site are generated on every build.
+# the staged corpus copy, the markdown alternates and footer metadata staging
+# writes beside it, and the rendered site are generated on every build.
 docs-site/src/
+docs-site/obj/
 docs-site/_site/
 
 # Phase A diagnostic reports

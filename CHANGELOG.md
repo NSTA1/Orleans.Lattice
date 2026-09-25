@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Docs - Agent-readable site.** Every page is published as markdown too, llms.txt and sitemap.xml are generated with the site, oversized pages are split by section or release, source links resolve, the footer states the version, and labels no longer run together. ([#3571](https://github.com/NSTA1/Orleans.Lattice/pull/3571)) (`repository-wide`)
+
 - **WAL - Append coalescing.** Under load a batched write left each WAL partition only a few entries, so every slice paid a full storage round trip. `WalAppendCoalescingInFlightThreshold` (default `4`, `0` disables) lets a slice accumulate while that many flushes are in flight. ([#3396](https://github.com/NSTA1/Orleans.Lattice/issues/3396)) (`Orleans.Lattice`)
 
 - **Benchmark - Layer 3 multi-silo scaling tier.** `performance-report.ps1 -Layer3` sweeps silo counts on a multi-silo Azure Container Apps cluster, publishes the scaling curve to `docs/lattice/performance-multi-silo.md`, and tears the infrastructure down. ([#3338](https://github.com/NSTA1/Orleans.Lattice/issues/3338)) (`repository-wide`)
