@@ -52,7 +52,7 @@ flowchart LR
     subgraph store["Record store"]
         sor["Store of record<br/>structural, symbol, memory"]
         proj["Rebuildable projections<br/>content, cross-reference, session,<br/>vector membership, payload, metadata"]
-        local["Local-derived, never replicated<br/>approximate index"]
+        local["Local-derived, never replicated<br/>approximate index,<br/>vector-coverage digest"]
     end
 
     claims["Claims<br/>leased and fenced,<br/>over the distributed lock"]
@@ -132,15 +132,16 @@ and predictable:
 - `repocontext_reset_index` drops the code index and every derived plane while
   preserving agent memory, so a wedged index is repairable without discarding
   notes, decisions, and gotchas.
-- The self-healing re-derivation may reset exactly two rebuildable vector trees
-  when one falls terminally off its write-ahead log, and refuses every other
-  tree outright, so a heal can never become data loss.
+- The self-healing re-derivation may reset one of two rebuildable vector trees -
+  vector metadata or vector membership - when it falls terminally off its
+  write-ahead log (a membership reset also drops the coverage digest that mirrors
+  it), and refuses every other tree outright, so a heal can never become data loss.
 - A terminally stale content tree degrades body-text ranking without failing
   ingest or retrieval, because the reconcile knows that content can be
   re-projected later.
 - Replication enrols the store-of-record and shareable projection trees, while
-  the approximate index stays local: each cluster builds its own far more
-  cheaply than it could ship one.
+  the approximate index and the vector-coverage digest stay local: each cluster
+  derives its own far more cheaply than it could ship one.
 
 Each classification is a fail-closed allow-list checked against local constants,
 so an unrecognised tree name is refused rather than defaulted into a bucket.

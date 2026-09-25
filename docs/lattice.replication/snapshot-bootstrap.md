@@ -14,9 +14,9 @@ before calling `AddLatticeReplication`.
 
 | Type | Shape | Purpose |
 |------|-------|---------|
-| `ISnapshotProvider` | `Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken ct)` | Streaming as-of-HLC export of a tree's primary state. The three-arg overload carries the sender-cluster identifier and is the one the bootstrap coordinator invokes; intra-cluster implementations inherit a default interface method that delegates to the two-arg overload after validating `sourceClusterId`. |
+| `ISnapshotProvider` | `Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, IReadOnlyList<LeafReReplayRange> ranges, HybridLogicalClock asOfHlc, CancellationToken ct)` | Streaming as-of-HLC export of a tree's primary state. The three-arg overload carries the sender-cluster identifier and is the one the bootstrap coordinator invokes; intra-cluster implementations inherit a default interface method that delegates to the two-arg overload after validating `sourceClusterId`. The range-scoped overload - used by the [bootstrap fallback](anti-entropy-bootstrap-fallback.md) - yields only entries inside the half-open `[StartKey, EndKey)` ranges; its default interface method filters the whole-tree export client-side. |
 | `SnapshotStream` | sealed class with `TreeName`, `AsOfHlc`, `CausalStableFrontier` (`VersionVector`), `Entries` (`IAsyncEnumerable<SnapshotEntry>`) | Carries the export metadata + entry stream produced by `ExportAsync`. |
-| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp` | A single live key-value record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. |
+| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp`, `IsPrepared`, `IsTombstone`, `TransactionId`, `SourceShardIndex`, `AtomicBatchSize`, `AtomicBatchIndex`, `ExpiresAtTicks`, `Delta`, `Mode` | A single exported record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. A committed-projection row sets `Key`, `Value`, and `Timestamp`; a prepared saga row additionally sets `IsPrepared`, `IsTombstone`, `TransactionId`, `ExpiresAtTicks`, and the typed CRDT `Delta` / `Mode` (see [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)). `SourceShardIndex` is reserved and always `0`. |
 
 `SnapshotEntry` is alias `olr.se`.
 
@@ -27,15 +27,18 @@ before calling `AddLatticeReplication`.
   common case when seeding a fresh peer that has no incremental
   cursor yet.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
-  HLC is strictly greater than `asOfHlc`. The receiver resumes
-  incremental replication from `asOfHlc`; the post-drain
-  snapshot pin installs the
-  per-origin HWM at `asOfHlc` atomically and the steady-state
-  HWM dedupe in `IReplicationApplier` makes the handoff
-  exactly-once across the snapshot/incremental boundary. See
-  "Bootstrap drain bypasses the per-origin HWM gate" below for the
+  HLC is strictly greater than `asOfHlc`. After the drain the
+  receiver's snapshot pin replaces both its per-origin
+  high-water-mark vector and its pinned causal floor with the
+  snapshot's causal-stable frontier (the source cluster's own
+  coordinate sealed at or above every entry the drain applied), and
+  the steady-state floor gate in `IReplicationApplier` then drops any
+  incremental entry at or below that frontier, which keeps the
+  handoff exactly-once across the snapshot/incremental boundary. See
+  "Bootstrap drain bypasses the pinned-floor gate and the
+  high-water-mark advance" below for the
   receiver-side state machine that keeps the in-drain apply
-  idempotent without relying on HWM dedup.
+  idempotent without relying on that gate.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
   at snapshot time - the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
@@ -44,13 +47,18 @@ before calling `AddLatticeReplication`.
   deployment, host using the legacy HLC-only overload), the provider
   falls back to the producer's per-tree local vector clock from
   the per-tree high-water-mark store's current vector - a strict superset
-  of the meet that is safe as a snapshot cut-point. Receivers pin
-  this `(asOfHlc, frontier)` snapshot cut-point on the per-tree high-water-mark store
-  before draining the entry stream so the causal dependency check on
-  the first incremental entry runs from a non-empty frontier.
+  of the meet that is safe as a snapshot cut-point. The receiver
+  records this `(asOfHlc, frontier)` cut-point when the export opens
+  and pins the frontier on the per-tree high-water-mark store only
+  after every snapshot entry has been applied, so the causal
+  dependency check on the first incremental entry after the pin runs
+  from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries
-  reach the receiver; the tombstone state is reconstructed from the
-  incremental WAL after the snapshot completes.
+  reach the receiver through the committed projection; the tombstone
+  state is reconstructed from the incremental WAL after the snapshot
+  completes. The one exception is an in-flight saga's prepared delete,
+  which ships as a prepared row with `IsTombstone` set (see
+  [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
 
 ## Default implementation
 
@@ -105,10 +113,10 @@ disturbing the live tail pipeline.
   `RequestSnapshotAsync` with the same `treeName` /
   `sourceClusterId` / `fromAsOfHlc` tuple to drain the stream. The
   metadata RPC returns the `(AsOfHlc, CausalStableFrontier)` pair the
-  receiver pins on the per-tree high-water-mark store
-  before the drain begins, so the snapshot/incremental handoff stays
-  exactly-once even though metadata and stream travel on separate
-  calls.
+  receiver records before the drain and pins on the per-tree
+  high-water-mark store once the drain completes, so the
+  snapshot/incremental handoff stays exactly-once even though
+  metadata and stream travel on separate calls.
 - **Point-in-time view.** Implementations MUST guarantee that entries
   committed on the sender after the metadata cut-point do not leak
   into the corresponding stream call. Receivers treat the stream as a
@@ -123,13 +131,14 @@ disturbing the live tail pipeline.
   `ArgumentNullException` when `treeName` or `sourceClusterId` is
   `null` and `ArgumentException` when either argument is empty or
   whitespace-only.
-- **Atomic-batch coordination is deferred.** The metadata DTO
-  intentionally omits prepared-transaction state. Reconstructing
-  receiver-side prepared-tx visibility across a cross-cluster
-  bootstrap is tracked as a follow-on; until it lands, a producer
-  running an in-flight multi-key transaction concurrent with a
-  cross-cluster bootstrap may deliver a split view to the
-  bootstrapping peer.
+- **Prepared-transaction state travels in the entry stream.** The
+  metadata DTO carries only the cut-point. In-flight saga state rides
+  the entry stream as prepared rows (see
+  [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)),
+  so a transport must stream each `SnapshotEntry` verbatim -
+  `IsPrepared`, `TransactionId`, `Delta`, and `Mode` included - for the
+  bootstrapping peer to keep every saga all-or-nothing across the
+  bootstrap.
 
 ### Contract test fixture
 
@@ -166,10 +175,18 @@ concrete binding the host registers.
 
 | Type | Purpose |
 |------|---------|
-| `LatticeRemoteSnapshotService` | Sender-side `IRemoteSnapshotTransport` handler. Validates routing arguments, invokes the local `ISnapshotProvider`, and returns the resulting cut-point metadata or streams the resulting entries. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
+| `LatticeRemoteSnapshotService` | Sender-side `IRemoteSnapshotTransport` handler. Validates routing arguments, refuses a tree that is not enrolled for replication on this cluster, invokes the local `ISnapshotProvider`, and returns the resulting cut-point metadata or streams the resulting entries. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
 
 #### Semantics
 
+- **Sender-side enrollment gate.** The requested tree name comes from
+  the peer, so it is re-resolved against this cluster's own
+  replication enrollment before anything is read. A tree that is not
+  enrolled here - or a handler with no enrollment source to decide -
+  is refused with `UnauthorizedAccessException`, so a peer that holds
+  the mesh secret cannot stream out a tree this cluster keeps local,
+  such as the `sys-` authorization and identity trees. The check sits
+  on the handler, so every binding (gRPC, loopback, custom) inherits it.
 - **Delegation to the local provider.** `GetMetadataAsync` calls
   `ISnapshotProvider.ExportAsync(treeName, fromAsOfHlc, ct)` and
   returns a `RemoteSnapshotMetadata` carrying the resulting
@@ -337,8 +354,9 @@ custom `ILatticeReplicationSecretSource`) and the same
 `LatticeReplicationSecurityOptions.RequireAuthentication` switch cover
 inbound snapshot calls without additional wiring.
 
-The client translates `RpcException(StatusCode.Cancelled)` into the
-canonical `OperationCanceledException`, so receivers can rely on the
+The client translates `RpcException(StatusCode.Cancelled)` raised while
+the caller's own cancellation token is cancelled into the canonical
+`OperationCanceledException`, so receivers can rely on the
 same cancellation contract whether the transport is the gRPC binding,
 the in-process loopback, or a host-supplied custom binding.
 
@@ -368,9 +386,9 @@ _ = (frontier, asOf);
 In a host the `ISnapshotProvider` is resolved from DI on the sender
 side; the default snapshot provider is shown above for illustration. The
 receiver pins the snapshot's `CausalStableFrontier` on its per-tree
-high-water-mark store before
-draining the entry stream so the causal dependency check on the first
-incremental entry runs from a non-empty frontier.
+high-water-mark store after draining the entry stream, so the causal
+dependency check on the first incremental entry after the pin runs
+from a non-empty frontier.
 
 ## Receiver-side bootstrap state machine
 
@@ -387,7 +405,7 @@ has fallen off the WAL) and by operator-driven re-seed flows.
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
 | `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` | Observable status snapshot returned by `GetStatusAsync`; carries the phase plus the in-flight source cluster id (or `null` when no bootstrap is in flight). |
 | `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
-| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, aggregate wrappers, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
+| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
@@ -434,10 +452,10 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
   of a crash is bounded re-application of at most ~100 entries - 
   and the receiver-side LWW reconciliation on each leaf grain
-  (plus the per-leaf `_recentlyTerminal` and per-tx
+  (plus the per-leaf recently-terminal short-circuit and the per-tx
   registry no-op described under "Bootstrap drain bypasses the
-  per-origin HWM gate" below) makes that re-application a
-  correctness no-op.
+  pinned-floor gate and the high-water-mark advance" below) makes
+  that re-application a correctness no-op.
 - **`Failed` is restartable.** On any thrown exception inside the
   phase pump the state transitions to `Failed` (persisted) and
   the pump tears down. A subsequent `BootstrapAsync` call
@@ -447,14 +465,15 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`
   (default: `LatticeBootstrapTransientFaultClassifier.IsTransient` -
   `TimeoutException`, `HttpRequestException`, `SocketException`,
-  `IOException`, aggregate wrappers, and gRPC `RpcException` carrying
+  `IOException`, `EnumerationAbortedException`, aggregate wrappers, and
+  gRPC `RpcException` carrying
   `Unavailable`, `DeadlineExceeded`, or `Aborted`), the coordinator
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
   `500 ms`, capped at `30 s`). Each retry re-opens the snapshot from
-  the persisted `LastAppliedHlc` cursor; the bootstrap-drain HWM
-  bypass plus receiver-side LWW reconciliation make the overlap
-  between attempts a correctness no-op. Every retry increments
+  the persisted apply cursor; the drain applies without the
+  pinned-floor gate, and receiver-side LWW reconciliation is what makes
+  the overlap between attempts a correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -478,27 +497,29 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   therefore raises the same observable side-effects as a receiver
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
-- **Bootstrap drain bypasses the per-origin HWM gate.** The applier
+- **Bootstrap drain bypasses the pinned-floor gate and the
+  high-water-mark advance.** The applier
   reads an ambient bootstrap-apply flag on every
   inbound call; when the flag is set (the bootstrap coordinator
-  opens one scope around the entire drain) the per-origin
-  high-water-mark check and the post-apply
-  watermark advance are skipped, and the steady-state
-  `orleans.lattice.replication.apply.fifo_violations` counter is
-  suppressed. This is required because the snapshot exporter
+  opens one scope around the entire drain) the pinned-causal-floor
+  check and the post-apply high-water-mark advance are skipped, and
+  the steady-state
+  `orleans.lattice.replication.apply.fifo_violations` tracker is not
+  fed. This is required because the snapshot exporter
   enumerates shards/leaves in arbitrary order rather than HLC order:
   per-shard HLCs are not globally monotonic across a single
-  bootstrap stream, so applying the steady-state HWM dedup gate
-  during the drain can drop a still-pending saga key with a
-  strictly-earlier source HLC and break per-saga all-or-nothing
-  visibility on the bootstrapped peer; and the FIFO regression
-  signal must stay silent during the drain so operators retain it as
-  an unambiguous transport-defect alert. The drain is still
+  bootstrap stream, so advancing the high-water-mark mid-drain can
+  suppress a still-pending saga key with a strictly-earlier source
+  HLC and break per-saga all-or-nothing visibility on the
+  bootstrapped peer; and feeding those out-of-order HLCs to the FIFO
+  diagnostic would register every out-of-order shard arrival as a
+  violation. The drain is still
   idempotent end-to-end because:
   - **Receiver-side LWW** on each leaf grain reconciles concurrent
-    arrivals of the same key by `(HLC, originClusterId)`, so a
-    re-applied snapshot entry that has already been delivered is a
-    no-op rather than an over-write.
+    arrivals of the same key by HLC, with a replica-invariant
+    tie-break (tombstone, expiry, then value bytes) ahead of the
+    origin id, so a re-applied snapshot entry that has already been
+    delivered is a no-op rather than an over-write.
   - The per-leaf recently-terminal short-circuit on
     the leaf grain suppresses a re-arriving saga terminal whose
     bucket has already drained, so saga-terminal re-delivery is
@@ -512,31 +533,39 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     late redelivery records the verdict afresh. The safe redelivery
     window is `LatticeOptions.TxDecisionRetention`, not "forever".
 
-  The post-drain
-  snapshot pin atomically
-  installs the per-origin HWM at the snapshot's `AsOfHlc`, so the
+  The post-drain snapshot pin atomically replaces the per-origin
+  high-water-mark vector and the pinned causal floor with the
+  snapshot's causal-stable frontier, so the
   bootstrap-to-incremental handoff retains exactly-once semantics on
-  the live tail. Range deletes, terminal records, and tombstone-reap
-  envelopes carry `HybridLogicalClock.Zero` and never interact with
-  the HWM gate; they are unaffected by the bootstrap scope.
-- **Live-incremental dedup is unchanged.** The per-origin HWM dedupe
-  in the applier continues to suppress any re-delivery of
-  bootstrap-arrived entries through the live-incremental path -
-  the pin at the end of the drain seeds the HWM at the snapshot's
-  `AsOfHlc`, so the first live entry below or at the pin is deduped
-  canonically.
+  the live tail. Range deletes (which carry `HybridLogicalClock.Zero`),
+  saga terminal records (which carry the saga's own terminal HLC), and
+  tombstone-reap envelopes are routed before the pinned-floor gate, so
+  the bootstrap scope does not change how they apply.
+- **Live-incremental dedup is unchanged.** The snapshot-pinned causal
+  floor in the applier suppresses any re-delivery of
+  bootstrap-arrived entries through the live-incremental path - the
+  pin at the end of the drain sets each origin's floor to its
+  coordinate in the snapshot's causal-stable frontier, so a live entry
+  at or below that coordinate is deduped canonically.
 - **Snapshot/incremental handoff is exactly-once.** The coordinator
-  pins `(AsOfHlc, CausalStableFrontier)` on the per-origin
-  high-water-mark store *after* every
-  snapshot entry has been applied. The per-origin HWM dedupe in
-  `IReplicationApplier` then makes any incremental entry whose
+  pins the snapshot's causal-stable frontier on the per-tree
+  high-water-mark store *after* every snapshot entry has been
+  applied, first sealing the source cluster's own coordinate at or
+  above the highest HLC the drain applied and the oldest
+  source-authored entry the local WAL still retains, so the fall-off
+  detector cannot read the retained baselines as a trim gap. The
+  pin replaces both the high-water-mark vector and the pinned floor
+  (the `AsOfHlc` passed alongside it is currently ignored). The
+  applier's floor gate then makes any incremental entry whose
   timestamp is at or below the pinned frontier a no-op, so the
   snapshot/incremental boundary is exactly-once regardless of
   overlap.
-- **Tombstones in custom providers are skipped.** Snapshot entries
-  whose `Value` is `null` (not emitted by the default provider, but
-  permissible from a host-supplied `ISnapshotProvider`) are skipped
-  rather than applied as deletes.
+- **Tombstones in custom providers are skipped.** Committed
+  (non-prepared) snapshot entries whose `Value` is `null` (not emitted
+  by the default provider, but permissible from a host-supplied
+  `ISnapshotProvider`) are skipped rather than applied as deletes, as
+  are prepared rows with an empty `TransactionId`. A prepared row with
+  `IsTombstone` set is applied as a prepared delete.
 - **Per-tree merge mode is honoured on bootstrap.** Every
   `WalRecord` emitted by the bootstrap drain is stamped with the
   merge mode declared for the tree in
@@ -656,9 +685,10 @@ producer's per-tree transaction-registry decisions:
    `InFlight`, `Indeterminate`, or absent. The emitted row carries the
    source-stamped
    prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
-   `AtomicBatchSize`, `AtomicBatchIndex`, and `ExpiresAtTicks` so the
+   `ExpiresAtTicks`, and the typed CRDT `Delta` / `Mode` so the
    receiver can route it identically to a steady-state prepared WAL
-   record.
+   record and a prepared CRDT entry folds its delta on the terminal
+   commit.
 
 2. **Committed projection pass.** Drains the source tree's entries
    via the resilient `ScanEntriesAsync` wrapper over

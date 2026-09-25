@@ -41,15 +41,16 @@ three normalised dimensions, each `0.0` (idle) to `1.0` (saturated):
 
 - **Activation** - the per-silo grain-activation working set from Orleans
   `SiloRuntimeStatistics.ActivationCount` (read via the management grain),
-  normalised against `ActivationWorkingSetTarget`.
+  normalised against `ActivationWorkingSetTarget`; the worst silo sets the
+  cluster value.
 - **Resource** - the worst-case of CPU and available-memory headroom across the
   silo pool, from Orleans `EnvironmentStatistics` (cgroup-aware).
 - **WAL dispatch** - how close the WAL append-dispatch pipeline is to its
-  admission ceiling, derived from the WAL saturation signal.
+  admission ceiling, derived from the answering silo's own WAL saturation signal
+  (the worst state across every tree that silo has observed).
 
-It also carries the worst-case `WalSaturationState` across every tree and
-partition, so a hard `Saturated` state can gate scale-in and drive the health
-check independently of the ratios.
+It also carries that worst-case `WalSaturationState`, so a hard `Saturated`
+state can gate scale-in and drive the health check independently of the ratios.
 
 ## Aggregating to a scalar
 
@@ -73,20 +74,29 @@ The scaling-signal computer reduces the compute axis to one replica-demand scala
    compute dimensions below their scale-in thresholds, WAL `Healthy`, and no
    shard split in flight. Any break resets the window. Until the gate opens the
    computer holds the previous scalar.
-4. **Floor.** `RecommendedReplicas` is `max(MinReplicas, ceil(finalScalar))`, so
-   the recommendation never drops below the configured minimum.
+4. **Floor.** A final scalar below `MinReplicas` is raised to it, and
+   `RecommendedReplicas` is `max(MinReplicas, ceil(finalScalar))`, so neither
+   `ScaleValue` nor the recommendation drops below the configured minimum once
+   the first sample lands.
 
 `ScaleValue` carries the smoothed, gated scalar an autoscaler should act on;
-`RawScaleValue` exposes the un-smoothed instantaneous demand for observability;
-`Reason` names the dominant dimension and the decision (warming up, scaling out,
-holding, or scaling in).
+`RawScaleValue` exposes the un-smoothed instantaneous demand for observability.
+`Reason` reads `warming up` until the first sample completes; after that it
+names the dominant dimension, its pressure, and the replica count it was measured
+across (for example `activation pressure 0.42 across 3 replica(s)`), with
+`; scale-in held by safety gate` appended when the gate held a falling scalar.
 
 ## Cluster-aggregate answering
 
-The signal is a *cluster* answer, not a per-silo one: the compute collector reads
-cluster-wide runtime statistics through the management grain, so any silo that
-serves a scrape returns the same aggregate view. This is why a KEDA rule can
-point at any replica's endpoint and read a coherent whole-cluster `scaleValue`.
+The activation and resource dimensions are *cluster* answers, not per-silo ones:
+the compute collector reads cluster-wide runtime statistics through the
+management grain and takes the worst silo per dimension, so every silo computes
+them from the same inputs. This is why a KEDA rule can point at any replica's
+endpoint and read a whole-cluster `scaleValue`. Two inputs are local to the
+answering silo, though: the WAL-dispatch dimension and `WalSaturation` come from
+that silo's own WAL saturation signal, and each silo keeps its own smoothing and
+scale-in-gate state. Two replicas can therefore serve slightly different
+snapshots when the WAL axis dominates or their sampling ticks differ.
 
 ## Storage axis, and the invariant
 

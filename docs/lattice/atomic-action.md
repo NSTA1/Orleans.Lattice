@@ -71,6 +71,15 @@ saga parks rather than replaying a changed effect against a partially completed
 plan. Bump the tag whenever the forward/compensate semantics change in a way that
 is unsafe to replay.
 
+Handler ids must be unique, and must not start with the `ol.` prefix, which is
+reserved for library built-in handlers; a duplicate or reserved id, or an empty id or
+version tag, is rejected with an `ArgumentException` at registration. To register a
+handler written as a class instead of a delegate pair, implement
+`IAtomicActionHandler` (`HandlerId`, `VersionTag`, `ForwardAsync`, `CompensateAsync`)
+and pass an instance to the `AddHandler(IAtomicActionHandler)` overload. Each effect
+receives an `IAtomicActionContext` carrying the `OperationId`, the step's `Args`, a
+`GrainFactory`, and a `CancellationToken`.
+
 ## Building and running a plan
 
 Build a plan with `AtomicActionPlanBuilder`, mixing built-in `TreeWrite` steps and
@@ -130,10 +139,14 @@ if (outcome is { Status: AtomicActionStatus.Committed })
 `.TreeWrite(treeId, ...)` performs an atomic multi-key write to **one** Lattice tree
 as a single saga step, with **library-synthesized** compensation - you supply no
 compensating effect. Before the write, the coordinator captures each affected key's
-pre-image; if a *later* step faults, it restores those pre-images with a fresh
-write (the same pre-image / last-writer-wins technique the atomic-write coordinator
-uses). The forward write itself delegates to `IAtomicWriteGrain`, so it inherits the
-tree's verified atomicity exactly as a direct `SetManyAtomicAsync` would: every key
+pre-image with one batched read; if a *later* step faults, it restores those
+pre-images with a fresh atomic write through the same atomic-write machinery -
+re-writing each key that existed before the step and deleting each key that was
+absent. That restore is a new, visible write, which is not how the atomic-write
+coordinator rolls back its own failures: an aborted atomic write issues no writes at
+all, because its staged writes were never visible - it records the abort and discards
+them. The forward write itself delegates to the tree's atomic-write coordinator, so it
+inherits the tree's verified atomicity exactly as a direct `SetManyAtomicAsync` would: every key
 in the step commits atomically across the target tree's shards, and - because a tree
 write rides the WAL and replication transport - that commit is visible atomically
 across **every cluster the tree replicates to**, never as a partial set. A single

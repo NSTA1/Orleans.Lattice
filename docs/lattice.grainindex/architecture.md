@@ -118,9 +118,11 @@ own write path:
 Steps 2 and 3 are what `projection.duration` measures.
 
 Under the default `Synchronous` projection mode this happens as part of the
-write path and a failure is surfaced to the caller. The mode is read once, when
-the enrolment path is built, because it changes the shape of a grain's write
-path rather than tuning it.
+write path and a failure is surfaced to the caller. Under `Eventual` the plan is
+recorded in the [outbox](#the-outbox) during the write path and applied by the
+drain afterwards, so the caller neither waits for it nor sees its failures. The
+mode is read once, when the enrolment path is built, because it changes the
+shape of a grain's write path rather than tuning it.
 
 ## The outbox
 
@@ -136,7 +138,9 @@ lands.
 
 A pending-projection marker is written to the registry tree *before*
 the index write is issued, and cleared when the write is confirmed. A background
-drain claims outstanding markers and retries them.
+drain scans the outstanding markers every `RetryInterval` and retries them, up to
+`MaxBatchSize` per pass; one marker that still fails is left for the next pass
+rather than stalling the ones behind it.
 
 The marker carries **the whole plan**, not a "this grain is dirty" flag. A flag
 would oblige the retry to re-read the grain's state, which means activating it -
@@ -168,8 +172,9 @@ The contract, stated precisely:
 - **Entry updates for one grain are atomic.** A reader never sees a grain
   half-way through a projection.
 - **A committed state change cannot silently leave the index stale.** A failed
-  index write is surfaced to the caller *and* leaves a durable marker that is
-  retried until it lands.
+  index write leaves a durable marker that is retried until it lands, and under
+  the default `Synchronous` mode a failed write on a state mutation is also
+  surfaced to the caller.
 - **A grain the backfill has not yet reached is absent**, not stale. Queries
   under-report during an incomplete backfill rather than returning wrong values.
 - **`SnapshotCursor` gives page-to-page stability over the index**, not over

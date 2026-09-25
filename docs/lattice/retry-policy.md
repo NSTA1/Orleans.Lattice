@@ -1,7 +1,9 @@
 # Idempotency Keys and Retry Policy
 
 Orleans.Lattice exposes an **opt-in** retry surface for transient storage
-faults on the public `ILattice` mutating methods. The library never enables
+faults on the public single-key and range-delete `ILattice` mutating
+methods (see [Wiring a retry policy](#wiring-a-retry-policy) for the exact
+list). The library never enables
 retry on its own - retry is a property of the caller's environment (cloud
 storage retry budgets, replication batch reissue, scheduled workers that
 re-run a step) and the throw-and-revert contract of every mutating method
@@ -98,9 +100,10 @@ calls within the scope all share the same key.
 
 ## Wiring a retry policy
 
-The shipped `BoundedExponentialRetryPolicy` retries up to `MaxAttempts`
-times with `min(MaxDelay, InitialDelay * 2^(attempt-1))` between
-attempts. Wire it via DI:
+The shipped `BoundedExponentialRetryPolicy` makes up to `MaxAttempts`
+attempts in total (the first call counts as one), waiting
+`min(MaxDelay, InitialDelay * 2^(attempt-1))` after failed attempt number
+`attempt` before the next. Wire it via DI:
 
 ```csharp verify
 siloBuilder.AddLatticeRetryPolicy(options =>
@@ -123,6 +126,14 @@ mutating call with no ambient key bypasses the policy entirely and
 runs with the original throw-and-revert semantics - the library will
 never silently retry a write that does not have a caller-supplied
 identity.
+
+The policy wraps the single-key mutators - `SetAsync` (both overloads),
+`SetIfVersionAsync`, `GetOrSetAsync`, `ApplyCrdtDeltaAsync` (both
+overloads, which the typed CRDT accessors write through), and
+`DeleteAsync` - and the range deletes `DeleteRangeAsync` and
+`DeleteRangeWherePredicateAsync`. The batch, atomic, and bulk-load entry
+points never route through it (see
+[What is explicitly out of scope](#what-is-explicitly-out-of-scope)).
 
 ## Caller-side retry without DI
 
@@ -160,15 +171,17 @@ Two storage paths participate:
   the same HLC, so the receiver's LWW resolution treats the retry as a
   tie and the stored value does not advance.
 - **PnCounter accessor.** `PnCounterAccessor.IncrementAsync` /
-  `DecrementAsync` no longer run a read-modify-write CAS loop - the leaf
-  grain is the single writer authority per key, so each call performs a
-  single read plus one delta apply. The idempotency dedup guard now runs
-  on the grain's delta-apply path rather than in the accessor: when an
-  idempotency scope is active, the apply drops the mutation if the stored
-  version already equals the ambient idempotency key's HLC and a value is
-  already present. This is necessary because a counter is otherwise a
-  non-idempotent delta type - applying the same `+5` twice would advance
-  by 10.
+  `DecrementAsync` perform a single read plus one delta apply rather than
+  a read-modify-write CAS loop - the leaf grain is the single writer
+  authority per key. The delta they mint carries the replica's resulting
+  per-replica total rather than the amount added, and a PN-counter folds
+  deltas by pointwise maximum, so re-applying the same delta is a no-op.
+  When the retry policy re-runs a failed apply it re-sends the same delta
+  bytes under the same pinned HLC, so a retried apply cannot advance the
+  counter twice. The accessor does not read the ambient key itself, so
+  this covers retries of the apply inside one `IncrementAsync` call, not a
+  second `IncrementAsync` call: calling the accessor again re-reads the
+  counter and mints a fresh delta.
 
 For replicated trees, the same identity flows through the
 `Orleans.Lattice.Replication` push transport's WAL dedup, so a retry
@@ -180,10 +193,14 @@ cluster as well.
 - The library does **not** install a retry policy by default. The
   `LatticeOptions.RetryPolicy` slot is `null` unless the host wires
   one in.
-- The retry policy does **not** wrap saga coordinators
-  (`SetManyAtomicAsync`). The saga's own compensation path handles
-  failure - retrying a partially-applied saga is unsafe and the policy
-  short-circuits inside that path.
+- The retry policy does **not** wrap the batch, atomic, or bulk-load
+  entry points: `SetManyAsync`, `SetManyWherePredicateAsync`,
+  `ApplyCrdtDeltaManyAsync`, `SetManyAtomicAsync`,
+  `SetManyAtomicWhereAsync`, `BulkLoadAsync`, and `BulkAppendChunkAsync`
+  never route through it. An atomic batch carries its own recovery - its
+  `operationId` overloads re-attach a retried call to the original saga -
+  and a failed saga aborts as a unit rather than being re-driven by the
+  policy.
 - There is no per-method retry override on the `ILattice` interface.
   Retry is a property of the caller's environment, not a per-call
   parameter, and adding a parameter would couple every grain method

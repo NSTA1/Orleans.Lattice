@@ -96,7 +96,9 @@ should mean.
 > and over bloat it? No. Repeating an operation you have already performed - such
 > as re-enabling a flag that is already on - does not make the stored value
 > bigger. See [Monotonic State Primitives](../lattice/state-primitives.md) for
-> how that is done.
+> how that is done. The one exception is the [OR-Map](ormap.md): it keeps every
+> write to a map key as its own contribution to that key's value, so re-writing a
+> key does add to what is stored.
 
 ## How you use them here
 
@@ -109,7 +111,8 @@ the delta for you, and exposes natural methods (`AddAsync`, `IncrementAsync`,
 
 Each key records its own merge mode, so a single tree can **mix** CRDT types
 freely, with different CRDT primitives and plain last-writer-wins values
-alongside one another. There is nothing to configure per tree for local
+alongside one another. Apart from registering an [OR-Map](ormap.md)'s shape for
+the tree that holds it, there is nothing to configure per tree for local
 (single-cluster) use.
 
 > [!NOTE]
@@ -141,12 +144,11 @@ two are why a read or a merge can never corrupt somebody else's state. If you ar
 implementing a CRDT against `ICrdt<TSelf>`, all three legs are part of the
 contract.
 
-Two things keep the cost of the copying legs down. An empty or tombstoned payload
-reuses the shared `Array.Empty<byte>()` singleton, so it never allocates - which
-matters because an aged sequence is mostly tombstones. And the set primitives
-(`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an element is
-encoded to a string key on the way in and decoded fresh on the way out, so they
-satisfy all three legs by construction.
+Two things keep the cost of the copying legs down. An empty payload reuses the
+shared `Array.Empty<byte>()` singleton, so copying it never allocates. And the set
+primitives (`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an
+element is encoded to a string key on the way in and decoded fresh on the way out,
+so they satisfy all three legs by construction.
 
 The rule is enforced structurally rather than by review. A contract test walks
 every registered CRDT's object graph and compares `byte[]` instances by reference

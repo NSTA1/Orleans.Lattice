@@ -3,8 +3,9 @@
 Code-first gRPC transport binding for
 [Orleans.Lattice.Api.Auth](https://www.nuget.org/packages/Orleans.Lattice.Api.Auth).
 Projects the membership and authorization-policy admin facade onto a flat set of
-unary gRPC RPCs so a remote admin tool, CLI, or dashboard can administer users,
-groups, membership, and rules - and introspect verdicts - over the wire.
+unary gRPC RPCs so a remote admin tool, CLI, or dashboard can administer groups,
+membership, and rules - and search the identity directory and introspect
+verdicts - over the wire.
 
 Administering authorization is the most sensitive surface in the cluster, so the
 binding fails closed: with no authorizer registered, every admin call is
@@ -29,6 +30,9 @@ rejected with `PermissionDenied`.
 | `ListRulesForTree` | `ListRulesForTreeAsync` |
 | `Explain` | `ExplainAsync` |
 | `EffectivePermissions` | `EffectivePermissionsAsync` |
+| `SearchDirectory` | `SearchDirectoryAsync` |
+| `ResolveDirectoryPrincipal` | `ResolveDirectoryPrincipalAsync` |
+| `GetAccessModel` | `GetAccessModelAsync` |
 
 ## Two-layer authorization
 
@@ -61,7 +65,8 @@ app.MapLatticeAuthApiGrpc();
 ```
 
 The host must register the admin facade in the same service provider - typically
-by co-hosting Orleans with `AddLattice(...).AddLatticeAuth(...).AddLatticeAuthApi()`.
+by co-hosting Orleans with
+`AddLattice(...).AddLatticeMembership().AddLatticeAuth(...).AddLatticeAuthApi()`.
 
 ## Client
 

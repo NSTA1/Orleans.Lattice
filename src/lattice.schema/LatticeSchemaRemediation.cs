@@ -12,12 +12,10 @@ namespace Orleans.Lattice.Schema;
 /// <remarks>
 /// <para>
 /// <b>Scope.</b> This delivers the remediation decision logic against an entry
-/// stream, fully unit-testable without a cluster. Persisting the transform as
-/// durable coordinator state and performing the physical shadow build + cutover
-/// (via <c>TreeRegistryEntry.PhysicalTreeId</c> aliasing) are the deferred
-/// follow-up: this component is what that shadow build would call per value, and
-/// its abort contract (first offending key / reason / value preview) is exactly
-/// what the coordinator reports.
+/// stream, fully unit-testable without a cluster. The durable coordinator persists
+/// the transform, performs the physical shadow build and cutover, and calls this
+/// component per value; its abort contract (first offending key / reason / value
+/// preview) is exactly what the coordinator reports.
 /// </para>
 /// <para>
 /// <b>Abort semantics.</b> A value whose transform throws (malformed / not

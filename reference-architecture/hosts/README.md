@@ -2,17 +2,18 @@
 
 Three minimal, production-shaped reference host projects for the active-active,
 cross-region Orleans.Lattice estate described in the root `reference-architecture.md`.
-Each project references the **published Orleans.Lattice v8.0.x NuGet packages**
-(from nuget.org - the 8.0.0 line, with `Orleans.Lattice.Membership.Entra.Graph`
-at 8.0.1 for the secret-less managed-identity Graph resolver, and the Explorer
-head adding `Orleans.Lattice.Explorer.Entra.Web` + `Orleans.Lattice.Caching.AzureBlob`
-for hosted-web OIDC sign-in and its distributed token cache), not project
-references into `src/`, so it consumes the released library exactly as a real
-deployment would.
+Each project references the **published Orleans.Lattice NuGet packages** (from
+nuget.org): the Silo and MCP heads pin the 9.7.x line (`Orleans.Lattice` itself
+at 9.7.1), and the Explorer head pins the 9.4.x line of the
+`Orleans.Lattice.Explorer.*` libraries - including
+`Orleans.Lattice.Explorer.Entra.Web` for hosted-web OIDC sign-in - plus
+`Orleans.Lattice.Caching.AzureBlob` 9.7.1 for its distributed token cache. Each
+`.csproj` holds the exact pins. They are not project references into `src/`, so
+each head consumes the released library exactly as a real deployment would.
 
 | Host | Project | Role |
 |------|---------|------|
-| Silo | `Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj` | The always-on Orleans silo: Azure Table clustering + durable Azure Table WAL, cross-region replication (shipper + receiver), the Azure Blob backup sink (primary/standby), the read-only State API + auth-admin control plane over gRPC, the `lattice.scaling` compute-axis signal, OpenTelemetry `/metrics`, and Entra auth. |
+| Silo | `Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj` | The always-on Orleans silo: Azure Table clustering + durable Azure Table WAL, cross-region replication (shipper + receiver), the Azure Blob backup sink (primary/standby), the read-only State API, the read-write Data API, and the auth-admin, backup, schema, and tree-administration control planes over gRPC (plus the replication control plane when enabled), the `lattice.scaling` compute-axis signal, OpenTelemetry `/metrics`, and Entra auth. |
 | Mcp | `Mcp/Orleans.Lattice.ReferenceArchitecture.Mcp.csproj` | A stateless remote MCP server (`AddLatticeMcpRemote` over gRPC) fronting the silo, with the telemetry tool module and Entra auth. |
 | Explorer | `Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj` | A standalone Explorer web console (Blazor Server) that connects, as a gRPC/gRPC-web client, to the silo's State + Auth gRPC endpoint, with a hosted-web Entra (OpenID Connect) sign-in and a distributed token cache over the region storage account. |
 
@@ -46,17 +47,21 @@ underscore separator, case-insensitive).
 | `Storage:TableServiceUri` / `Storage:BlobServiceUri` | - | Managed-identity storage endpoints (production). |
 | `Wal:TableName` / `Clustering:TableName` / `Reminders:TableName` / `GrainStorage:TableName` | `OrleansLatticeWal` / `...Clustering` / `...Reminders` / `...Grains` | Azure Table names. |
 | `Replication:ClusterId` | `Cluster:Id` | This region's replication cluster id. |
-| `Replication:Peers` | - | Enrolled peers as `clusterId=endpoint,clusterId=endpoint` (receiver-enrollment gate; must be reciprocal per region). |
+| `Replication:Peers` | - | Enrolled peers as `clusterId=endpoint,clusterId=endpoint`: the clusters this region ships to (and whose cross-cluster saga calls it accepts). Must be reciprocal across regions. |
 | `Replication:Trees` | - | Per-tree wire merge mode as `treeName=MergeMode,...` (for example `orders=LwwRegister`; must match on both ends). |
 | `Replication:AllowPlaintext` | `false` | Allow `http://` peer endpoints (local dev only; Azure uses server TLS). |
+| `Replication:EnableRuntimeConfig` | `false` | Runtime per-tree replication control plane: enrols the `sys-replication-config` tree and co-hosts the replication control facade and its gRPC binding, fail-closed behind an authored Replication grant. Compute binds it to the deployer's replication-control switch. |
+| `Replication:EnableDigestAntiEntropy` / `Replication:DigestProbeIntervalSeconds` | `false` / `0` | Cross-cluster anti-entropy (digest probe, Merkle-walk drift localisation, bounded automatic repair), set symmetrically per region; a positive interval overrides the package's probe cadence. |
 | `Backup:Primary` | `false` | `true` on the single designated backup-primary region (scheduler on); `false` on DR standbys (scheduler off). |
 | `Backup:ContainerName` | `orleans-lattice-backup` | Blob container for the backup sink. |
+| `Backup:BlobConnectionString` / `Backup:BlobServiceUri` | - | Optional dedicated storage for the backup sink (an emulator connection string, or a managed-identity blob endpoint). When neither is set the sink uses the `Storage:*` identity. |
 | `Backup:FullIntervalHours` / `Backup:IncrementalIntervalMinutes` / `Backup:RetentionKeepLast` | `24` / `60` / `7` | Schedule tuning (primary only). |
 | `Scaling:MinReplicas` | `1` | Floor for the compute-axis scaling signal. |
-| `StateApi:RequireAuthorization` | `false` | When `true`, the state gRPC surface is gated by the turnkey env-var credential authorizer and the auth surface requires authorization. Local dev leaves it `false` (a documented bypass); a deployment sets it `true` behind the Entra front door. |
+| `StateApi:RequireAuthorization` | `false` | When `true`, the silo's gRPC facades require authorization. With Entra on, their coarse transport gates are opened and the deny-by-default per-subject access gate, keyed on the caller's Entra identity, is the real enforcement; with Entra off, the state surface is gated by the turnkey env-var credential authorizer (a shared username / password). Local dev leaves it `false` (a documented bypass); a deployment sets it `true` behind the Entra front door. |
 | `DataApi:Enabled` | `true` | Exposes the read-write Data API gRPC binding, co-hosted on the silo gRPC port (same origin as the State API). Enabled by default; every mutation is still subject-checked by the deny-by-default access gate. Set `false` to withhold the write surface entirely. |
 | `Auth:DefaultEffect` | `Deny` | `Deny` (secure default) or `Allow` (fully-open local dev cluster). |
 | `Auth:BootstrapAdministrators` | - | Comma-separated subject ids seeded as administrators. |
+| `Auth:DevAuthenticateForwardedSubject` | `false` | Local dev bypass, honoured only when Entra is off: trust a forwarded bearer token as its named subject when that id is a configured bootstrap administrator. |
 | `Entra:Enabled` | `false` | Enable Entra-backed authentication for the exposed facades. |
 | `Entra:TenantId` / `Entra:ClientId` / `Entra:Authority` / `Entra:Audiences` | - | Entra authenticator configuration. |
 | `Entra:Algorithms` | `RS256` | Comma-separated allow-list of accepted JWT signature algorithms (the header `alg`), pinned as defense-in-depth against algorithm-confusion attacks (CWE-347). Defaults to `RS256`, the algorithm Entra issues v2.0 tokens with; a token advertising any other algorithm is refused. |
@@ -70,16 +75,22 @@ underscore separator, case-insensitive).
 | `Mcp:StateEndpoint` | (required) | The silo's State gRPC endpoint. |
 | `Mcp:AuthEndpoint` | `Mcp:StateEndpoint` | The silo's Auth gRPC endpoint (needed for permission-scoped discovery). |
 | `Mcp:DataEndpoint` / `Mcp:BackupEndpoint` | - | Data / backup gRPC endpoints. Compute sets `Mcp:DataEndpoint` to the silo gRPC FQDN by default (the write facade rides that endpoint); backup only if the silo exposes it. |
+| `Mcp:ReplicationEndpoint` | - | Replication control gRPC endpoint. Compute sets it to the silo gRPC FQDN when replication control is enabled. |
+| `Mcp:TreeAdminEndpoint` | `Mcp:StateEndpoint` | Tree-administration and schema-control gRPC endpoint (co-hosted on the silo gRPC port). |
 | `Mcp:RequireAuthorization` | `Entra:Enabled` | Fail-closed toggle on the MCP HTTP endpoint. |
-| `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableAuthAdministration` | `EnableDataWrites` on by default in a deployment (compute binds it to the Data API); the others `false` | Advertise the mutating tool verbs of each group. |
+| `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableReplicationControl` / `Mcp:EnableAuthAdministration` | `false` | Advertise the mutating tool verbs of each group. Compute binds the first three to the deployer's Data API, backup-control, and replication-control switches (all on by default); `EnableAuthAdministration` stays `false`. |
+| `Mcp:EnableTreeAdminLifecycle` / `Mcp:EnableTreeAdminSchemaControl` | `true` / `true` | Advertise the tree-lifecycle (create, bulk load, restore, reshard, resize, snapshot, delete / recover / purge) and schema-mutation tools; every call is still gated at the silo. |
+| `Mcp:Stateless` | `true` | Stateless streamable-HTTP transport (no per-session server state), so a follow-up request can land on any region or replica behind Front Door. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
 | `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head mint a rotating managed-identity Entra token per query for an Azure Monitor managed-Prometheus endpoint (no static secret); the workload identity needs Monitoring Data Reader on the workspace. |
 | `Mcp:Telemetry:Scope` | `https://prometheus.monitor.azure.com/.default` | Access-token scope for `DynamicBearer` mode; override only for a non-default Azure Monitor audience. |
 | `Mcp:RegionId` / `Mcp:ClusterId` | `current` / - | This head's own (default) region id and cluster id, surfaced by `lattice_list_regions` and targeted when a tool call supplies no `region`. Compute sets them to the region code and Orleans cluster id. |
 | `Mcp:VerifyRegionIdentity` | `false` | Probe each peer region's state facade once and reject a peer whose endpoint does not reach its advertised cluster (an anycast/Front Door misconfiguration). Compute sets it `true` whenever peer regions are wired. |
-| `Mcp:Regions:{n}:RegionId` / `:ClusterId` / `:StateEndpoint` / `:AuthEndpoint` / `:DataEndpoint` / `:BackupEndpoint` / `:ReplicationEndpoint` | - | The peer regions a caller may target via the optional per-call `region` selector. Each peer is dialed at its DIRECT region-pinned silo gRPC FQDN (the same endpoint replication uses), which serves every facade group. Compute populates these on pass 2 from the sibling regions' silo FQDNs. |
+| `Mcp:Regions:{n}:RegionId` / `:ClusterId` / `:StateEndpoint` / `:AuthEndpoint` / `:DataEndpoint` / `:BackupEndpoint` / `:ReplicationEndpoint` / `:TreeAdminEndpoint` | - | The peer regions a caller may target via the optional per-call `region` selector. Each peer is dialed at its DIRECT region-pinned silo gRPC FQDN (the same endpoint replication uses), which serves every facade group. Compute populates these on pass 2 from the sibling regions' silo FQDNs. |
 | `Entra:Enabled` / `Entra:TenantId` / `Entra:Authority` / `Entra:Audience` / `Entra:ClientId` | - | Entra JWT validation on the front door; the token is forwarded to and re-validated by the silo. |
+| `Mcp:PublicUrl` / `Mcp:Oauth:Scopes` | - | With Entra on, the head's public URL enables OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery at `/.well-known/oauth-protected-resource`, advertising the given scopes. Compute sets both from the Front Door MCP endpoint and the silo `user_impersonation` scope. |
+| `Mcp:DevAuthenticateAll` / `Mcp:DevSubjectId` | `false` / `local-dev-admin` | Local dev bypass, forced off when Entra is on: authenticate every request as one synthetic subject. |
 
 ### Explorer
 
@@ -93,8 +104,10 @@ underscore separator, case-insensitive).
 | `Entra:ClientSecret` | - | Optional confidential-client secret. Left unset in Azure: the container authenticates secret-lessly via a federated managed-identity assertion (`AZURE_CLIENT_ID`). |
 | `Entra:TokenCache:BlobServiceUri` | - | Blob endpoint of the per-region account backing the Microsoft.Identity.Web distributed token cache, so tokens are shared across warm replicas and survive restart. Empty falls back to an in-memory cache. Consumed via the `AZURE_CLIENT_ID` managed identity. |
 | `Entra:TokenCache:ContainerName` | `explorer-token-cache` | Container (on the per-region account) that stores the token cache. |
+| `Explorer:PublicOrigin` | - | The public origin (scheme + host) operators reach the console at - the Front Door Explorer endpoint - so OpenID Connect builds its sign-in redirect URIs against that host rather than the internal Container Apps origin. Empty leaves requests untouched (local / compose). |
 | `LATTICE_EXPLORER_ENDPOINT` | - | The remote State/Auth gRPC endpoint the console connects to (read by the explorer's own environment bootstrap). |
 | `LATTICE_EXPLORER_INSECURE_DEV` | - | `true` to allow the local h2c dev transport. |
+| `LATTICE_EXPLORER_TRANSPORT_HEADERS` | - | Semicolon-separated `Name=Value` non-secret headers sent on every call to the silo. Compute sets `X-Azure-FDID=<frontDoorId>` so the console, which dials the silo origin directly, passes its origin lock. |
 | `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` | - | Optional first-run auto-sign-in (local dev). |
 
 ### Front Door origin lock (all hosts)
@@ -107,8 +120,11 @@ The lock always exempts the platform health probe path (`/health`), which ACA
 calls on the container directly, bypassing Front Door. The **Silo** host also
 exempts `/metrics` (the OpenTelemetry scrape) and `/lattice/scale` (the KEDA
 compute-axis signal), which are served on the internal-only HTTP port and are
-likewise probed directly. Exemptions match on whole path segments, so a
-lookalike such as `/healthz` remains locked.
+likewise probed directly, and the replication engine's silo-to-silo gRPC services
+(`/orleans.lattice.replication.LatticeReplication`, `.LatticeRemoteSnapshot`, and
+`.LatticeSaga`), which peer regions dial directly and which authenticate every
+call with the shared replication key. Exemptions match on whole path segments, so
+a lookalike such as `/healthz` remains locked.
 
 ## Container images
 

@@ -21,10 +21,11 @@ orleans.lattice.backup
 | `reason` | `LatticeBackupMetrics.TagReason` | The classified failure reason. |
 | `kind` | `LatticeBackupMetrics.TagKind` | The backup kind: `full` or `incremental`. |
 | `tree_count` | `BackupMetrics.TagTreeCount` | The participating-tree count of a cross-tree-consistent backup set. |
+| `tenant` | `LatticeTenantLabel.TagTenant` | Always the platform sentinel `_platform_`: a backup scope spans an operator-chosen set of trees, so no backup measurement is attributed to a single tenant. Carried by every instrument below in addition to the tags its row lists. |
 
 ### Phase values (`LatticeBackupMetrics`)
 
-Capture phases: `PhaseSnapshotOpen` (`snapshot-open`), `PhaseExport` (`export`), `PhaseSinkWrite` (`sink-write`), `PhaseManifestCommit` (`manifest-commit`). Restore phases: `PhaseRead` (`read`), `PhaseVerify` (`verify`), `PhaseMerge` (`merge`).
+Capture phases: `PhaseSnapshotOpen` (`snapshot-open`), `PhaseExport` (`export`), `PhaseSinkWrite` (`sink-write`), `PhaseManifestCommit` (`manifest-commit`). Restore phases: `PhaseRead` (`read`), `PhaseVerify` (`verify`), `PhaseMerge` (`merge`). An incremental capture also tags a failure to read its base manifest from the sink `read`, and it has no separate `sink-write` phase: its manifest write is tagged `manifest-commit`.
 
 ### Reason values (`LatticeBackupMetrics`)
 
@@ -42,7 +43,7 @@ Capture phases: `PhaseSnapshotOpen` (`snapshot-open`), `PhaseExport` (`export`),
 | `BackupEntries` | `orleans.lattice.backup.entries` | Histogram | `kind` | Entries captured per backup. |
 | `EntriesProcessed` | `orleans.lattice.backup.entries_processed` | Counter | `kind` | Cumulative entries processed by captures. |
 | `BytesProcessed` | `orleans.lattice.backup.bytes_processed` | Counter (By) | `kind` | Cumulative bytes processed by captures. |
-| `RetentionBytesReclaimed` | `orleans.lattice.backup.retention.bytes_reclaimed` | Counter (By) | `scope` | Artifact bytes reclaimed by retention / deletion. |
+| `RetentionBytesReclaimed` | `orleans.lattice.backup.retention.bytes_reclaimed` | Counter (By) | `scope` | Artifact bytes reclaimed by a retention pass (a backup deleted through the control facade is not counted). |
 | `RetentionPruned` | `orleans.lattice.backup.retention.pruned` | Counter | `scope` | Backups pruned by retention. |
 
 ### Throughput and latency
@@ -68,7 +69,7 @@ Capture phases: `PhaseSnapshotOpen` (`snapshot-open`), `PhaseExport` (`export`),
 
 ### Inventory (observable gauges)
 
-These gauges read from the in-memory inventory registry on scrape without touching storage.
+These gauges read from the in-memory inventory registry on scrape without touching storage. The registry is process-local and not seeded from the catalog: it tracks the backups this silo process has captured, less those retention has pruned, since it started, so it resets on restart and does not reflect a backup deleted through the control facade. For restart-durable counts use `ILatticeBackupControl.GetInventoryAsync`, which is derived from the catalog.
 
 | Instrument | Name | Kind | Tags | Meaning |
 |---|---|---|---|---|

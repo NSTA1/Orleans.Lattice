@@ -24,9 +24,11 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 ## Benchmarks
 
 - [x] **microbench: `ILattice` micro-benchmark from `Bench.Microbench`.**
-  Bypass the simulator entirely. Sweep concurrency × key cardinality × value
-  size against `SetAsync`, `GetAsync`, `SetManyAsync`, and a 70r/30w mix
-  directly. Compare results to `docs/lattice/benchmarks.md`. Characterizes
+  Bypass the simulator entirely. Runs the BenchmarkDotNet
+  `LatticeMicroBenchmarks` suite (point read and write, `GetManyAsync`, bulk
+  load, atomic writes, a 70r/30w mix, and deeper-tree variants) at the key
+  count and value size set by `BENCH_MICROBENCH_KEY_COUNT` /
+  `BENCH_MICROBENCH_VALUE_BYTES`. Compare results to `docs/lattice/benchmarks.md`. Characterizes
   the primitive in isolation and gives a reference curve for interpreting
   later end-to-end runs.
 
@@ -60,12 +62,12 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   controlled interval while the simulator keeps writing, then resume.
   Measure WAL growth during the pause, time-to-converge after resume, and
   that the per-peer cursor advances strictly on ack. Exercises cursor
-  durability and the janitor''s GC predicate (R-061).
+  durability and the WAL garbage collector's trim predicate, which may only trim what every consumer cursor - each peer's included - has acknowledged.
 
 - [x] **receiver-crash: Receiver crash mid-stream.**
   Building on `current-state-single-peer`, hard-kill the receiver silo
   during steady-state replication. Verifies idempotent replay from the
-  durable HLC cursor and that no replog entries are lost or double-applied.
+  durable HLC cursor and that no WAL entries are lost or double-applied.
 
 - [x] **bidirectional-replication: Two-cluster bidirectional replication.**
   Split the fleet across two clusters, each replicating to the other.
@@ -79,7 +81,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   shipped, capture it; if not, this run motivates landing it.
 
 - [x] **event-log-with-ttl: Event-log tree with TTL (separate run).**
-  Alternative key shape: `key = vehicleId/yyyyMMddTHHmmss.fff`,
+  Alternative key shape: `key = vehicleId/yyyyMMddTHHmmssfffZ`,
   `value = VehicleTelemetryEvent`, with a TTL of e.g. 1 hour via the F-016
   `SetAsync(ttl)` overload. Stresses ordered scans (`ScanKeysAsync` /
   `EntriesAsync`), continuous tombstone compaction, and the read-path
@@ -138,6 +140,22 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `bidirectional-replication` to attribute any throughput regression between
   the WAL append path and the ship/apply pipeline.
 
+- [x] **current-state-no-replication-azuretable-no-crow: Azure Table WAL without the phase-0 candidate row.**
+  Mirror of `current-state-no-replication-azuretable` with
+  `BENCH_WAL_ELIMINATE_CANDIDATE_ROW=true` (`Lattice:Wal:EliminateCandidateRowOnHotPath`):
+  the append path skips the phase-0 candidate-row upsert on the shard's
+  manifest partition, and recovery falls back to a cross-partition scan at
+  activation. Compare against `current-state-no-replication-azuretable` to read
+  that optimisation in isolation.
+
+- [x] **current-state-no-replication-azuretable-pipelined: Azure Table WAL with pipelined phase 2.**
+  Mirror of `current-state-no-replication-azuretable` with
+  `BENCH_WAL_PIPELINE_PHASE_TWO=true` (`Lattice:Wal:PipelinePhaseTwo`): an append
+  returns once the previous batch's phase-2 manifest commit lands while the
+  current batch's phase 2 continues asynchronously; phases 0 and 1 stay
+  synchronous and durable. Compare against `current-state-no-replication-azuretable`
+  to read the throughput-versus-latency trade.
+
 - [x] **atomic-write: Atomic-saga driver, single cluster, replication off.**
   Drives a steady stream of `SetManyAtomicAsync` sagas via `LatticeAtomicSagaDriver`
   to exercise the WAL-only prepare path under sustained load. Each saga commits
@@ -177,7 +195,8 @@ These apply to every benchmark above and should be verified before kicking off a
   the measurement.
 - For any cross-cluster scenario (`current-state-single-peer`,
   `replication-backpressure`, `receiver-crash`,
-  `bidirectional-replication`, `replication-key-filter`), use at least two
+  `bidirectional-replication`, `bidirectional-replication-azuretable`,
+  `replication-key-filter`, `atomic-write-replication`), use at least two
   physical hosts; single-box replication runs are smoke tests only.
 - The fleet size used by every scenario above is read from
   `benchmark/.fleet-size.config`, which is produced by
@@ -205,8 +224,8 @@ contracts will fail CI.
 at the producer:
 
 ```csharp
-ValueTask PublishTelemetryAsync(VehicleTelemetryEvent telemetry, CancellationToken ct = default);
-ValueTask PublishEventAsync(VehicleEvent vehicleEvent, CancellationToken ct = default);
+ValueTask PublishTelemetryAsync(VehicleTelemetryEvent telemetry, CancellationToken cancellationToken = default);
+ValueTask PublishEventAsync(VehicleEvent vehicleEvent, CancellationToken cancellationToken = default);
 ```
 
 The interface is deliberately minimal: no batching API, no flush hook, no
@@ -229,9 +248,9 @@ silo (`benchmark/host/Bench.Silo/`) reads `BENCH_TELEMETRY_SINK` from the
 
 | `BENCH_TELEMETRY_SINK` | Registration                                                                                | Used by |
 |---|---|---|
-| `null`   | `services.AddSingleton<ITelemetrySink, NullTelemetrySink>(_ => NullTelemetrySink.Instance);` | (rare; observer-off A/B half) |
+| `null`   | `services.AddSingleton<ITelemetrySink>(_ => NullTelemetrySink.Instance);` | (rare; observer-off A/B half) |
 | `fanout` | `services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();`                              | non-Lattice control runs       |
-| `lattice`| `services.AddSingleton<ITelemetrySink, LatticeSink>();` (extension: `AddLatticeSink`)        | every Lattice scenario above   |
+| `lattice`| `services.AddLatticeSink(configuration.GetSection("LatticeSink"));` (registers `LatticeSink` as the `ITelemetrySink` and as a hosted service) | every Lattice scenario above   |
 
 `Program.cs` in `benchmark/host/Bench.Silo/` is the single registration
 point. The replacement must be exclusive - registering a second
@@ -245,21 +264,30 @@ point. The replacement must be exclusive - registering a second
 non-Lattice deployments of the simulator. The minimum surface:
 
 ```csharp
-public sealed class LatticeSink : ITelemetrySink, IAsyncDisposable
+public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposable
 {
-    public LatticeSink(IClusterClient clusterClient, IOptions<LatticeSinkOptions> options, ILogger<LatticeSink> logger);
-    // PublishTelemetryAsync: write Channel<VehicleTelemetryEvent>.Writer.TryWrite, return synchronously.
-    // Background Task: drain the channel in batches, call ILattice.SetAsync per entry (or a typed
-    // helper); on transient failures, surface via metrics, never throw out of the producer path.
-    // DisposeAsync: complete the channel, await the drain task, flush metrics.
+    public LatticeSink(IGrainFactory grainFactory, IOptions<LatticeSinkOptions> options, ILogger<LatticeSink> logger);
+    // PublishTelemetryAsync: Channel<VehicleTelemetryEvent>.Writer.TryWrite, return synchronously
+    //   (with DropOnFull, the default, a full channel drops its oldest sample instead of blocking).
+    // PublishEventAsync: no-op - discrete events are not written to the tree.
+    // StartAsync: start the background drain - one SetManyAsync per batch (SetAsync with a TTL for
+    //   the event-log key shape); faults surface via metrics, never out of the producer path.
+    // StopAsync / DisposeAsync: complete the channel and await the drain for up to
+    //   ShutdownDrainTimeout, counting any remainder as dropped_on_shutdown.
 }
 
 public sealed class LatticeSinkOptions
 {
     public string TreeId { get; set; } = "vehicle-fleet";
+    public int ChannelCapacity { get; set; } = 100_000;
     public int BatchSize { get; set; } = 256;
     public TimeSpan FlushInterval { get; set; } = TimeSpan.FromMilliseconds(50);
     public KeyShape KeyShape { get; set; } = KeyShape.CurrentStateByVehicleId;
+    public TimeSpan? EventLogTtl { get; set; } = TimeSpan.FromHours(1);
+    public string Regions { get; set; } = "eu-west,eu-east,us-west,us-east";
+    public double HotRegionShare { get; set; } = 0.7;
+    public bool DropOnFull { get; set; } = true;
+    public TimeSpan ShutdownDrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
     public Func<VehicleTelemetryEvent, byte[]>? Serializer { get; set; } // default: System.Text.Json
 }
 ```
@@ -268,9 +296,9 @@ Key shape is the central knob and maps directly to the benchmark scenarios:
 
 | `KeyShape` | Key | Scenarios |
 |---|---|---|
-| `CurrentStateByVehicleId` | `vehicleId.ToString("N")` | `current-state-no-replication`, `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter`, `observer-no-peer`, `read-heavy-random`, `read-heavy-ordered`, `read-write-mix-random`, `read-write-mix-ordered` |
+| `CurrentStateByVehicleId` | `vehicleId.ToString("N")` | `current-state-no-replication` (and its three `-azuretable` variants), `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `bidirectional-replication-azuretable`, `replication-key-filter`, `observer-no-peer`, `read-heavy-random`, `read-heavy-ordered`, `read-write-mix-random`, `read-write-mix-ordered`, `atomic-write`, `atomic-write-replication` |
 | `RegionPrefixedVehicleId` | `region/vehicleId` (skewed region distribution) | `skewed-key-shard-splits` |
-| `EventLogTimestamped` | `vehicleId/{Timestamp:O}` with TTL | `event-log-with-ttl` |
+| `EventLogTimestamped` | `vehicleId/{TimestampUtc:yyyyMMddTHHmmssfffZ}` with TTL | `event-log-with-ttl` |
 
 The sink encapsulates the key-shape choice so `VehicleGrain` remains
 key-agnostic.
@@ -336,9 +364,9 @@ the sink. The read-driver:
   `BENCH_READ_RATE_PER_SECOND`.
 - Bounds concurrency via `BENCH_READ_CONCURRENCY` so the offered read
   load is reproducible.
-- Publishes the `vehicle_fleet_simulator.read_driver` meter
-  (`reads_total`, `duration_ms` histogram, `errors_total`,
-  `inflight` UpDownCounter). The benchmark script promotes the histogram
+- Publishes the `vehicle_fleet_simulator.read_driver` meter (`reads`,
+  `misses`, and `errors` counters - `*_total` once exported to Prometheus -
+  and the `duration_ms` histogram). The benchmark script promotes the histogram
   to `bench_vehicle_fleet_simulator_read_driver_*` aliases so the
   history dashboards bind to short, stable names.
 
@@ -348,21 +376,26 @@ configuration without forking the sink contract.
 
 ### 8. Metrics wiring
 
-Each benchmark scenario interprets three meter sources side-by-side:
+Each benchmark scenario interprets these meter sources side-by-side:
 
-- `orleans.lattice` - Lattice''s published `System.Diagnostics.Metrics`
-  meter (shard counters, leaf-latency histograms, cache hit/miss;
-  replication WAL append, HWM, ack RTT - the replication histograms ride
-  the same meter via `orleans.lattice.replication`).
+- `orleans.lattice` - Lattice's published `System.Diagnostics.Metrics`
+  meter (shard counters, leaf-latency histograms, cache hit/miss), with the
+  replication package's WAL-shipping, HWM, and ack-latency instruments on the
+  separate `orleans.lattice.replication` meter.
 - `vehicle_fleet_simulator.sink` - sink-side counters and histograms:
-  `published`, `dropped`, `queue_depth`, `flush_duration_ms`,
-  `flush_batch_size`, `inline_publish_duration_ms` (target: bimodal at ~0
-  and ~channel-write cost).
+  `published`, `dropped`, `dropped_on_shutdown`, `flush_errors`,
+  `queue_depth`, `flush_duration_ms`, `flush_batch_size`,
+  `inline_publish_duration_ms` (target: bimodal at ~0 and ~channel-write
+  cost).
 - `vehicle_fleet_simulator.read_driver` - read-driver-side counters and
   histograms (only emitted by read-heavy and read/write-mix scenarios):
-  `reads_total`, `duration_ms`, `errors_total`, `inflight`.
+  `reads`, `misses`, `errors`, `duration_ms`.
+- `vehicle_fleet_simulator.write_driver` - the replica-side write driver
+  (bidirectional scenarios): `writes`, `errors`, `duration_ms`.
+- `vehicle_fleet_simulator.atomic_saga_driver` - the saga driver
+  (atomic-write scenarios): `sagas`, `errors`, `duration_ms`.
 
-All three meters are registered with the same OpenTelemetry exporter in
+All of these meters are registered with the same OpenTelemetry exporter in
 `benchmark/host/Bench.Silo/Program.cs` so latency attribution is visible
 in a single dashboard.
 
@@ -397,8 +430,9 @@ for any future change to the simulator integration:
   guarantees the default sink''s per-vehicle shard mapping has not
   regressed (so the existing `FleetStreamHub` consumers continue to work
   in non-Lattice runs).
-- `FanOutTelemetrySinkRoutingTests.Events_always_land_on_shard_zero` -
-  guarantees discrete events do not leak across shards.
+- `FanOutTelemetrySinkRoutingTests.Events_land_on_the_dedicated_events_activation_and_never_on_a_telemetry_shard` -
+  guarantees discrete events land on their dedicated activation and never
+  leak onto a telemetry shard.
 - `TelemetrySinkSwappabilityTests.A_custom_sink_registered_in_DI_receives_every_vehicle_tick` -
   guarantees the swap mechanism works end-to-end through `VehicleGrain`.
 - `TelemetrySinkSwappabilityTests.The_default_FanOutTelemetrySink_is_overridden_not_chained` -

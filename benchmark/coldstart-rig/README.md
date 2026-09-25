@@ -23,7 +23,7 @@ guard refuses to start when any of them is violated:
 | Host image tags | `repocontext-mcp:local` | `repocontext-mcp:coldstart-rig` |
 | Host port | 8080 | 18080 |
 
-On top of the naming, four structural properties:
+On top of the naming, five structural properties:
 
 - **The stack is never built.** `docker-compose.rig.yml` has no `build:` section
   anywhere, and the guard refuses a resolved document that declares one. What a
@@ -122,10 +122,13 @@ the host cannot reach and fail minutes later inside the image build, blaming the
 wrong thing.
 
 The result is recorded as the run's source image, so the following `rig.ps1 tag`
-(and `run-cohort.ps1`) applies the rig's additional `:coldstart-rig` tag to the
-image you just built rather than to whatever `:local` happens to hold. The
-record is ignored if that image is later pruned, so a stale record can never
-quietly send a cohort back to the live image while claiming otherwise.
+(and `prepare-master.ps1`, which applies the same tags) applies the rig's
+additional `:coldstart-rig` tag to the image you just built rather than to
+whatever `:local` happens to hold. `run-cohort.ps1` does not tag anything: it
+reads the record for provenance and refuses to start when the rig tag no longer
+resolves to the recorded image. The record is ignored if that image is later
+pruned, so a stale record can never quietly send a cohort back to the live image
+while claiming otherwise.
 
 The compose stack still has no `build:` section anywhere, and the resolved-compose
 half of the guard still refuses any service that declares one. `build` is a
@@ -173,9 +176,10 @@ Two supporting habits, both free:
 
 - Every `cohort.json` records **which image produced its numbers**:
   `imageUnderTest` carries the tested tag and its resolved image ID, and, when
-  the rig built it, the git ref and commit behind it. The build record is only
-  credited when its image ID still matches the tested image, so a superseded
-  build cannot claim provenance it no longer has. Two cohorts are only
+  the rig built it, the git ref and commit behind it. A cohort refuses to start
+  when a build record exists but its image ID no longer matches the tested
+  image (`rig.ps1 tag` re-applies the record), so a superseded build cannot
+  claim provenance it no longer has. Two cohorts are only
   comparable if you know what each one ran, and that should not rest on operator
   memory.
 - Every cohort re-reads the live container's pinned image ID **after** the run
@@ -216,14 +220,16 @@ Two supporting habits, both free:
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. |
 | `scripts/_rig-helpers.ps1` | Pure helpers: config, the isolation guard, the file-WAL framing walk, statistics, log counters. |
 | `scripts/_rig-docker.ps1` | Docker, HTTP and stateless-MCP helpers. Every binding operation runs the guard first. |
-| `scripts/Test-RigHelpers.ps1` | Regression suite for the guard and the parsers. Pure and Docker-free except the live-image-drift cases, which construct a real divergence from throwaway rig-namespace images and skip themselves when no daemon is reachable. |
+| `scripts/Test-RigHelpers.ps1` | Regression suite for the guard and the parsers. Pure and Docker-free except the live-image-drift and recorded-build-source cases, which construct a real divergence from throwaway rig-namespace images and skip themselves when no daemon is reachable (or when `-SkipDockerTests` is passed). |
 | `scripts/prepare-master.ps1` | Restores a backup tarball into the pristine master volume and applies the rig image tags. |
 | `scripts/run-cohort.ps1` | **The one-command run.** Clones the master, runs the restart scenarios, emits `cohort.json`. |
 | `scripts/inspect-state.ps1` | Offline durable-state census, with known-answer validation. |
 | `scripts/snapshot-volume.ps1` | Extracts a rig volume to a staging directory so the census can walk a volume that has moved on (a healed working volume, say). |
 | `scripts/observe-healing.ps1` | Attaches to a running box and records, on a cadence, whether it keeps serving while it heals itself. |
 | `scripts/generate-corpus.ps1` | Synthetic scale mode: generate, index and promote a corpus well beyond live size. |
-| `scripts/rig.ps1` | Day-to-day helper: `guard`, `build`, `tag`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
+| `scripts/verify-corpus.ps1` | Fingerprints the corpus a running rig box serves (repositories, file and symbol scopes, memory keys, content spot checks, known queries) into `fingerprints/`, and with `-Compare` diffs two fingerprints as supersets, exiting non-zero on any loss. |
+| `scripts/rig.ps1` | Day-to-day helper: `guard`, `build`, `tag`, `clone`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
+| `results/` | Committed cohort and census JSON, and the dated adoption and evaluation reports written from them. |
 
 Run artefacts land under `benchmark/.run/coldstart-rig/`, which is gitignored.
 
@@ -334,6 +340,11 @@ Useful flags:
   would report the improvement as a cold-start regression. `readySeconds` is
   still recorded either way, by probing for readiness alongside the query.
 - `-KeepUp` leaves the stack running afterwards.
+- `-CohortId <id>` names the output directory (default `cohort-<UTC timestamp>`).
+- `-WarmQueryCount <n>` overrides how many warm samples follow the first
+  success (default `WarmQueryCount` in the parameters, 5).
+- `-ParametersFile <path>` loads a different parameters file instead of
+  `parameters.local.ps1` / `parameters.ps1`; every rig script accepts it.
 
 ### The warm-up phase, and why it exists
 
@@ -361,9 +372,9 @@ The rig sets the self-index tick, reconcile interval and full-walk interval to a
 day, so a continuous background reconcile neither competes for CPU with the
 measured path nor writes to the working volume mid-run. That is what makes two
 runs from the same master comparable. Set
-`RIG_SELFINDEX_TICK_SECONDS=5` and `RIG_RECONCILE_INTERVAL_SECONDS=5` in the
-environment to reproduce the live cadence when the background indexer is itself
-the thing under test.
+`RIG_SELFINDEX_TICK_SECONDS=5`, `RIG_RECONCILE_INTERVAL_SECONDS=5` and
+`RIG_FULL_WALK_INTERVAL_SECONDS=120` in the environment to reproduce the live
+cadence when the background indexer is itself the thing under test.
 
 ## Reading the output
 
@@ -380,7 +391,7 @@ Top level:
 | `cohortId`, `generatedUtc` | Identity of the run. |
 | `hostContext` | What the host looked like: `dockerCpus`, `dockerMemoryBytes`, `runningContainers`, `foreignContainers`, `foreignContainerNames[]`, and `contended`. A cohort taken alongside unrelated containers is still valid, but its spread is the **host's** floor, not the rig's - read this before believing a spread figure. |
 | `configuration` | Project, port, images, volumes, repo id, query, scenarios, run count. |
-| `imageUnderTest` | **Which image produced these numbers**: `mcpImage` and its resolved `mcpImageId`, the same for the embedder, the configured `sourceMcpImage`, and `builtFrom` (git ref, commit, build time) when `rig.ps1 build` produced it. `builtFrom.matchesTestedImage` is false when the build was later superseded by a re-tag from elsewhere, so a stale build record cannot claim provenance it no longer has. |
+| `imageUnderTest` | **Which image produced these numbers**: `mcpImage` and its resolved `mcpImageId`, the same for the embedder, the configured `sourceMcpImage`, and `builtFrom` (git ref, commit, build time) when `rig.ps1 build` produced it. `builtFrom.matchesTestedImage` compares the recorded build's image ID with the tested one; a cohort refuses to start when they differ, so a written cohort only ever records `true` and a stale build record cannot claim provenance it no longer has. |
 | `liveDeployment` | The live deployment's image pin `pinBeforeCohort` / `pinAfterCohort` (each `status` of `clean`, `drift` or `skipped`), and `postCondition`, which asserts the live container's pinned image ID was **unchanged** across the run. `checked` is false on a host with no live deployment. |
 | `runs[]` | One entry per run, each with `scenarios[]`. |
 | `summary[]` | One entry per scenario, aggregated across runs. |
@@ -548,8 +559,9 @@ established the "64 trims, one per shard, ever" figure in the first place.
 
 `-SkipWal` skips the framing walk, which is the slow half (roughly 100 seconds
 for 105 segments / 559k records). That walk **streams**: it reads each record's
-9-byte frame header plus the 8 body bytes it actually needs and seeks past the
-payload, so its memory cost is bounded regardless of segment size. Loading
+5-byte frame header (type tag and body length) plus the 8 body bytes it actually
+needs and seeks past the rest of the payload and the 4-byte CRC trailer, so its
+memory cost is bounded regardless of segment size. Loading
 segments whole would be faster today but allocates a large object per segment,
 which is the wrong property for a rig whose purpose is to measure much larger
 trees.

@@ -47,6 +47,10 @@ The typed CRDT delta records each expose a static `Empty` property that returns 
 | `RgaDelta` | Add each `Inserts` node as a live node keyed by its `(replicaId, counter)` dot (idempotent; a present node has its parent / value refreshed and its tombstone flag preserved), then mark each `Tombstones` dot tombstoned. Sibling order under a shared parent is the descending `(Counter, ReplicaId)` tie-break resolved at materialise time, so every replica that applies the same deltas yields an identical ordered traversal. Order-independent and idempotent; a tombstone observed before its insert records a tombstoned placeholder so the merge stays total. |
 | `OrFlagDelta` | Union `Enables` into the local enable-dot set, then union `Disables` into the local tombstone set. The flag is enabled when at least one enable dot is not tombstoned, so a concurrent enable the disabler never observed survives (enable-wins). Order-independent and idempotent. |
 | `RwFlagDelta` | Union `Enables`, `Disables`, and `Tombstones` into the matching local lists. The flag is enabled when at least one enable dot survives and every disable dot has been tombstoned, so a concurrent disable the enabler never observed suppresses the flag (remove-wins). Order-independent and idempotent. |
+| `GCounterDelta` | Pointwise-max each per-replica cumulative component against the local counter. Late or duplicate delivery is a no-op. |
+| `GSetDelta` | Union the added elements into the local set. Elements are never removed. |
+| `RwSetDelta` | Union the add dots, remove dots, and tombstones into the local set; a concurrent add and remove of the same element converge remove-wins. Order-independent and idempotent. |
+| `BoundedRegisterDelta` | Fold the candidate into the local register when it beats the current value under the register's direction (larger total-order key for `MaxRegister`, smaller for `MinRegister`); a losing candidate is ignored. |
 
 ## Sender-side delta combine (pre-ship coalescing)
 
@@ -61,18 +65,24 @@ When pre-ship coalescing is enabled (`LatticeReplicationOptions.PreShipCoalescin
 | `RgaDelta` | Union the `Inserts` (deduped by dot) and union the `Tombstones` (both grow-only). |
 | `OrFlagDelta` | Union the two deltas' `Enables` and union their `Disables` (both grow-only dot sets, deduped by `(replicaId, counter)`). |
 | `RwFlagDelta` | Union the two deltas' `Enables`, `Disables`, and `Tombstones` (all grow-only dot sets, deduped by `(replicaId, counter)`). |
+| `GCounterDelta` | Pointwise-max the per-replica `Increments` (cumulative components - never sum). |
+| `GSetDelta` | Union the added elements. |
+| `RwSetDelta` | Union the `Adds`, `Removes`, and `Tombstones` dot sets. |
+| `BoundedRegisterDelta` | Keep the candidate that wins the register's direction, comparing the total-order key first and the value bytes second. |
 | `OrMapDelta<TKey, TValue>` | Union the dot-tagged `Adds` (deduped by `(key, replicaId, counter)`) and the `Tombstones`, lattice-merging any same-dot value snapshots through the value CRDT's own `ICrdt<TValue>.MergeFrom`. First-seen dots insert a cloned value so source deltas are never mutated. Registered OR-Map trees coalesce like the closed shapes; an unregistered tree (no shape descriptor) or an opaque (null) entry still ships individually. |
 
 Each combine is commutative, associative, and idempotent, so the shipper may fold an arbitrary same-key run in iteration (HLC-ascending) order and ship the result once. A CRDT entry carrying no typed delta (`WalRecord.Delta == null`, an opaque or legacy payload) is never combined; its whole key ships verbatim. Coalescing stays within a single origin and never crosses an atomic-batch boundary - range deletes, saga terminal marks, prepared atomic-batch entries, and zero-HLC entries are never candidates. The combined entry inherits the last contributing entry's HLC and causal metadata, and the on-wire entry shape is unchanged (fewer / merged entries of the existing format - no wire-version bump). See [`replication-drivers.md`](replication-drivers.md#pre-ship-coalescing) for the operator-facing description and [`observability.md`](observability.md#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided--coalescedeltas_merged) for the `coalesce.deltas_merged` metric.
 
 ## Equality caveats
 
-The deltas are `readonly record struct`s, so the synthesized `Equals` operator delegates to `EqualityComparer<T>.Default` for each field. That means:
+Most of the records override `Equals` and `GetHashCode` with content equality: `LwwRegisterDelta`, `OrSetDelta`, `OrSetDeltaDot`, `MvRegisterDelta`, `MvRegisterEntry`, `RgaDelta`, `RgaDeltaNode`, `OrFlagDelta`, `RwFlagDelta`, `GSetDelta`, `RwSetDelta`, and `BoundedRegisterDelta` compare their byte arrays and collections element by element, so two structurally identical deltas built from independently allocated buffers are `Equals`-equal.
 
-- `byte[]` fields (`LwwRegisterDelta.Value`, `OrSetDeltaDot.Element`, `MvRegisterEntry.Value`, `OrMapDeltaEntry<TKey, TValue>.Value`, `RgaDeltaNode.Value`) compare by **reference**, not content.
-- Collection-typed fields (`OrSetDelta.Adds`/`Removes`, `PnCounterDelta.Increments`/`Decrements`, `VersionVectorDelta.Entries`, `MvRegisterDelta.Entries`/`Context`, `OrMapDelta<TKey, TValue>.Adds`/`Tombstones`, `RgaDelta.Inserts`/`Tombstones`, `OrFlagDelta.Enables`/`Disables`, `RwFlagDelta.Enables`/`Disables`/`Tombstones`) compare by **reference** as well.
+The remaining records keep the synthesized record equality, which delegates to `EqualityComparer<T>.Default` for each field, so their collection-typed fields compare by **reference**, not content:
 
-Two structurally-identical deltas built from independently-allocated arrays / dictionaries are therefore not `Equals`-equal. Consumers that need content-equality (e.g. matching an inbound dot against the local set) must compare element bytes and collection contents explicitly.
+- `PnCounterDelta.Increments` / `Decrements`, `VersionVectorDelta.Entries`, and `GCounterDelta.Increments` (dictionaries).
+- `OrMapDelta<TKey, TValue>.Adds` / `Tombstones` (lists); `OrMapDeltaEntry<TKey, TValue>.Value` compares through `EqualityComparer<TValue>.Default`.
+
+Consumers that need content equality for those records must compare collection contents explicitly.
 
 ## Origin and HLC propagation
 

@@ -4,7 +4,7 @@ The package has one public options type, `LatticeEntraAuthenticatorOptions`, whi
 
 ## `LatticeEntraAuthenticatorOptions`
 
-Bind it through `AddEntraCredentialAuthenticator(configure)`.
+Bind it through `AddEntraCredentialAuthenticator(configure)`. Each call registers one more authenticator; its options are validated when that authenticator is built, and a violation of any constraint in the tables below throws `OptionsValidationException` naming the option.
 
 ### Constants
 
@@ -20,16 +20,16 @@ Bind it through `AddEntraCredentialAuthenticator(configure)`.
 |---|---|---|---|
 | `Authority` | `string` | `""` (empty) | The Entra authority the OIDC metadata is discovered from, for example `https://login.microsoftonline.com/common/v2.0` (multi-tenant) or `https://login.microsoftonline.com/{tenant-guid}/v2.0` (single-tenant). Must be set. When `MetadataAddress` is unset the discovery document address is derived from this value. |
 | `MetadataAddress` | `string?` | `null` | The explicit OIDC discovery document address. When `null` it is derived from `Authority` by appending `/.well-known/openid-configuration`. |
-| `IssuerTemplate` | `string` | `DefaultIssuerTemplate` | The issuer template validated against each token, with `{tenantid}` substituted by the token's tenant id. |
-| `TenantIds` | `IList<string>` | empty list | The tenant ids (Entra `tid` values) this authenticator accepts. A single entry is single-tenant; several entries form a multi-tenant allow-list. A token whose `tid` is not in this set is not handled on tenant grounds and resolution falls through to the next authenticator - **unless** `SchemeHint` is set and the credential's scheme matches it, in which case this authenticator claims the credential before the tenant check runs (see `SchemeHint`), so a scheme-tagged token from a disallowed tenant resolves to anonymous rather than falling through. Must contain at least one entry. Populate the collection in place. |
-| `Audiences` | `IList<string>` | empty list | The audiences accepted (the token `aud` claim), typically the Entra application (client) id or its Application ID URI. Must contain at least one entry. Populate the collection in place. |
-| `Algorithms` | `IList<string>` | `["RS256"]` | The token signature algorithms accepted (the JWT header `alg`), pinned via `ValidAlgorithms`. Defaults to `RS256`, the algorithm Entra issues v2.0 tokens with, so a token advertising any other algorithm is rejected (defense-in-depth against algorithm-confusion attacks). Clear and repopulate to accept a different set. Must contain at least one entry: an empty list is refused at startup rather than read as "accept any algorithm", and the authenticator independently denies every token should an empty list reach it by a path that bypasses options validation. Populate the collection in place. |
+| `IssuerTemplate` | `string` | `DefaultIssuerTemplate` | The issuer template validated against each token, with `{tenantid}` substituted by the token's tenant id. Must contain the `{tenantid}` placeholder. |
+| `TenantIds` | `IList<string>` | empty list | The tenant ids (Entra `tid` values) this authenticator accepts, compared case-insensitively. A single entry is single-tenant; several entries form a multi-tenant allow-list. A token whose `tid` is not in this set is not handled on tenant grounds and resolution falls through to the next authenticator - **unless** `SchemeHint` is set and the credential's scheme matches it, in which case this authenticator claims the credential before the tenant check runs (see `SchemeHint`), so a scheme-tagged token from a disallowed tenant resolves to anonymous rather than falling through. Must contain at least one entry, and no null or empty entry. Populate the collection in place. |
+| `Audiences` | `IList<string>` | empty list | The audiences accepted (the token `aud` claim), typically the Entra application (client) id or its Application ID URI. Must contain at least one entry, and no null or empty entry. Populate the collection in place. |
+| `Algorithms` | `IList<string>` | `["RS256"]` | The token signature algorithms accepted (the JWT header `alg`), pinned via `ValidAlgorithms`. Defaults to `RS256`, the algorithm Entra issues v2.0 tokens with, so a token advertising any other algorithm is rejected (defense-in-depth against algorithm-confusion attacks). Clear and repopulate to accept a different set. Must contain at least one entry, and no null or empty entry: an empty list is refused by options validation when the authenticator is built rather than read as "accept any algorithm", and the authenticator independently denies every token should an empty list reach it by a path that bypasses options validation. Populate the collection in place. |
 | `SchemeHint` | `string?` | `null` | Optional scheme hint. When set, a credential whose scheme equals this value selects this authenticator without the token being parsed. `null` selects solely by tenant / issuer. |
-| `GroupResolutionMode` | `EntraGroupResolutionMode` | `TokenOnly` | How overflowed group membership is resolved. |
+| `GroupResolutionMode` | `EntraGroupResolutionMode` | `TokenOnly` | How overflowed group membership is resolved. `TokenOnly` never makes an external lookup: the token-asserted groups and roles stand, and the directory merge upstream fills in the rest. `ResolveOnOverage` consults the registered `IEntraGroupResolver` when a token carries the overage marker in place of its `groups` claim, and falls back to the token-only behaviour when no resolver is registered. |
 | `ValidateLifetime` | `bool` | `true` | Whether to validate the token lifetime (`exp` / `nbf`). |
-| `ClockSkew` | `TimeSpan` | `5 minutes` | The permitted clock skew during lifetime validation. |
-| `AutomaticRefreshInterval` | `TimeSpan` | `12 hours` | How often the discovered JWKS metadata is proactively refreshed. |
-| `RefreshInterval` | `TimeSpan` | `5 minutes` | The minimum interval between forced JWKS refreshes. |
+| `ClockSkew` | `TimeSpan` | `5 minutes` | The permitted clock skew during lifetime validation. Must not be negative. |
+| `AutomaticRefreshInterval` | `TimeSpan` | `12 hours` | How often the discovered JWKS metadata is proactively refreshed. Must be strictly positive. |
+| `RefreshInterval` | `TimeSpan` | `5 minutes` | The minimum interval between forced JWKS refreshes. Must be strictly positive. |
 
 ### Methods
 

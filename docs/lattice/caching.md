@@ -20,19 +20,23 @@ flowchart LR
     L -.->|"StateDelta"| CB
 ```
 
-- **Cursor-based delta refresh**: Every read calls
-  `GetDeltaSinceCursorAsync` on the primary leaf, passing the cache's
-  current `LeafDeliveryCursor` (an activation-scoped
-  `(Epoch, Sequence)` pair). `Sequence` is bumped on the leaf once per
-  `StoreEntry` / `RemoveEntry` regardless of the write's LWW HLC, so
-  the leaf ships every entry strictly newer than the cache's last
-  delivered sequence even when the underlying source HLC has rewound
-  (the cross-cluster apply case, where the destination leaf preserves
-  the source cluster's HLC verbatim and may publish a `Version[ReplicaId]`
-  higher than that HLC). An empty delta is a cheap cursor comparison
-  with no entry scan. When [`CacheTtl`](configuration.md#cachettl) is set
-  to a non-zero value, the cache skips the refresh entirely if less than
-  the configured duration has elapsed since the last successful refresh.
+- **Cursor-based delta refresh**: Every read first refreshes the cache from
+  the primary leaf. The cache holds an activation-scoped delivery cursor (an
+  epoch plus a sequence number); the leaf bumps the sequence once per stored
+  or removed entry regardless of the write's LWW HLC, so it ships every entry
+  strictly newer than the cache's last delivered sequence even when the
+  underlying source HLC has rewound (the cross-cluster apply case, where the
+  destination leaf preserves the source cluster's HLC verbatim). An empty
+  delta is a cheap cursor comparison with no entry scan. Before each delta the
+  cache also re-reads the leaf's set of keys covered by an in-flight atomic
+  batch, so reads of those keys can be delegated to the leaf. Two gates can
+  skip the refresh. When the primary leaf is activated on the same silo, the
+  cache compares an in-process revision counter the leaf bumps on every state
+  change and skips the refresh only while it is unchanged - a changed counter
+  forces a refresh even inside `CacheTtl`. When the primary leaf is on another
+  silo and [`CacheTtl`](configuration.md#cachettl) is non-zero, the cache
+  skips the refresh if less than that duration has elapsed since the last
+  successful refresh.
 - **Epoch-flip full snapshot**: A leaf re-activation bumps the
   leaf-side epoch, so a cache holding a stale cursor falls back to a
   full-snapshot delivery on its next refresh and adopts the new

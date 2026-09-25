@@ -17,8 +17,9 @@ snapshot, write-ahead-log, and merge machinery:
   provenance high-water marks, and an optional compression-dictionary reference.
 - **Incremental capture** - a forward write-ahead-log differential layered on a
   base backup, resuming from the base's per-partition WAL offsets and falling
-  back to a full capture when the resume point has been trimmed or a range delete
-  surfaces in the delta window.
+  back to a full capture when the resume point has been trimmed, a range delete
+  surfaces in the delta window, or the base chain was captured on a different
+  cluster.
 - **Restore** - a mode-faithful replay that reinstalls every entry's
   hybrid-logical-clock, version vector, origin cluster id, expiry, and tombstone
   flag exactly as captured, either in place (bulk-load or last-writer-wins merge)
@@ -27,9 +28,11 @@ snapshot, write-ahead-log, and merge machinery:
   per scope, and a chain-aware retention policy that never prunes the base chain
   of a retained increment.
 
-Every backup id is the SHA-256 content address of its captured payload, so a
-retried capture that produces identical bytes re-registers the same backup rather
-than a duplicate, and a restore is idempotent under retry. Backups
+Every backup id is the SHA-256 content address of its captured payload (an
+incremental's id also folds in its base backup id), so a retried capture that
+produces identical bytes re-registers the same backup rather than a duplicate,
+and a restore is idempotent under retry. Artifact ids are per-capture, not
+content-addressed. Backups
 are written to a pluggable `ILatticeBackupSink`, defaulting to an in-cluster
 dogfooded tree, with a durable
 [Azure Blob Storage sink](https://www.nuget.org/packages/Orleans.Lattice.Backup.AzureBlob)

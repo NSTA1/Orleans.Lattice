@@ -63,6 +63,10 @@ grain persists the per-step status vector and re-derives its next action purely 
 that vector, a crash is modelled faithfully as "discard the un-persisted mark and
 re-decide", an at-least-once effect whose safety the core must still guarantee.
 
+The crash-or-persist choices form a choice space the model walks with
+`runtime.RandomBoolean()`, not a thread schedule: the model runs at a Coyote
+concurrency degree of zero, exactly like the atomic-commit models (see
+[The Coyote concurrency tier](verified-atomic-commit.md#the-coyote-concurrency-tier)).
 After every step, on every explored order, the model asserts the safety properties
 below with `Specification.Assert`.
 

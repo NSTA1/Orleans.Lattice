@@ -34,10 +34,12 @@ grants `staff` read therefore reaches `alice` through the nesting.
 
 The demo runs in four acts:
 
-1. **Nested membership.** Create users (`alice`, `bob`, `carol`) and groups
-   (`staff`, `engineering`, `oncall`), make `engineering` a **member of**
-   `staff`, and print each subject's transitive groups - `alice` shows up in
-   `staff` even though she was only added to `engineering`.
+1. **Nested membership.** Create groups (`staff`, `engineering`, `oncall`),
+   make `engineering` a **member of** `staff`, add `alice` to `engineering` and
+   `bob` to `oncall` (users are plain member ids - the directory keeps no user
+   records - and `carol` starts in no group), and print each subject's
+   transitive groups - `alice` shows up in `staff` even though she was only
+   added to `engineering`.
 2. **Rules and enforcement.** Author three rules under a default-deny policy - a
    tree grant on the top-level group (`staff` reads the whole tree), a prefix
    grant on the nested group (`engineering` writes/deletes the `svc/` subtree),

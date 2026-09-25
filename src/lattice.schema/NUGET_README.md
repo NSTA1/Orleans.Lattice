@@ -1,11 +1,31 @@
 # Orleans.Lattice.Schema
 
-Foundation for the **schema** add-ons of
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Ships a shared,
+Schema enforcement and schema versioning for
+[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice), built on a shared,
 serializable **value-to-value transform IR** - `LatticeValueTransform` - that is
 the sibling of the core boolean predicate IR (`LatticePredicateNode`). Where the
 predicate IR answers "does this value's JSON document match?", the transform IR
 answers "what new JSON document does this value become?".
+
+The package ships two independent, strictly opt-in capabilities:
+
+- **Schema enforcement** (`AddLatticeSchemaEnforcement(...)`) - per-tree,
+  server-side validation of writes against a `LatticeSchemaPolicy` (JSON,
+  UTF-8, maximum byte length, regex, or a structured predicate), managed through
+  `ILatticeSchemaAdmin`. A non-compliant local write throws
+  `LatticeSchemaViolationException`; under strict ingest a non-compliant
+  replicated or restored item is dead-lettered instead of applied. Existing data
+  is brought into compliance by a shadow-build-and-cutover remediation
+  (`ILatticeSchemaRemediationAdmin`), and `ILatticeSchemaComplianceAdmin` audits a
+  tree without changing it.
+- **Schema versioning** (`AddLatticeSchemaVersioning(...)`) - a per-value
+  schema-version envelope, managed through `ILatticeSchemaVersionAdmin`, with
+  read-time upcasting to the tree's monotonic target version and an eager
+  re-stamping migration.
+
+These in-process admin services perform no authorization of their own; the
+`Orleans.Lattice.Api.Schema` facade authorizes remote callers. See the
+[schema documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.schema/README.md).
 
 ## Design
 
@@ -24,8 +44,8 @@ Value expressions read from the input document and produce the value a
 `SetMember` writes:
 
 - `Member(path)` - read a member from the input document.
-- `Constant(value)` - a literal captured at translation time (reuses the core
-  `LatticeConstant`).
+- `Const(value)` (node kind `Constant`) - a literal captured at translation time
+  (reuses the core `LatticeConstant`).
 - `Conditional(condition, thenExpression, elseExpression)` - where `condition`
   embeds a core `LatticePredicateNode`, so the boolean IR becomes a sub-node
   (the default-fill primitive).

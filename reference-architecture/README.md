@@ -15,7 +15,7 @@ not duplicate the design; it tells you how to run the kit.
 
 | Folder | Contents |
 |--------|----------|
-| [`bicep/`](bicep/) | `main.bicep` orchestrator, the per-concern modules (compute, storage, networking, observability, frontdoor), `bootstrap.bicep` (registry pre-build seam), and `entra/` (the Microsoft Graph extension module + its scoped `bicepconfig.json`). |
+| [`bicep/`](bicep/) | `main.bicep` orchestrator, the per-concern modules (compute, storage, networking, vnet, privatedns, observability, frontdoor), `bootstrap.bicep` (registry pre-build seam), and `entra/` (the Microsoft Graph extension module + its scoped `bicepconfig.json`). |
 | [`hosts/`](hosts/) | The three container host projects - Silo, MCP, and Explorer - each with a chiselled, non-root Dockerfile. They reference the published `Orleans.Lattice` NuGet packages. See [`hosts/README.md`](hosts/README.md) for the full host configuration surface. |
 | [`deploy/`](deploy/) | `Deploy-ReferenceArchitecture.ps1`, the single idempotent orchestrator, and [`deploy/README.md`](deploy/README.md) documenting its internals. |
 | [`local/`](local/) | A Docker Compose harness that stands the whole estate up on one machine for development. See [`local/README.md`](local/README.md). |
@@ -27,9 +27,9 @@ not duplicate the design; it tells you how to run the kit.
   Container Apps, storage accounts, Key Vaults, Azure Monitor workspaces, an
   Azure Container Registry, and an Azure Front Door profile in that subscription.
 - For Entra provisioning: rights to create app registrations and service
-  principals, and - for the one residual admin-consent step - a
-  Privileged Role Administrator (or Global Administrator) to grant tenant-wide
-  application permissions.
+  principals, and a Privileged Role Administrator (or Global Administrator) role:
+  the Bicep grants tenant admin consent for the silo's Microsoft Graph application
+  permission declaratively, and that grant needs the privileged role.
 - Tooling on the operator workstation:
   - PowerShell 7.0 or later.
   - The Azure CLI (`az`) with the `containerapp` extension available, signed in
@@ -76,18 +76,22 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-ResourceGroup` | yes | Created if absent (idempotent). |
 | `-Location` | yes | Resource-group location. |
 | `-BaseName` | yes | 3-16 lowercase alphanumerics, shared estate-wide. |
-| `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
+| `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`, or the compact string form `'regionCode=location'` (for example `'use=eastus'`). One or many. |
 | `-ImageTag` | yes | Tag applied to all three built images. |
+| `-SiloImageRepository` / `-McpImageRepository` / `-ExplorerImageRepository` | no | Registry repository names for the three built images (defaults `lattice-silo` / `lattice-mcp` / `lattice-explorer`). |
 | `-DeploymentOption` | no | `public` (default) or `private`. See below. |
 | `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute; applies to both options (both are VNet-injected). |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
-| `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
+| `-IngressAllowedCidrs` | no | Ingress allow-list seam (public option). Currently only echoed as a `networking` module output; no ingress applies it yet. |
 | `-SiloMinReplicas` / `-SiloMaxReplicas` | no | Silo scale floor (default 1) and ceiling (default 3). The floor is never zero. |
 | `-AuthDefaultEffect` | no | `Deny` (default, secure) or `Allow` (throwaway dev only). |
 | `-RequireApiAuthorization` | no | Default `$true`. |
 | `-EnableDataApi` | no | Default `$true`. Exposes the read-write Data API (write surface); set `-EnableDataApi:$false` to withhold it. |
-| `-ReplicationKey` | public option | `SecureString`, byte-identical across every run and region. |
+| `-EnableReplicationControl` | no | Default `$true`. Co-hosts the runtime per-tree replication control plane (the `sys-replication-config` tree, the silo replication-control gRPC binding, and the MCP `lattice_replication_*` tools), fail-closed behind an explicitly authored Replication grant. `-EnableReplicationControl:$false` withholds it. |
+| `-EnableBackupControl` | no | Default `$true`. Makes the MCP head advertise the backup tool group (read plus capture / restore / delete); the silo's backup facade is always co-hosted and every call needs an authored Backup grant. `-EnableBackupControl:$false` withholds the MCP group. |
+| `-EnableDigestAntiEntropy` / `-DigestProbeIntervalSeconds` | no | Default `$false` / `0`. Cross-cluster anti-entropy (digest probe, Merkle-walk drift localisation, bounded automatic repair), applied to every region; the interval optionally shortens the probe cadence (`0` keeps the package default). |
+| `-ReplicationKey` | yes | `SecureString`, byte-identical across every run and region. Required by both options. |
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable Entra and target the tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra/entra.bicep`. |
@@ -109,19 +113,31 @@ through the script) are:
 | `baseName` | (required) | 3-16 lowercase alphanumerics. |
 | `regions` | (required) | Array of `{ regionCode, location }`. |
 | `imageTag` | (required) | Host image tag. |
+| `siloImageRepository` / `mcpImageRepository` / `explorerImageRepository` | `lattice-silo` / `lattice-mcp` / `lattice-explorer` | Registry repository names for the three built images. |
+| `registryLocation` | resource-group location | Location of the shared registry; the script pins it to the first region to match `bootstrap.bicep`. |
+| `orleansServiceId` | `baseName` | Orleans service id, estate-wide (each region's cluster id is `<baseName>-<regionCode>`). |
+| `logAnalyticsDailyQuotaGb` / `logAnalyticsRetentionInDays` | `1` / `30` | Per-region Log Analytics ingestion cap and retention. |
 | `deploymentOption` | `public` | `public` or `private`. |
 | `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Applies to both options - both are VNet-injected. |
 | `siloMinReplicas` / `siloMaxReplicas` | 1 / 3 | Silo autoscale bounds. |
 | `backupPrimaryRegionCode` | first region | The single backup-primary region. |
 | `replicationKey` | `''` | `@secure()`; the per-cluster replication key (both options - authenticates replication over public ingress, or over the private VNet mesh as defense in depth). |
 | `grafanaAdminPassword` | required | `@secure()`; per-region Grafana admin password (no default; must be non-empty). |
-| `ingressAllowedCidrs` | `[]` | Ingress allow-list (public option). |
+| `ingressAllowedCidrs` | `[]` | Ingress allow-list seam (public option); echoed as a `networking` module output only - no ingress applies it yet. |
 | `authDefaultEffect` | `Deny` | Authorization default effect estate-wide. |
 | `requireApiAuthorization` | `true` | Whether the facades and MCP require authorization. |
-| `dataApiEnabled` | `true` | Whether the read-write Data API is exposed (co-hosted on the silo gRPC port; the MCP head advertises its write tools). Every mutation is still subject-gated. |
+| `enableReplicationControl` | `false` | Runtime per-tree replication control plane. The template defaults it off; the script's `-EnableReplicationControl` defaults on. |
+| `enableBackupControl` | `false` | Whether the MCP head advertises the backup tool group. The template defaults it off; the script's `-EnableBackupControl` defaults on. |
+| `enableDigestAntiEntropy` / `digestProbeIntervalSeconds` | `false` / `0` | Cross-cluster anti-entropy, applied to every region; `0` keeps the package's probe cadence. |
 | `entraEnabled` / `entraTenantId` / `entraClientId` / `entraAudiences` | off / `''` | Entra authentication. |
 | `explorerWebClientId` / `explorerAuthScope` | `''` | Explorer hosted-web OIDC: its own web-app client id and the delegated silo scope it requests on-behalf-of the operator. Threaded from the entra deployment on a later pass. |
 | `prometheusQueryEndpoint` / `frontDoorId` | `''` | Forward-threaded seams; empty on pass 1, activated on pass 2 (compile-cycle avoidance). Managed by the script. |
+| `explorerPublicOrigin` / `mcpPublicUrl` / `mcpAuthScope` | `''` | Explorer and MCP public Front Door URLs (OIDC redirect host, OAuth discovery resource) and the silo scope MCP clients request; Azure-assigned values threaded on a later pass. |
+
+The read-write Data API switch is not a `main.bicep` parameter: it is the compute
+module's `dataApiEnabled` (default `true`), which the script sets from
+`-EnableDataApi` on pass 2, so a hand-deployed `main.bicep` always exposes the Data
+API (every mutation is still subject-gated).
 
 The per-region module parameters (`bicep/modules/*.bicep`) are internal seams the
 orchestrator wires; you do not set them by hand. Each module header documents its
@@ -274,8 +290,10 @@ immediately under the same names.
 
 ### Connect an MCP client
 
-The MCP head exposes the Lattice control surface (state, data, auth-admin, and
-telemetry tool groups) as a Model Context Protocol server over streamable HTTP. It
+The MCP head exposes the Lattice control surface (state, data, auth-admin,
+tree-administration, and telemetry tool groups, plus backup and replication while
+those surfaces are enabled - the deployer's default) as a Model Context Protocol
+server over streamable HTTP. It
 runs stateless behind Front Door, is authenticated with a Microsoft Entra bearer
 token that a spec-compliant client acquires automatically via OAuth discovery
 (below), and is origin-locked: Front Door injects the `X-Azure-FDID` header on the
@@ -312,9 +330,10 @@ rest - no `Authorization` header:
 Visual Studio Code, Visual Studio, and GitHub Copilot sign in with their own
 pre-authorized first-party Entra client, so no client id is needed; a client that
 prompts for one can use the Visual Studio Code id
-`aebc6443-996d-45c2-90f0-388ff96faa56`. A signed-in caller sees no tools until the
-security administrator grants their Entra object id (`oid`) access on the Explorer
-console Access tab; discovery then advertises only the tool groups they hold, and
+`aebc6443-996d-45c2-90f0-388ff96faa56`. A signed-in caller sees no tool groups -
+only the `lattice_capabilities` meta-tool - until the security administrator
+grants their Entra object id (`oid`) access on the Explorer console Access tab;
+discovery then advertises only the tool groups they hold, and
 every forwarded call is re-authorized at the silo.
 
 #### Fallback: supply a bearer token by hand

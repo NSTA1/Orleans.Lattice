@@ -59,7 +59,7 @@ public sealed record AuthExplanation
 
     /// <summary>
     /// The authored rules that apply to this subject, operation, and scope,
-    /// ordered by rule id. Advisory debugging detail: the authoritative verdict
+    /// ordered by governed tree id and then rule id. Advisory debugging detail: the authoritative verdict
     /// is <see cref="Allowed"/>. Empty when the verdict rests solely on the
     /// <see cref="DefaultEffect"/> or a bootstrap-administrator bypass.
     /// </summary>

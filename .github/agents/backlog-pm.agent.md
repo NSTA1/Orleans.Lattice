@@ -64,8 +64,10 @@ These override or extend the base for Orleans.Lattice only.
    with `-NoNewline` collapses every newline and flattens the body to one line.
 
 3. **Text hygiene is gated in CI.** No em-dash (U+2014) and no non-ASCII bytes in
-   any tracked text file, enforced by tests in the required `build-and-test`
-   check. The gates enumerate **tracked** files, so running them before
+   any tracked text file. The em-dash and mojibake gates enforce the damaging
+   cases through tests in the required `build-and-test` check; other non-ASCII
+   is not gated, so keep to plain ASCII by discipline. The gates enumerate
+   **tracked** files, so running them before
    committing a new file is a false green: commit first, then run them.
 
 4. **Issue and pull-request labels.** Apply a release-notes category

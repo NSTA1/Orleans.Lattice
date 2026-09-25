@@ -80,13 +80,16 @@ shared state with the original is the sink:
 
 1. It bootstraps the reserved `sys-` trees if they are absent, so a cluster whose
    catalog has never existed can proceed.
-2. It resolves the target manifest and walks its `BaseBackupId` chain **directly
-   from the sink**, never the catalog.
-3. It verifies every referenced artifact against its recorded digest before
-   applying anything.
-4. It replays the chain through the existing HLC-preserving restore engine, so the
-   recovered tree keeps every entry's hybrid-logical-clock, version vector, origin
-   cluster id, expiry, and tombstone flag exactly as captured.
+2. It resolves the target (tip) manifest **directly from the sink**, never the
+   catalog.
+3. It hands the request to the existing HLC-preserving restore engine, which walks
+   the `BaseBackupId` chain and verifies every referenced artifact against its
+   recorded digest before applying anything. That engine reads catalog-first with
+   a sink fallback, so on a cluster whose catalog is gone the whole chain resolves
+   from the sink.
+4. It replays the chain, so the recovered tree keeps every entry's
+   hybrid-logical-clock, version vector, origin cluster id, expiry, and tombstone
+   flag exactly as captured.
 5. It re-projects the catalog from the sink, so the recovered cluster ends up with
    a correct catalog.
 
@@ -101,8 +104,10 @@ It throws
 base chain is broken, or an artifact is missing or tampered.
 
 Because a cold restore depends on nothing but the sink, the same call recovers a
-single tree, an incremental chain, or a whole backup set - as long as the sink is
-reachable.
+single tree or an incremental chain (pass the tip's backup id) - as long as the
+sink is reachable. It takes one backup id and restores one tree, so a backup set
+is recovered one member at a time: each member is an ordinary per-tree backup in
+the sink.
 
 ## Recovery runbook
 

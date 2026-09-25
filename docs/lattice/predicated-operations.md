@@ -149,8 +149,9 @@ AtomicWriteOutcome retry = await tree.SetManyAtomicAsync(
 The streaming scans accept a predicate as their first argument. Matching is
 done on each owning leaf, so a key-only scan never ships values across the wire
 at all, and an entry/value scan only ships the values that match. The resilient
-overloads recover transparently from an `EnumerationAbortedException` (for
-example a leaf split mid-scan) with the predicate intact.
+overloads recover transparently from an `EnumerationAbortedException` (raised
+when the remote enumerator is reclaimed mid-scan, for example by a silo
+failover or idle expiry) with the predicate intact.
 
 ```csharp verify
 // Keys only - no values cross the wire.

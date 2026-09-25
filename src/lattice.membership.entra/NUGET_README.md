@@ -13,8 +13,10 @@ signing-key, and lifetime checks and only layers on the Entra-specific concerns:
   allow-list and the templated Entra v2.0 issuer.
 - Entra v2.0 claim conventions: subject from `oid`, tenant from `tid`, groups
   from `groups`, and app roles from `roles`.
-- Groups-overage handling through a pluggable resolver abstraction, with a
-  dependency-free token-only fallback when no resolver is registered.
+- Groups-overage handling through a pluggable resolver abstraction (opt in with
+  `GroupResolutionMode = EntraGroupResolutionMode.ResolveOnOverage`), with a
+  dependency-free token-only fallback when the mode is left at its `TokenOnly`
+  default or no resolver is registered.
 
 The Microsoft Graph dependency needed to resolve overflowed group membership is
 isolated in the separate `Orleans.Lattice.Membership.Entra.Graph` package, so

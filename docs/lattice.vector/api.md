@@ -89,12 +89,12 @@ that must keep a partially-loaded instance across a fault uses
 | `LoadedKeyCount`, `IsLoaded`, `HasBankedLoadProgress` | Load observability: identifier mappings loaded so far, whether a load has completed, and whether an interrupted load banked progress. |
 | `KeyPrefix`, `Generation`, `LoadMode` | Where the index lives, which partitioning is live, and how it was opened. |
 | `Status`, `Count`, `UpdatesSinceTraining` | The core's status, the live vector count, and the drift signal that tells you when to retrain. |
-| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, whether the state was restored rather than recomputed, plus `IsReady` and `IngestedFraction`. `IngestedFraction` reports `1` when the build is ready *or* when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. |
+| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, whether the state was restored rather than recomputed, the lifetime counts of ingest slices stopped by their wall-clock budget (`SlicesDeadlined`) and of those that banked nothing (`SlicesDeadlinedWithoutProgress`), plus `EmptyDeadlinesSinceLastAdvance`, `IsStarvedBySource`, `IsReady`, and `IngestedFraction`. `IsStarvedBySource` is the present-tense stall signal: `true` while at least one slice has been deadlined empty-handed since the build last banked anything, cleared the moment a slice banks an item. `IsReady` is `true` only when the build has finished *and* produced a partitioning. `IngestedFraction` reports `1` when the build has finished *or* when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. |
 | `BuildStepAsync` | Does one bounded slice of build work and returns progress. |
 | `RunBuildAsync` | Loops `BuildStepAsync` to completion. |
 | `UpsertAsync`, `RemoveAsync` | Incremental maintenance. |
 | `TryGetId`, `TryGetKey` | Resolve between an external string identifier and the index's `long` key. |
-| `FlushAsync` | Persist the partitions whose stamps moved. |
+| `FlushAsync` | Persist the partitions whose stamps moved, rewriting only the chunks whose content changed. |
 | `Search` | Synchronous and allocation-free, into a caller-owned span. Returns the number of hits written and reports the path through an `out` parameter. Under a lazy load it answers from whatever cells are already resident. |
 | `SearchAsync` | Query, returning a `VectorSearchOutcome`. Under a lazy load it fetches any cell the query would probe. |
 | `ReconcileAsync` | Bounded sweep against the store of record, always settling in the source's favour. |
@@ -115,6 +115,9 @@ Do not conflate these:
 A corpus below the training minimum legitimately finishes its build with no
 partitioning and answers exactly by exhaustive scan. Reporting that as not-ready
 would be wrong; reporting it as approximate would also be wrong.
+`Progress.IsReady` is the conjunction of the two - the build has finished and a
+partitioning exists - so it stays `false` for that small corpus even though
+`Progress.Phase` is `Ready`.
 
 ### Supporting types
 

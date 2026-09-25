@@ -220,7 +220,7 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>
-    /// Streams one of a backup's content-addressed artifacts back chunk-wise,
+    /// Streams one of a backup's manifest-declared artifacts back chunk-wise,
     /// with bounded memory, yielding each chunk until the server ends the stream.
     /// </summary>
     public async IAsyncEnumerable<ReadOnlyMemory<byte>> ExportArtifactAsync(

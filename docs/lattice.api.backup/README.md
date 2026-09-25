@@ -8,7 +8,7 @@ A transport-agnostic backup / restore control facade for [Orleans.Lattice.Backup
 
 It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and read-write [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) data-plane facades:
 
-- **A transport-agnostic facade.** A single control surface (`ILatticeBackupControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes capture, incremental, backup-set capture, list, stream, describe, delete, restore, revert, artifact export, inventory, catalog repair, scheduling, health, capability, and scope-status operations over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** A single control surface (`ILatticeBackupControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes capture, incremental, backup-set capture, list, stream, describe, delete, restore, cold restore, revert, artifact export, inventory, catalog repair, scheduling, health, capability, and scope-status operations over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Backup.Grpc`](../lattice.api.backup.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client. This package ships no transport of its own; it is the contract every binding adapts over.
 
 ## Core properties

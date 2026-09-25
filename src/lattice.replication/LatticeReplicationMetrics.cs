@@ -253,8 +253,8 @@ public static class LatticeReplicationMetrics
     /// the receiver's wall clock and the entry's
     /// <see cref="WalRecord.Timestamp"/>. Reserved for receivers that
     /// surface <see cref="HybridLogicalClock"/>-related faults as
-    /// classified exceptions; the canonical applier does not currently
-    /// raise this class of failure.
+    /// classified exceptions and for entries evicted from the causal-apply
+    /// buffer when it reaches its configured bound.
     /// </summary>
     public const string ReasonHlcSkew = "hlc_skew";
 
@@ -1015,13 +1015,11 @@ public static class LatticeReplicationMetrics
     /// Counter of successful point applies whose source HLC was strictly
     /// less than the most recently applied source HLC for the same
     /// <c>(treeId, originClusterId)</c> pair. Pins the per-origin FIFO
-    /// contract the causal-apply buffer (<see cref="CausalApplyBuffer"/>)
-    /// relies on for occupancy bounds: under correct sender + transport
-    /// behaviour the producer's partitioned change feed yields per-shard
-    /// in WAL-offset order and each shard's WAL is HLC-monotonic per
-    /// origin, so per-(origin, shard) FIFO is preserved end-to-end with
-    /// no cross-shard sender serialisation. A sustained nonzero rate
-    /// flags a transport-side regression that broke that invariant.
+    /// contract as observed by the receiver. Per-leaf HLCs mean cross-shard
+    /// arrival can legitimately be out of HLC order, so this is a diagnostic
+    /// signal rather than an invariant violation by itself; sustained nonzero
+    /// rates identify sender, transport, or workload patterns that defeat the
+    /// causal-apply buffer's occupancy assumptions.
     /// <para>
     /// The counter is recorded after a successful apply (direct or drained)
     /// - never on park - so the underlying invariant tracks "what has

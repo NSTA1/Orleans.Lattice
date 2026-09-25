@@ -66,7 +66,7 @@ before you draw a conclusion from a shallow report.
 | `SampledAt` | Within `DiagnosticsCacheTtl` (default 5 s) of now. | Older than the TTL means you are reading a cached report; see [the traps](#traps-when-reading-a-report). |
 | `Deep` | Echoes the argument you passed. | If it is `false`, ignore every tombstone field in the report. |
 | `Shards` | One entry per physical shard, ordered by `ShardIndex`. | See the per-shard table below. |
-| `RecentSplits` | Empty on a stable tree; a short list after adaptive splits. | A steady stream of entries points at [Concurrent split activity](#concurrent-split-activity). |
+| `RecentSplits` | Empty on a stable tree; a short list after adaptive splits or an online reshard. | A steady stream of entries points at [Concurrent split activity](#concurrent-split-activity). |
 
 ### Per-shard fields
 
@@ -79,7 +79,7 @@ before you draw a conclusion from a shallow report.
 | `OpsPerSecond` | Comparable across shards. | One shard far above its peers is a hot shard - the exact condition adaptive splitting exists to relieve. See [Concurrent split activity](#concurrent-split-activity). |
 | `Reads` / `Writes` | The raw counters `OpsPerSecond` is derived from, over `HotnessWindow`: `(Reads + Writes) / HotnessWindow.TotalSeconds`. | A read-heavy shard and a write-heavy shard need different remedies; the split between the two counters tells you which you have. |
 | `HotnessWindow` | The sampling window the counters cover. | `TimeSpan.Zero` makes `OpsPerSecond` meaningless (it is reported as `0.0`); the shard has not accumulated a window yet. |
-| `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight adaptive split. Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
+| `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight split - adaptive, or driven by an online reshard. Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
 | `BulkOperationPending` | `false` on a stable tree. | `true` means the shard is holding a pending bulk graft. Normal during a bulk load; see [Bulk loading](bulk-loading.md). |
 
 ### A worked reading
@@ -186,12 +186,16 @@ independently by the provider's per-row or per-blob limit:
 - **The WAL row**, written once per mutation. Its size grows with the key and
   value you wrote, plus causal metadata.
 - **The leaf snapshot blob**, capturing a leaf's live entries. Its size grows
-  with the number of entries the leaf holds, which is bounded by that tree's
-  pinned `MaxLeafKeys`.
+  with the entries the leaf holds, which are bounded by that tree's pinned
+  `MaxLeafKeys` and by `LatticeOptions.MaxLeafBytes` (default 64 MiB). A
+  payload larger than `LeafSnapshotSegmentBytes` (default 4 MiB) is written
+  as row-aligned segments of at most that size, so a single snapshot row
+  exceeds the segment size only for an indivisible entry larger than it.
 - **The leaf state row**, which no longer scales with `MaxLeafKeys`.
 
-An oversized single value pushes the WAL row over the limit; too many entries
-per leaf pushes the snapshot blob over it. [Tree storage](tree-storage.md)
+An oversized single value pushes the WAL row over the limit; a snapshot
+segment larger than the provider's per-row limit pushes a snapshot row over
+it. [Tree storage](tree-storage.md)
 carries the per-provider limit table, the row-size formulas, and the sizing
 arithmetic for choosing `MaxLeafKeys` against a given provider.
 
@@ -253,14 +257,19 @@ Two things this is *not*:
   per tree in the registry (defaulting to 128) and changed only through
   `ILattice.ResizeAsync`. See [Tree sizing](tree-sizing.md) for the resize
   procedure and [Tree storage](tree-storage.md) for how to pick the value.
+- **Lower `LeafSnapshotSegmentBytes`** (default 4 MiB, floor 64 KiB) below
+  the grain-storage provider's per-row limit, so every snapshot row fits
+  whatever `MaxLeafKeys` is. Set it on the silo-wide options: the snapshot
+  storage grain does not see a per-tree override. See
+  [Tree storage](tree-storage.md).
 - **Move the WAL to a higher-capacity backend.** The WAL has its own storage
   seam (`IWalStorageProvider`), so it can be pointed at a backend with a larger
   per-row limit independently of the grain-storage provider the rest of the
   tree uses; see [WAL storage providers](wal-storage-providers.md). Note this
   does not help the snapshot blob: leaf snapshots are persisted through the
-  same named grain-storage provider as the rest of the tree, so the only levers
-  there are `MaxLeafKeys`, the value sizes you write, and swapping that
-  provider.
+  same named grain-storage provider as the rest of the tree, so the levers
+  there are `LeafSnapshotSegmentBytes`, `MaxLeafKeys`, `MaxLeafBytes`, the
+  value sizes you write, and swapping that provider.
 - **Turn on admission control** so the tree refuses writes with a typed,
   actionable `LatticeQuotaExceededException` before it grows into provider
   limits, rather than after. See `MaxLiveKeys`, `MaxEstimatedBytes`, and the
@@ -280,8 +289,10 @@ shard is elevated, and `RecentSplits` shows entries appearing regularly.
 
 `SplitInProgress` means the shard is the **source** of an in-flight adaptive
 split: Lattice has detected a hot shard and is moving part of its virtual-shard
-range to a new physical shard. The autonomic splitter watches per-shard
-throughput and triggers when a shard's observed operations per second exceed
+range to a new physical shard. An online reshard (`ILattice.ReshardAsync`)
+drives the same per-shard split, so while one runs the flag and `RecentSplits`
+also move on the shards it divides, hot or not. The autonomic splitter watches
+per-shard throughput and triggers when a shard's observed operations per second exceed
 `HotShardOpsPerSecondThreshold` (default 200). That figure is computed as
 `(reads + writes) / window.TotalSeconds` - the same quantity the report
 surfaces as `OpsPerSecond`, so the report shows you exactly what the splitter
@@ -322,16 +333,23 @@ Then decide which case you are in:
 | Observation | Reading |
 |---|---|
 | Flag set, clears within a few report intervals, `RecentSplits` gains one entry | Normal. The split committed. |
-| Flag set on several shards at once | Also normal if it is bounded: `MaxConcurrentAutoSplits` (default 2) caps in-flight splits per tree, and `MaxClusterConcurrentAutoSplits` (default `null`, disabled) adds a cluster-wide ceiling on top of it. |
+| Flag set on several shards at once | Also normal if it is bounded: `MaxConcurrentAutoSplits` (default 2) caps in-flight autonomic splits per tree, `MaxClusterConcurrentAutoSplits` (default `null`, disabled) adds a cluster-wide ceiling on top of it, and `MaxConcurrentMigrations` (default 4) bounds the splits an online reshard runs at once. |
 | Flag set on the same shard across many reports, no new `RecentSplits` entry, no throughput recovery | Stuck. Treat as a fault. |
 | Flag never set even though one shard is obviously hot | The candidate is being suppressed. |
 
 For the last two cases, the metrics tell you which: `orleans.lattice.split.in_flight`
-shows what is actually running, `orleans.lattice.split.candidates_suppressed`
-shows candidates rejected by a suppression rule, and
-`orleans.lattice.split.admission.deferred` shows splits deferred by the
-concurrency caps, and `orleans.lattice.shard.splits_committed` counts the
-splits that completed. See [Metrics](metrics.md).
+shows what is actually running; `orleans.lattice.split.candidates_suppressed`
+counts hot, eligible shards held back because a concurrency cap
+(`MaxConcurrentAutoSplits` or `MaxClusterConcurrentAutoSplits`) was already
+reached; `orleans.lattice.split.admission.deferred` counts hot shards the
+admission policy held back, by `reason`: `cluster_cap` (the cluster-wide
+gate), `uniform_load` (the whole tree is hot - typically a bulk ingest - so a
+split would relieve nothing), `low_occupancy` (too few live entries to
+redistribute), or `shard_ceiling` (the tree's physical shard ceiling); and
+`orleans.lattice.shard.splits_committed` counts the splits that completed. A
+shard held off by the minimum tree age, by the per-shard cooldown, or because
+it owns fewer than two virtual slots is counted on neither. See
+[Metrics](metrics.md).
 
 ### How to fix
 
@@ -340,7 +358,10 @@ splits that completed. See [Metrics](metrics.md).
   rules in [Shard splitting](shard-splitting.md). The common causes are
   `AutoSplitMinTreeAge` (default 60 s) holding off splits on a young tree,
   `HotShardSplitCooldown` (default 2 minutes) rate-limiting repeat splits on
-  the same shard, and `AutoSplitEnabled` having been turned off.
+  the same shard, and `AutoSplitEnabled` having been turned off. The
+  admission policy can also hold a hot shard back - read the `reason` on
+  `orleans.lattice.split.admission.deferred`: `uniform_load` means the whole
+  tree is hot, so splitting would not help.
 - **Splits triggering too eagerly on a bursty workload**: raise
   `HotShardOpsPerSecondThreshold`, or lengthen `HotShardSampleInterval`
   (default 30 s) so a short burst does not look like sustained load.
@@ -409,7 +430,7 @@ Four things dominate scan cost:
 
   Console.WriteLine(accepted
       ? "compaction pass accepted"
-      : "shard declined the request (already compacting, or nothing to do)");
+      : "request declined (compaction disabled for this tree, or a pass already in flight)");
   ```
 
   See [Tombstone compaction](tombstone-compaction.md) for the full policy and
@@ -417,13 +438,16 @@ Four things dominate scan cost:
 - **Bound the range.** Prefer the `startInclusive` / `endExclusive` overloads
   over an unbounded enumeration. A bound does not reduce the number of shards
   visited - routing is by hash, so every shard is asked - but it cuts the work
-  each shard does and keeps the client-side dedup set small, since that set
-  grows with the number of distinct keys the scan has yielded.
-- **Use the resilient streaming API for long scans.** `ScanKeysAsync` and
+  each shard does and keeps the per-scan dedup set the tree grain holds small,
+  since that set grows with the number of distinct keys the scan has yielded.
+- **Use the resilient streaming API for scans.** `ScanKeysAsync` and
   `ScanEntriesAsync` transparently reconnect and resume when an enumeration is
   aborted mid-flight, with a default budget of 8 reconnect attempts
-  (overridable per call via `maxAttempts`). `ILattice.KeysAsync` is for short,
-  single-page reads.
+  (overridable per call via `maxAttempts`). The raw `ILattice.KeysAsync` and
+  `EntriesAsync` streams surface the abort instead, and because the tree grain
+  is a stateless worker the abort rate rises with concurrency on the tree
+  rather than with scan length, so prefer the resilient pair for scans of any
+  length.
 - **Turn on prefetch for scans you will consume in full.** `PrefetchKeysScan`
   and `PrefetchEntriesScan` both default to `false`; a per-call `prefetch: true`
   argument overrides them for a single scan. Prefetch fetches each shard's next
@@ -458,13 +482,17 @@ Lattice serves `GetAsync`, `ExistsAsync`, and `GetManyAsync` through a
 per-silo read-through cache. Whether that cache can return a stale value is
 entirely determined by `CacheTtl`:
 
-- **`CacheTtl = TimeSpan.Zero` (the default).** Every read performs a delta
-  refresh against the primary leaf before answering. The version-vector
-  comparison is cheap, but the round trip still happens - so the default
-  configuration does **not** serve stale values.
-- **`CacheTtl` set to a non-zero value.** The cache may answer from its local
-  dictionary without contacting the primary for up to that interval. This is
-  the trade you opted into: lower read latency, staleness bounded by the TTL.
+- **`CacheTtl = TimeSpan.Zero` (the default).** Every read confirms freshness
+  before answering. When the primary leaf is activated on the same silo and its
+  revision has not moved since the cache last refreshed, that local check is
+  enough; otherwise the cache performs a delta refresh against the primary. The
+  version-vector comparison is cheap, and either way the default configuration
+  does **not** serve stale values.
+- **`CacheTtl` set to a non-zero value.** When the primary leaf is on another
+  silo, the cache may answer from its local dictionary without contacting the
+  primary for up to that interval. This is the trade you opted into: lower read
+  latency, staleness bounded by the TTL. A same-silo primary whose revision has
+  moved is still refreshed immediately.
 
 So on a default-configured tree, a surprising read is almost never the read
 cache. See [Caching](caching.md) for the refresh protocol and
@@ -521,10 +549,13 @@ Two secondary checks:
   freshness - which is exactly why a caller that needs an authoritative live
   count should use `CountAsync` rather than reading `TotalLiveKeys` out of a
   possibly-cached report.
-- **After a resize or reshard, no cache flush is needed.** The new physical
-  tree has different leaf grain identities, so reads land on fresh cache
-  activations. See [Tree sizing](tree-sizing.md) and [Online
-  reshard](online-reshard.md).
+- **After a resize or reshard, no cache flush is needed.** A resize rebuilds
+  the tree into a new physical tree with different leaf grain identities, so
+  reads land on fresh cache activations. A reshard moves virtual slots onto
+  new physical shards, so moved keys likewise read through new leaves and
+  their fresh caches, while keys that stay put keep reading through the same
+  leaves, whose caches keep refreshing against them. See
+  [Tree sizing](tree-sizing.md) and [Online reshard](online-reshard.md).
 
 ---
 

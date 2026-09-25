@@ -29,8 +29,8 @@ namespace Orleans.Lattice;
 /// shard's leaf chain through XxHash128 - the shard digest's <see cref="Hash"/>
 /// covers the concatenation <c>XxHash128(leaf_1.Hash || leaf_2.Hash || ...)</c>,
 /// <see cref="EntryCount"/> sums the per-leaf entry counts, and
-/// <see cref="CheckpointOffset"/> is the sum of the per-leaf checkpoint
-/// offsets so divergence at any leaf surfaces in the shard total.
+/// <see cref="CheckpointOffset"/> is the maximum per-leaf checkpoint
+/// offset so divergence at any leaf surfaces in the shard total.
 /// </para>
 /// <para>
 /// <b>Contribution-function compatibility contract.</b> The per-entry
@@ -75,7 +75,7 @@ public readonly record struct LeafProjectionDigest
 
     /// <summary>
     /// The persisted <c>ProjectionCheckpointOffset</c> at the time the
-    /// digest was computed (or, for a shard digest, the sum across every
+    /// digest was computed (or, for a shard digest, the maximum across every
     /// leaf in the shard). Folded into <see cref="Hash"/> so two silos at
     /// different replay positions report distinct digests even if their
     /// post-state happens to coincide.

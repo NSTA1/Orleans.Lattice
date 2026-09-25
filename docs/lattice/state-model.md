@@ -14,13 +14,15 @@ distinct durability boundaries and growth rates:
 |---|---|---|---|
 | Write-ahead log (WAL) | Per-shard `IWalStorageProvider` rows | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
 | Leaf state row | `BPlusLeafGrain` persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
-| Snapshot blob | `LeafSnapshotStorageGrain` persistent state | Live-key count * canonical row size | Snapshot-on-fall-off capture path; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
+| Snapshot blob | `LeafSnapshotStorageGrain` persistent state | Live-key count * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
 
 The **WAL is canonical.** Everything else is derived. A leaf's
-per-activation entry cache is the projection of the WAL through the
-leaf's `ProjectionCheckpointOffset`; the snapshot blob is a
-point-in-time image of that projection persisted separately for
-activation-cost reasons.
+per-activation entry cache is the projection of the WAL, and the
+persisted checkpoint offset records how far that projection has been
+durably checkpointed; the snapshot blob is a point-in-time image of
+the projection, persisted separately both to bound activation cost
+and as the durable coverage that lets the WAL GC trim the prefix it
+covers.
 
 ## Why the leaf state row stays small
 
@@ -32,9 +34,10 @@ storage provider's per-row ceiling into the sizing model.
 
 The collapsed leaf state row carries only:
 
-- Topology fields (sibling pointers, parent reference, key range,
-  shard index, split lifecycle), plus the sticky moved-away slot seal
-  an adaptive shard split records.
+- The owning tree id and the topology fields (sibling pointers,
+  parent reference, key range, shard index, split lifecycle -
+  including the durable marker of a split still in flight), plus the
+  sticky moved-away slot seal an adaptive shard split records.
 - The projection-digest XOR fold (`ProjectionHash`, 16 bytes).
 - The `ProjectionCheckpointOffset` pointing into the WAL, plus a
   per-partition offset array on a multi-partition tree and a flag
@@ -53,40 +56,45 @@ The collapsed leaf state row carries only:
 
 See [Tree Storage](tree-storage.md) for exact byte-level sizing.
 
-The per-activation entry cache - the actual `(key,
-LwwValue<byte[]>)` rows - is rebuilt by replaying WAL entries
-strictly past `ProjectionCheckpointOffset` on activation. A leaf's
-in-memory state is therefore always "the projection through the
-WAL head at this instant"; the persisted row is just enough metadata
-to bound the next replay.
+The per-activation entry cache - the actual per-key
+last-writer-wins rows - is rebuilt on every activation from the
+leaf's snapshot and the WAL, as the next section describes; nothing
+in the persisted row holds it. A leaf's in-memory state is therefore
+always "the projection through the WAL head at this instant"; the
+persisted row is just enough metadata to anchor and bound the next
+replay.
 
 ## Activation: replay, rehydrate, and the safety net
 
 On every leaf activation, the materialiser runs three steps in
 order:
 
-1. **Classify the persisted checkpoint.** The fall-off-log detector
-   reads `ProjectionCheckpointOffset` and the WAL tail and returns
-   the matching `FallOffLogDecision`. Only a WAL trimmed past the
+1. **Prefer a snapshot when newer than the checkpoint.** If the
+   leaf's snapshot storage carries a blob whose snapshot offset
+   strictly exceeds the persisted checkpoint, the leaf rehydrates
+   its cache from the blob's canonical rows and advances the
+   persisted checkpoint to the snapshot offset. This is the safety
+   net for the case where the WAL has been trimmed past the
+   persisted checkpoint between deactivations.
+2. **Choose where the replay starts.** A leaf that rehydrated from a
+   snapshot resumes above it (a *warm* activation). A leaf with no
+   usable snapshot starts with an empty cache, which the persisted
+   checkpoint cannot anchor - replaying only past it would drop
+   every entry at or below it - so it replays the whole readable
+   WAL window instead (a *cold* activation).
+3. **Classify, then replay, each WAL partition.** Before reading a
+   partition, the fall-off-log detector classifies the gap between
+   the checkpoint and the WAL. Only a WAL trimmed past the
    checkpoint (genuine loss) is fatal; a replay-budget or retention
-   overrun against an intact WAL returns the non-fatal
-   `TailReplayOverBudget`, and the `LeafSnapshotMargin` proximity
-   check returns the `SnapshotPending` advisory.
-2. **Prefer a snapshot when newer than the checkpoint.** If
-   `LeafSnapshotStorageGrain` carries a blob whose `SnapshotOffset`
-   strictly exceeds the persisted `ProjectionCheckpointOffset`, the
-   leaf rehydrates its cache from the blob's canonical rows and
-   advances the persisted checkpoint to the snapshot offset. This
-   is the safety net for the case where the WAL has been trimmed
-   past the persisted checkpoint between deactivations.
-3. **Tail-replay the WAL.** From the resolved checkpoint forward,
-   the materialiser applies WAL records to the in-memory cache,
-   re-folding the projection digest as it goes.
+   overrun against an intact WAL is a non-fatal over-budget verdict
+   that replays anyway, and the `LeafSnapshotMargin` proximity check
+   raises a snapshot-pending advisory. The materialiser then applies
+   the partition's WAL records to the in-memory cache, re-folding
+   the projection digest as it goes.
 
-If the fall-off-log decision was `SnapshotPending` (advisory only),
-the leaf finishes the tail replay and then fires a single
-`CaptureSnapshotAsync` to refresh the snapshot grain before it
-yields the activation turn. While the leaf stays hot, every
+If the detector raised the snapshot-pending advisory, the leaf
+finishes the replay and then captures a fresh snapshot once before
+it yields the activation turn. While the leaf stays hot, every
 `LeafSnapshotReClassifyEveryNCheckpoints` successful checkpoint
 persist re-runs the classifier and captures again on advisory.
 
@@ -104,13 +112,20 @@ The activation path therefore tolerates any combination of:
   own range, not by the WAL head. The trim trigger is also a no-op
   for the sentinel: there is no projection state to lose.
 - A leaf whose snapshot is older than the persisted checkpoint
-  (snapshot ignored, tail replay handles it).
+  (snapshot ignored; a cold replay of the whole readable WAL window
+  rebuilds the cache).
 - A leaf whose snapshot is newer than the persisted checkpoint and
   the WAL has been trimmed (snapshot rehydrate, then tail replay
   from the snapshot offset).
-- A leaf whose checkpoint has fallen off the WAL retention window
-  entirely (the configured `ProjectionRebuildPolicy` -
-  `SnapshotThenWal`, `FullRebuildFromWal`, or `Fail` - takes over).
+
+The one case it does not tolerate is genuine loss: a checkpoint the
+WAL has been trimmed past with no snapshot covering the gap. Under
+every `ProjectionRebuildPolicy` value (`SnapshotThenWal`,
+`FullRebuildFromWal`, or `Fail`) the activation then fails with
+`LeafProjectionStaleException` rather than rebuilding the leaf over
+the lost prefix, because the snapshot-then-WAL and full-rebuild
+recovery paths are not yet integrated - an operator-driven rebuild
+is required. See [Projection Rebuild](projection-rebuild.md).
 
 ## CRDT producer-side mutation cost
 

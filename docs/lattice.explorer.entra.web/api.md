@@ -15,6 +15,8 @@ Registers the Microsoft.Identity.Web OpenID Connect app (auth-code + PKCE, cooki
 - **Throws** `ArgumentNullException` when `services` or `configure` is null, and `InvalidOperationException` when a required option is missing (validation runs during this call).
 - The auth method and token acquirer are registered **scoped** for per-circuit credential isolation.
 - The fallback authorization policy is installed only when `RequireAuthenticatedUser` is true; the circuit handler only when `AutoSignIn` is true.
+- The call also registers the cascading authentication state (`AddCascadingAuthenticationState()`), so a Blazor Server circuit sees the OpenID Connect user rather than an anonymous principal.
+- **Re-authentication side effect.** When `ReauthChallengePath` is set, the call registers an `ExplorerReauthOptions` whose `ChallengePath` is that path, after the core default, so the core Explorer's re-authentication interstitial navigates to it. The endpoint itself is mapped separately with `MapLatticeExplorerEntraWebReauth`.
 - **CSP side effect.** When `SignOutPath` is set, the call also publishes it as the core `ExplorerSignOutOptions.FederatedSignOutPath` and, when `Instance` parses as an absolute http(s) authority, adds that Entra authority origin to the Explorer web head's Content-Security-Policy `form-action` sources (via `ExplorerContentSecurityPolicyOptions.AdditionalFormActionSources`) so the federated sign-out form's redirect to Entra's end-session URL is not blocked by the default `form-action 'self'`. A malformed `Instance` contributes nothing (fail closed).
 
 ## `ExplorerEntraWebEndpointRouteBuilderExtensions`
@@ -42,7 +44,7 @@ public static IEndpointConventionBuilder MapLatticeExplorerEntraWebReauth(
     string returnUrlParameter = DefaultReturnUrlParameter)
 ```
 
-Maps a forced-interactive re-authentication endpoint that issues an OpenID Connect challenge with `prompt=login`, so a **new** authorization code is redeemed even when a valid session cookie already exists - repopulating a failover replica's token cache. The core Explorer's re-authentication interstitial navigates here when the credential latches into its revoked state. The endpoint honours the `returnUrlParameter` query value only when it is a **local** path (an absolute or protocol-relative URL is rejected and the browser returns to `/`), so it cannot be abused as an open redirect. Pass `select_account` for `prompt` to let the operator pick a different account. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern`, `prompt`, or `returnUrlParameter` is blank.
+Maps a forced-interactive re-authentication **`GET`** endpoint that issues an OpenID Connect challenge with `prompt=login` (or the supplied `prompt`), so a **new** authorization code is redeemed even when a valid session cookie already exists - repopulating a failover replica's token cache. The core Explorer's re-authentication interstitial navigates here when the credential latches into its revoked state. The endpoint honours the `returnUrlParameter` query value only when it is a **local** path (an absolute or protocol-relative URL is rejected and the browser returns to `/`), so it cannot be abused as an open redirect. Pass `select_account` for `prompt` to let the operator pick a different account. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern`, `prompt`, or `returnUrlParameter` is blank.
 
 ## `IExplorerWebTokenAcquirer`
 

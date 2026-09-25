@@ -112,8 +112,8 @@ the banner assertion fails, and the mistake surfaces as a mistake.
 
 `RevisionMonotonicRollback` is the mutation where this matters most: it
 decrements the revision counter but deliberately stays inside
-`0..Cardinality(Txns)`, so `TypeOK` still holds and monotonicity is the only
-property that can catch it.
+`0..(2 * Cardinality(Txns))`, so `TypeOK` still holds and monotonicity is the
+only property that can catch it.
 
 ## TLC does not name the property for a liveness violation
 
@@ -182,12 +182,24 @@ Three do not. `TypeOkRevisionRunaway`, `DecisionDurabilityDecisionFlip` and
 `RevisionMonotonicRollback` splice a brand-new action into `Next`
 (`RevisionRunaway`, `DecisionFlip`, `RevisionRollback`) that models no step of
 the protocol. They do this because the properties they target are
-**unfalsifiable by any behaviour of the base module**: `decision` and `revision`
-are each written by exactly one action, `DecideTx`, under a guard of
-`phase[t] = "prepared"` that the same action immediately leaves, and no action
-ever re-enters `"prepared"`. So each is assigned at most once per saga, and
-`DecisionDurability`, `RevisionMonotonic` and `TypeOK`'s revision conjunct
-cannot fail however the base is scheduled.
+**unfalsifiable by any behaviour of the base module**: `decision` is written by
+exactly one action, `DecideTx`, under a guard of `phase[t] = "prepared"` that
+the same action immediately leaves, and no action ever re-enters `"prepared"`,
+so it is assigned at most once per saga; `revision` is only ever incremented,
+once by `DecideTx` and at most once more by `ForgetDecision`, which sets the
+`forgotten[t]` flag its own guard requires to be clear. So
+`DecisionDurability`'s two no-flip conjuncts, `RevisionMonotonic` and `TypeOK`'s
+`0..(2 * Cardinality(Txns))` revision conjunct cannot fail however the base is
+scheduled.
+
+`DecisionDurability`'s third conjunct is the exception, and its pairing does
+not reach it. That conjunct forbids retiring a decision's row while a written
+key has not yet applied its terminal, and `ForgetDecision` is a protocol action
+whose drain guard is all that prevents it: weaken the guard and the conjunct
+fires. `DecisionDurabilityDecisionFlip` exercises only the flip half, so the
+retirement half is covered at the implementation level, by
+`AtomicCommitInvariantCoyoteTests.Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability`
+(see [`../Refinement.md`](../Refinement.md)), rather than by this directory.
 
 For those three the two-arm experiment therefore establishes something weaker
 than it does for the other nine. It establishes that the property is
@@ -197,9 +209,10 @@ and that TLC would report it if the state it forbids became reachable. It does
 nothing in the protocol can violate it.
 
 That is not a defect in the mutations, and it is not a reason to "fix" them by
-hunting for a protocol-level perturbation instead - there is none, which is
-precisely the point. It is a limit on what may be concluded, and issue #2323's
-second supporting control names it directly: such a result is a classifier,
+hunting for a protocol-level perturbation instead - for the flip half and the
+two revision properties there is none, which is precisely the point. It is a
+limit on what may be concluded, and issue #2323's second supporting control
+names it directly: such a result is a classifier,
 never evidence of reachability. A future revision that lets a saga re-enter
 `"prepared"` - a retry, a re-prepare, a recovery path - would make these three
 properties load-bearing, and the mutations are the standing check that they

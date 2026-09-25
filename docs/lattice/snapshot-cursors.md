@@ -27,9 +27,10 @@ visibility semantics differ.
 `OpenSnapshot*CursorAsync` performs these deterministic steps before
 returning the cursor ID:
 
-1. **Routing capture.** The current `RoutingInfo` (tree map version,
-   shard count) is snapshotted so all paging fan-outs target the same
-   shard layout.
+1. **Routing capture.** The tree's routing map is re-read from the
+   registry (not taken from a cached copy) and its version pinned on the
+   coordinate - with the full map as well when the tree has more than one
+   physical shard - so all paging fan-outs target the same shard layout.
 2. **Per-shard frozen-baseline capture.** Every shard root walks its
    leaf chain through `IShardRootGrain.CaptureSnapshotBaselineAsync`,
    freezing each `BPlusLeafGrain`'s committed projection and folding its
@@ -60,8 +61,13 @@ returning the cursor ID:
    so a shard root can never be held indefinitely by an unresponsive
    leaf: the capture is abandoned instead, which is safe because it
    performs no observable writes until the baseline is seeded.
-3. **Registry HLC capture.** The current `IWalCursorRegistry` snapshot
-   HLC pins the WAL retention floor.
+3. **Saga-decision snapshot.** The tree's transaction registry is read, as
+   for a point-in-time cursor, but its decisions are not carried into the
+   cursor: the coordinate records only a diagnostic registry clock, which
+   is currently always zero, and a failed read does not fail the open. Saga
+   visibility is fixed by the frozen baseline itself - a batch whose commit
+   terminal lands after the captured head stays pending, and so invisible,
+   on every leaf it touched.
 
 The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and
@@ -139,12 +145,16 @@ regardless of any WAL trimming that happened in the meantime.
 
 ## WAL retention
 
-A snapshot cursor still registers a per-cursor WAL retention pin through
-`IWalCursorRegistry.ReportCursorAsync(...)` for the lifetime of the
-cursor. Because pages are served from the frozen baseline rather than the
-WAL, the pin is a defensive retention floor (and a diagnostic anchor)
-rather than a correctness dependency: even if the pinned prefix were
-trimmed, the already-captured baseline continues to serve the snapshot.
+A snapshot cursor still registers itself with the WAL cursor registry
+through `IWalCursorRegistry.ReportCursorAsync(...)` for the lifetime of the
+cursor, but it reports the coordinate's registry clock (always zero for a
+coordinate captured by the current build) with no blocked floor - a
+registration the WAL garbage collector excludes from its trim floor - so it
+does not hold back WAL trimming. That is safe because pages are served from
+the frozen baseline rather than the WAL: the registration is a diagnostic
+anchor (it is what `orleans.lattice.snapshot.pins` counts), not a
+correctness dependency, and trimming the WAL cannot perturb an
+already-captured baseline.
 Any durable per-shard baselines (written only once a snapshot spans
 multiple pages) are deleted when the cursor is closed
 (`CloseCursorAsync`) or evicted by the idle-TTL reminder; a single-page
@@ -191,9 +201,9 @@ Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`;
 
 | Instrument | Kind | Tags | Description |
 |---|---|---|---|
-| `orleans.lattice.snapshot.replay.duration` | Histogram (ms) | `tree`, `shard` | Per-shard wall-clock replay time observed during snapshot-leaf open. |
-| `orleans.lattice.snapshot.replay.entries` | Counter | `tree`, `shard` | WAL entries consumed during snapshot-leaf replay. |
-| `orleans.lattice.snapshot.pins` | ObservableGauge | `tree` | Live WAL retention pins held by snapshot cursors, derived from the WAL cursor registry rather than accumulated. |
+| `orleans.lattice.snapshot.replay.duration` | Histogram (ms) | `tree`, `shard`, `tenant` | Per-shard wall-clock WAL replay time when a snapshot leaf opens from a legacy coordinate (one persisted before the frozen-baseline store, with no baseline token). A frozen-baseline snapshot never replays the WAL, so it never records this. |
+| `orleans.lattice.snapshot.replay.entries` | Counter | `tree`, `shard`, `tenant` | WAL entries consumed by that legacy snapshot-leaf replay. Not recorded for a frozen-baseline snapshot. |
+| `orleans.lattice.snapshot.pins` | ObservableGauge (`{pin}`) | `tree`, `tenant` | Live WAL cursor-registry pins held by snapshot cursors (registrations that do not hold back trimming - see [WAL retention](#wal-retention)), derived from the WAL cursor registry rather than accumulated. |
 
 `orleans.lattice.snapshot.pins` reports the pins held **now**, derived from the WAL
 cursor registry, rather than accumulating a `+1` on open and a `-1` on close. That is
@@ -275,11 +285,14 @@ while (true)
 // scope.DisposeAsync() runs here and closes the cursor.
 ```
 
-The `*Scope` family covers every cursor flavour - `OpenKeyCursorScopeAsync`,
+The `*Scope` family covers the five unfiltered cursor flavours - `OpenKeyCursorScopeAsync`,
 `OpenEntryCursorScopeAsync`, `OpenSnapshotKeyCursorScopeAsync`,
 `OpenSnapshotEntryCursorScopeAsync`, and `OpenDeleteRangeCursorScopeAsync` -
 so the choice between scoped and manual is independent of the
-cursor's semantics. Pick the scoped shape when the cursor lives and
+cursor's semantics. A predicate-filtered cursor (the
+`Open*CursorWherePredicateAsync` methods) has no scope helper; wrap its id
+in `new LatticeScopedCursor(lattice, cursorId)` for the same close-on-dispose
+behaviour. Pick the scoped shape when the cursor lives and
 dies inside one method; pick the manual shape when the cursor ID
 must survive a serialization or process boundary.
 
@@ -287,11 +300,13 @@ must survive a serialization or process boundary.
 
 - **Cross-cluster snapshot rendezvous.** A snapshot is local to the
   cluster that opened it.
-- **Writable snapshots.** `OpenDeleteRangeCursorAsync` with
-  `ZeroObservableWrites` is rejected.
+- **Writable snapshots.** There is no snapshot variant of
+  `OpenDeleteRangeCursorAsync`; a delete-range cursor spec is rejected under
+  zero-observable-writes.
 - **Snapshot reuse across cursors.** Two cursors opened at logically
-  identical coordinates do not share their materialised snapshot leaves;
-  each cursor's `coordinateHash` is salted by the cursor ID.
+  identical coordinates do not share their materialised snapshot leaves:
+  every open mints a fresh baseline token, and the snapshot leaves and their
+  baseline rows are keyed by it.
 - **Live-vs-snapshot diff.** Compute the diff in the caller by running
   a live cursor against the same range.
 

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Schema.Grpc API reference
 
-The public surface is the typed client, the server-side options, the registration extensions, and the wire message records. The gRPC service, method definitions, marshallers, interceptor, and default auth-scheme plumbing are internal and are described by behaviour in [Architecture](architecture.md).
+The public surface is the typed client, the server-side options, the registration extensions, the authorization and identity seams (with the operation enum and authorization-context struct), and the wire message records. The gRPC service, method definitions, marshallers, interceptor, and the default header credential bridge / options auth-scheme source are internal and are described by behaviour in [Architecture](architecture.md).
 
 The wire message records are Orleans-serialized (`[GenerateSerializer]`) with stable aliases prefixed `oisg.`. The facade and shared abstractions records use aliases prefixed `ois.`.
 
@@ -12,7 +12,7 @@ Static extensions.
 
 - `IServiceCollection AddLatticeSchemaApiGrpc(this IServiceCollection services, Action<LatticeSchemaApiGrpcOptions>? configure = null)`
 
-  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorization path, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the schema control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Idempotent. Throws `ArgumentNullException` when `services` is null.
+  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the schema control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Idempotent. Throws `ArgumentNullException` when `services` is null.
 
 - `IEndpointRouteBuilder MapLatticeSchemaApiGrpc(this IEndpointRouteBuilder endpoints)`
 
@@ -47,19 +47,58 @@ Methods (one per RPC):
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
 
-Methods that take a tree id reject a null or empty id. Methods that take a policy, config, transform, or target policy reject null inputs. `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` and `RemediateAsync` throw `ArgumentNullException` on a null policy or target policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
 
 ## Server-side options
 
 ### `LatticeSchemaApiGrpcOptions`
 
-See [Configuration](configuration.md) for the full table. Properties: `bool RequireAuthorization` (default `true`), `string CredentialHeaderName` (default `authorization`), `string CredentialScheme` (default `Bearer`), and `IList<AuthSchemeDescriptor> AdvertisedAuthSchemes` (empty by default).
+See [Configuration](configuration.md) for the full table. Properties: `bool RequireAuthorization` (default `true`), `string CredentialHeaderName` (default `authorization`), `string CredentialScheme` (default `Bearer`), `string ActiveTenantHeaderName` (default `lattice-active-tenant`), and `IList<AuthSchemeDescriptor> AdvertisedAuthSchemes` (empty by default).
 
-## Authorization behaviour
+## Authorization and identity seams
+
+### `ILatticeSchemaApiAuthorizer`
+
+The transport meta-authorization seam. A host supplies an implementation to decide whether an inbound call may drive the schema control API.
+
+- `Task<bool> IsAuthorizedAsync(LatticeSchemaApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)` - `true` to allow, `false` to reject with `PermissionDenied`.
+
+### `DenySchemaApiAuthorizer` : `ILatticeSchemaApiAuthorizer`
+
+The default authorizer, registered automatically (via `TryAdd`, so a host-registered authorizer wins), that rejects every protected call so a host that maps the surface without configuring authorization fails closed.
+
+### `AllowAllSchemaApiAuthorizer` : `ILatticeSchemaApiAuthorizer`
+
+An opt-in authorizer that permits every protected call, for trusted-network deployments behind a separate authentication boundary. Register it explicitly to override the default-deny posture.
+
+### `ILatticeSchemaApiCredentialBridge`
+
+The identity seam that lifts the caller identity on an inbound call into an ambient `LatticeCredential` so the schema access gate can resolve the caller's subject.
+
+- `LatticeCredential? Resolve(ServerCallContext context)` - the resolved credential, or `null` when the call carries none (the caller is then anonymous, and denied when auth-backed schema control is active). The built-in default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix; a host registers its own implementation for a bespoke identity source.
+
+### `ILatticeSchemaApiAuthSchemeSource`
+
+Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
+
+- `AuthSchemeAdvertisement GetAdvertisement()` - the current advertisement (the built-in default projects `AdvertisedAuthSchemes`, so it is empty when nothing is configured). An implementation must return only public configuration - never a secret.
+
+### `LatticeSchemaApiOperation`
+
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read).
+
+### `LatticeSchemaApiAuthorizationContext`
+
+A `readonly struct` describing an inbound call to the authorizer.
+
+- Constructor: `LatticeSchemaApiAuthorizationContext(ServerCallContext call, LatticeSchemaApiOperation operation, string? targetId)`. Throws `ArgumentNullException` when `call` is null.
+- `ServerCallContext Call` - the underlying gRPC call context (headers, deadline, peer).
+- `LatticeSchemaApiOperation Operation` - the operation being invoked.
+- `string? TargetId` - the governed tree id the call targets; every protected schema RPC carries one.
 
 ### Authorization interceptor
 
-The internal fail-closed authorization interceptor denies by default, exempts only `GetAuthScheme`, and maps unknown or unmapped failures to safe gRPC status codes. A host must configure authorization deliberately or place the endpoint behind a trusted boundary and set `RequireAuthorization = false`.
+The internal authorization interceptor runs the registered `ILatticeSchemaApiAuthorizer` on every protected call while `RequireAuthorization` is `true` (the default), exempts only `GetAuthScheme`, and presents an unrecognised method as `Unknown`. A host must configure authorization deliberately or place the endpoint behind a trusted boundary and set `RequireAuthorization = false`. Server faults that the binding does not map to a specific status are returned with a safe gRPC status code (see [Architecture](architecture.md#status-mapping)).
 
 `GetAuthScheme` advertises the configured public auth schemes to unauthenticated callers. It must never return secrets or user-specific data.
 

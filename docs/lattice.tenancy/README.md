@@ -402,7 +402,7 @@ enforcement stays lock-free:
 | `MaxLeaseBackoff` | `TimeSpan` | `5m` | The ceiling the lease interval backs off to after consecutive cycle failures. The effective interval doubles per consecutive failure and resets to `LeaseInterval` on the first success, so a persistently unhealthy registry is probed at a decaying rate rather than hammered every tick. A value below `LeaseInterval` disables backoff; a non-positive value falls back to the default. |
 | `RateSnapshotTtl` | `TimeSpan` | `2m` | How long a read of the registry's configured rates stays usable before the next cycle re-reads it. Configured rates change at administrative cadence, so caching them decouples the frequent re-apportionment of token buckets from the expensive whole-tree registry scan. The snapshot is stale-if-error, so a failed refresh apportions from the previous snapshot rather than pruning every tenant's bucket. A non-positive value falls back to the default. |
 | `Apportionment` | `TenantRateApportionmentStrategy` | `Demand` | `Demand` leases demand-proportionally and degrades to static-even when no cluster-wide demand aggregate is available; `StaticEven` is the zero-coordination fallback that splits the rate evenly. |
-| `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]`; ignored under `StaticEven`. |
+| `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]` (a value outside is clamped to that range); ignored under `StaticEven`. |
 
 A breach surfaces as a `LatticeQuotaExceededException` on the `ops-per-second`
 dimension. Unlike the footprint dimensions it is **transient**: the same call
@@ -497,9 +497,11 @@ region becomes `Online` or an old one is fully drained.
 
 Every instrument is an **observable gauge** on the `orleans.lattice.tenancy` meter
 (`LatticeTenantMetrics.MeterName`). Each series carries a single `tenant` tag
-(`LatticeTenantMetrics.TagTenant`) identifying the owning tenant; the one
-cluster-aggregate series is untagged. Set `PublishGauges = false` to publish none of
-them.
+(`LatticeTenantMetrics.TagTenant`): the owning tenant's id on every per-tenant
+series (`default` for the reserved legacy-adoption tenant), and the reserved
+`_platform_` sentinel on the one cluster-aggregate series,
+`orleans.lattice.tenancy.tenants`. The per-tenant series cover every tenant in the
+registry. Set `PublishGauges = false` to publish none of them.
 
 | Instrument | Meaning |
 |---|---|
@@ -518,13 +520,16 @@ them.
 | `orleans.lattice.tenancy.overage.memory_bytes` | Converged, durable metered resident-memory overage. |
 | `orleans.lattice.tenancy.overage.trees` | Converged, durable metered owned-tree overage. |
 
-A `quota.*` gauge emits a measurement **only for a tenant whose corresponding
-dimension is bounded** - an unbounded (`null`) ceiling contributes no series at all,
-so "no series" reads as "unlimited on that dimension" rather than "zero". Usage
-gauges reflect the last landed metering sample (see `MeterInterval` above), so a
-tenant with no sample yet has no usage series. The `overage.*` gauges are the
-billing-ready tallies: they are grow-only converged sums, not instantaneous
-readings.
+The four ceiling gauges (`quota.bytes`, `quota.keys`, `quota.memory_bytes`, and
+`quota.trees`) emit a measurement **only for a tenant whose corresponding dimension
+is bounded** - an unbounded (`null`) ceiling contributes no series at all, so "no
+series" reads as "unlimited on that dimension" rather than "zero".
+`quota.burst_percent` is emitted for every tenant, `0` when it has no burst
+allowance. Usage gauges reflect the last landed metering sample (see
+`MeterInterval` above); a registered tenant with no sample yet reports zero usage
+rather than no series, so a zero reading can also mean "not yet metered". The
+`overage.*` gauges are the billing-ready tallies: they are grow-only converged sums,
+not instantaneous readings.
 
 `MaxOpsPerSecond` has no gauge: the rate budget is enforced from silo-local token
 buckets rather than from a published aggregate, so a breach is observed through the
@@ -536,6 +541,30 @@ variable so a panel can be scoped to a single tenant or to every tenant. See
 `docs/lattice.dashboards/metrics-to-panel-map.md` for the instrument-to-panel
 mapping. To consume them directly instead, subscribe to the
 `orleans.lattice.tenancy` meter from your OpenTelemetry exporter.
+
+### The derived `tenant` dimension
+
+Beyond this meter, every instrument that Orleans.Lattice and its add-on packages
+publish carries the same derived `tenant` tag (`LatticeTenantLabel.TagTenant`). It
+is emitted on tenancy-on and tenancy-off clusters alike, so a dashboard query is
+byte-identical in both deployment modes, and it is derived from the tree id rather
+than read from the caller:
+
+| Tree id | `tenant` value |
+|---|---|
+| A well-formed `t/{tenantId}/{name}` id | The owning tenant's id. |
+| A bare, unsegmented id (every id on a tenancy-off cluster) | `default` (`LatticeTenantLabel.DefaultTenant`), the legacy-adoption tenant. |
+| A `_lattice_` or `sys-` id, or a malformed `t/` id | `_platform_` (`LatticeTenantLabel.PlatformTenant`). |
+
+An instrument with no tree dimension carries `_platform_` too, unless its
+measurement is attributable to a tenant some other way - the per-tenant gauges on
+this meter carry the tenant id directly. `default` is a real, queryable tenant;
+`_platform_` names platform state that no tenant may see. The sentinel is a tag
+value rather than an absent label, and it opens with an underscore - which the
+tenant-id grammar forbids - so it can never collide with a real tenant. A
+tenant-scoped matcher such as `tenant="acme"` therefore excludes platform series
+by construction, and a tree-id regex is not a substitute: `tree!~"^t/.*"` would
+also match the `_lattice_` and `sys-` platform trees.
 
 ## Security
 

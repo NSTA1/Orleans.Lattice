@@ -167,8 +167,9 @@ public sealed class LatticeScalingSignalOptions
     /// or above which retained WAL bytes are treated as capacity pressure -
     /// both for the aggregate <see cref="StoragePressure.OverThreshold"/> flag and
     /// for per-account <see cref="WalAccountPressure.OverThreshold"/> /
-    /// <see cref="WalPressureClassification.CapacityBound"/> classification. Clamped
-    /// to the open-closed interval <c>(0, 1]</c> at evaluation time.
+    /// <see cref="WalPressureClassification.CapacityBound"/> classification. At
+    /// evaluation time a non-positive value falls back to the default and a value
+    /// above 1 is clamped to 1, so the effective ratio is always in <c>(0, 1]</c>.
     /// <para>
     /// The ceiling is resolved <b>per tree</b>, so a per-tree option value or
     /// runtime override applies, not only the silo-wide default. An account's

@@ -237,7 +237,8 @@ What is in place, and why.
 ## Voice
 
 - **Engine:** Kokoro-82M, run locally by the HyperFrames CLI. It needs no
-  account, key or network, costs nothing, and the same script and settings
+  account or key, and no network once the CLI has downloaded the model on the
+  first narration run; it costs nothing, and the same script and settings
   give the same narration, so audio is as reproducible as the pictures.
   Hosted voices (HeyGen, ElevenLabs) are richer but need a key, and neither is
   reproducible.
@@ -321,7 +322,8 @@ Checked against the live services on 2026-09-24:
 - **The site has room.** The published site is 41.7 MB (725 files) of its
   1 GB, so the current cut of all 24 planned episodes, about 260 MB, fits.
   100 GB a month is about 9,000 full plays of the introduction, and a visitor
-  who never presses play downloads almost nothing (`preload="metadata"`).
+  who never presses play downloads only the poster (the player is
+  `preload="none"`).
 - **Release files are not part of the site.** They count against neither the
   site's 1 GB nor git history, and have no total-size or bandwidth limit. But
   a release file is served through a signed link that expires within the hour,

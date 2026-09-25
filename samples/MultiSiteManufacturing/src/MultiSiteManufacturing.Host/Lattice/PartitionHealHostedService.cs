@@ -12,7 +12,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// and GC'd. Running on every silo is intentional: each silo heals
 /// only its own shadow prefix (<c>shadow/{siloId}/…</c>), and the
 /// resulting two promotions naturally merge in the shared tree via
-/// LWW (operator register) and set union (G-Set labels).
+/// LWW (operator register) and OR-Set merge (process labels).
 /// </summary>
 internal sealed class PartitionHealHostedService(
     IGrainFactory grainFactory,

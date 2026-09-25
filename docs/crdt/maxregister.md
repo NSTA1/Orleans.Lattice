@@ -16,8 +16,8 @@ The register is generic over your value type `T`. Because the store cannot know
 your ordering, you supply an `orderKeySelector` that produces an
 **order-preserving** `byte[]` key for a value: its unsigned lexicographic byte
 order must match the intended value order (for example a big-endian encoding of a
-numeric reading). The key travels on the wire alongside the value so the receiver
-folds without needing your comparer.
+non-negative numeric reading). The key travels on the wire alongside the value so
+the receiver folds without needing your comparer.
 
 Reach for it when a value only ever moves in one direction: a monotone gauge, a
 version ceiling, a max-seen sensor reading, a highest-offset watermark. Its
@@ -41,7 +41,7 @@ sequenceDiagram
 ## Example
 
 ```csharp verify
-// The order key must be order-preserving: big-endian bytes of the reading.
+// The order key must be order-preserving: big-endian bytes of a non-negative reading.
 var peak = tree.MaxRegister<long>("sensor:42:peak", static v =>
 {
     var key = new byte[8];
@@ -53,7 +53,11 @@ var peak = tree.MaxRegister<long>("sensor:42:peak", static v =>
 await peak.SetAsync(1013, cancellationToken);
 await peak.SetAsync(1007, cancellationToken);
 
-long? highest = await peak.GetAsync(cancellationToken);
+long highest = await peak.GetAsync(cancellationToken); // 1013
+
+// Before the first write GetAsync returns default(T) - 0 for a long - so ask
+// HasValueAsync when "never written" must be told apart from a real 0.
+bool written = await peak.HasValueAsync(cancellationToken);
 ```
 
 See also: its low-water mirror [Min-Register](minregister.md), the multi-value

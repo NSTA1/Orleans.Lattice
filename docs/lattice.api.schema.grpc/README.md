@@ -53,7 +53,7 @@ Register the binding on a silo that already has `AddLatticeSchemaApi`, then map 
 
 `LatticeSchemaApiGrpcClient` is created over a caller-supplied `CallInvoker` and an `IServiceProvider` with Orleans serialization registered (`AddSerializer()`). The typed client carries no address, TLS, retry, deadline, or credential policy of its own.
 
-A call the server rejects arrives as a `PermissionDenied` or `Unauthenticated` transport failure; the client translates auth failures consistently. Other unmapped server faults are returned with a safe gRPC status rather than leaking implementation details. See [Architecture](architecture.md#status-mapping) for the mapping.
+A call the server rejects arrives as a `PermissionDenied` `RpcException` (the client surfaces the server status unchanged). Other unmapped server faults are returned with a safe gRPC status rather than leaking implementation details. See [Architecture](architecture.md#status-mapping) for the mapping.
 
 ## Reference
 

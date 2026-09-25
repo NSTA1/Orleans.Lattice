@@ -39,7 +39,7 @@ See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation 
 | Non-atomic bulk upsert | `SetManyAsync` | `SetMany` | `SetManyAsync(pairs)` |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
 | Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the grain-factory cross-tree coordinator surface |
-| Point read | `GetAsync` | `Get` | `GetAsync(key)` |
+| Point read | `GetAsync` | `Get` | `GetWithVersionAsync(key)`, after a `TreeExistsAsync` probe so an unknown tree is a clean miss rather than a created tree |
 | Bounded range-read page | `ReadRangeAsync` | `ReadRange` | the paged entry-cursor surface (`OpenEntryCursorAsync` / `NextEntriesAsync` / `CloseCursorAsync`) |
 | Typed CRDT write | `CounterIncrementAsync`, `SetAddAsync`, `OrFlagEnableAsync`, `RwFlagEnableAsync`, `GCounterIncrementAsync`, `GSetAddAsync`, `RwSetAddAsync`, `VersionVectorTickAsync`, `RegisterSetAsync`, `MaxRegisterSetAsync`, `MinRegisterSetAsync`, `SequenceInsertAtAsync`, `MapSetAsync`, and their matching mutation verbs | `CrdtWrite` | the typed CRDT facade extension surface |
 | Typed CRDT read | `CounterGetAsync`, `SetGetAsync`, `OrFlagGetAsync`, `RwFlagGetAsync`, `GCounterGetAsync`, `GSetGetAsync`, `RwSetGetAsync`, `VersionVectorGetAsync`, `RegisterGetAsync`, `MaxRegisterGetAsync`, `MinRegisterGetAsync`, `SequenceGetAsync`, `MapGetAsync` | `CrdtRead` | the typed CRDT read surface |

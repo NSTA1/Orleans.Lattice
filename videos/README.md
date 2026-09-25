@@ -76,10 +76,12 @@ npm run render -- --episode introduction --quality draft -o renders/introduction
 | `npm run ascii` | fail on any non-ASCII character in this folder |
 | `npm test` | unit tests for the tools and the browser runtime |
 
-Every command runs the pinned CLI from `node_modules` through
-[tools/hf.js](tools/hf.js), which switches off HyperFrames telemetry, update
-checks and skill installation. `snapshot` never sends frames to a hosted vision
-model unless you pass `--describe` yourself.
+Every command runs the pinned CLI from `node_modules` with HyperFrames
+telemetry, update checks and skill installation switched off: the project
+commands through [tools/hf.js](tools/hf.js), and narration through the runner
+it shares, [tools/lib/hyperframes.js](tools/lib/hyperframes.js). `snapshot`
+never sends frames to a hosted vision model unless you pass `--describe`
+yourself.
 
 The CLI's project commands open only `<project>/index.html`, and its lint finds
 other compositions only under a folder named `compositions/`. `--episode`
@@ -93,7 +95,8 @@ are root-relative, exactly as the smoke test's are.
 ```text
 videos/
   README.md, series.md, frame.md    how to work here, the plan, the look
-  package.json, hyperframes.json    the workspace
+  package.json, package-lock.json   the workspace and its pinned toolchain
+  hyperframes.json, meta.json       HyperFrames project configuration
   index.html                        workspace smoke test, not an episode
   shared/                           everything more than one episode uses
     brand/brand.css                 imports the site's design system; adds the camera sizes and notation
@@ -183,5 +186,6 @@ gates still scan every file here.
 ## Licences
 
 HyperFrames and the Kokoro-82M voice model are Apache-2.0. GSAP is used under
-its standard no-charge licence. None of them is vendored: all three arrive from
-npm or pip at install time.
+its standard no-charge licence. None of them is vendored: HyperFrames and GSAP
+arrive from npm, Kokoro's runtime from pip, and the Kokoro-82M model is
+downloaded the first time narration runs.

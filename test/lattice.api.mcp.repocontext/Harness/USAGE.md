@@ -38,8 +38,10 @@ Switch the posture; nothing else changes:
 - `RepoContextMcpAuthPosture.Reader` - granted the repository-context group but not
   the host-side write opt-in: the read-only tools are offered, no mutating tool is.
 - `RepoContextMcpAuthPosture.Writer` - granted the group with the write opt-in: the
-  read-only tools plus, once they land, the mutating tools (with the correct
-  destructive/read-only hints) are offered.
+  read-only tools plus the mutating tools (with the correct destructive/read-only
+  hints) are offered. The path-taking onboarding tool is among them because the
+  harness passes a `WorkspaceRoot` (the system temp directory unless a fixture
+  sets another).
 
 The posture is driven through deterministic stub collaborators (a stub credential
 bridge and a stub permission resolver), so it never depends on a real Auth policy

@@ -8,7 +8,7 @@ Static extension method on `ISiloBuilder`.
 
 - `ISiloBuilder AddLatticeBackupAzureBlob(this ISiloBuilder builder, Action<LatticeBackupAzureBlobOptions> configure)`
 
-  Registers the Azure Blob Storage sink as the silo's `ILatticeBackupSink`, replacing the in-cluster default that `AddLatticeBackup` installs. The registration is idempotent (a repeat call keeps the last configuration) and may be called before or after `AddLatticeBackup` because it replaces the sink registration outright. The container client is built once, from the populated authentication mode, when the sink is first resolved. Throws `ArgumentNullException` when `builder` or `configure` is null.
+  Registers the Azure Blob Storage sink as the silo's `ILatticeBackupSink`, replacing the in-cluster default that `AddLatticeBackup` installs. It may be called before or after `AddLatticeBackup` because it replaces the sink registration outright. A repeat call re-registers the sink and adds its `configure` delegate after the earlier ones - every delegate runs, in registration order - so a later call overrides only the properties it sets; setting a second authentication mode on top of an earlier one is rejected at validation. The container client is built once, from the populated authentication mode, when the sink is first resolved. Throws `ArgumentNullException` when `builder` or `configure` is null.
 
 ## `LatticeBackupAzureBlobOptions`
 

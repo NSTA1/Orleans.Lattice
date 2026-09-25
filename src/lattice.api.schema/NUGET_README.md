@@ -4,10 +4,11 @@ Optional, opt-in **schema-management control facade** add-on for
 [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a single
 transport-agnostic admin surface that drives the
 [`Orleans.Lattice.Schema`](https://www.nuget.org/packages/Orleans.Lattice.Schema)
-engine - set / clear / inspect enforcement policy, envelope versioning
-(set / advance / migrate / clear), background remediation, and a read-only
-per-tree compliance audit - from one place. A sibling package projects this
-facade onto a code-first gRPC surface.
+engine - set / clear / inspect enforcement policy, dead-letter inspection,
+envelope versioning (set / advance / migrate / clear), background remediation,
+a read-only per-tree compliance audit, and a side-effect-free capability probe -
+from one place. A sibling package projects this facade onto a code-first gRPC
+surface.
 
 ## Design
 

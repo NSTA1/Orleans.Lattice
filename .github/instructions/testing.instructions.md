@@ -81,10 +81,10 @@ Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
 
 A false green is worse than a red. A red is a defect to fix; a green that never
 ran the property it names is a defect *plus* a standing claim that there is no
-defect, which is why these survive for so long. Six shapes have cost real time
-on this repository and each is cheap to avoid once named. A seventh - an
+defect, which is why these survive for so long. Seven shapes have cost real time
+on this repository and each is cheap to avoid once named. An eighth - an
 emulator-gated run that prints `Passed!` while 89 tests silently vanish - is
-documented under Tier 3 above.
+documented under Tier 3 below.
 
 The common structure is worth holding onto, because it generalises past testing:
 **an artefact produced by an action cannot be validated by a check that runs
@@ -296,9 +296,11 @@ produced no in-band evidence that it can observe anything at all.
 
 ### A fixture CI builds but never selects, and its near-miss twin
 
-CI does not run this project's content gates by listing them. It runs one filter,
-`(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)`,
-so a fixture is included only if its **fully-qualified name** contains one of
+CI does not run this project's content gates by listing them. It runs one filter
+whose inclusion clause is
+`(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)`
+(the whole filter is quoted under "How these gates reach CI" below), so a fixture
+is included only if its **fully-qualified name** contains one of
 those words. Put a new hygiene fixture in `test/lattice/Hygiene/` but leave it in
 namespace `Orleans.Lattice.Tests`, and CI compiles it on every run and never
 executes a single one of its tests. Nothing reports this: the build is green, the
@@ -307,12 +309,14 @@ gate job is green, and the test count is the only thing that moves.
 namespace - not its directory - is what satisfies it.
 
 The near-miss is the part worth remembering, because the gate stays green through
-it. A fixture named `PerturbationResidueHygieneTests` in namespace
-`Orleans.Lattice.Tests` **is** selected - not because it is wired up, but because
-the word `Hygiene` happens to appear in its *type name*. It runs today and it
-would silently stop running the day somebody renames the class, with no failing
-check at the moment of the rename. So place the fixture in
-`Orleans.Lattice.Tests.Hygiene` (or the `.Formal` / `.Docs` sibling) and let the
+it. Left in namespace `Orleans.Lattice.Tests`, a fixture named
+`PerturbationResidueHygieneTests` **would** still be selected - not because it is
+wired up, but because the word `Hygiene` happens to appear in its *type name*. It
+would run, and it would silently stop running the day somebody renamed the class,
+with no failing check at the moment of the rename: `CiContentGateWiringTests`
+matches the fully-qualified name against the filter, so the coincidence satisfies
+it too. That is why the real fixture sits in `Orleans.Lattice.Tests.Hygiene`: place
+a fixture in that namespace (or the `.Formal` / `.Docs` sibling) and let the
 namespace carry the selection. Matching on a coincidence in the type name is a
 green you did not earn, and it expires without telling you.
 
@@ -377,15 +381,17 @@ silently proves less than the original while looking identical at the call site.
 - **`MeterListening`** - meter and instrument listeners that take the target as a
   parameter, so the unsafe declaration ordering is not expressible.
 
-Several private copies predate this library and have not been migrated yet - nine
-hand-written `TimeProvider` fakes under four different names, two
-`InMemoryVectorIndexStore` copies, and four `FakePersistentState<T>` copies. Issue
-#3147 tracks retiring them. Do not add to that set: reach for the shared helper, and
+Several private copies predate this library and have not been migrated yet. Issue
+#3147 inventories nine hand-written `TimeProvider` fakes under four different
+names, two `InMemoryVectorIndexStore` copies, and four `FakePersistentState<T>`
+copies, and tracks retiring them. Its `TimeProvider` inventory is not exhaustive:
+a whole-tree search finds more than sixty private `TimeProvider` subclasses under
+`test/`. Do not add to that set: reach for the shared helper, and
 if it lacks something you need, add it there.
 
 ## Running Tests
 
-The suite has grown past the point where running everything is a reasonable inner-loop action. There are ~340 test files across five test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
+The suite has grown past the point where running everything is a reasonable inner-loop action. There are about 3,000 test files across fifty test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
 
 Counter-intuitively, "just run the integration tests" is the *slowest* possible loop. Integration tests are precisely what you want to defer.
 
@@ -412,7 +418,7 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
   --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc"
 ```
 
-The five test projects (`Orleans.Lattice.Tests`, `Orleans.Lattice.Replication.Tests`, `Orleans.Lattice.Replication.Grpc.Tests`, `Orleans.Lattice.Storage.AzureTable.Tests`, `Orleans.Lattice.Dashboards.Tests`) are independent - if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
+Each package's tests live in their own project under `test/<package>/` - fifty test projects in all, alongside the shared `Orleans.Lattice.Testing` library - and they are independent: if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
 
 ### Tier 3 - before committing (a few minutes)
 
@@ -477,7 +483,7 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 
 **Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
-**Catching cross-project breakage is CI's job, not the local dev loop's.** CI runs the full cross-solution non-chaos suite on every PR (plus the `Chaos` and `AzureStorageEmulator` suites), so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
+**Catching cross-project breakage is CI's job, not the local dev loop's.** On every PR, CI runs the non-chaos suite (plus the `Chaos` and `AzureStorageEmulator` suites) of every package the change can reach - the changed packages, every package that project-references them, and `lattice.dashboards` always; a shared or root change fans out to every package - so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
 
 **Exception: the repository-wide gates scan every package, and they do not all live in one test project.** The scoping rule above is correct for ordinary tests and structurally blind to these. Seventeen fixtures below are repository-wide, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all. Fifteen resolve the repository root and scan **all of `src/`** irrespective of which package they sit in; `DashboardJsonTests` and `MetricDocArmArityTests` are repository-wide by reflection over the live meters instead and contain no `src` path at all, which is why "scans `src/`" is not by itself the membership rule. Note the set is defined by the **concern** (instruments), not by a directory: they are spread across `test/lattice/`, `test/lattice.dashboards/`, and `test/lattice.api.telemetry/`, so treating `test/lattice/` as the boundary reproduces the very blindness this exception exists to correct. `RepositoryWideGateEnrolmentTests` computes this population from source and fails if the table, or either count above, drifts from it. It also checks the third column, within the limits of what prose allows: **a backticked PascalCase word in that column is read as a claim that the symbol exists in the fixture the row names**, and is verified against that fixture's source, so a rename cannot leave the description quietly false. A cell claiming its gate reads `src/` is checked against the computed scanner population. Note that the recorded non-scanners are load-bearing for the distinction between the three spelled counts above: the total and the "must also run these" count are compared against the row count, while the scanner count is compared against rows *minus* the recorded non-scanners. Those three were numerically equal for most of this table's history, so the differing denominator was invisible to every earlier reader - and if the recorded non-scanners were ever removed they would collapse back to equal, inviting the next person to re-derive the wrong rule from the evidence in front of them. The rest of the cell is prose and is not machine-checked - if you write a description carrying no backticked symbol, nothing verifies it.
 
@@ -535,7 +541,7 @@ The tier filters above only get sharper over time if tests are correctly categor
 - Tag tests that require an external service (Azurite, a real Azure resource, a gRPC server bound to a port, etc.) with the service name, e.g. `[Category("AzureStorageEmulator")]`.
 - Tag fixtures whose sole job is to verify documentation or sample code (e.g. `DocsSnippetCompilationTests`) with `[Category("Docs")]`.
 - Tag Coyote systematic-concurrency models (fixtures that drive a shared correctness core through `CoyoteModelHarness`) with `[Category("Coyote")]`. See "Coyote concurrency tier" below.
-- Tag fixtures that shell out to the TLA+ model checker with `[Category("Tlc")]`. They need a JVM and `tla2tools.jar`, which is the same reason `AzureStorageEmulator` exists as a category, and the Tier 1 filter excludes them so a contributor without that toolchain is not blocked. CI provisions the toolchain and the fixtures run there in the `deterministic` tier, which is the complement of `Chaos` and `Coyote` and therefore needs no matrix-planner change. Such a fixture must handle a missing toolchain asymmetrically: `Assert.Ignore` locally (a *visible* `Skipped` count - never `Assert.Inconclusive`, per the false-green trap above) but `Assert.Fail` when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a broken pipeline and a verification gate that quietly evaporates still reads as coverage. See `test/lattice/Formal/TlcModelCheckTests.cs` and [`spec/README.md`](../../spec/README.md).
+- Tag fixtures that shell out to the TLA+ model checker with `[Category("Tlc")]`. They need a JVM and `tla2tools.jar`, which is the same reason `AzureStorageEmulator` exists as a category, and the Tier 2 filter excludes them so a contributor without that toolchain is not blocked. CI provisions the toolchain and the fixtures run there in the `deterministic` tier, which is the complement of `Chaos` and `Coyote` and therefore needs no matrix-planner change. Such a fixture must handle a missing toolchain asymmetrically: `Assert.Ignore` locally (a *visible* `Skipped` count - never `Assert.Inconclusive`, per the false-green trap above) but `Assert.Fail` when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a broken pipeline and a verification gate that quietly evaporates still reads as coverage. See `test/lattice/Formal/TlcModelCheckTests.cs` and [`spec/README.md`](../../spec/README.md).
 - Tag browser-driven Playwright tests with `[Category("UI")]`. They live in their own project (`test/lattice.explorer.uitests/`), never in a package's test project. See "Browser UI tier" below.
 - Pure in-process unit tests (grains constructed directly with `FakePersistentState<T>`, primitive type tests, options tests) do not need a category.
 - Prefer fixture-level `[Category(...)]` over per-method tagging so the tag stays consistent across partial test files.
@@ -944,7 +950,7 @@ dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.cspro
 Two traps there, both of which silently cost coverage rather than failing:
 
 - The discovery glob is `*Tests.csproj`, **not** `*.Tests.csproj`. A project named `Orleans.Lattice.Explorer.UiTests.csproj` has no literal dot before `Tests`, so the stricter glob skipped it entirely.
-- `--collect:"XPlat Code Coverage"` needs the test project to reference **`coverlet.collector`**. Without it the flag is accepted, the tests pass, and no report is emitted at all. Every test project must carry it.
+- `--collect:"XPlat Code Coverage"` needs the test project to reference **`coverlet.collector`**. Without it the flag is accepted, the tests pass, and no report is emitted at all. Every test project the lane discovers must carry it (the lane skips `test/microbench/` and `test/azure-throughput-silo/`, which carry none).
 
 When you add a test project, verify it is actually discovered and actually emits a `coverage.cobertura.xml` - do not assume the naming convention matched.
 Like `Explorer CI`, it is **advisory rather than a required check** - it does not run on most PRs, and a required check that never reports leaves a PR pending forever. Treat a failure as blocking by convention.
@@ -953,7 +959,7 @@ Like `Explorer CI`, it is **advisory rather than a required check** - it does no
 
 Browser tests are slow and are the easiest place in this repo to introduce flake. The review bar rejects timing-dependent tests: use Playwright's web-first assertions and auto-waiting, never `Task.Delay` or `Thread.Sleep`. If a browser test would pass as a bUnit test, it belongs in bUnit.
 
-## TLA+ specification (not a required check)
+## TLA+ specification
 
 The atomic-commit protocol also has a design-level TLA+ specification under the
 top-level [`spec/`](../../spec/) directory (`AtomicCommit.tla` + `.cfg`, checked
@@ -963,14 +969,18 @@ while the TLA+ spec checks the protocol *design* exhaustively over small bounded
 instances. See `spec/README.md` for how to run it and `spec/Refinement.md` for
 the mapping from spec actions to the code cores.
 
-TLC is deliberately **not** a required per-PR check. It needs a Java runtime and
-the TLA+ tools, which the .NET build image does not carry, and the spec tracks
-the protocol design rather than any single code change, so gating every PR on it
-would add a heavyweight toolchain for little marginal signal. It is run locally
-when the protocol design changes; a non-required scheduled workflow could run it
-nightly if the model portfolio grows, but no required check may depend on the
-TLA+ toolchain. `spec/` is outside `Orleans.Lattice.slnx` and is not built by
-`dotnet`.
+TLC **is** run per PR, through an ordinary NUnit fixture rather than a workflow
+step of its own: `test/lattice/Formal/TlcModelCheckTests.cs` (`[Category("Tlc")]`)
+checks the specification and a mutant generated from each definition in
+`spec/mutations/`, so every property has to demonstrate that it can go red. It
+rides the test fan-out in the `deterministic` tier; every CI test leg provisions a
+Temurin 17 runtime and a digest-pinned `tla2tools.jar` first, and
+`CiTlaToolchainProvisioningTests` requires every workflow that runs .NET tests to
+provision the same toolchain or carry a `# tla-toolchain: not-required - <reason>`
+marker. Locally the fixture calls `Assert.Ignore` when the toolchain is missing
+(see "Categorization conventions" above). This reverses an earlier decision to
+keep TLC out of per-PR CI; the "CI decision" section of `spec/README.md` records
+why. `spec/` is outside `Orleans.Lattice.slnx` and is not built by `dotnet`.
 
 ## Hygiene gates
 
@@ -984,7 +994,7 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedNa
 
 Two things that filter does **not** cover, so do not treat it as "all gates":
 
-- `DocsSnippetCompilationTests` is **not** matched - its name has no `Hygiene` and it is `[Category("Docs")]`. It is also far heavier (it Roslyn-compiles every `csharp verify` snippet under `docs/`). Run it when you have touched docs, either by name or by category:
+- `DocsSnippetCompilationTests` is **not** matched - its name has no `Hygiene` and it is `[Category("Docs")]`. It is also far heavier (it Roslyn-compiles every `csharp verify` snippet in its scope), and it is split by package: the core project's fixture compiles `docs/lattice/`, the repo-root `README.md`, and any `docs/<package>/` subtree no package fixture claims (`CoreDocsSnippetScope.ClaimedPackageDocsRoots` lists the claimed ones), while each claiming package's own test project compiles its `docs/<package>/` subtree. Run it when you have touched docs - in the core project, and in the project of each package whose docs you touched - either by name or by category:
 
   ```powershell
   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippet"
@@ -1019,12 +1029,15 @@ and verify with:
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~SliceCoverage"
 ```
 
-That namespace convention is now load-bearing rather than cosmetic, and
-`CiContentGateWiringTests` enforces it: **a `[TestFixture]` under a
-`test/<pkg>/Hygiene/`, `test/<pkg>/Formal/`, or `test/<pkg>/Docs/` directory must
-sit in a namespace naming its family**, because that is how CI's content-gate job
-selects it. A fixture that falls outside the filter is still built and never run,
-which is silent - so the guard fails the build instead.
+That namespace convention is now load-bearing rather than cosmetic: **a
+`[TestFixture]` under a `test/<pkg>/Hygiene/`, `test/<pkg>/Formal/`, or
+`test/<pkg>/Docs/` directory must be selected by CI's content-gate filter**, and
+`CiContentGateWiringTests` fails the build when one is not. A namespace naming the
+fixture's family is what guarantees the selection; the guard matches the
+fully-qualified name, so a family word that only appears in the type name passes
+it too (the near-miss described under "False greens"). A fixture that falls
+outside the filter is still built and never run, which is silent - so the guard
+fails the build instead.
 
 The shared bases are discovered through their per-project subclasses, so each gate's `[TestFixture]` lives under the consuming project's `Hygiene/` folder; the table below lists what each enforces.
 
@@ -1032,7 +1045,7 @@ The shared bases are discovered through their per-project subclasses, so each ga
 |---|---|---|
 | `EmDashHygieneTests` | No em-dash (U+2014) in any tracked text file - source, tests, docs, build scripts, samples, or config. | Use a plain ASCII hyphen (`-`). Do not paste prose from word processors that auto-convert `--` to an em-dash. Runs per project over its own slice; the core project also covers repo-level files. |
 | `MojibakeHygieneTests` | No byte-level mojibake (a UTF-8 stream decoded as Windows-1252 / CP437 / CP850 and re-encoded) in any tracked text file. | Author plain ASCII. Mojibake leaks when prose or PR-body text is pasted from a terminal or editor whose code page disagrees with the UTF-8 bytes, producing nonsense runs in place of smart quotes, apostrophes, ellipses, dashes, arrows, or check-marks. Runs per project over its own slice; the core project also covers repo-level files. |
-| `DeletionMandateHygieneTests` | Retired apply-mode / staging-buffer identifiers (`AtomicApplyEntry`, `ApplyManyAtomicAsync`, `IReplicationTxBufferGrain`, and siblings) never reappear in source or test code. | Use the universal cross-cluster atomic-visibility primitive instead. Runs in every project over its own `.cs` slice. |
+| `DeletionMandateHygieneTests` | Retired apply-mode / staging-buffer identifiers (`AtomicApplyEntry`, `ApplyManyAtomicAsync`, `IReplicationTxBufferGrain`, and siblings) never reappear in source or test code. | Use the universal cross-cluster atomic-visibility primitive instead. Runs in the core project over the repo-level scope, and in each package project that carries a subclass over that project's own `.cs` slice. Unlike the em-dash and mojibake gates it is not carried by every slice-registered project, and a registered slice whose project carries none is not scanned for these identifiers. |
 | `IntegrationCategoryHygieneTests` | Every fixture that stands up a cluster (a `TestCluster`, `TestServer`, `IHost`, `GrpcChannel`, or any `*ClusterFixture`-suffix helper) carries a slow category. | Tag the fixture `[Category("Integration")]` (or `("Chaos")` / `("AzureStorageEmulator")`). This keeps the tiered run filters safe. Runs in every test project against that project's own assembly. |
 | `IntegrationCategoryGateEnrolmentTests` | Every test project declares a concrete `IntegrationCategoryHygieneTestsBase` subclass, so the gate above actually runs there. | Add `test/<package>/Hygiene/IntegrationCategoryHygieneTests.cs`. The base reflects over its own subclass's assembly, so an unenrolled project is silently unexamined rather than reported as uncovered - this gate is what makes the row above's "every test project" true. |
 | `SerializableExceptionDeepCopyGateEnrolmentTests` | Every package under `src/` records whether it owes the same-silo exception deep-copy contract: its test project enrols a concrete `SerializableExceptionDeepCopyContractTestsBase` subclass, or it is listed in `PackagesDeclaringNoSerializableException` and a comment-stripped source scan confirms it declares no `[GenerateSerializer]` exception. | A package that gains a `[GenerateSerializer]` exception adds `test/<package>/SerializableExceptionDeepCopyContractTests.cs` and leaves the exemption list; a new package with none is added to that list. The base audits the assembly its subclass names and asserts it found at least one exception, so "no subclass" alone cannot distinguish "not owed" from "forgotten" - this gate records the difference and re-verifies the exemption on every run. Repo-level gate over `src/` and `test/`; runs only in the core project. |
@@ -1058,7 +1071,7 @@ They now run in a dedicated `content-gates` job that carries **no `if:` and no
 the solution once and runs
 
 ```text
-(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc
+(FullyQualifiedName~Formal|FullyQualifiedName~Hygiene|FullyQualifiedName~Docs)&Category!=Tlc&FullyQualifiedName!~Explorer.UiTests
 ```
 
 across `Orleans.Lattice.slnx`. `build-and-test` requires `success` from that job
@@ -1067,4 +1080,5 @@ non-blocking - which is the same defect one level up. Two guards keep it honest:
 `run-text-gates.py` fails the job if the run executed no tests, or no tests for
 any one of the three families, and `CiContentGateWiringTests` fails the build if
 the job acquires a condition, drops out of the required check's `needs:`, starts
-accepting `skipped`, or stops selecting a fixture that exists in a gate directory.
+accepting `skipped`, stops selecting a fixture that exists in a gate directory, or
+lets an exclusion remove one.

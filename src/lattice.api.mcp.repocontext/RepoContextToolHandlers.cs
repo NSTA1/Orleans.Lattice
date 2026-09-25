@@ -219,7 +219,7 @@ internal static class RepoContextToolHandlers
         string scope,
         [Description("The memory topic to scan; required when scope is 'MemoryTopic', otherwise ignored.")]
         string? topic = null,
-        [Description("An optional directory path prefix to restrict a 'Files' scan to a subtree (for example 'src/'); ignored for other scopes.")]
+        [Description("An optional directory path prefix to restrict a 'Files' scan to a subtree (for example 'src/'); rejected for other scopes.")]
         string? pathPrefix = null,
         [Description("An opaque continuation token from a prior page; omit to start at the beginning of the range.")]
         string? continuationToken = null,
@@ -695,8 +695,8 @@ internal static class RepoContextToolHandlers
 
     /// <summary>
     /// Finds the repository-context records most relevant to a natural-language
-    /// query, hydrated from the store of record and ranked best-first. Runs an
-    /// exact semantic search when an embedder and vectors are available and
+    /// query, hydrated from the store of record and ranked best-first. Runs the
+    /// configured semantic search (approximate by default) when an embedder and vectors are available and
     /// otherwise degrades to a keyword/structural scan.
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the search service.</param>
@@ -1051,7 +1051,8 @@ internal static class RepoContextToolHandlers
     /// durable agent-memory records: the same cancel/drain/clear preamble runs
     /// as <c>repocontext_remove_repo</c>, then the structural, symbol, content,
     /// cross-reference, session, and every vector tree are tombstoned for the
-    /// repository, along with the repository root marker. The
+    /// repository, while the repository root marker is preserved with index-derived
+    /// fields cleared. The
     /// <see cref="RepoContextTrees.Memory"/> tree is not touched, so every
     /// memory entry survives with its fields, tags, links, and remaining
     /// time-to-live intact. The repository stays registered and re-indexable, so

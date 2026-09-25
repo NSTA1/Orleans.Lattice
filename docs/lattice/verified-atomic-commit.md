@@ -49,7 +49,7 @@ path. The cores are `internal` and exposed to the test assembly through
 | `ShadowedMigrationReadGuard` | How a read resolves against a leaf mid-migration when a prepared bucket has been shadow-forwarded across a shard split. | Phase 3 (#1591) |
 | `SplitBoundary` | Which post-split leaf owns a key, so migration routing is a pure function of the key and the split boundary. | Phase 3 (#1591) |
 | `TerminalDecisionGuard.Classify` | The write-once classification of an incoming terminal (apply, idempotent duplicate, or rejected flip) at the serialized registry. | Phase 5 (#1594) |
-| `TerminalArrivalTally` | The per-saga terminal arrival count that decides when a saga's registry entry may be tombstoned. | Phase 5 (#1594) |
+| `TerminalArrivalTally` | The completeness gate over a saga's per-source-shard terminal arrivals at a receiver: the expected count only grows (a max-merge of the stamped counts), and the per-tree decision mark flips once the distinct arrivals reach it. | Phase 5 (#1594) |
 
 The core files live under `src/lattice/BPlusTree/` next to the grains that call
 them. The shape of a core is a pure verdict function, for example:
@@ -104,6 +104,10 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 | `ReshardMigrationModel` | `MigrationTerminalCore`, `ShadowedMigrationReadGuard`, `SplitBoundary` | Phase 3 |
 | `AtomicCommitLivenessModel` | The full saga under bounded fault injection | Phase 4 |
 | `AtomicCommitInvariantModel` | The full single-saga lifecycle across every core | Phase 6 |
+| `ReshardForwardWindowModel` | `AtomicVisibilityGate` - the reshard forward window, where a destination leaf holds a drain-migrated pre-saga value before it carries the concurrent saga's shadow marker | #3117 |
+| `SplitPivotAdmissionModel` | `SplitBoundary` - a leaf may only be divided at a key strictly inside its own declared range | #3117 |
+| `SpanAdmissionMigrationModel` | `SplitBoundary` - a cross-shard migration import is subject to the same declared-span admission as any other commit | #3117 |
+| `MovedAwaySealInheritanceModel` | `SplitBoundary` - a leaf divided from a sealed leaf is born carrying the donor's moved-away seal | #3121 |
 
 ### Every model ships a non-vacuous guard test
 
@@ -199,22 +203,29 @@ The spec lives outside the compiled solution under [`spec/`](../../spec/):
 |------|-----------|
 | `AtomicCommit.tla` | The specification: state, actions, safety invariants, liveness properties. |
 | `AtomicCommit.cfg` | The TLC model: the bounded instance and the invariant / property list. |
+| `mutations/` | One deliberate defect per checked property, each of which must make that property fire (see [`spec/mutations/README.md`](../../spec/mutations/README.md)). |
 | `Refinement.md` | The refinement note mapping each spec variable and action to its protocol counterpart in the code cores. |
 | `README.md` | How to run TLC and the last-checked result. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
 overlapping write sets and a bounded reshard orphan step, and checks all seven
-safety invariants and all five temporal properties. A clean run enumerates a few
+invariants (the type invariant `TypeOK` plus the six safety invariants of the
+catalogue above) and all five temporal properties. A clean run enumerates a few
 thousand distinct states with no invariant, temporal-property, or deadlock
 violation. The spec's invariant names are the same names used by the property
 catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
 between the two levers.
 
-TLC needs a Java runtime and the TLA+ tools, which the .NET build image does not
-carry, so it is **not** a required per-PR check - the specification tracks the
-protocol design rather than any single code change. Run it locally when the
-protocol design changes; the procedure and the CI decision are in
-[`spec/README.md`](../../spec/README.md).
+TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
+`[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
+and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
+fixture checks that the base specification holds and that each of the twelve
+checked properties fires under its paired mutation in `spec/mutations/` while
+staying clean against the unmutated specification, so a property weakened until it
+can no longer fail breaks the build instead of passing vacuously. Locally the
+fixture skips when the toolchain is absent; under CI a missing toolchain fails it.
+Run TLC by hand when iterating on the protocol design; the procedure and the CI
+decision are in [`spec/README.md`](../../spec/README.md).
 
 ## Why three levers
 

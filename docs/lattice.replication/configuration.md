@@ -36,6 +36,8 @@ siloBuilder.ConfigureLatticeReplication("orders", o =>
 });
 ```
 
+A few options are read only from the cluster-wide (unnamed) instance, so a per-tree override of them has no effect: `ReplicationPeers`, `ShipPhaseTimerPeriod`, `ShipDoorbellEnabled`, and `MaxInboundDecompressedBytes`. The [WAL-retention startup guard](#walretention) likewise reads `DigestProbeEnabled` and `AllowWalRetentionWithoutAntiEntropy` from the cluster-wide instance.
+
 Startup options validation rejects empty cluster ids, invalid replicated-tree declarations, non-positive sizes, invalid intervals, invalid jitter and factor ranges, and incompatible wire-version, compression, adaptive-batch, and remediation bounds.
 
 ## Options Reference - `LatticeReplicationOptions`
@@ -61,6 +63,8 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` |
 | [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) | `bool` | `false` |
 | [`MaintenanceGcInterval`](#maintenancegcinterval) | `TimeSpan` | 5 seconds |
+
+The core WAL - its per-shard grains, commit-log writer, and garbage collector - reads the tree's core `LatticeOptions`, not these fields. `AddLatticeReplication` mirrors `ReplogPartitions` (onto `LatticeOptions.WalPartitions`), `WalMaxBatchEntries`, `WalMaxBatchBytes`, `WalMaxPendingBatches`, `WalStorageProvider`, and `WalRetention` onto the same tree's `LatticeOptions`. The mirror is one-way and writes a field only when the replication-side value differs from its default here (is non-`null`, for the two nullable fields) and the core field is still at its own default, so a direct `LatticeOptions` override always wins. `WalMaxPendingBatches` is the one field whose defaults differ - `4` here, `16` on `LatticeOptions` - so leaving it at (or setting it to) `4` leaves the WAL at the core `16`.
 
 ### Apply and causal buffer
 
@@ -101,7 +105,7 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 | [`PreShipCoalescingEnabled`](#preshipcoalescingenabled) | `bool` | `true` |
 | [`FramingCompression`](#framingcompression) | `LatticeCompression` | `Zstd` |
 | [`FramingCompressionLevel`](#framingcompressionlevel) | `int` | 3 |
-| [`MaxInboundDecompressedBytes`](#maxinbounddecompressedbytes) | `long` | `16 * WalMaxBatchBytes` |
+| [`MaxInboundDecompressedBytes`](#maxinbounddecompressedbytes) | `long` | 64 MiB (`16 * DefaultWalMaxBatchBytes`) |
 | [`FramingCompressionMinBatchBytes`](#framingcompressionminbatchbytes) | `int` | 512 |
 | [`FramingCompressionDictionaryId`](#framingcompressiondictionaryid) | `uint` | 0 |
 | [`DictionaryNegotiationEnabled`](#dictionarynegotiationenabled) | `bool` | `false` |
@@ -175,6 +179,8 @@ Optional prefix allowlist. Prefer prefixes over `KeyFilter` when possible becaus
 
 Number of WAL partitions per replicated tree. Increase to spread write and ship load; keep consistent with storage-provider capacity. Existing retained WAL and consumers are sensitive to partitioning, so plan changes carefully.
 
+The shipper and the change feed iterate `[0, ReplogPartitions)` directly, so the value must equal the tree's WAL partition count: a value below the core `LatticeOptions.WalPartitions` skips every write routed to a higher partition. Configure the count here - the [mirror](#wal-and-replog) copies it onto `WalPartitions` - rather than on `LatticeOptions.WalPartitions` alone, because nothing copies it back.
+
 ### `WalStorageProvider`
 
 Optional per-tree WAL backend resolver. Leave `null` to use the registered default. Use a resolver when different trees need different WAL durability or placement.
@@ -189,7 +195,7 @@ Maximum byte budget for a WAL batch. Keep below provider transaction and message
 
 ### `WalMaxPendingBatches`
 
-Maximum pending WAL batches per partition. Raising it increases pipeline depth and memory; lowering it applies back-pressure earlier.
+Maximum pending WAL batches per partition. Raising it increases pipeline depth and memory; lowering it applies back-pressure earlier. It reaches the WAL only through the [mirror](#wal-and-replog), and an unconfigured tree runs at the core `LatticeOptions.WalMaxPendingBatches` default of `16`, not at this option's `4`.
 
 ### `MaxApplyRetries`
 
@@ -229,7 +235,7 @@ Collapses redundant per-key versions before shipping. Keep enabled for normal de
 
 ### `ContentHashDedupElisionEnabled`
 
-Enables actual payload elision for repeated content. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol.
+Enables actual payload elision for repeated content. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
 
 ### `WalRetention`
 
@@ -253,7 +259,7 @@ Rate limit for routine operator snapshot requests per tree and source cluster. U
 
 ### `BootstrapTransientRetry`
 
-Optional retry policy for transient bootstrap failures. `null` installs the built-in bounded exponential policy.
+Optional retry policy for transient bootstrap failures. `null` installs the built-in bounded exponential policy: `DefaultBootstrapMaxAttempts` (4) attempts, a `DefaultBootstrapInitialRetryDelay` (500 ms) initial delay doubling up to `DefaultBootstrapMaxRetryDelay` (30 seconds), classified by `LatticeBootstrapTransientFaultClassifier.IsTransient`. A classified-transient fault re-opens the snapshot from the persisted apply cursor; any other fault fails the bootstrap on the first occurrence. Supplying an instance replaces the whole policy - its unset fields take `BoundedExponentialRetryPolicyOptions`' own defaults (4 attempts, 50 ms, 2 seconds), not the bootstrap built-ins - while a `null` classifier still falls back to `LatticeBootstrapTransientFaultClassifier.IsTransient`. See [Snapshot Bootstrap](snapshot-bootstrap.md).
 
 ### `ReplicationPeers`
 
@@ -273,7 +279,7 @@ Number of successful batches between persisted cursor writes. Lower values reduc
 
 ### `ShipCursorWriteMaxDelay`
 
-Wall-clock maximum delay before persisting ship cursor progress even if the interval count has not been reached.
+Wall-clock maximum delay before persisting ship cursor progress even if the interval count has not been reached. Set `Timeout.InfiniteTimeSpan` to coalesce purely by `ShipCursorWriteInterval`; any other value must be greater than zero.
 
 ### `ShipMaxInFlight`
 
@@ -293,7 +299,7 @@ Safety-net cadence for re-resolving the source tree's physical identity from the
 
 ### `LivenessProbeInterval`
 
-Cadence for peer liveness contact when no normal traffic is flowing.
+Cadence for peer liveness contact when no normal traffic is flowing: an idle pump tick that finds nothing to drain ships an empty batch once this long has passed since the last successful contact. Set `Timeout.InfiniteTimeSpan` to disable the probe; any other value must be greater than zero.
 
 ### `ShipBackoffMax`
 
@@ -325,15 +331,15 @@ Randomization fraction applied to digest probe scheduling.
 
 ### `MerkleWalkEnabled`
 
-Enables Merkle walk repair after a digest mismatch. See [Merkle walks](anti-entropy-merkle-walk.md).
+Enables the Merkle-walk localisation pass after a digest mismatch (it also requires `DigestProbeEnabled`). The walk is read-only: it narrows the divergence to a leaf or a few leaves and never repairs anything itself - repair is the job of the stages below. See [Merkle walks](anti-entropy-merkle-walk.md).
 
 ### `MerkleWalkMaxDepth`
 
-Maximum Merkle descent depth per repair attempt.
+Maximum depth a localisation pass descends into a shard's internal-node tree (the shard root is depth `0`) before it aborts.
 
 ### `MerkleWalkMaxBytes`
 
-Byte budget for Merkle walk probe traffic.
+Budget of digest hash bytes - local and remote, summed - a localisation pass may compare before it aborts.
 
 ### `LeafReReplayEnabled`
 
@@ -373,7 +379,7 @@ Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `
 
 ### `MaxInboundDecompressedBytes`
 
-Hard ceiling on the **decompressed** size of an inbound compressed framing batch. The framing decoder rejects (with `ArgumentException`) any frame whose declared uncompressed length exceeds this *before* it allocates the inflate buffer, bounding the decompression-bomb amplification a hostile or corrupt sender can drive from a tiny request. This is reachable pre-auth on the gRPC transport - framing is decoded before the shared-secret interceptor body runs. Defaults to 16x the 4 MB `WalMaxBatchBytes` ceiling (64 MiB); raise it in step if you legitimately ship larger batches. Must be `>= 1`.
+Hard ceiling on the **decompressed** size of an inbound compressed framing batch. The framing decoder rejects (with `ArgumentException`) any frame whose declared uncompressed length exceeds this *before* it allocates the inflate buffer, bounding the decompression-bomb amplification a hostile or corrupt sender can drive from a tiny request. This is reachable pre-auth on the gRPC transport - framing is decoded before the shared-secret interceptor body runs. Defaults to 64 MiB - 16x the default 4 MiB `WalMaxBatchBytes` ceiling. It is a fixed value that does not follow a configured `WalMaxBatchBytes`, so raise it in step if you legitimately ship larger batches. Must be `>= 1`.
 
 ### `FramingCompressionMinBatchBytes`
 
@@ -389,7 +395,7 @@ Enables peer negotiation for shared compression dictionaries.
 
 ### `AutoSharedDictionaryEnabled`
 
-Enables automatic shared-dictionary training and distribution when the related registration helper is used.
+Enables automatic shared-dictionary training and distribution when the related registration helper is used. `AddLatticeAutoSharedDictionary` registers the auto-training dictionary provider and turns this option on for every tree; setting the flag without that provider registered does not train anything.
 
 ### `WireVersionNegotiationEnabled`
 
@@ -397,11 +403,11 @@ Enables negotiation of effective wire version with peers.
 
 ### `MinimumSupportedWireVersion`
 
-Lowest wire version this node will accept.
+Oldest peer wire version the local shipper will interoperate with while `WireVersionNegotiationEnabled` is set. It is a sender-side floor, not a receive-side acceptance check: a peer whose acks advertise a lower `ReplicationAck.SupportedWireVersion` is not shipped to - the shipper logs an error and backs off until the peer upgrades. Must lie in `[1, EncodedBatchHeader.CurrentWireVersion]`.
 
 ### `UnknownPeerWireVersionFloor`
 
-Effective version floor assumed before a peer reports capabilities.
+Wire version the shipper encodes at for a peer that has not yet advertised a `SupportedWireVersion` on an ack, while `WireVersionNegotiationEnabled` is set. Must lie in `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]`; lower it below the current version to make un-acked first batches conservative during a rolling upgrade.
 
 ### `AdaptiveBatchSizingEnabled`
 
@@ -429,7 +435,7 @@ Enables automatic repair after digest mismatch. Leave disabled until your transp
 
 ### `RemediationTrafficBudgetFraction`
 
-Fraction of normal replication traffic budget that remediation may consume.
+Fraction of `ShipBatchSize` that one `(tree, peer)` may spend on automatic remediation re-ship per `RemediationTrafficWindow`: the per-window entry budget is `max(1, ceil(RemediationTrafficBudgetFraction x ShipBatchSize))`. It is derived from the configured batch size, not from observed traffic. Must be in `(0.0, 1.0]`.
 
 ### `RemediationTrafficWindow`
 
@@ -450,6 +456,10 @@ The replication back-pressure health check has its own named options type, `Latt
 ## Receiver flow-control tuning - `WalSaturationReceiverFlowControlOptions`
 
 The default receiver-side flow-control policy is tuned through `WalSaturationReceiverFlowControlOptions` (`ThrottledBatchRatio` default `0.5`, `ThrottledPauseMs` default `50`, `SaturatedBatchSize` default `1`, `SaturatedPauseMs` default `500`), bound per tree and force-installed via `AddWalSaturationReceiverFlowControl`. Every knob, its type, and its default is documented in [Receiver-side flow control](receiver-flow-control.md).
+
+## Transport security - `LatticeReplicationSecurityOptions`
+
+Shared-secret authentication policy has its own options type, `LatticeReplicationSecurityOptions`, set with `ConfigureLatticeReplicationSecurity`. It carries three knobs: `RequireAuthentication` (`bool`, default `true`), `SecretRefreshInterval` (`TimeSpan`, default 30 seconds), and `ScanConfigurationForSecrets` (`bool`, default `true`). Secret material is not an option: it flows through `ILatticeReplicationSecretSource`, whose default implementation reads the `LATTICE_REPLICATION_SECRET` and `LATTICE_REPLICATION_ACCEPTED_SECRETS` environment variables plus per-peer `LATTICE_REPLICATION_PEER_SECRET__<CLUSTERID>` overrides; replace it with `AddLatticeReplicationSecrets` or `AddLatticeReplicationSecretsFromConfiguration`. Rotation, the startup configuration scan, and every knob are documented in [Transport Security](transport-security.md).
 
 ## gRPC replication transport options
 

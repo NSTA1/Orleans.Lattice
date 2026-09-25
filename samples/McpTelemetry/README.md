@@ -72,7 +72,7 @@ request carrying a marker header onto a fixed `agent` credential. A real
 deployment leaves `RequireAuthorization` at its secure default and lifts an
 authenticated ASP.NET Core principal onto the ambient credential instead, and
 points the telemetry proxy at an authenticated Prometheus with a `Bearer`,
-`Basic`, or `MutualTls` backend credential.
+`Basic`, or `MutualTls` backend credential, or a rotating `DynamicBearer` token.
 
 ## What to look at
 

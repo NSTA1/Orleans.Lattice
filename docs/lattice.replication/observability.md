@@ -7,6 +7,10 @@
 - **Throughput counters** - `wal.entries_shipped`. Counts entries the producer durably ships to each peer; correlate it against WAL retention / GC to confirm the sender keeps pace with the log. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter and emit in a default build because content-hash dedup measurement is on by default; the `coalesce.entries_elided` / `coalesce.bytes_elided` / `coalesce.deltas_merged` counters likewise emit by default because pre-ship coalescing is on by default. Each set falls silent only when its option (`ContentHashDedupEnabled` / `PreShipCoalescingEnabled`) is explicitly set to `false`.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
+These four shapes are the headline families, not the full set: the [instrument index](#instrument-index) at the end of this page lists every instrument on the meter with its kind, unit, and tags, and points at the page that documents it.
+
+Every instrument also carries the repository-wide derived `tenant` tag (`LatticeTenantLabel.TagTenant`), computed from the `tree` value, or fixed to the platform sentinel `_platform_` on the instruments that carry no `tree` tag. The two `wire_version.*` gauges are the exception: they carry only `tree` and `peer`. The Tags columns on this page list the replication-specific dimensions and leave `tenant` implicit.
+
 ## Replication-lag histogram (`apply.lag`)
 
 `orleans.lattice.replication.apply.lag` is recorded by the canonical applier immediately after a successful point apply (`Set` / `Delete`). The sample is `now - entry.Timestamp.WallClockTicks` in milliseconds, **clamped to a non-negative value** so a future-dated source HLC (e.g. a faster-moving peer's wall clock) reports as `0` rather than corrupting the histogram with a negative sample.
@@ -17,16 +21,16 @@
 | Unit | `ms` |
 | Tags | `tree`, `peer` |
 
-The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. Under transitive replication (A &#8594; B &#8594; C) an entry shipped from B to C still records `peer=A`, mirroring the producer-side `WalRecord.OriginClusterId` slot. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
+The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. The tag is read from the producer-side `WalRecord.OriginClusterId` slot. The shipper - and the leaf re-replay repair that re-ships from the WAL - only ever sends entries its own cluster authored, so on those paths the authoring cluster and the delivering peer coincide; an entry a cluster applied on another origin's behalf is never re-shipped onward. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
 
 The histogram is intentionally not recorded for:
 
 - **`MutationKind.DeleteRange`** - range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
-- **HWM-deduped re-deliveries** - the entry never reached the merge step, so reporting lag would conflate "applied" and "filtered" samples.
+- **Deduplicated or deferred deliveries** - an entry dropped at or below the snapshot-pinned causal floor, suppressed by the shadow-forward identity cache, or deferred by a restore saga's receive fence never reaches the merge step, so reporting lag would conflate "applied" and "filtered" samples.
 - **Local-origin entries** - the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
 - **Source HLC equal to `Zero`** - protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
 
-A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has already been applied locally) reports an empty `apply.lag` distribution. That is the correct signal: there is no replication progress to measure.
+A receiver whose every delivery is dropped by the pinned floor or the identity cache reports an empty `apply.lag` distribution. That is the correct signal: there is no replication progress to measure. A re-delivery that survives both - its cache entry already evicted - re-applies idempotently under per-key last-writer-wins and does record a sample.
 
 ## Apply-duration histogram (`apply.duration`)
 
@@ -40,17 +44,20 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 
 The `peer` tag carries the same value as `apply.lag`'s `peer` tag - the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
-The `outcome` tag partitions the histogram into seven mutually-exclusive buckets:
+The `outcome` tag partitions the histogram into ten mutually-exclusive buckets:
 
 | Value | Constant | When |
 |---|---|---|
 | `success` | `LatticeReplicationMetrics.OutcomeSuccess` | The entry was applied successfully - both directly applied point operations (`Set` / `Delete`) and range deletes contribute. Each `ApplyAsync` invocation records exactly one `apply.duration` sample regardless of how many entries the call drains from the causal-apply buffer: a drain cascade triggered by an arriving satisfier contributes its drained-entry work to the satisfier's own `success` sample, and the originally parked entries do not generate additional samples on drain. |
-| `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge - either the per-origin high-water-mark already covers `entry.Timestamp`, or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
+| `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge: its `Timestamp` is at or below the origin's snapshot-pinned causal floor, it is a tombstone-reap envelope (local structural cleanup that is never meant to ship), a restore saga's durable receive fence deferred it (the result carries `Deferred = true` and the sender re-ships it once the fence lifts), or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
 | `failure` | `LatticeReplicationMetrics.OutcomeFailure` | The apply attempt threw. Recorded in the `finally` path before the exception unwinds. Includes payload-shape faults (`ArgumentException`, `InvalidOperationException`), `OperationCanceledException` from a cancelled `cancellationToken` (graceful shutdown traffic appears here), transport / IO failures, and any other unhandled exception out of the apply pipeline. |
 | `parked-causal-buffer` | `LatticeReplicationMetrics.OutcomeParkedCausalBuffer` | The entry parked on the causal-apply buffer because its declared `VectorClock` was not yet dominated by the local vector clock. The original delivery did not advance the high-water-mark; the entry re-enters the apply pipeline through the buffer drain when its dependencies arrive. |
-| `shadow-forward-dedup` | `LatticeReplicationMetrics.OutcomeShadowForwardDedup` | The entry was suppressed by the per-tree shadow-forward dedupe cache because a matching identity tuple (`(originClusterId, timestamp, key, op)`) was already applied since the last cache eviction. The duplicate arises when a structural rewrite (shard split / merge / saga compensate) shadow-forwards a user write into a different shard, so both emits ride the WAL with identical identity tuples. |
+| `shadow-forward-dedup` | `LatticeReplicationMetrics.OutcomeShadowForwardDedup` | The entry was suppressed by the per-tree shadow-forward dedupe cache because a matching identity tuple (`(originClusterId, timestamp, key, op)`) was already applied since the last cache eviction. The duplicate arises when a structural rewrite - a shard split, or a shard consolidation (merge) - shadow-forwards a user write into a different shard, so both emits ride the WAL with identical identity tuples. |
 | `rejected-not-replicated` | `LatticeReplicationMetrics.OutcomeRejectedNotReplicated` | The inbound entry was rejected by the receiver-side enrollment gate because its `TreeId` is not enrolled for replication on this receiver (the local per-tree resolver returns no merge mode for it). The entry is dropped without applying and without dead-lettering - a non-enrolled tree id is peer-controlled, so parking it would let a peer spawn unbounded dead-letter-queue activations. |
 | `rejected-mode-mismatch` | `LatticeReplicationMetrics.OutcomeRejectedModeMismatch` | The inbound entry was rejected by the receiver-side merge-mode gate because its peer-supplied `Mode` disagrees with the merge mode the receiver resolves locally for the entry's `TreeId`. The entry is not applied; because the tree is enrolled (and therefore bounded) the entry is dead-lettered with the `mode_mismatch` reason rather than silently dropped. |
+| `rejected-foreign-tenant` | `LatticeReplicationMetrics.OutcomeRejectedForeignTenant` | The receiver-side tenant-isolation gate (live only when tenancy is on) refused the entry because its `TreeId` names a tenant that does not exist on this receiver. The owning tenant is derived from the tree id alone, never from a wire field. The entry is dead-lettered with the `foreign_tenant` reason and the high-water-mark is left unchanged. |
+| `rejected-tenant-offline` | `LatticeReplicationMetrics.OutcomeRejectedTenantOffline` | The tenant-isolation gate refused the entry because its tenant exists but is not resident in the region serving this receiver. Dead-lettered with `tenant_offline`; the high-water-mark is left unchanged so the sender re-ships and the write converges once the tenant becomes resident here. |
+| `rejected-tenant-suspended` | `LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant` | The tenant-isolation gate refused the entry because its tenant exists but has been suspended or disabled by an operator. Dead-lettered with `tenant_suspended`; the high-water-mark is left unchanged so the write converges if the tenant is reinstated. |
 
 A receiver with a single overwhelmed subscriber surfaces as a rising `failure` bucket; a receiver with persistent causal skew surfaces as a rising `parked-causal-buffer` bucket. Both are independent of `apply.lag`, which only samples successful merges.
 
@@ -62,9 +69,9 @@ A receiver with a single overwhelmed subscriber surfaces as a rising `failure` b
 |---|---|
 | Name | `orleans.lattice.replication.apply.parallel_runs` |
 | Unit | `{run}` |
-| Tags | _(none)_ |
+| Tags | _(none beyond `tenant`, fixed to `_platform_`)_ |
 
-The histogram is untagged: the measurement describes the batch as a whole, which may span multiple trees. A value of `1` denotes fully-sequential apply - either the default posture (`ApplyMaxParallelRuns = 1`) or a single-tree batch where cross-tree parallelism is moot. A value greater than `1` reports the achieved concurrency, which is the host-configured `LatticeReplicationOptions.ApplyMaxParallelRuns` clamped to the number of distinct trees present in the batch.
+The histogram carries no `tree` tag: the measurement describes the batch as a whole, which may span multiple trees. A value of `1` denotes fully-sequential apply - either the default posture (`ApplyMaxParallelRuns = 1`) or a single-tree batch where cross-tree parallelism is moot. A value greater than `1` reports the achieved concurrency, which is the host-configured `LatticeReplicationOptions.ApplyMaxParallelRuns` clamped to the number of distinct trees present in the batch.
 
 Operators use the distribution to confirm parallel apply is actually engaging under multi-tree load (the `p50` rising above `1` after raising `ApplyMaxParallelRuns`) and to correlate the achieved parallelism against `apply.lag` and `apply.duration`. Independence is enforced at the tree granularity: distinct trees apply concurrently, while runs that share a tree stay sequential so the per-tree causal-apply buffer, shadow-forward dedupe cache, per-origin FIFO, and per-origin high-water-mark monotonicity hold exactly as in the sequential path. See [the batch-apply section of replication-apply.md](replication-apply.md) for the full independence model.
 
@@ -78,16 +85,32 @@ The producer no longer emits a commit-time append counter: a commit reaches the 
 
 Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL's growth and trim signals (`wal.entries_trimmed`, plus the configured retention window). A ship rate that persistently lags the WAL's growth means the local log is accumulating faster than the sender can drain it, which is the signal the min-acked-cursor WAL GC predicate and a future health check both consume.
 
+## Ship duration (`ship.duration`)
+
+`orleans.lattice.replication.ship.duration` is recorded by the gRPC push transport around every `Push` unary call it issues - entry-carrying batches and empty liveness probes alike - in a `finally`, so a failed call still records a sample.
+
+| Property | Value |
+|---|---|
+| Name | `orleans.lattice.replication.ship.duration` |
+| Unit | `ms` |
+| Tags | `tree`, `peer`, `outcome` |
+
+`outcome` is `ok` when the call returned an ack and `error` when it threw; the values are string literals at the emission site rather than published constants. Because the sample is taken inside the transport, a host that ships through a custom `IReplicationTransport` does not record it, and neither does it record `wal.entries_shipped`.
+
 ## DLQ enqueue-reason classification
 
-`orleans.lattice.replication.dead_letter.enqueued` is tagged with one of four canonical reason values:
+`orleans.lattice.replication.dead_letter.enqueued` is tagged with one of these reason values ([Dead-Letter Queue](dead-letter-queue.md) carries the operator-side detail):
 
 | Value | When |
 |---|---|
-| `schema` | The terminal failure was an `ArgumentException` (malformed entry, missing field, range delete with no end key) or an `InvalidOperationException` (unrecognised `LatticeMergeMode`, state-merge CAS budget exhausted). The receiver classifies these as payload-shape faults. |
-| `hlc_skew` | Reserved. Future receiver decorators that surface implausible HLC skew between the receiver's wall clock and the entry's `Timestamp` as a classified exception will tag this value. |
-| `oversized` | Reserved. Future receiver decorators that wrap the canonical applier with a size-validating check will tag this value when a single entry exceeds the configured per-entry size ceiling. |
-| `unknown` | Catch-all for terminal failure shapes the canonical decorator could not classify (e.g. transport / IO / `TimeoutException`). |
+| `schema` | A terminal apply failure was an `ArgumentException` (malformed entry, missing field, range delete with no end key) or an `InvalidOperationException` (unrecognised `LatticeMergeMode`, state-merge CAS budget exhausted) - raised after the dead-letter-tracking decorator exhausted `MaxApplyRetries`, or by a drained causal-buffer entry. The sender also parks a batch it cannot encode as `schema`, and an entry with an empty tree id, which cannot be parked per tree, is dropped but still counted as `schema` with an empty `tree` tag. |
+| `unknown` | Catch-all for every other terminal failure shape (e.g. transport / IO / `TimeoutException`). |
+| `hlc_skew` | A blocked entry evicted from a full causal-apply buffer (`CausalBufferMaxEntries` / `CausalBufferMaxBytes`) to make room for a newer park. |
+| `mode_mismatch` | The receiver-side merge-mode gate rejected an entry whose wire `Mode` disagrees with the merge mode the receiver resolves locally for the tree. |
+| `foreign_tenant` / `tenant_offline` / `tenant_suspended` | The tenant-isolation gate refused the write: unknown tenant / tenant not resident in this region / tenant suspended or disabled (the matching `apply.duration` outcomes are the three `rejected-*-tenant` buckets above). |
+| `oversized` | Reserved. Nothing emits it today; it is published for host decorators that wrap the canonical applier with a per-entry size check. |
+
+`orleans.lattice.replication.dead_letter.removed` is tagged `discarded` (explicit operator discard), `replayed` (removed after a successful replay), or `evicted` (FIFO capacity eviction during a later enqueue).
 
 The failure-to-reason mapping is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
 
@@ -116,7 +139,22 @@ These counters fire by default: `LatticeReplicationOptions.ContentHashDedupEnabl
 
 The shipper keeps a per-activation, per-key bounded LRU of the last-shipped content hash (FNV-1a 64-bit over the op, key, range end-key, and value bytes), sized by `LatticeReplicationOptions.ContentHashDedupCacheSize` (default `4096`, validated `>= 64`). Read the redundant fraction as `rate(ship_redundant_payloads) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals idempotent upstream retry logic re-sending the same value, which is exactly the signal that justifies opting into a dedup round trip. `ship.redundant_payload_bytes` quantifies the bandwidth that round trip could reclaim, not just the entry count.
 
-The measurement is **observability-only**: it never elides, reorders, or alters the bytes the sender ships, so the wire output is unchanged whether or not dedup measurement is enabled. (Actually skipping a byte-identical re-set carrying a newer HLC would strand the receiver's per-origin high-water mark and change LWW/HLC convergence; the receiver must consent through a manifest/pull exchange, which is deferred until wire-version capability negotiation lands.) Because the counters fire as entries are framed onto the wire, a batch re-shipped after a transient transport failure counts its entries again - which is correct, since a re-ship is itself a redundant wire payload.
+The measurement is **observability-only**: it never elides, reorders, or alters the bytes the sender ships, so the wire output is unchanged whether or not dedup measurement is enabled. (Actually skipping a byte-identical re-set carrying a newer HLC would strand the receiver's per-origin high-water mark and change LWW/HLC convergence; the receiver must consent through a content-manifest exchange, which is the separate opt-in `ContentHashDedupElisionEnabled` - see [Content-manifest payload elision](#content-manifest-payload-elision).) Because the counters fire as entries are framed onto the wire, a batch re-shipped after a transient transport failure counts its entries again - which is correct, since a re-ship is itself a redundant wire payload.
+
+## Content-manifest payload elision
+
+These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. An identical-content entry carrying a newer HLC advances the receiver's per-origin high-water-mark through a metadata-only update during the exchange.
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.ship.manifest_exchanges` | `LatticeReplicationMetrics.ManifestExchangesName` | `{exchange}` | `tree`, `peer` | Sender side, once per completed exchange with a peer that supports it. A failed exchange ships the full batch and records nothing. |
+| `orleans.lattice.replication.ship.elided_payloads` | `LatticeReplicationMetrics.ShipElidedPayloadsName` | `{entry}` | `tree`, `peer` | Sender side, the number of entries the exchange removed from the outbound batch. |
+| `orleans.lattice.replication.ship.elided_payload_bytes` | `LatticeReplicationMetrics.ShipElidedPayloadBytesName` | `By` | `tree`, `peer` | Sender side, the summed pre-encoded wire-segment length of the entries counted above. |
+| `orleans.lattice.replication.receiver.content_manifest_exchanges` | `LatticeReplicationMetrics.ReceiverContentManifestExchangesName` | `{exchange}` | `tree`, `peer` | Receiver side, once per manifest exchange the gRPC endpoint serves. `peer` is the requesting origin cluster. |
+| `orleans.lattice.replication.receiver.content_entries_elided` | `LatticeReplicationMetrics.ReceiverContentEntriesElidedName` | `{entry}` | `tree`, `peer` | Receiver side, the number of manifest entries it already held and therefore did not request. |
+| `orleans.lattice.replication.receiver.content_hwm_advances` | `LatticeReplicationMetrics.ReceiverContentHwmAdvancesName` | `{advance}` | `tree`, `peer` | Receiver side, once per exchange whose metadata-only update actually advanced the per-origin high-water-mark. |
+
+A peer whose exchange seam reports it cannot perform the exchange makes the sender fall back to shipping full batches for the rest of the activation, so a mixed fleet shows these counters only on the links where both ends support elision.
 
 ## Sender-side adaptive batch sizing (`ship.effective_batch_size` / `ship.ack_latency`)
 
@@ -145,7 +183,7 @@ These counters fire by default: `LatticeReplicationOptions.PreShipCoalescingEnab
 | `orleans.lattice.replication.coalesce.bytes_elided` | `LatticeReplicationMetrics.CoalesceBytesElidedName` | `By` | `tree`, `peer` | The summed pre-encoded wire-segment length of the entries counted above. |
 | `orleans.lattice.replication.coalesce.deltas_merged` | `LatticeReplicationMetrics.CoalesceDeltasMergedName` | `{delta}` | `tree`, `peer` | On a CRDT tree, once per source delta folded into a combined delta (the CRDT-specific dimension; the `entries_elided` / `bytes_elided` counters still record the source entries dropped on this path too). |
 
-Coalescing runs on both last-writer-wins and recognised CRDT trees, but by different mechanics. On a `LwwRegister` tree the pass keeps only the latest same-key version and drops the earlier ones outright. On a recognised CRDT tree, dropping earlier versions would lose each entry's delta contribution, so the pass instead **folds** the same-key deltas into one combined delta - a join over the primitive's semilattice whose receiver-side apply effect is identical to applying the source deltas in sequence - re-encodes it onto the kept entry, and elides the rest. A registered `OrMap` tree folds by unioning the dot-tagged adds and tombstones and lattice-merging any same-dot value snapshots through the value CRDT's own join, so it coalesces like the closed shapes. `coalesce.deltas_merged` counts the source deltas folded on this CRDT path; `entries_elided` / `bytes_elided` count the source entries it dropped, exactly as on the LWW path. An `OrMap` tree whose `(TKey, TValue)` shape is unregistered (no shape descriptor resolves) and any CRDT entry carrying no typed delta fall back to shipping individually (loss-free). Only plain point `Set` / `Delete` writes with a real (non-`Zero`) HLC that are not prepared atomic-batch entries are eligible; range deletes, saga terminal marks, and zero-HLC entries are never coalesced. Read the elided fraction as `rate(coalesce_entries_elided) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals a hot rewrite pattern that coalescing is collapsing, and `coalesce.bytes_elided` quantifies the cross-cluster bandwidth reclaimed. The coalesced output converges identically on an unmodified receiver - a strict subset on LWW trees, an effect-equivalent merge on CRDT trees.
+Coalescing runs on both last-writer-wins and recognised CRDT trees, but by different mechanics. On a `LwwRegister` tree the pass keeps only the latest same-key version and drops the earlier ones outright. On a recognised CRDT tree, dropping earlier versions would lose each entry's delta contribution, so the pass instead **folds** the same-key deltas into one combined delta - a join over the primitive's semilattice whose receiver-side apply effect is identical to applying the source deltas in sequence - re-encodes it onto the kept entry, and elides the rest. A registered `OrMap` tree folds by unioning the dot-tagged adds and tombstones and lattice-merging any same-dot value snapshots through the value CRDT's own join, so it coalesces like the closed shapes. `coalesce.deltas_merged` counts the source deltas folded on this CRDT path; `entries_elided` / `bytes_elided` count the source entries it dropped, exactly as on the LWW path. An `OrMap` tree whose `(TKey, TValue)` shape is unregistered (no shape descriptor resolves) and any CRDT entry carrying no typed delta fall back to shipping individually (loss-free). Only plain point `Set` / `Delete` writes with a real (non-`Zero`) HLC that are neither prepared nor part of an atomic batch are eligible; range deletes, saga terminal marks, and zero-HLC entries are never coalesced. Read the elided fraction as `rate(coalesce_entries_elided) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals a hot rewrite pattern that coalescing is collapsing, and `coalesce.bytes_elided` quantifies the cross-cluster bandwidth reclaimed. The coalesced output converges identically on an unmodified receiver - a strict subset on LWW trees, an effect-equivalent merge on CRDT trees.
 
 ## Doorbell coalescing (`doorbell.rung` / `doorbell.coalesced`)
 
@@ -160,7 +198,7 @@ Read the coalescing win as `rate(doorbell_coalesced) / (rate(doorbell_coalesced)
 
 ## Shared-dictionary compression ratio (`compress.dictionary.bytes_in` / `compress.dictionary.bytes_out`)
 
-These counters are **opt-in** and fire only when shared-dictionary compression is selected (`LatticeReplicationOptions.FramingCompression = LatticeCompression.ZstdDictionary` with a non-zero `FramingCompressionDictionaryId`, and the requested dictionary resolves on the sending silo); the default build never records them. They quantify the before/after win of compressing the batch tail against a shared Zstandard dictionary (see [Shared-dictionary Zstandard compression](../lattice/compression.md#shared-dictionary-zstandard-compression)).
+These counters are **opt-in** and fire only when a batch is actually framed with shared-dictionary compression - either statically (`LatticeReplicationOptions.FramingCompression = LatticeCompression.ZstdDictionary` with a non-zero `FramingCompressionDictionaryId`) or through the auto-shared dictionary (`AutoSharedDictionaryEnabled`) once a trained dictionary is active - and the requested dictionary resolves on the sending silo; the default build never records them. They quantify the before/after win of compressing the batch tail against a shared Zstandard dictionary (see [Shared-dictionary Zstandard compression](../lattice/compression.md#shared-dictionary-zstandard-compression)).
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -223,7 +261,7 @@ Operators monitor them together:
 
 ## Per-origin FIFO invariant (`apply.fifo_violations`)
 
-The receiver-side apply pipeline relies on a per-origin FIFO contract for its causal-apply buffer's occupancy bounds: under correct sender + transport behaviour, the producer's partitioned change feed yields per-shard in WAL-offset order and each shard's WAL is HLC-monotonic per origin, so per-`(origin, shard)` FIFO is preserved end-to-end with **no cross-shard sender serialisation** (which would defeat the whole point of partitioned replog scaling).
+`apply.fifo_violations` counts successful applies whose source HLC is lower than the highest source HLC already applied for the same `(tree, origin)`. It is an ordering diagnostic, not a correctness alarm. Source HLCs are stamped per leaf, each leaf ticking its own clock, and the write-ahead log partitions by key hash, so one origin's HLC stream is not monotonic in delivery order: the shipper merges each drain by HLC, but a write committed on a lagging leaf can reach the log after a higher-HLC write has already shipped, and it then arrives below the running maximum as a genuine new write. That is why the receiver drops point writes only at the snapshot-pinned causal floor rather than at the per-origin high-water-mark (see [the pinned causal floor](replication-apply.md#2-snapshot-pinned-causal-floor-and-per-origin-high-water-mark)).
 
 | Property | Value |
 |---|---|
@@ -236,9 +274,20 @@ The canonical applier records the most recently applied source HLC per `(treeId,
 - **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
 - **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded - it neither records a violation nor overwrites the recorded HLC.
 
-A violation **does not change apply behaviour**: the entry is still applied, the HWM is still advanced. This is purely an observability surface - an alert on `rate > 0` flags a transport-side regression that broke the per-origin order, not a correctness defect on the receiver. Operators triage by joining the `tree` and `origin` tags against the producer-side topology to identify which sender path regressed.
+A violation **does not change apply behaviour**: the entry is still applied, and the high-water-mark advance is a monotonic no-op for it because the running maximum is already higher. Read the counter as a rate against `wal.entries_shipped` rather than alerting on `rate > 0`: a steady low rate reflects ordinary per-leaf interleaving, while a step change on one `(tree, origin)` pair points at a sender or transport path that has started reordering deliveries. Operators triage by joining the `tree` and `origin` tags against the producer-side topology.
 
-Cross-shard interleaving for the same origin is permitted by design and is **not** a FIFO violation under this contract: entries that have a genuine cross-shard causal dependency carry it in their `VectorClock` and route through the causal-apply buffer's dependency-check path instead. The current implementation tracks one entry per `(tree, origin)` because the canonical applier is one-instance-per-tree; a future per-shard applier partitioning will key the tracker by `(tree, shard, origin)` without changing the metric's tag dimensionality.
+Genuine causal dependencies are not enforced through this counter: an entry that depends on another origin's write carries the dependency in its `VectorClock` and routes through the causal-apply buffer's dependency check instead. Bootstrap-drain entries are not recorded, because a snapshot export visits shards and leaves in arbitrary order. The tracker holds one value per `(tree, origin)` in process-local memory, so a silo restart resets it.
+
+## Fall-off-the-log detection (`peer.fell_off_log` / `peer.fell_off_log_suppressed`)
+
+The fall-off detector compares a peer's per-origin high-water-mark with an oldest-available HLC for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest retained entry the peer authored - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)).
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.peer.fell_off_log` | `LatticeReplicationMetrics.PeerFellOffLogName` | `{event}` | `tree`, `origin` | Once per fresh fall-off detection. Emitted whether or not `AutoBootstrapOnFallOffLog` then starts a bootstrap, so disabling auto-bootstrap does not silence the alert. |
+| `orleans.lattice.replication.peer.fell_off_log_suppressed` | `LatticeReplicationMetrics.PeerFellOffLogSuppressedName` | `{event}` | `tree`, `origin` | Once per detection absorbed because a bootstrap from the same source cluster is already in flight (requesting, applying, or handing off), so repeated probes during a long drain do not inflate the fresh-detection count. |
+
+`origin` is the source cluster the detector probed, the same key the bootstrap instruments below use.
 
 ## Bootstrap instruments
 
@@ -246,12 +295,12 @@ The receiver-side bootstrap coordinator emits the following instruments tracking
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
-| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `tree`, `origin` | Incremented by 1 per snapshot entry successfully applied through the local replication applier (post-decorator chain). |
+| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `tree`, `origin` | Incremented by 1 per snapshot entry handed to the local replication applier (post-decorator chain) once its apply call returns without throwing - whether or not the entry was newly merged. Committed rows with no value and prepared rows with no transaction id are skipped and not counted. |
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` (`By`) | `tree`, `origin` | Incremented by `entry.Value.Length` per applied entry. Mirrors the lifecycle of `entries_received`. |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is one of `live`, `failed`, or `timed_out`. |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `tree`, `origin` | Incremented by 1 each time the bootstrap drain catches a classified-transient transport fault and consumes one slot of the configured `LatticeReplicationOptions.BootstrapTransientRetry` budget. A bootstrap that completes on its first drain attempt records zero on this counter; a bootstrap that exhausts the budget and pivots to `Failed` records `MaxAttempts - 1` (one per consumed retry slot). |
 
-The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
+The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(treeName, sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
 
 The histogram's `outcome` values are exposed as `LatticeReplicationMetrics.BootstrapOutcomeLive`, `BootstrapOutcomeFailed`, and `BootstrapOutcomeTimedOut` constants. The `timed_out` value is reserved for a future transport-timeout policy; the in-tree coordinator emits only `live` and `failed` today, but the constant is published so dashboard rules referencing it remain valid across future releases.
 
@@ -277,8 +326,8 @@ Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)`
 
 `peer.last_contact_seconds` and `peer.consecutive_errors` carry a `direction` tag with two values:
 
-- `direction="outbound"` - recorded by the per-peer shipper after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the 16-byte framing header alone; no entries are shipped.
-- `direction="inbound"` - recorded by the canonical applier's batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Range-delete and local-origin entries skip the recording.
+- `direction="outbound"` - recorded by the per-peer shipper after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the fixed 32-byte framing header plus the length-prefixed tree name and origin cluster id; no entries are shipped.
+- `direction="inbound"` - recorded by the canonical applier's batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Entries with no origin or tree id, and local-origin entries, skip the recording.
 
 The two directions are independent: a peer that this silo only ships to never produces an inbound row; a peer that this silo only receives from never produces an outbound row. `Snapshot()` returns one row per `(tree, peer, direction)` triple, each carrying a `Direction` property of type `ReplicationContactDirection`.
 
@@ -308,3 +357,73 @@ strings. The `saga.phase.duration` histogram uses a monotonic stopwatch anchored
 at each phase entry; a silo failover mid-phase truncates the measured interval to
 the span since the most recent reactivation, matching the bootstrap-duration
 behaviour described above.
+
+## Instrument index
+
+Every instrument on the `orleans.lattice.replication` meter. Kind and unit come from the instrument declarations in `LatticeReplicationMetrics` and `ReplicationPeerStats`; Tags lists the replication-specific dimensions each emission site attaches (the derived `tenant` tag is implicit - see the note at the top of this page).
+
+| Instrument | Kind | Unit | Tags | Details |
+|---|---|---|---|---|
+| `orleans.lattice.replication.peer.entries_behind` | `ObservableGauge<long>` | `{entry}` | `tree`, `peer` | [Health check](health-check.md#related-metrics) |
+| `orleans.lattice.replication.peer.bytes_behind` | `ObservableGauge<long>` | `By` | `tree`, `peer` | [Bidirectional contact gauges](#bidirectional-peerlast_contact_seconds-and-the-liveness-probe) |
+| `orleans.lattice.replication.peer.ship_in_flight` | `ObservableGauge<long>` | `{batch}` | `tree`, `peer` | [Pipelining depth](#sender-side-pipelining-depth-peership_in_flight) |
+| `orleans.lattice.replication.peer.consecutive_errors` | `ObservableGauge<long>` | `{error}` | `tree`, `peer`, `direction` | [Bidirectional contact gauges](#bidirectional-peerlast_contact_seconds-and-the-liveness-probe) |
+| `orleans.lattice.replication.peer.last_contact_seconds` | `ObservableGauge<double>` | `s` | `tree`, `peer`, `direction` | [Bidirectional contact gauges](#bidirectional-peerlast_contact_seconds-and-the-liveness-probe) |
+| `orleans.lattice.replication.wire_version.negotiated` | `ObservableGauge<long>` | `{version}` | `tree`, `peer` (no `tenant`) | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
+| `orleans.lattice.replication.wire_version.downgrade_active` | `ObservableGauge<long>` | `{bool}` | `tree`, `peer` (no `tenant`) | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
+| `orleans.lattice.replication.digest_remediation.disabled` | `ObservableGauge<long>` | `{state}` | `tree`, `peer`, `reason` | [Remediation guards](anti-entropy-remediation-guards.md#observability) |
+| `orleans.lattice.replication.ship.duration` | `Histogram<double>` | `ms` | `tree`, `peer`, `outcome` | [Ship duration](#ship-duration-shipduration) |
+| `orleans.lattice.replication.wal.entries_shipped` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Ship-rate](#ship-rate-walentries_shipped) |
+| `orleans.lattice.replication.ship.effective_batch_size` | `Histogram<int>` | `{entry}` | `tree`, `peer` | [Adaptive batch sizing](#sender-side-adaptive-batch-sizing-shipeffective_batch_size--shipack_latency) |
+| `orleans.lattice.replication.ship.ack_latency` | `Histogram<double>` | `ms` | `tree`, `peer` | [Adaptive batch sizing](#sender-side-adaptive-batch-sizing-shipeffective_batch_size--shipack_latency) |
+| `orleans.lattice.replication.ship.redundant_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
+| `orleans.lattice.replication.ship.redundant_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
+| `orleans.lattice.replication.ship.manifest_exchanges` | `Counter<long>` | `{exchange}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.ship.elided_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.ship.elided_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.receiver.content_manifest_exchanges` | `Counter<long>` | `{exchange}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.receiver.content_entries_elided` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.receiver.content_hwm_advances` | `Counter<long>` | `{advance}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
+| `orleans.lattice.replication.coalesce.entries_elided` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Pre-ship coalescing](#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided--coalescedeltas_merged) |
+| `orleans.lattice.replication.coalesce.bytes_elided` | `Counter<long>` | `By` | `tree`, `peer` | [Pre-ship coalescing](#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided--coalescedeltas_merged) |
+| `orleans.lattice.replication.coalesce.deltas_merged` | `Counter<long>` | `{delta}` | `tree`, `peer` | [Pre-ship coalescing](#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided--coalescedeltas_merged) |
+| `orleans.lattice.replication.doorbell.rung` | `Counter<long>` | `{ring}` | `tree`, `peer` | [Doorbell coalescing](#doorbell-coalescing-doorbellrung--doorbellcoalesced) |
+| `orleans.lattice.replication.doorbell.coalesced` | `Counter<long>` | `{ring}` | `tree`, `peer` | [Doorbell coalescing](#doorbell-coalescing-doorbellrung--doorbellcoalesced) |
+| `orleans.lattice.replication.compress.dictionary.bytes_in` | `Counter<long>` | `By` | `tree` | [Dictionary compression ratio](#shared-dictionary-compression-ratio-compressdictionarybytes_in--compressdictionarybytes_out) |
+| `orleans.lattice.replication.compress.dictionary.bytes_out` | `Counter<long>` | `By` | `tree` | [Dictionary compression ratio](#shared-dictionary-compression-ratio-compressdictionarybytes_in--compressdictionarybytes_out) |
+| `orleans.lattice.replication.ship.dictionary_negotiation` | `Counter<long>` | `{negotiation}` | `tree`, `peer`, `outcome` | [Dictionary negotiation](wire-format.md#per-peer-shared-dictionary-capability-negotiation) |
+| `orleans.lattice.replication.ship.dictionary_batches` | `Counter<long>` | `{batch}` | `tree`, `peer`, `dictionary` | [Dictionary negotiation](wire-format.md#per-peer-shared-dictionary-capability-negotiation) |
+| `orleans.lattice.replication.ship.dictionary_convergence` | `Counter<long>` | `{pull}` | `tree`, `peer`, `outcome` | [Dictionary convergence](#shared-dictionary-convergence-shipdictionary_convergence) |
+| `orleans.lattice.replication.ship.wire_version_down_stamp` | `Counter<long>` | `{batch}` | `tree`, `peer`, `reason` | [Down-stamping](wire-format.md#version-adaptive-down-stamping-wireversiondownencoder) |
+| `orleans.lattice.replication.apply.duration` | `Histogram<double>` | `ms` | `tree`, `peer`, `outcome` | [Apply duration](#apply-duration-histogram-applyduration) |
+| `orleans.lattice.replication.apply.lag` | `Histogram<double>` | `ms` | `tree`, `peer` | [Replication lag](#replication-lag-histogram-applylag) |
+| `orleans.lattice.replication.apply.parallel_runs` | `Histogram<int>` | `{run}` | _(none)_ | [Parallel-apply degree](#parallel-apply-degree-applyparallel_runs) |
+| `orleans.lattice.replication.apply.fifo_violations` | `Counter<long>` | `{entry}` | `tree`, `origin` | [FIFO diagnostic](#per-origin-fifo-invariant-applyfifo_violations) |
+| `orleans.lattice.replication.apply.buffered_entries` | `UpDownCounter<long>` | `{entry}` | `tree`, `shard` | [Causal+ instruments](#causal-instruments) |
+| `orleans.lattice.replication.apply.buffer_bytes` | `UpDownCounter<long>` | `By` | `tree`, `shard` | [Causal+ instruments](#causal-instruments) |
+| `orleans.lattice.replication.apply.dependency_wait` | `Histogram<double>` | `ms` | `tree` | [Causal+ instruments](#causal-instruments) |
+| `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `{entry}` | `tree` | [Causal+ instruments](#causal-instruments) |
+| `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
+| `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
+| `orleans.lattice.replication.peer.fell_off_log` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
+| `orleans.lattice.replication.peer.fell_off_log_suppressed` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
+| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `{entry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` | `By` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | `tree`, `origin`, `outcome` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.digest_probe.compared` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer`, `outcome` | [Digest probe](anti-entropy-digest-probe.md#observability) |
+| `orleans.lattice.replication.digest_probe.mismatch` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer` | [Digest probe](anti-entropy-digest-probe.md#observability) |
+| `orleans.lattice.replication.merkle_walk.localised` | `Counter<long>` | `{leaf}` | `tree`, `depth` | [Merkle walk](anti-entropy-merkle-walk.md#observability) |
+| `orleans.lattice.replication.merkle_walk.aborted` | `Counter<long>` | `{walk}` | `reason` | [Merkle walk](anti-entropy-merkle-walk.md#observability) |
+| `orleans.lattice.replication.leaf_rereplay.entries` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Leaf re-replay](anti-entropy-leaf-rereplay.md#observability) |
+| `orleans.lattice.replication.leaf_rereplay.skipped` | `Counter<long>` | `{skip}` | `tree`, `peer`, `reason` | [Leaf re-replay](anti-entropy-leaf-rereplay.md#observability) |
+| `orleans.lattice.replication.bootstrap_fallback.triggered` | `Counter<long>` | `{fallback}` | `tree`, `peer` | [Bootstrap fallback](anti-entropy-bootstrap-fallback.md#observability) |
+| `orleans.lattice.replication.bootstrap_fallback.entries` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Bootstrap fallback](anti-entropy-bootstrap-fallback.md#observability) |
+| `orleans.lattice.replication.bootstrap_fallback.skipped` | `Counter<long>` | `{skip}` | `tree`, `peer`, `reason` | [Bootstrap fallback](anti-entropy-bootstrap-fallback.md#observability) |
+| `orleans.lattice.replication.digest_remediation.skipped` | `Counter<long>` | `{skip}` | `tree`, `peer`, `reason` | [Remediation guards](anti-entropy-remediation-guards.md#observability) |
+| `orleans.lattice.replication.saga.phase.duration` | `Histogram<double>` | `ms` | `phase` | [Coordinated-restore saga](#coordinated-restore-saga) |
+| `orleans.lattice.replication.saga.fence.duration` | `Histogram<double>` | `ms` | `tree` | [Coordinated-restore saga](#coordinated-restore-saga) |
+| `orleans.lattice.replication.saga.participant.votes` | `Counter<long>` | `{vote}` | `reason` | [Coordinated-restore saga](#coordinated-restore-saga) |
+| `orleans.lattice.replication.saga.participant.commits` | `Counter<long>` | `{commit}` | `reason` | [Coordinated-restore saga](#coordinated-restore-saga) |
+| `orleans.lattice.replication.saga.participant.aborts` | `Counter<long>` | `{abort}` | `reason` | [Coordinated-restore saga](#coordinated-restore-saga) |
+| `orleans.lattice.replication.saga.compensations` | `Counter<long>` | `{compensation}` | `cause` | [Coordinated-restore saga](#coordinated-restore-saga) |
